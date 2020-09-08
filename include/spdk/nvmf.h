@@ -51,6 +51,7 @@ extern "C" {
 #endif
 
 #define NVMF_TGT_NAME_MAX_LENGTH	256
+#define NVMF_HCA_NAME_MAX_LENGTH	64
 
 struct spdk_nvmf_tgt;
 struct spdk_nvmf_subsystem;

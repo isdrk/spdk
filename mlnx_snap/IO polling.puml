@@ -1,0 +1,33 @@
+@startuml
+autoactivate on
+hide footbox
+
+title IO flow
+
+control "poll group poller" as pg
+participant "**transport**" as tr #lime
+participant "controller" as ctrlr
+
+autoactivate off
+[-> tr : NVME_COMMAND
+autoactivate on
+
+|||
+
+pg -> tr : **poll_group_poll**
+activate pg
+    note right of tr
+        **[MLNX_SNAP]**
+        Admin SQ: handle identify, create CQ/SQ commands. Create SQ == create new qpair
+        New qpair: the same as 'New connection'
+        IO SQ: handle IO request. TBD
+    end note
+    tr -> ctrlr : spdk_nvmf_request_exec
+    return
+    return
+deactivate pg
+
+ctrlr -> tr : **req_complete**
+[<-- tr : RESPONSE
+
+@enduml

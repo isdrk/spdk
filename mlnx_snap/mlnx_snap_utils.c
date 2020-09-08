@@ -6,7 +6,7 @@
 
 #include <glob.h>
 
-#include <spdk_internal/log.h>
+#include <spdk/log.h>
 
 #define IB_PREFIX "/sys/class/infiniband/"
 #define NET_PREFIX "/sys/class/net/"
@@ -39,8 +39,9 @@ nvmf_mlnx_snap_diff_files(const char *fpath1, const char *fpath2)
 		c2 = getc(f2);
 	} while ((c1 == c2) && c1 != EOF && c2 != EOF);
 
-	if (c1 != EOF || c2 != EOF)
+	if (c1 != EOF || c2 != EOF) {
 		ret = 1;
+	}
 
 	fclose(f2);
 	fclose(f1);
@@ -63,7 +64,7 @@ static int nvmf_mlnx_snap_is_representor(const char *iface)
 	int ret = 0;
 
 	snprintf(dev_port_path, sizeof(dev_port_path),
-			 NET_PREFIX"%s/dev_port", iface);
+		 NET_PREFIX"%s/dev_port", iface);
 
 	fp = fopen(dev_port_path, "r");
 	if (!fp) {
@@ -72,18 +73,20 @@ static int nvmf_mlnx_snap_is_representor(const char *iface)
 	}
 
 	//dev_port should be 0 for device, and != for representors
-	if (NULL == fgets(line, sizeof(line)-1, fp)) {
+	if (NULL == fgets(line, sizeof(line) - 1, fp)) {
 		SPDK_ERRLOG("Failed to read file %s: %d\n", dev_port_path, errno);
 		ret = -errno;
 		fclose(fp);
 		return ret;
 	}
-	if (atoi(line) != 0)
+	if (atoi(line) != 0) {
 		ret = 1;
+	}
 
 	//dev_port should be single-lined file
-	if(fgets(line, sizeof(line)-1, fp))
+	if (fgets(line, sizeof(line) - 1, fp)) {
 		ret = -EINVAL;
+	}
 
 	fclose(fp);
 	return ret;
@@ -133,9 +136,10 @@ int nvmf_mlnx_snap_dev_to_iface(const char *dev, char *iface)
 			snprintf(netdev_res_path, sizeof(netdev_res_path), "%s"SUFFIX, *p);
 			_iface = *p + strlen(NET_PREFIX);
 			if (access(netdev_res_path, F_OK) != -1 &&
-				nvmf_mlnx_snap_diff_files(ibdev_res_path, netdev_res_path) == 0) {
-				if (nvmf_mlnx_snap_is_representor(_iface))
+			    nvmf_mlnx_snap_diff_files(ibdev_res_path, netdev_res_path) == 0) {
+				if (nvmf_mlnx_snap_is_representor(_iface)) {
 					continue;
+				}
 				strncpy(iface, _iface, IFACE_MAX_LEN - 1);
 				ret = 0;
 				break;

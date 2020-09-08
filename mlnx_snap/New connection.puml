@@ -1,0 +1,64 @@
+@startuml
+autoactivate on
+hide footbox
+
+title New connection
+
+control "acceptor poller" as acceptor
+participant "nvmf_tgt" as tgt
+collections "poll groups" as pg
+participant "**transport**" as tr #lime
+participant "controller" as ctrlr
+
+acceptor -> tr : **accept**
+activate acceptor
+    note right of tr
+        **[MLNX_SNAP]**
+        Iterate listeners, trigger callback to check bar modification
+        Cb: read bar, check modified values. Handle Controller Config reg change
+        CC reg: check CC_EN 0->1 - create a new controller
+        New ctrlr: allocate mem, create admin CQ, SQ. Assign CQ to some **pg**
+        Allocate nvme/nvmf requests per SQ (note: we should get buffers from transport)
+    end note
+    tr -> tgt : spdk_nvmf_tgt_new_qpair
+    tgt -> tr : **get_optimal_poll_group**
+    note right of tr
+         **[MLNX_SNAP]** return **pg** CQ was assigned to
+    end note
+    return pg
+    autoactivate off
+    tgt ->] : spdk_nvmf_poll_group_add
+    autoactivate on
+    return
+    return
+deactivate acceptor
+
+...
+
+pg <-] : spdk_nvmf_poll_group_add
+	pg -> tr : **poll_group_add**
+	note right of tr
+		**[MLNX_SNAP]**
+		send fake FABRIC_CONNECT command to subsystem
+		For admin QP it creates nvmf controller
+	end note
+
+
+	tr -> tr : NVME_FABRICS_CONNECT
+		tr -> ctrlr : spdk_nvmf_request_exec
+			ctrlr -> ctrlr : nvmf_ctrlr_create
+				ctrlr -> tr : **cdata_init**
+				note right of tr
+					**[MLNX_SNAP]** TBD
+				end note
+				return
+			note right of ctrlr: Create ctrlr, assign controller to qpair
+		return ctrlr
+		deactivate ctrlr
+		tr <- ctrlr : **req_complete**
+		deactivate tr
+	deactivate tr
+	return status
+deactivate pg
+
+@enduml

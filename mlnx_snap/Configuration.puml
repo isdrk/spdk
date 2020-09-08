@@ -1,0 +1,47 @@
+@startuml
+autoactivate on
+hide footbox
+
+title Configuration
+
+participant "rpc"
+collections "poll groups" as pg
+participant "**transport**" as tr #lime
+
+[-> rpc : nvmf_create_transport
+rpc -> tr : **opts_init**
+return opts
+
+rpc -> tr : **create**
+note right of tr
+    **[MLNX_SNAP]** create contexts for all devices
+end note
+return
+
+rpc -> pg : nvmf_poll_group_add_transport
+pg -> tr : **poll_group_create**
+note right of tr
+    **[MLNX_SNAP]** Create poller for each snap_ctx
+    **[MLNX_SNAP]** Add pg to connection schedule
+end note
+return
+return
+return
+
+[-> rpc : nvmf_subsystem_add_listener
+rpc -> tr : **listen** (dev_name, pf)
+note right of tr
+    **[MLNX_SNAP]** Find an open snap context by dev_name
+    **[MLNX_SNAP]** Open snap device
+    **[MLNX_SNAP]** Init NVME bar
+    **[MLNX_SNAP]** Assign a callback to check bar modification
+end note
+return
+rpc -> tr : **listen_associate**
+note right of tr
+    **[MLNX_SNAP]** Save a pointer to subsystem
+end note
+return
+return
+
+@enduml

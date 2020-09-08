@@ -3312,6 +3312,8 @@ nvme_ctrlr_init_cap(struct spdk_nvme_ctrlr *ctrlr, const union spdk_nvme_cap_reg
 	ctrlr->opts.io_queue_size = spdk_min(ctrlr->opts.io_queue_size, ctrlr->cap.bits.mqes + 1u);
 
 	ctrlr->opts.io_queue_requests = spdk_max(ctrlr->opts.io_queue_requests, ctrlr->opts.io_queue_size);
+
+	SPDK_WARNLOG("ctrlr pg_sz %u, io_q_size %u\n", ctrlr->page_size, ctrlr->opts.io_queue_size);
 }
 
 void

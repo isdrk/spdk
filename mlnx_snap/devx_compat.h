@@ -1,19 +1,17 @@
 #ifndef _DEVX_COMPAT_H
 #define _DEVX_COMPAT_H
 
+#define HAVE_DEVX_IN_RDMA_CORE 1
+
 /**
  * Compatibility layer to bridge gaps over proof of concept devx and the final
  * version that it is now part of the rdma-core
  */
 
-#include "config.h"
-#include "utils.h"
+#include "mlnx_snap_utils.h"
 #include <limits.h>
 #include <stdint.h>
 
-#define u8 uint8_t
-#define BIT(n) (1<<(n))
-#define __packed
 #include <infiniband/verbs.h>
 #include <linux/types.h>
 
@@ -32,43 +30,43 @@ struct devx_db_page;
 typedef struct devx_vtunnel devx_vtunnel_t;
 
 typedef struct devx_obj {
-    struct devx_obj_handle *memh;
-    struct devx_obj_handle *objh;
-    void                   *buff;
-    uint32_t               *dbr;
-    int                     id;
+	struct devx_obj_handle *memh;
+	struct devx_obj_handle *objh;
+	void                   *buff;
+	uint32_t               *dbr;
+	int                     id;
 } devx_obj_t;
 
 typedef struct {
-    struct ibv_context   *ibv_ctx;
-    devx_obj_t            pd;
-    int                   type;
-    uint16_t              lid;
-    uint8_t               gid[16];
-    uint16_t              r_roce_min_udp_src_port;
-    uint16_t              r_roce_max_udp_src_port;
-    uint16_t              r_roce_udp_dst_port;
-    char                  if_name[IFACE_MAX_LEN];
-    uint16_t              vhca_id;
-    size_t                page_size;
-    int                   cache_line_size;
-    struct devx_db_page  *db_list;
-    devx_vtunnel_t       *emu_vf_tun; /* tunnel to pass commands to the VF on the emulation device */
-    char                  ibdev_path[PATH_MAX];
+	struct ibv_context   *ibv_ctx;
+	devx_obj_t            pd;
+	int                   type;
+	uint16_t              lid;
+	uint8_t               gid[16];
+	uint16_t              r_roce_min_udp_src_port;
+	uint16_t              r_roce_max_udp_src_port;
+	uint16_t              r_roce_udp_dst_port;
+	char                  if_name[IFACE_MAX_LEN];
+	uint16_t              vhca_id;
+	size_t                page_size;
+	int                   cache_line_size;
+	struct devx_db_page  *db_list;
+	devx_vtunnel_t       *emu_vf_tun; /* tunnel to pass commands to the VF on the emulation device */
+	char                  ibdev_path[PATH_MAX];
 } devx_ctx_t;
 
 struct devx_obj_handle {
-    devx_ctx_t *ctx;
-    union {
-        struct mlx5dv_devx_obj  *obj;
-        struct mlx5dv_devx_umem *umem;
-        struct mlx5dv_devx_uar  *uar;
-        uint64_t                 handle; /* used for the steering rules */
-    };
-    uint8_t *dtor_in;
-    size_t   dtor_in_len;
-    uint8_t *dtor_out;
-    size_t   dtor_out_len;
+	devx_ctx_t *ctx;
+	union {
+		struct mlx5dv_devx_obj  *obj;
+		struct mlx5dv_devx_umem *umem;
+		struct mlx5dv_devx_uar  *uar;
+		uint64_t                 handle; /* used for the steering rules */
+	};
+	uint8_t *dtor_in;
+	size_t   dtor_in_len;
+	uint8_t *dtor_out;
+	size_t   dtor_out_len;
 };
 
 /* Open/close mlx5 devx context */
@@ -77,22 +75,22 @@ void devx_close_device(devx_ctx_t *ctx);
 
 /* DEVX object */
 struct devx_obj_handle *devx_obj_create(devx_ctx_t *ctx, void *in, size_t inlen,
-                                        void *out, size_t outlen);
+					void *out, size_t outlen);
 int devx_obj_destroy(struct devx_obj_handle *obj);
 
 int devx_obj_query(struct devx_obj_handle *obj, void *in, size_t inlen,
-                   void *out, size_t outlen);
+		   void *out, size_t outlen);
 
 int devx_obj_modify(struct devx_obj_handle *obj, void *in, size_t inlen,
-		            void *out, size_t outlen);
+		    void *out, size_t outlen);
 
 /* set destructor for the 'tunneled object' */
 void devx_obj_set_dtor(struct devx_obj_handle *obj, void *dtor,
-                       size_t dtor_in_len, size_t dtor_out_len);
+		       size_t dtor_in_len, size_t dtor_out_len);
 
 /* General command */
 int devx_cmd(devx_ctx_t *ctx, void *in, size_t inlen, void *out,
-             size_t outlen);
+	     size_t outlen);
 
 /* UAR */
 struct devx_obj_handle *devx_alloc_uar(devx_ctx_t *ctx, uint32_t *idx, void **addr);
@@ -104,13 +102,13 @@ void devx_free_dbrec(devx_ctx_t *ctx, void *db);
 
 /* UMEM */
 struct devx_obj_handle *devx_umem_reg(devx_ctx_t *ctx, void *addr, size_t size,
-				                      int access, uint32_t *id);
+				      int access, uint32_t *id);
 int devx_umem_dereg(struct devx_obj_handle *umem);
 
 /* FLOW steering */
 struct devx_obj_handle *devx_fs_rule_add(devx_ctx_t *ctx, void *in,
-                    					 struct devx_obj_handle *dest,
-                                         uint32_t vport);
+		struct devx_obj_handle *dest,
+		uint32_t vport);
 int devx_fs_rule_del(struct devx_obj_handle *obj);
 
 /* MISC */
