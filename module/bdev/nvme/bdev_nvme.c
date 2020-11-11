@@ -771,6 +771,7 @@ static bool
 bdev_nvme_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 {
 	struct nvme_bdev *nbdev = ctx;
+	struct nvme_bdev_ctrlr *bdev_ctrlr = nbdev->nvme_ns->ctrlr;
 	struct spdk_nvme_ctrlr *ctrlr = nbdev->nvme_ns->ctrlr->ctrlr;
 	struct spdk_nvme_ns *ns = nbdev->nvme_ns->ns;
 	const struct spdk_nvme_ctrlr_data *cdata;
@@ -816,6 +817,11 @@ bdev_nvme_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 	case SPDK_BDEV_IO_TYPE_COMPARE_AND_WRITE:
 		if (spdk_nvme_ctrlr_get_flags(ctrlr) &
 		    SPDK_NVME_CTRLR_COMPARE_AND_WRITE_SUPPORTED) {
+			return true;
+		}
+		return false;
+	case SPDK_BDEV_IO_TYPE_DATA_PASSTHRU:
+		if (bdev_ctrlr->connected_trid->trtype == SPDK_NVME_TRANSPORT_RDMA) {
 			return true;
 		}
 		return false;
