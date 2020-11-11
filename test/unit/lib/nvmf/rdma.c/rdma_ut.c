@@ -38,10 +38,6 @@
 #include "nvmf/rdma.c"
 #include "nvmf/transport.c"
 
-uint64_t g_mr_size;
-uint64_t g_mr_next_size;
-struct ibv_mr g_rdma_mr;
-
 #define RDMA_UT_UNITS_IN_MAX_IO 16
 
 struct spdk_nvmf_transport_opts g_rdma_ut_transport_opts = {
@@ -126,19 +122,6 @@ spdk_nvme_transport_id_populate_trstring(struct spdk_nvme_transport_id *trid, co
 	return 0;
 }
 
-uint64_t
-spdk_mem_map_translate(const struct spdk_mem_map *map, uint64_t vaddr, uint64_t *size)
-{
-	if (g_mr_size != 0) {
-		*(uint32_t *)size = g_mr_size;
-		if (g_mr_next_size != 0) {
-			g_mr_size = g_mr_next_size;
-		}
-	}
-
-	return (uint64_t)&g_rdma_mr;
-}
-
 static void reset_nvmf_rdma_request(struct spdk_nvmf_rdma_request *rdma_req)
 {
 	int i;
@@ -191,6 +174,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	poller.group = &group;
 	rqpair.poller = &poller;
 	rqpair.max_send_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
+	rqpair.device = &device;
 
 	sgl = &cmd.nvme_cmd.dptr.sgl1;
 	rdma_req.recv = &recv;
@@ -205,7 +189,6 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	rtransport.transport.data_buf_pool = NULL;
 
 	device.attr.device_cap_flags = 0;
-	g_rdma_mr.lkey = 0xABCD;
 	sgl->keyed.key = 0xEEEE;
 	sgl->address = 0xFFFF;
 	rdma_req.recv->buf = (void *)0xDDDD;
@@ -220,7 +203,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	sgl->keyed.length = rtransport.transport.opts.io_unit_size / 2;
 
 	device.map = (void *)0x0;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
 	CU_ASSERT(rdma_req.req.length == rtransport.transport.opts.io_unit_size / 2);
@@ -231,12 +214,12 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	CU_ASSERT((uint64_t)rdma_req.req.buffers[0] == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].length == rtransport.transport.opts.io_unit_size / 2);
-	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == RDMA_UT_LKEY);
 
 	/* Part 2: simple I/O, one SGL larger than the transport io unit size (equal to the max io size) */
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->keyed.length = rtransport.transport.opts.io_unit_size * RDMA_UT_UNITS_IN_MAX_IO;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -248,13 +231,13 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		CU_ASSERT((uint64_t)rdma_req.req.buffers[i] == 0x2000);
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == 0x2000);
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == rtransport.transport.opts.io_unit_size);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 
 	/* Part 3: simple I/O one SGL larger than the transport max io size */
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->keyed.length = rtransport.transport.opts.max_io_size * 2;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == -1);
 
@@ -262,7 +245,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	MOCK_SET(spdk_mempool_get, NULL);
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->keyed.length = rtransport.transport.opts.io_unit_size * RDMA_UT_UNITS_IN_MAX_IO;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == false);
@@ -282,7 +265,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->address = 0;
 	sgl->unkeyed.length = rtransport.transport.opts.in_capsule_data_size;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data == (void *)0xDDDD);
@@ -293,7 +276,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->address = rtransport.transport.opts.in_capsule_data_size;
 	sgl->unkeyed.length = rtransport.transport.opts.in_capsule_data_size;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == -1);
 
@@ -301,7 +284,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->address = 0;
 	sgl->unkeyed.length = rtransport.transport.opts.in_capsule_data_size * 2;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == -1);
 
@@ -323,7 +306,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		sgl_desc[i].keyed.key = 0x44;
 	}
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -348,7 +331,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		sgl_desc[i].keyed.key = 0x44;
 	}
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -378,7 +361,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	sgl_desc[1].address = 0x4000 + rtransport.transport.opts.io_unit_size * 15 +
 			      rtransport.transport.opts.io_unit_size / 2;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -404,7 +387,6 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	sgl->keyed.subtype = SPDK_NVME_SGL_SUBTYPE_ADDRESS;
 	sgl->address = 0xFFFF;
 	rdma_req.recv->buf = (void *)0xDDDD;
-	g_rdma_mr.lkey = 0xABCD;
 	sgl->keyed.key = 0xEEEE;
 
 	for (i = 0; i < 4; i++) {
@@ -417,7 +399,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	MOCK_SET(spdk_mempool_get, (void *)0x2000);
 	reset_nvmf_rdma_request(&rdma_req);
 	sgl->keyed.length = rtransport.transport.opts.io_unit_size * 4;
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	SPDK_CU_ASSERT_FATAL(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -438,7 +420,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 
 	/* part 2: now that we have used the buffers from the cache, try again. We should get mempool buffers. */
 	reset_nvmf_rdma_request(&rdma_req);
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	SPDK_CU_ASSERT_FATAL(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -463,7 +445,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		STAILQ_INSERT_TAIL(&group.group.buf_cache, &bufs[i], link);
 	}
 	reset_nvmf_rdma_request(&rdma_req);
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	SPDK_CU_ASSERT_FATAL(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -495,7 +477,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	g_mr_size = rtransport.transport.opts.io_unit_size / 4;
 	g_mr_next_size = rtransport.transport.opts.io_unit_size / 2;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 	SPDK_CU_ASSERT_FATAL(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
 	CU_ASSERT(rdma_req.req.length == rtransport.transport.opts.io_unit_size / 2);
@@ -508,7 +490,7 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == (((uint64_t)&buffer + NVMF_DATA_BUFFER_MASK) &
 			~NVMF_DATA_BUFFER_MASK));
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].length == rtransport.transport.opts.io_unit_size / 2);
-	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == RDMA_UT_LKEY);
 	buffer_ptr = STAILQ_FIRST(&group.retired_bufs);
 	CU_ASSERT(buffer_ptr == &buffer);
 	STAILQ_REMOVE(&group.retired_bufs, buffer_ptr, spdk_nvmf_transport_pg_cache_buf, link);
@@ -637,7 +619,6 @@ test_spdk_nvmf_rdma_request_process(void)
 
 	device.attr.device_cap_flags = 0;
 	device.map = (void *)0x0;
-	g_rdma_mr.lkey = 0xABCD;
 
 	/* Test 1: single SGL READ request */
 	rdma_recv = create_recv(&rqpair, SPDK_NVME_OPC_READ);
@@ -908,6 +889,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	poller.group = &group;
 	rqpair.poller = &poller;
 	rqpair.max_send_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
+	rqpair.device = &device;
 
 	sgl = &cmd.nvme_cmd.dptr.sgl1;
 	rdma_req.recv = &recv;
@@ -923,7 +905,6 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 
 	device.attr.device_cap_flags = 0;
 	device.map = NULL;
-	g_rdma_mr.lkey = 0xABCD;
 	sgl->keyed.key = 0xEEEE;
 	sgl->address = 0xFFFF;
 	rdma_req.recv->buf = (void *)0xDDDD;
@@ -942,7 +923,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = data_bs * 8;
 	sgl->keyed.length = data_bs * 4;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -958,7 +939,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	for (i = 0; i < 4; ++i) {
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == 0x2000 + i * (data_bs + md_size));
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == data_bs);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 
 	/* Part 2: simple I/O, one SGL equal to io unit size, io_unit_size is not aligned with md_size,
@@ -972,7 +953,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = data_bs * 4;
 	sgl->keyed.length = data_bs * 4;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -988,16 +969,16 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	for (i = 0; i < 3; ++i) {
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == 0x2000 + i * (data_bs + md_size));
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == data_bs);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 	CU_ASSERT(rdma_req.data.wr.sg_list[3].addr == 0x2000 + 3 * (data_bs + md_size));
 	CU_ASSERT(rdma_req.data.wr.sg_list[3].length == 488);
-	CU_ASSERT(rdma_req.data.wr.sg_list[3].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[3].lkey == RDMA_UT_LKEY);
 
 	/* 2nd buffer consumed */
 	CU_ASSERT(rdma_req.data.wr.sg_list[4].addr == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[4].length == 24);
-	CU_ASSERT(rdma_req.data.wr.sg_list[4].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[4].lkey == RDMA_UT_LKEY);
 
 	/* Part 3: simple I/O, one SGL equal io unit size, io_unit_size is equal to block size 512 bytes */
 	MOCK_SET(spdk_mempool_get, (void *)0x2000);
@@ -1009,7 +990,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = data_bs;
 	sgl->keyed.length = data_bs;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1024,7 +1005,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].length == data_bs);
-	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == RDMA_UT_LKEY);
 
 	CU_ASSERT(rdma_req.req.iovcnt == 2);
 	CU_ASSERT(rdma_req.req.iov[0].iov_base == (void *)((unsigned long)0x2000));
@@ -1044,7 +1025,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = (data_bs + md_size) * 4;
 	sgl->keyed.length = data_bs * 4;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1060,7 +1041,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	for (i = 0; i < 4; ++i) {
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == 0x2000 + i * (data_bs + md_size));
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == data_bs);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 
 	/* Part 5: simple I/O, one SGL equal to 2x io unit size, io_unit_size is aligned with md_size,
@@ -1074,7 +1055,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = (data_bs + md_size) * 2;
 	sgl->keyed.length = data_bs * 4;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1107,7 +1088,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = data_bs * 4;
 	sgl->keyed.length = data_bs * 6;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1123,24 +1104,24 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	for (i = 0; i < 3; ++i) {
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == 0x2000 + i * (data_bs + md_size));
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == data_bs);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 	CU_ASSERT(rdma_req.data.wr.sg_list[3].addr == 0x2000 + 3 * (data_bs + md_size));
 	CU_ASSERT(rdma_req.data.wr.sg_list[3].length == 488);
-	CU_ASSERT(rdma_req.data.wr.sg_list[3].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[3].lkey == RDMA_UT_LKEY);
 
 	/* 2nd IO buffer consumed */
 	CU_ASSERT(rdma_req.data.wr.sg_list[4].addr == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[4].length == 24);
-	CU_ASSERT(rdma_req.data.wr.sg_list[4].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[4].lkey == RDMA_UT_LKEY);
 
 	CU_ASSERT(rdma_req.data.wr.sg_list[5].addr == 0x2000 + 24 + md_size);
 	CU_ASSERT(rdma_req.data.wr.sg_list[5].length == 512);
-	CU_ASSERT(rdma_req.data.wr.sg_list[5].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[5].lkey == RDMA_UT_LKEY);
 
 	CU_ASSERT(rdma_req.data.wr.sg_list[6].addr == 0x2000 + 24 + 512 + md_size * 2);
 	CU_ASSERT(rdma_req.data.wr.sg_list[6].length == 512);
-	CU_ASSERT(rdma_req.data.wr.sg_list[6].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[6].lkey == RDMA_UT_LKEY);
 
 	/* Part 7: simple I/O, number of SGL entries exceeds the number of entries
 	   one WR can hold. Additional WR is chained */
@@ -1155,7 +1136,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = data_bs * 16;
 	sgl->keyed.length = data_bs * 16;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1182,7 +1163,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rtransport.transport.opts.io_unit_size = 516;
 	sgl->keyed.length = data_bs * 2;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
@@ -1197,13 +1178,13 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == 0x2000);
 	CU_ASSERT(rdma_req.data.wr.sg_list[0].length == 512);
-	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == RDMA_UT_LKEY);
 
 	/* 2nd IO buffer consumed, offset 4 bytes due to part of the metadata
 	  is located at the beginning of that buffer */
 	CU_ASSERT(rdma_req.data.wr.sg_list[1].addr == 0x2000 + 4);
 	CU_ASSERT(rdma_req.data.wr.sg_list[1].length == 512);
-	CU_ASSERT(rdma_req.data.wr.sg_list[1].lkey == g_rdma_mr.lkey);
+	CU_ASSERT(rdma_req.data.wr.sg_list[1].lkey == RDMA_UT_LKEY);
 
 	/* Test 9 dealing with a buffer split over two Memory Regions */
 	MOCK_SET(spdk_mempool_get, (void *)&buffer);
@@ -1217,7 +1198,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	g_mr_size = data_bs;
 	g_mr_next_size = rtransport.transport.opts.io_unit_size;
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 	SPDK_CU_ASSERT_FATAL(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
 	CU_ASSERT(rdma_req.req.length == rtransport.transport.opts.io_unit_size / 2);
@@ -1231,7 +1212,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].addr == (uint64_t)rdma_req.req.data + i *
 			  (data_bs + md_size));
 		CU_ASSERT(rdma_req.data.wr.sg_list[i].length == data_bs);
-		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == g_rdma_mr.lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[i].lkey == RDMA_UT_LKEY);
 	}
 	buffer_ptr = STAILQ_FIRST(&group.retired_bufs);
 	CU_ASSERT(buffer_ptr == &buffer);
@@ -1266,7 +1247,7 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 		sgl_desc[i].keyed.key = 0x44;
 	}
 
-	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
+	rc = nvmf_rdma_request_parse_sgl(&rtransport, &rqpair, &rdma_req);
 
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(rdma_req.req.data_from_pool == true);
