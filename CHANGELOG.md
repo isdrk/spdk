@@ -53,6 +53,11 @@ writing json bool results into one function.
 Update API `bdev_nvme_set_options` and add a keep_alive_timeout_ms parameter. Now you
 can specify the keep_alive_timeout before creating NVMe bdev.
 
+### rdma
+rdma.h header is now public. New functions to support unified memory translation
+`spdk_rdma_create_mem_map`, `spdk_rdma_free_mem_map`, `spdk_rdma_get_translation`
+and `spdk_rdma_register_translation_method` have been added.
+
 ### rpc
 
 An new optional parameter `wait` was added to the RPC `iscsi_create_portal_group`,

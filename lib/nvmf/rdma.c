@@ -40,10 +40,10 @@
 #include "spdk/string.h"
 #include "spdk/trace.h"
 #include "spdk/util.h"
+#include "spdk/log.h"
+#include "spdk/rdma.h"
 
 #include "spdk_internal/assert.h"
-#include "spdk/log.h"
-#include "spdk_internal/rdma.h"
 
 #include "nvmf_internal.h"
 
