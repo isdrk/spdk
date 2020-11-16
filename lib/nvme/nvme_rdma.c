@@ -47,9 +47,9 @@
 #include "spdk/endian.h"
 #include "spdk/likely.h"
 #include "spdk/config.h"
+#include "spdk/rdma.h"
 
 #include "nvme_internal.h"
-#include "spdk_internal/rdma.h"
 
 #define NVME_RDMA_TIME_OUT_IN_MS 2000
 #define NVME_RDMA_RW_BUFFER_SIZE 131072

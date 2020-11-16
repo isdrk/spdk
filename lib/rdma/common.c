@@ -34,8 +34,8 @@
 #include "spdk/log.h"
 #include "spdk/env.h"
 #include "spdk/likely.h"
+#include "spdk/rdma.h"
 
-#include "spdk_internal/rdma.h"
 #include "spdk_internal/assert.h"
 
 struct spdk_rdma_mem_map {

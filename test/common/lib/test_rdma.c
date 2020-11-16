@@ -32,8 +32,8 @@
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/rdma.h"
 
-#include "spdk_internal/rdma.h"
 #include "spdk_internal/mock.h"
 
 #define RDMA_UT_LKEY 123
