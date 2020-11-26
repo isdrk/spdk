@@ -53,6 +53,8 @@ DEFINE_STUB(spdk_rdma_qp_flush_send_wrs, int, (struct spdk_rdma_qp *spdk_rdma_qp
 DEFINE_STUB(spdk_rdma_create_mem_map, struct spdk_rdma_mem_map *, (struct ibv_pd *pd,
 		struct spdk_nvme_rdma_hooks *hooks), NULL);
 DEFINE_STUB_V(spdk_rdma_free_mem_map, (struct spdk_rdma_mem_map **map));
+DEFINE_STUB_V(spdk_rdma_register_translation_method,
+	      (spdk_rdma_addr_translation_cb translation_cb));
 
 /* used to mock out having to split an SGL over a memory region */
 size_t g_mr_size;

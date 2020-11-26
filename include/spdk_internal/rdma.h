@@ -170,4 +170,27 @@ void spdk_rdma_free_mem_map(struct spdk_rdma_mem_map **map);
 int spdk_rdma_get_translation(struct spdk_rdma_qp *qp, struct spdk_rdma_mem_map *map, void *address,
 			      size_t length, struct spdk_rdma_memory_translation *translation);
 
+/**
+ * Prototype of the function to be used for custom memory translation.
+ *
+ * \param qp Pointer to RDMA qpair
+ * \param address Memory address for translation
+ * \param length Length of the memory address
+ * \param[in,out] translation Pointer to translation result to be filled by this function
+ * \retval -EINVAL if translation is not found
+ * \retval 0 translation succeed
+ */
+typedef int (*spdk_rdma_addr_translation_cb)(struct spdk_rdma_qp *qp, void *address, size_t length,
+		struct spdk_rdma_memory_translation *translation);
+
+/**
+ * Register a custom translation method which will be used for every memory translation in runtime.
+ *
+ * This approach differs from callbacks defined in spdk_nvme_rdma_hooks structure, the callbacks
+ * are only used to create Memory Regions, typically at initialization time.
+ *
+ * \param translation_cb Pointer to the translation function
+ */
+void spdk_rdma_register_translation_method(spdk_rdma_addr_translation_cb translation_cb);
+
 #endif /* SPDK_RDMA_H */

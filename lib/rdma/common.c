@@ -49,6 +49,8 @@ struct spdk_rdma_mem_map {
 static LIST_HEAD(, spdk_rdma_mem_map) g_rdma_mr_maps = LIST_HEAD_INITIALIZER(&g_rdma_mr_maps);
 static pthread_mutex_t g_rdma_mr_maps_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static spdk_rdma_addr_translation_cb g_rdma_translation;
+
 static int
 rdma_mem_notify(void *cb_ctx, struct spdk_mem_map *map,
 		enum spdk_mem_map_notify_action action,
@@ -196,11 +198,22 @@ spdk_rdma_get_translation(struct spdk_rdma_qp *qp, struct spdk_rdma_mem_map *map
 {
 	struct ibv_mr *mr;
 	uint64_t real_length = length;
+	int rc;
 
 	assert(qp);
 	assert(map);
 	assert(address);
 	assert(translation);
+
+	if (g_rdma_translation) {
+		rc = g_rdma_translation(qp, address, length, translation);
+		/* Translation completed, no need to use common methods */
+		if (rc == 0) {
+			return rc;
+		}
+		/* Use common translation on -EINVAL */
+		assert(rc == -EINVAL);
+	}
 
 	translation->addr = address;
 
@@ -223,4 +236,14 @@ spdk_rdma_get_translation(struct spdk_rdma_qp *qp, struct spdk_rdma_mem_map *map
 	}
 
 	return 0;
+}
+
+void
+spdk_rdma_register_translation_method(spdk_rdma_addr_translation_cb translation_cb)
+{
+	if (g_rdma_translation) {
+		SPDK_WARNLOG("Redefining RDMA translation hook\n");
+	}
+
+	g_rdma_translation = translation_cb;
 }
