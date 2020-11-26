@@ -45,6 +45,7 @@
 #include "spdk/nvmf_cmd.h"
 #include "spdk/nvmf_spec.h"
 #include "spdk/memory.h"
+#include "../../lib/nvmf/io_pacer.h"
 
 #ifdef SPDK_CONFIG_VTUNE
 #include <ittnotify.h>
@@ -87,6 +88,9 @@ struct spdk_nvmf_dif_info {
 struct spdk_nvmf_request {
 	struct spdk_nvmf_qpair		*qpair;
 	uint32_t			length;
+    // Check about receive tse. ~Ankit
+    // Might we need to add to rdma_nvmf_request struct. ~Ankit
+    uint32_t            entry_time;
 	enum spdk_nvme_data_transfer	xfer;
 	void				*data;
 	union nvmf_h2c_msg		*cmd;
@@ -136,6 +140,7 @@ struct spdk_nvmf_transport_pg_cache_buf {
 	STAILQ_ENTRY(spdk_nvmf_transport_pg_cache_buf) link;
 };
 
+/* What are these elements used for? ~Ankit */
 struct spdk_nvmf_transport_poll_group {
 	struct spdk_nvmf_transport					*transport;
 	/* Requests that are waiting to obtain a data buffer */
@@ -188,6 +193,10 @@ struct spdk_nvmf_transport {
 
 	TAILQ_HEAD(, spdk_nvmf_listener)	listeners;
 	TAILQ_ENTRY(spdk_nvmf_transport)	link;
+
+    /* I don't think this is the right place to share across all pacers.
+     * Find correct place. ~Ankit */
+    spdk_io_pacer_shared pacer_shared;
 };
 
 struct spdk_nvmf_transport_ops {
