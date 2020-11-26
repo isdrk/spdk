@@ -88,8 +88,6 @@ struct spdk_nvmf_dif_info {
 struct spdk_nvmf_request {
 	struct spdk_nvmf_qpair		*qpair;
 	uint32_t			length;
-    // Check about receive tse. ~Ankit
-    // Might we need to add to rdma_nvmf_request struct. ~Ankit
     uint32_t            entry_time;
 	enum spdk_nvme_data_transfer	xfer;
 	void				*data;
@@ -193,10 +191,6 @@ struct spdk_nvmf_transport {
 
 	TAILQ_HEAD(, spdk_nvmf_listener)	listeners;
 	TAILQ_ENTRY(spdk_nvmf_transport)	link;
-
-    /* I don't think this is the right place to share across all pacers.
-     * Find correct place. ~Ankit */
-    spdk_io_pacer_shared pacer_shared;
 };
 
 struct spdk_nvmf_transport_ops {
