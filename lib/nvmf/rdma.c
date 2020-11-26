@@ -2064,6 +2064,12 @@ nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->state = RDMA_REQUEST_STATE_FREE;
 }
 
+static uint32_t
+current_time()
+{
+    return (spdk_get_ticks() * SPDK_SEC_TO_NSEC) / spdk_get_ticks_hz();
+}
+
 static void
 nvmf_rdma_io_pacer_pop_cb(void *io)
 {
@@ -2071,22 +2077,118 @@ nvmf_rdma_io_pacer_pop_cb(void *io)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	struct spdk_nvmf_rdma_transport *rtransport;
 
+            SPDK_NOTICELOG("Ankit: io_pacer_schedule_request\n");
 	rdma_req = SPDK_CONTAINEROF(io, struct spdk_nvmf_rdma_request, state_link);
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 				      struct spdk_nvmf_rdma_transport,
 				      transport);
+    rdma_req->req.entry_time = current_time();
 	rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
 	STAILQ_INSERT_TAIL(&rqpair->poller->group->group.pending_buf_queue,
 			   &rdma_req->req,
 			   buf_link);
 	spdk_nvmf_rdma_request_process(rtransport, rdma_req);
+            SPDK_NOTICELOG("Ankit: io_pacer_schedule_request\n");
+}
+
+static rte_atomic64_t io_pacer_packet_count; // To test only. ~Ankit
+
+static uint32_t time_taken_by_packet(struct spdk_nvmf_rdma_request *rdma_req)
+{
+    return (current_time() - rdma_req->req.entry_time);
+}
+
+spdk_io_pacer_shared pacer_shared_global;
+
+static int
+io_pacer_schedule_request(  struct spdk_nvmf_rdma_transport *rtransport,
+                            struct spdk_nvmf_rdma_request *rdma_req, 
+                            spdk_io_pacer_shared *pacer_shared, 
+                            spdk_io_pacer *pacer)
+{
+	struct spdk_nvmf_rdma_qpair	*rqpair;
+	struct spdk_nvmf_rdma_poll_group *rgroup;
+	struct io_pacer_queue_entry *entry;
+            SPDK_NOTICELOG("Ankit: io_pacer_schedule_request\n");
+	uint32_t next_queue = pacer_shared->next_queue.cnt;
+	int rc = 0;
+
+	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+    rgroup = rqpair->poller->group;
+    
+    uint32_t i;
+    uint32_t num_disk = pacer_shared->number_of_inserted_disks.cnt;
+    uint32_t disk_index = pacer->last_scheduling_disk_index;
+    uint32_t disk_iterated = 0;
+     
+    struct spdk_nvmf_ns *completed_ns, *pacer_entry_ns;
+    completed_ns = _spdk_nvmf_subsystem_get_ns(rqpair->qpair.ctrlr->subsys, rdma_req->req.cmd->nvme_cmd.nsid);
+    assert(completed_ns != NULL);
+
+    if (!pacer_shared->num_queues.cnt) {
+        return rc;
+    }
+	for (   entry = STAILQ_FIRST(&pacer_shared->queues[next_queue].queue);
+            entry != NULL 
+                && pacer_shared->total_allocated_mem.cnt < BF2_CACHE_SIZE 
+                && disk_iterated < pacer_shared->number_of_inserted_disks.cnt;
+            next_queue++,
+                disk_index %= pacer_shared->number_of_inserted_disks.cnt ,
+                disk_iterated++ 
+            ) {
+
+
+        next_queue %= pacer_shared->num_queues.cnt;
+        // * What can be the bet way to take lock here for num queues instead of using next_queue % pacer_shared->number_of_inserted_disks. ~Ankit * /
+        rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
+            entry = STAILQ_FIRST(&pacer_shared->queues[next_queue].queue);
+        rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
+        pacer_entry_ns = entry->ns;
+        assert(pacer_entry_ns->nsid < MAX_SUPPORTED_DISKS);
+
+        //Below one should be checked for poped entry, is it correct? ~Ankit
+        if (pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt < pacer_shared->per_disk_max_buffer[pacer_entry_ns->nsid].cnt) {
+            // * Time taken by completed request. * /
+            uint64_t time_taken = time_taken_by_packet(rdma_req);
+            rte_atomic64_set(&pacer_shared->per_disk_time_taken_to_transfer[completed_ns->nsid][pacer_shared->current_data_and_time_index.cnt], time_taken);
+            rte_atomic64_set(&pacer_shared->current_data_and_time_index, pacer_shared->current_data_and_time_index.cnt + 1);
+            // * Memory taken by next request. * /
+            rte_atomic64_set(&pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid], pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt + entry->size); // Confirm if it's correct. ~Ankit
+            rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt + entry->size);
+
+            rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue - 1]);
+                STAILQ_REMOVE(&pacer_shared->queues[next_queue - 1].queue, entry, io_pacer_queue_entry, link);
+            rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue - 1]);
+            rte_atomic64_set(&pacer_shared->next_queue, next_queue);
+            //pacer->pop_cb(entry);
+            {
+                struct spdk_nvmf_rdma_request *rdma_req_pop_cb;
+                struct spdk_nvmf_rdma_qpair *rqpair_pop_cb;
+                struct spdk_nvmf_rdma_transport *rtransport_pop_cb;
+
+                rdma_req_pop_cb = SPDK_CONTAINEROF(entry, struct spdk_nvmf_rdma_request, state_link);
+                rqpair_pop_cb = SPDK_CONTAINEROF(rdma_req_pop_cb->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+                rtransport_pop_cb = SPDK_CONTAINEROF(rqpair_pop_cb->qpair.transport, struct spdk_nvmf_rdma_transport, transport);
+                rdma_req_pop_cb->req.entry_time = current_time();
+                rdma_req_pop_cb->state = RDMA_REQUEST_STATE_NEED_BUFFER;
+                rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue - 1]);
+                    STAILQ_INSERT_TAIL(&rqpair_pop_cb->poller->group->group.pending_buf_queue, &rdma_req_pop_cb->req, buf_link);
+                rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue - 1]);
+                spdk_nvmf_rdma_request_process(rtransport_pop_cb, rdma_req_pop_cb);
+            }
+        }
+	}   
+    pacer->last_scheduling_disk_index = disk_index;
+
+    return rc;
 }
 
 bool
 spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			       struct spdk_nvmf_rdma_request *rdma_req)
 {
+    assert(rtransport);
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 	struct spdk_nvmf_rdma_device	*device;
 	struct spdk_nvmf_rdma_poll_group *rgroup;
@@ -2098,10 +2200,29 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 	int				data_posted;
 	uint32_t			num_blocks;
 	struct spdk_nvme_sgl_descriptor *sgl;
+	spdk_io_pacer *pacer;
+    uint32_t i, j;
+    uint32_t disk_start_index;
+    struct spdk_nvmf_request *req = &rdma_req->req;
+    uint32_t length = req->length;
+    uint64_t per_disk_total_time, per_disk_total_data, average_disk_speed;
+    spdk_io_pacer_shared *pacer_shared;
+    pacer_shared = &pacer_shared_global;
+    uint32_t num_disk = pacer_shared->number_of_inserted_disks.cnt;
+    num_disk = pacer_shared->number_of_inserted_disks.cnt;
+/* Disable to test only. ~Ankit
+// Don't know why it's giving problem. :( ~Ankit 
+    num_disk = rdma_req->req.qpair->ctrlr->subsys->max_nsid;
+//*/
+    SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %u, pacer_shared->per_disk_used_buffer[i].cnt: %u, rdma_req->pacer_entry.size: %u,  pacer_shared->total_allocated_mem.cnt: %u\n", 
+                pacer_shared->total_allocated_mem.cnt, pacer_shared->per_disk_used_buffer[0].cnt, rdma_req->pacer_entry.size,  pacer_shared->total_allocated_mem.cnt);
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	device = rqpair->device;
-	rgroup = rqpair->poller->group;
+    rgroup = rqpair->poller->group;
+    pacer = rgroup->pacer;
+
+    disk_start_index = pacer->last_scheduling_disk_index;
 
 	assert(rdma_req->state != RDMA_REQUEST_STATE_FREE);
 
@@ -2168,7 +2289,8 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 		case RDMA_REQUEST_STATE_IO_PACING:
 			sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
 
-			if ((rgroup->pacer == NULL) ||
+			if ((pacer == NULL) ||
+                (0 == rtransport->transport.opts.io_pacer_period) ||
 			    (sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK &&
 			     sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) ||
 			    spdk_unlikely(spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) ||
@@ -2182,8 +2304,11 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			ns = _spdk_nvmf_subsystem_get_ns(rqpair->qpair.ctrlr->subsys,
 							 rdma_req->req.cmd->nvme_cmd.nsid);
 			assert(ns != NULL);
+            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %u, pacer_shared->per_disk_used_buffer[i].cnt: %u, rdma_req->pacer_entry.size: %u\n", 
+                        pacer_shared->total_allocated_mem.cnt, pacer_shared->per_disk_used_buffer[ns->nsid - 1].cnt, rdma_req->pacer_entry.size);
 
 			/* @todo: check if size is calculated correctly for all types of commands */
+            /* Need to confirm this io size of serving request. ~Ankit */
 			rdma_req->pacer_entry.size = spdk_bdev_get_block_size(ns->bdev) *
 				((from_le32(&rdma_req->req.cmd->nvme_cmd.cdw12) & 0xFFFFu) + 1);
 			if (rdma_req->pacer_entry.size <= rtransport->transport.opts.io_pacer_threshold) {
@@ -2192,11 +2317,51 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				break;
 			}
 
-			rdma_req->pacer_key = ((uint64_t)rqpair->qpair.ctrlr->subsys->id << 32) +
-				rdma_req->req.cmd->nvme_cmd.nsid;
-			spdk_io_pacer_push(rgroup->pacer,
-					   rdma_req->pacer_key,
-					   &rdma_req->pacer_entry);
+            // Move to pacer.c ~Ankit
+            pacer->pacer_iteration_number++;
+            if (pacer->pacer_iteration_number >= pacer->take_average_after_count) {
+                //for (i = average_disk_speed = 0; i < MAX_SUPPORTED_DISKS; i++) {
+                for (i = average_disk_speed = 0; i < num_disk; i++) {
+                    average_disk_speed += pacer_shared->disk_speeds[i].cnt;
+                }
+                average_disk_speed /= i;
+                for (i = 0; i < num_disk; i++) {
+                    for (j = per_disk_total_time = per_disk_total_data = 0; j < MAX_ITERATION_TO_COMPUTE_AVERAGE; j++) {
+                        per_disk_total_time += pacer_shared->per_disk_time_taken_to_transfer[i][j].cnt;
+                        per_disk_total_data += pacer_shared->per_disk_data_transfered[i][j].cnt;
+                    }
+                    per_disk_total_time /= MAX_ITERATION_TO_COMPUTE_AVERAGE;
+                    per_disk_total_data /= MAX_ITERATION_TO_COMPUTE_AVERAGE;
+                    uint64_t disk_speed = per_disk_total_data / per_disk_total_time;
+                    rte_atomic64_set(&pacer_shared->disk_speeds[i], disk_speed);
+                    if (pacer_shared->disk_speeds[i].cnt) {
+                        disk_speed = MAX_ALLOCATION_SIZE_PER_DISK * pacer_shared->disk_speeds[i].cnt / average_disk_speed;
+                        rte_atomic64_set(&pacer_shared->per_disk_max_buffer[i], disk_speed);
+                    }
+                }
+                pacer->pacer_iteration_number = 0;
+            }
+
+            i = ns->nsid - 1;
+            i = (i < MAX_SUPPORTED_DISKS) ? i : MAX_SUPPORTED_DISKS - 1;
+            if ((pacer_shared->total_allocated_mem.cnt >= BF2_CACHE_SIZE) 
+                || pacer_shared->per_disk_used_buffer[i].cnt >= (pacer_shared->per_disk_max_buffer[i].cnt) 
+                || rdma_req->pacer_entry.size > ((uint64_t)BF2_CACHE_SIZE - pacer_shared->total_allocated_mem.cnt)
+                ) {
+                // * What's the max nsid can go? ~Ankit * /
+                rdma_req->pacer_entry.ns = ns;
+                rdma_req->pacer_key = ((uint64_t)rqpair->qpair.ctrlr->subsys->id << 32) +
+                                                                rdma_req->req.cmd->nvme_cmd.nsid;
+                spdk_io_pacer_push(pacer_shared, rdma_req->pacer_key, &rdma_req->pacer_entry);
+                break;
+            }
+
+            rte_atomic64_set(&pacer_shared->per_disk_used_buffer[i], pacer_shared->per_disk_used_buffer[i].cnt + rdma_req->pacer_entry.size);
+            rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt + rdma_req->pacer_entry.size);
+
+            rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
+            STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->req, buf_link);
+
 			break;
 
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
@@ -2226,10 +2391,6 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
-
-			if (rgroup->pacer_tuner2 && (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
-				spdk_io_pacer_tuner2_add(rgroup->pacer_tuner2, rdma_req->req.length);
-			}
 
 			/* If data is transferring from host to controller and the data didn't
 			 * arrive using in capsule data, we need to do a transfer from the host.
@@ -2405,11 +2566,9 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				rqpair->poller->stat.request_latency_large += tsc - rdma_req->receive_tsc;
 			}
 
-			if (rgroup->pacer_tuner2 &&
-			    (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
-				spdk_io_pacer_tuner2_sub(rgroup->pacer_tuner2, rdma_req->req.length);
+            if (0 != rtransport->transport.opts.io_pacer_period) {
+                io_pacer_schedule_request(rtransport, rdma_req, pacer_shared, pacer);
 			}
-
 			nvmf_rdma_request_free(rdma_req, rtransport);
 
 			if (rdma_req->pacer_key != 0xDEADBEEF) {
@@ -3557,11 +3716,23 @@ spdk_nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport)
 		poller->num_cqe = num_cqe;
 	}
 
+    struct spdk_nvmf_rdma_request *rdma_req;
+    struct spdk_nvmf_rdma_qpair *rqpair;
+    spdk_io_pacer_shared *pacer_shared = &pacer_shared_global;
 	if (0 != transport->opts.io_pacer_period) {
-		rgroup->pacer = spdk_io_pacer_create(transport->opts.io_pacer_period,
-						     transport->opts.io_pacer_credit,
-						     transport->opts.io_pacer_disk_credit,
-						     nvmf_rdma_io_pacer_pop_cb);
+        //rte_spinlock_init(&pacer_shared->lock_for_pacer_initialization);
+        //pacer_shared->slow_disk_var_initialization.cnt = 0; //Not needed since changed it to type staic, but hasn't worked so. ~Ankit
+        //rte_spinlock_unlock(&pacer_shared->lock_for_pacer_initialization);
+
+
+        SPDK_NOTICELOG("Ankit: create pacer.\n");
+
+        //pacer_shared->number_of_inserted_disks.cnt = rqpair->qpair.ctrlr->subsys->max_nsid;
+		rgroup->pacer = spdk_io_pacer_create(pacer_shared, 
+                                            transport->opts.io_pacer_period,
+						                    transport->opts.io_pacer_credit,
+                                            transport->opts.io_pacer_disk_credit,
+                                            nvmf_rdma_io_pacer_pop_cb);
 		if (!rgroup->pacer) {
 			SPDK_ERRLOG("Failed to create IO pacer\n");
 			spdk_nvmf_rdma_poll_group_destroy(&rgroup->group);
@@ -3569,29 +3740,6 @@ spdk_nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport)
 			return NULL;
 		}
 
-		if (transport->opts.io_pacer_tuner_type == 0) {
-			rgroup->pacer_tuner = spdk_io_pacer_tuner_create(rgroup->pacer,
-									 transport->opts.io_pacer_tuner_period,
-									 transport->opts.io_pacer_tuner_step);
-			if (!rgroup->pacer_tuner) {
-				SPDK_ERRLOG("Failed to create IO pacer tuner\n");
-				spdk_nvmf_rdma_poll_group_destroy(&rgroup->group);
-				pthread_mutex_unlock(&rtransport->lock);
-				return NULL;
-			}
-		} else {
-			rgroup->pacer_tuner2 = spdk_io_pacer_tuner2_create(rgroup->pacer,
-									   transport->opts.io_pacer_tuner_period,
-									   transport->opts.io_pacer_tuner_threshold /
-									   spdk_env_get_core_count(),
-									   transport->opts.io_pacer_tuner_factor);
-			if (!rgroup->pacer_tuner2) {
-				SPDK_ERRLOG("Failed to create IO pacer tuner\n");
-				spdk_nvmf_rdma_poll_group_destroy(&rgroup->group);
-				pthread_mutex_unlock(&rtransport->lock);
-				return NULL;
-			}
-		}
 	}
 
 	/* @todo: there is no good place to create queues. */
@@ -3668,6 +3816,7 @@ spdk_nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 	struct spdk_nvmf_rdma_qpair		*qpair, *tmp_qpair;
 	struct spdk_nvmf_transport_pg_cache_buf	*buf, *tmp_buf;
 	struct spdk_nvmf_rdma_transport		*rtransport;
+    spdk_io_pacer_shared *pacer_shared = &pacer_shared_global;
 
 	rgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_rdma_poll_group, group);
 	if (!rgroup) {
@@ -3718,13 +3867,7 @@ spdk_nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 	rtransport = SPDK_CONTAINEROF(rgroup->group.transport, struct spdk_nvmf_rdma_transport, transport);
 
 	if (rgroup->pacer) {
-		if (rtransport->transport.opts.io_pacer_tuner_type == 0) {
-			spdk_io_pacer_tuner_destroy(rgroup->pacer_tuner);
-		} else {
-			spdk_io_pacer_tuner2_destroy(rgroup->pacer_tuner2);
-		}
-
-		spdk_io_pacer_destroy(rgroup->pacer);
+		spdk_io_pacer_destroy(pacer_shared);
 	}
 
 	pthread_mutex_lock(&rtransport->lock);
