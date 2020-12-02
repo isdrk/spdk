@@ -2080,7 +2080,6 @@ nvmf_rdma_io_pacer_pop_cb(void *io)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	struct spdk_nvmf_rdma_transport *rtransport;
 
-            SPDK_NOTICELOG("Ankit: \n");
 	rdma_req = SPDK_CONTAINEROF(io, struct spdk_nvmf_rdma_request, state_link);
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
@@ -2092,7 +2091,6 @@ nvmf_rdma_io_pacer_pop_cb(void *io)
 			   &rdma_req->req,
 			   buf_link);
 	spdk_nvmf_rdma_request_process(rtransport, rdma_req);
-            SPDK_NOTICELOG("Ankit: \n");
 }
 
 static rte_atomic64_t io_pacer_packet_count; // To test only. ~Ankit
@@ -2109,20 +2107,14 @@ typedef struct io_pacer_thread_parameter {
 
 static void* thread_to_schedule_io_pacer_request(void *arg)
 {
-            SPDK_NOTICELOG("Ankit: \n");
-            return NULL;
     io_pacer_thread_parameter *thread_parameters = arg;
     struct spdk_nvmf_rdma_transport *rtransport_pop_cb;
     struct spdk_nvmf_rdma_request *rdma_req_pop_cb;
 
-            SPDK_NOTICELOG("Ankit: \n");
     rtransport_pop_cb = thread_parameters->rtransport;
     rdma_req_pop_cb = thread_parameters->rdma_req;
-            SPDK_NOTICELOG("Ankit: \n");
     free(thread_parameters);
-            SPDK_NOTICELOG("Ankit: \n");
-    //spdk_nvmf_rdma_request_process(rtransport_pop_cb, rdma_req_pop_cb); //Comented out to test only. ~Ankit
-            SPDK_NOTICELOG("Ankit: \n");
+    spdk_nvmf_rdma_request_process(rtransport_pop_cb, rdma_req_pop_cb); //Comented out to test only. ~Ankit
     return NULL;
 }
 
@@ -2134,53 +2126,29 @@ io_pacer_schedule_request(  struct spdk_nvmf_rdma_transport *rtransport,
                             spdk_io_pacer_shared *pacer_shared, 
                             spdk_io_pacer *pacer)
 {
+            uint64_t time_taken_by_func = current_time(); 
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 	struct spdk_nvmf_rdma_poll_group *rgroup;
 	struct io_pacer_queue_entry *entry;
-            uint64_t time_taken_by_func = current_time(); 
-            SPDK_NOTICELOG("Ankit: \n");
 	uint32_t next_queue = pacer_shared->next_queue.cnt;
 	int rc = 0;
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
     rgroup = rqpair->poller->group;
     
-            SPDK_NOTICELOG("Ankit: \n");
     uint32_t i;
     uint32_t num_disk = pacer_shared->number_of_inserted_disks.cnt;
     uint32_t disk_index = pacer->last_scheduling_disk_index;
     uint32_t disk_iterated = 0;
      
     struct spdk_nvmf_ns *completed_ns, *pacer_entry_ns;
-            SPDK_NOTICELOG("Ankit: \n");
     completed_ns = _spdk_nvmf_subsystem_get_ns(rqpair->qpair.ctrlr->subsys, rdma_req->req.cmd->nvme_cmd.nsid);
-            SPDK_NOTICELOG("Ankit: \n");
     assert(completed_ns != NULL);
-            SPDK_NOTICELOG("Ankit: \n");
 
-    //rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt - rdma_req->payload_size);
-    //        SPDK_NOTICELOG("Ankit: \n");
-    //        SPDK_NOTICELOG("Ankit: pacer_shared->number_of_inserted_disks.cnt: %llu, \n", pacer_shared->number_of_inserted_disks.cnt);
-    //        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %llu, \n", completed_ns->nsid);
-    //completed_ns->nsid %= pacer_shared->number_of_inserted_disks.cnt;
-    //        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %llu, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %llu \n",
-    //                    completed_ns->nsid, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt); // Confirm if it's correct. ~Ankit
-    //        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %llu, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %llu pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %llu\n",
-    //                    completed_ns->nsid, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt); // Confirm if it's correct. ~Ankit
-    //        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %llu, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %llu pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %llu, rdma_req->pacer_entry.size: %llu\n",
-    //                    completed_ns->nsid, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt, rdma_req->pacer_entry.size); // Confirm if it's correct. ~Ankit
-
-    //rte_atomic64_set(&pacer_shared->per_disk_used_buffer[completed_ns->nsid], pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt - rdma_req->payload_size); // Confirm if it's correct. ~Ankit
-    //        SPDK_NOTICELOG("Ankit: \n");
-
-            SPDK_NOTICELOG("Ankit: \n");
     if (pacer_shared->num_queues.cnt <= 0) {
-            SPDK_NOTICELOG("Ankit: \n");
+            SPDK_NOTICELOG("Nothing to schedule in pacer queue.\n");
         return rc;
     }
-            SPDK_NOTICELOG("Ankit: \n");
-            SPDK_NOTICELOG("Ankit: pacer_shared->num_queues.cnt: %lu, pacer_shared->total_allocated_mem.cnt: %lu, pacer_shared->number_of_inserted_disks.cnt: %lu\n", 
-                            pacer_shared->num_queues.cnt, pacer_shared->total_allocated_mem.cnt, pacer_shared->number_of_inserted_disks.cnt);
     uint64_t entry_num;
 	for (   entry = STAILQ_FIRST(&pacer_shared->queues[next_queue].queue), disk_iterated = entry_num = 0;
             // entry != NULL 
@@ -2192,101 +2160,66 @@ io_pacer_schedule_request(  struct spdk_nvmf_rdma_transport *rtransport,
                 disk_index %= pacer_shared->number_of_inserted_disks.cnt ,
                 disk_iterated++ 
             ) {
-            SPDK_NOTICELOG("Ankit: \n");
 
 
-//* Disable to test only. ~Ankit
-            SPDK_NOTICELOG("Ankit: \n");
         next_queue %= pacer_shared->num_queues.cnt;
         // * What can be the bet way to take lock here for num queues instead of using next_queue % pacer_shared->number_of_inserted_disks. ~Ankit * /
-            SPDK_NOTICELOG("Ankit: \n");
         rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
             entry = STAILQ_FIRST(&pacer_shared->queues[next_queue].queue);
         rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
-            SPDK_NOTICELOG("Ankit: \n");
         if (entry == NULL) {
-            SPDK_NOTICELOG("Ankit: \n");
+            SPDK_NOTICELOG("Done with pacer entry.\n");
             break;
         }
-            SPDK_NOTICELOG("Ankit: \n");
-                struct spdk_nvmf_rdma_request *rdma_req_pop_cb;
-                struct spdk_nvmf_rdma_qpair *rqpair_pop_cb;
-                struct spdk_nvmf_rdma_transport *rtransport_pop_cb;
+        struct spdk_nvmf_rdma_request *rdma_req_pop_cb;
+        struct spdk_nvmf_rdma_qpair *rqpair_pop_cb;
+        struct spdk_nvmf_rdma_transport *rtransport_pop_cb;
 
-                rdma_req_pop_cb = SPDK_CONTAINEROF(entry, struct spdk_nvmf_rdma_request, state_link);
-            SPDK_NOTICELOG("Ankit: \n");
-                rqpair_pop_cb = SPDK_CONTAINEROF(rdma_req_pop_cb->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
-            SPDK_NOTICELOG("Ankit: \n");
-                rtransport_pop_cb = SPDK_CONTAINEROF(rqpair_pop_cb->qpair.transport, struct spdk_nvmf_rdma_transport, transport);
-            SPDK_NOTICELOG("Ankit: \n");
+        rdma_req_pop_cb = SPDK_CONTAINEROF(entry, struct spdk_nvmf_rdma_request, state_link);
+        rqpair_pop_cb = SPDK_CONTAINEROF(rdma_req_pop_cb->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+        rtransport_pop_cb = SPDK_CONTAINEROF(rqpair_pop_cb->qpair.transport, struct spdk_nvmf_rdma_transport, transport);
         pacer_entry_ns = entry->ns;
-            SPDK_NOTICELOG("Ankit: \n");
         assert(pacer_entry_ns->nsid < MAX_SUPPORTED_DISKS);
-            SPDK_NOTICELOG("Ankit: \n");
-            SPDK_NOTICELOG("Ankit: pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt: %lu, pacer_shared->per_disk_max_buffer[pacer_entry_ns->nsid].cnt: %lu\n",
-                            pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt, pacer_shared->per_disk_max_buffer[pacer_entry_ns->nsid].cnt);
 
         //Below one should be checked for poped entry, is it correct? ~Ankit
         if (pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt < pacer_shared->per_disk_max_buffer[pacer_entry_ns->nsid].cnt) {
-            //// * Time taken by completed request. * /
-            //uint64_t time_taken = time_taken_by_packet(rdma_req);
-            //SPDK_NOTICELOG("Ankit: \n");
-            //rte_atomic64_set(&pacer_shared->per_disk_time_taken_to_transfer[completed_ns->nsid][pacer_shared->current_data_and_time_index.cnt], time_taken);
-            //SPDK_NOTICELOG("Ankit: \n");
-            //rte_atomic64_set(&pacer_shared->current_data_and_time_index, pacer_shared->current_data_and_time_index.cnt + 1);
-            SPDK_NOTICELOG("Ankit: \n");
             // * Memory taken by next request. * /
             rte_atomic64_set(&pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid], pacer_shared->per_disk_used_buffer[pacer_entry_ns->nsid].cnt + rdma_req_pop_cb->payload_size); // Confirm if it's correct. ~Ankit
-            SPDK_NOTICELOG("Ankit: \n");
             rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt + rdma_req_pop_cb->payload_size);
 
-            SPDK_NOTICELOG("Ankit: \n");
             rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
                 STAILQ_REMOVE(&pacer_shared->queues[next_queue].queue, entry, io_pacer_queue_entry, link);
             rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
-            SPDK_NOTICELOG("Ankit: \n");
             rte_atomic64_set(&pacer_shared->next_queue, next_queue);
-            SPDK_NOTICELOG("Ankit: \n");
             //pacer->pop_cb(entry);
             {
                 rdma_req_pop_cb->req.entry_time = current_time();
-            SPDK_NOTICELOG("Ankit: \n");
                 rdma_req_pop_cb->state = RDMA_REQUEST_STATE_NEED_BUFFER;
-            SPDK_NOTICELOG("Ankit: \n");
                 rte_spinlock_lock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
                     STAILQ_INSERT_TAIL(&rqpair_pop_cb->poller->group->group.pending_buf_queue, &rdma_req_pop_cb->req, buf_link);
                 rte_spinlock_unlock(&pacer_shared->lock_per_queue[next_queue % pacer_shared->number_of_inserted_disks.cnt]);
-            SPDK_NOTICELOG("Ankit: \n");
                 //spdk_nvmf_rdma_request_process(rtransport_pop_cb, rdma_req_pop_cb);
                 pthread_t thread_id;
                 io_pacer_thread_parameter *thread_arg;
-            SPDK_NOTICELOG("Ankit: \n");
                 thread_arg = (io_pacer_thread_parameter *) malloc(sizeof(io_pacer_thread_parameter));
                 if (thread_arg == NULL) {
                     SPDK_NOTICELOG("Unable to allocate memory.\n");
                     return 0;
                 }
-            SPDK_NOTICELOG("Ankit: \n");
                 thread_arg->rtransport = rtransport_pop_cb;
                 thread_arg->rdma_req = rdma_req_pop_cb;
-            SPDK_NOTICELOG("Ankit: \n");
                 int thread_err = pthread_create(&thread_id, NULL, &thread_to_schedule_io_pacer_request, thread_arg);
-            SPDK_NOTICELOG("Ankit: \n");
                 if (thread_err) {
                     SPDK_NOTICELOG("Unable to create thread.\n");
                     return 0;
                 }
-            SPDK_NOTICELOG("Ankit: \n");
                 thread_err = pthread_join(thread_id, NULL);
-            SPDK_NOTICELOG("Ankit: \n");
                 if (thread_err) {
                     SPDK_NOTICELOG("Unable to join thread.\n");
                     return 0;
                 }
-            SPDK_NOTICELOG("Ankit: \n");
             }
         }
-//*/
 	}  
     pacer->last_scheduling_disk_index = disk_index;
 
@@ -2301,7 +2234,6 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			       struct spdk_nvmf_rdma_request *rdma_req)
 {
             uint64_t time_taken_by_func = current_time(); 
-            SPDK_NOTICELOG("Ankit: \n");
     assert(rtransport);
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 	struct spdk_nvmf_rdma_device	*device;
@@ -2328,8 +2260,6 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 // Don't know why it's giving problem. :( ~Ankit 
     num_disk = rdma_req->req.qpair->ctrlr->subsys->max_nsid;
 //*/
-    SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %"PRIu64"\n", pacer_shared->total_allocated_mem.cnt);
-    // SPDK_NOTICELOG("Ankit: rdma_req->pacer_entry.size: %lu\n", rdma_req->pacer_entry.size); //Wrong place to print. ~Ankit
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	device = rqpair->device;
@@ -2422,31 +2352,19 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			ns = _spdk_nvmf_subsystem_get_ns(rqpair->qpair.ctrlr->subsys,
 							 rdma_req->req.cmd->nvme_cmd.nsid);
 			assert(ns != NULL);
-            SPDK_NOTICELOG("Ankit: \n");
             rdma_req->ns = ns;
 			/* @todo: check if size is calculated correctly for all types of commands */
             /* Need to confirm this io size of serving request. ~Ankit */
-			// rdma_req->pacer_entry.size = spdk_bdev_get_block_size(ns->bdev) *
-			//     ((from_le32(&rdma_req->req.cmd->nvme_cmd.cdw12) & 0xFFFFu) + 1);
-			rdma_req->pacer_entry.size = spdk_bdev_get_block_size(ns->bdev);
+			rdma_req->pacer_entry.size = spdk_bdev_get_block_size(ns->bdev) *
+                                            ((from_le32(&rdma_req->req.cmd->nvme_cmd.cdw12) & 0xFFFFu) + 1);
             rdma_req->payload_size = rdma_req->pacer_entry.size;
             if (rdma_req->pacer_entry.size > MAX_PACKET_SIZE) {
                 SPDK_NOTICELOG("Improper size of packet found. Packet size: %llu \n", rdma_req->pacer_entry.size);
-                return -1;
             }
-            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %"PRIu64", ns->nsid: %u, pacer_shared->per_disk_used_buffer[i].cnt: %"PRIu64", rdma_req->pacer_entry.size: %lu\n", 
-                        pacer_shared->total_allocated_mem.cnt, ns->nsid - 1, pacer_shared->per_disk_used_buffer[ns->nsid - 1].cnt, rdma_req->pacer_entry.size);
-
-			// if (rdma_req->pacer_entry.size <= rtransport->transport.opts.io_pacer_threshold) {
-			// 	rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
-			// 	STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->req, buf_link);
-			// 	break;
-			// }
 
             // Move to pacer.c ~Ankit
             pacer->pacer_iteration_number++;
             if (pacer->pacer_iteration_number >= pacer->take_average_after_count) {
-                //for (i = average_disk_speed = 0; i < MAX_SUPPORTED_DISKS; i++) {
                 for (i = average_disk_speed = 0; i < num_disk; i++) {
                     average_disk_speed += pacer_shared->disk_speeds[i].cnt;
                 }
@@ -2470,33 +2388,23 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
             i = ns->nsid - 1;
             i = (i < MAX_SUPPORTED_DISKS) ? i : MAX_SUPPORTED_DISKS - 1;
-            SPDK_NOTICELOG("Ankit: \n");
-            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %lu \n", pacer_shared->total_allocated_mem.cnt);
-            SPDK_NOTICELOG("Ankit: pacer_shared->per_disk_used_buffer[i].cnt: %lu\n", pacer_shared->per_disk_used_buffer[i].cnt);
-            SPDK_NOTICELOG("Ankit: pacer_shared->per_disk_max_buffer[i].cnt: %lu\n", pacer_shared->per_disk_max_buffer[i].cnt);
-            SPDK_NOTICELOG("Ankit: rdma_req->pacer_entry.size: %lu\n", rdma_req->pacer_entry.size);
-/* Disable to test only. ~Ankit
             if ((pacer_shared->total_allocated_mem.cnt >= BF2_CACHE_SIZE) 
                 || pacer_shared->per_disk_used_buffer[i].cnt >= (pacer_shared->per_disk_max_buffer[i].cnt) 
                 || rdma_req->pacer_entry.size > ((uint64_t)BF2_CACHE_SIZE - pacer_shared->total_allocated_mem.cnt)
                 ) {
-            SPDK_NOTICELOG("Ankit: \n");
                 // * What's the max nsid can go? ~Ankit * /
                 rdma_req->pacer_entry.ns = ns;
                 rdma_req->pacer_key = ((uint64_t)rqpair->qpair.ctrlr->subsys->id << 32) +
                                                                 rdma_req->req.cmd->nvme_cmd.nsid;
                 spdk_io_pacer_push(pacer_shared, rdma_req->pacer_key, &rdma_req->pacer_entry);
-            SPDK_NOTICELOG("Ankit: \n");
                 break;
             }
-//*/
 
             rte_atomic64_set(&pacer_shared->per_disk_used_buffer[i], pacer_shared->per_disk_used_buffer[i].cnt + rdma_req->payload_size);
             rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt + rdma_req->payload_size);
 
             rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
             STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->req, buf_link);
-            SPDK_NOTICELOG("Ankit: \n");
 
 			break;
 
@@ -2702,133 +2610,39 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				rqpair->poller->stat.request_latency_large += tsc - rdma_req->receive_tsc;
 			}
 
-            SPDK_NOTICELOG("Ankit: \n");
-            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %lu, rdma_req->pacer_entry.size: %lu \n", pacer_shared->total_allocated_mem.cnt, rdma_req->pacer_entry.size);
-//* Disable to test only. ~Ankit
 			sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
-            SPDK_NOTICELOG("Ankit: sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK: %d, sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET: %d, (spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)): %d, (rdma_req->req.cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC): %d\n",
-                            sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK, sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET, (spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) , (rdma_req->req.cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC));
-            SPDK_NOTICELOG("Ankit: \n");
-			//if ( ! ((pacer == NULL) ||
-            //    (0 == rtransport->transport.opts.io_pacer_period) ||
-            //    (pacer_shared->num_queues.cnt <= 0) ||
-			//    (sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK &&
-			//     sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) ||
-			//    spdk_unlikely(spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) ||
-			//    spdk_unlikely(rdma_req->req.cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC))) {
-			//if(    (sgl->generic.type != SPDK_NVME_SGL_TYPE_DATA_BLOCK ||
-			//     sgl->unkeyed.subtype != SPDK_NVME_SGL_SUBTYPE_OFFSET) &&
-			//    spdk_unlikely(! spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) &&
-			//    spdk_unlikely(rdma_req->req.cmd->nvmf_cmd.opcode != SPDK_NVME_OPC_FABRIC)) {
-			//if(  ! ( (pacer == NULL) 
-            //        || (0 == rtransport->transport.opts.io_pacer_period) 
-            //    // || (sgl->generic.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK && sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) ||
-			//    || (spdk_nvmf_qpair_is_admin_queue(&rqpair->qpair)) 
-			//    // || (rdma_req->req.cmd->nvmf_cmd.opcode == SPDK_NVME_OPC_FABRIC)
-            //    )) {
             if (rdma_req->pacer_entered == 0xA5A5A5) {
 
-            SPDK_NOTICELOG("Ankit: \n");
-
                 struct spdk_nvmf_ns *ns;
-                //ns = _spdk_nvmf_subsystem_get_ns(rqpair->qpair.ctrlr->subsys,
-                //                 rdma_req->req.cmd->nvme_cmd.nsid);
                 ns = rdma_req->ns;
-                    SPDK_NOTICELOG("Ankit: \n");
                 assert(ns != NULL);
-                        SPDK_NOTICELOG("Ankit: \n");
                 uint64_t completed_nsid;
-                        SPDK_NOTICELOG("Ankit: \n");
-                        SPDK_NOTICELOG("Ankit: pacer_shared->number_of_inserted_disks.cnt: %lu, \n", pacer_shared->number_of_inserted_disks.cnt);
-                        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %u, \n", ns->nsid);
                 completed_nsid = ns->nsid % pacer_shared->number_of_inserted_disks.cnt;
-                        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %lu, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %lu \n",
-                                    completed_nsid, pacer_shared->per_disk_used_buffer[completed_nsid].cnt); // Confirm if it's correct. ~Ankit
-                        SPDK_NOTICELOG("Ankit: completed_nsid: %lu, pacer_shared->per_disk_used_buffer[completed_nsid].cnt: %lu pacer_shared->per_disk_max_buffer[completed_nsid].cnt: %lu\n",
-                                    completed_nsid, pacer_shared->per_disk_used_buffer[completed_nsid].cnt, pacer_shared->per_disk_max_buffer[completed_nsid].cnt); // Confirm if it's correct. ~Ankit
-                        SPDK_NOTICELOG("Ankit: completed_nsid: %lu, pacer_shared->per_disk_used_buffer[completed_nsid].cnt: %lu pacer_shared->per_disk_max_buffer[completed_nsid].cnt: %lu, rdma_req->pacer_entry.size: %lu\n",
-                                    completed_nsid, pacer_shared->per_disk_used_buffer[completed_nsid].cnt, pacer_shared->per_disk_max_buffer[completed_nsid].cnt, rdma_req->pacer_entry.size); // Confirm if it's correct. ~Ankit
 
-                SPDK_NOTICELOG("Ankit: \n");
-            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %lu, rdma_req->payload_size: %lu \n", pacer_shared->total_allocated_mem.cnt, rdma_req->payload_size);
-            if (rdma_req->payload_size > MAX_PACKET_SIZE) {
-                SPDK_NOTICELOG("Improper size of packet found. Packet size: %llu \n", rdma_req->payload_size);
-                return -1;
-            }
-                if (pacer_shared->total_allocated_mem.cnt >= rdma_req->payload_size) {
+                if (rdma_req->payload_size > MAX_PACKET_SIZE) {
+                    SPDK_NOTICELOG("Improper size of packet found. Packet size: %llu \n", rdma_req->payload_size);
+                    return -1;
+                }
+                if (pacer_shared->total_allocated_mem.cnt >= rdma_req->payload_size && rdma_req->payload_size < MAX_PACKET_SIZE) {
                     rte_atomic64_set(&pacer_shared->total_allocated_mem, pacer_shared->total_allocated_mem.cnt - rdma_req->payload_size);
                 } else {
                     SPDK_NOTICELOG("Allocated size must always be greater than payload size.\n");
                 }
-            SPDK_NOTICELOG("Ankit: pacer_shared->total_allocated_mem.cnt: %lu, rdma_req->pacer_entry.size: %lu \n", pacer_shared->total_allocated_mem.cnt, rdma_req->payload_size);
-                if (pacer_shared->per_disk_used_buffer[completed_nsid].cnt >= rdma_req->payload_size) {
+                if (pacer_shared->per_disk_used_buffer[completed_nsid].cnt >= rdma_req->payload_size && rdma_req->payload_size < MAX_PACKET_SIZE) {
                     rte_atomic64_set(&pacer_shared->per_disk_used_buffer[completed_nsid], pacer_shared->per_disk_used_buffer[completed_nsid].cnt - rdma_req->payload_size); // Confirm if it's correct. ~Ankit
                 } else {
                     SPDK_NOTICELOG("Allocated size must always be greater than payload size.\n");
                 }
-                        SPDK_NOTICELOG("Ankit: completed_ns->nsid: %lu, pacer_shared->per_disk_used_buffer[completed_ns->nsid].cnt: %lu \n",
-                                    completed_nsid, pacer_shared->per_disk_used_buffer[completed_nsid].cnt); // Confirm if it's correct. ~Ankit
-                        SPDK_NOTICELOG("Ankit: \n");
                 // * Time taken by completed request. * /
                 uint64_t time_taken = time_taken_by_packet(rdma_req);
-                SPDK_NOTICELOG("Ankit: \n");
                 rte_atomic64_set(&pacer_shared->per_disk_time_taken_to_transfer[completed_nsid][pacer_shared->current_data_and_time_index.cnt], time_taken);
-                SPDK_NOTICELOG("Ankit: \n");
                 rte_atomic64_set(&pacer_shared->current_data_and_time_index, (pacer_shared->current_data_and_time_index.cnt + 1) % MAX_ITERATION_TO_COMPUTE_AVERAGE);
-                SPDK_NOTICELOG("Ankit: \n");
-
-                // SPDK_NOTICELOG("Ankit: rtransport->transport.opts.io_pacer_period: %lu, pacer_shared->num_queues.cnt: %lu\n",
-                //                 rtransport->transport.opts.io_pacer_period, pacer_shared->num_queues.cnt);
-                // if ( (pacer != NULL) &&
-                //     (rtransport->transport.opts.io_pacer_period > 0) &&
-                //     (pacer_shared->num_queues.cnt > 0) ) {
-                // SPDK_NOTICELOG("Ankit: \n");
-                //         io_pacer_schedule_request(rtransport, rdma_req, pacer_shared, pacer);
-                // SPDK_NOTICELOG("Ankit: \n");
-                // }
             }
-                SPDK_NOTICELOG("Ankit: rtransport->transport.opts.io_pacer_period: %lu, pacer_shared->num_queues.cnt: %lu\n",
-                                rtransport->transport.opts.io_pacer_period, pacer_shared->num_queues.cnt);
-                if ( (pacer != NULL) &&
+                if ((pacer != NULL) &&
                     (rtransport->transport.opts.io_pacer_period > 0) &&
                     (pacer_shared->num_queues.cnt > 0) ) {
-                SPDK_NOTICELOG("Ankit: \n");
                         io_pacer_schedule_request(rtransport, rdma_req, pacer_shared, pacer);
-                SPDK_NOTICELOG("Ankit: \n");
                 }
-//*/
-            SPDK_NOTICELOG("Ankit: \n");
-/* For testing only. ~Ankit
-            //pacer->pop_cb(entry);
-            {
-                pthread_t thread_id;
-                io_pacer_thread_parameter *thread_arg;
-            SPDK_NOTICELOG("Ankit: \n");
-                thread_arg = (io_pacer_thread_parameter *) malloc(sizeof(io_pacer_thread_parameter));
-                if (thread_arg == NULL) {
-                    SPDK_NOTICELOG("Unable to allocate memory.\n");
-                    return 0;
-                }
-            SPDK_NOTICELOG("Ankit: \n");
-                thread_arg->rtransport = rtransport;
-                thread_arg->rdma_req = rdma_req;
-            SPDK_NOTICELOG("Ankit: \n");
-                int thread_err = pthread_create(&thread_id, NULL, &thread_to_schedule_io_pacer_request, thread_arg);
-            SPDK_NOTICELOG("Ankit: \n");
-                if (thread_err) {
-                    SPDK_NOTICELOG("Unable to create thread.\n");
-                    return 0;
-                }
-            SPDK_NOTICELOG("Ankit: \n");
-                thread_err = pthread_join(thread_id, NULL);
-            SPDK_NOTICELOG("Ankit: \n");
-                if (thread_err) {
-                    SPDK_NOTICELOG("Unable to join thread.\n");
-                    return 0;
-                }
-            SPDK_NOTICELOG("Ankit: \n");
-            }
-//*/
 
 			if (rdma_req->pacer_key != 0xDEADBEEF) {
 				spdk_io_pacer_drive_stats_sub(&drives_stats, rdma_req->pacer_key, 1);
@@ -2844,18 +2658,12 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 		if (rdma_req->state != prev_state) {
 			progress = true;
 		}
-            SPDK_NOTICELOG("Ankit: for case: %u\n",
-                        rdma_req->state);
+            SPDK_NOTICELOG("Ankit: for case: %u\n", rdma_req->state);
 	} while (rdma_req->state != prev_state);
 
-//* Disable to test only. ~Ankit
-            time_taken_by_state[rdma_req->state] += current_time() - time_taken_by_func;
-            SPDK_NOTICELOG("Ankit: for case: %u,\t time_taken_by_func: %lu,\t total time taken by state: %lu\n",
-                        rdma_req->state, current_time() - time_taken_by_func, time_taken_by_state[rdma_req->state]);
-            //for (i = 0; i < RDMA_REQUEST_NUM_STATES; i++) {
-            //    SPDK_NOTICELOG("Ankit: total time taken by state %d: %llu\n", i, time_taken_by_state[i]);
-            //}
-//*/
+    time_taken_by_state[rdma_req->state] += current_time() - time_taken_by_func;
+    SPDK_NOTICELOG("Ankit: for case: %u,\t time_taken_by_func: %lu,\t total time taken by state: %lu\n",
+                rdma_req->state, current_time() - time_taken_by_func, time_taken_by_state[rdma_req->state]);
 	return progress;
 }
 
