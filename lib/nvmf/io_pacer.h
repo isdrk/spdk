@@ -44,11 +44,11 @@
 
 
 #define MAX_SUPPORTED_DISKS 96
-#define KB 1024
+#define KB 1024UL
 #define MB (KB * KB)
 #define BF2_CACHE_SIZE (12 * MB)
 #define MAX_PACKET_SIZE (128 * KB)
-#define MAX_ALLOCATION_SIZE_PER_DISK (128 * MAX_PACKET_SIZE) 
+#define MAX_ALLOCATION_SIZE_PER_DISK (8 * MAX_PACKET_SIZE) 
 #define MAX_ITERATION_TO_COMPUTE_AVERAGE 96000
 #define AVG_5GbPS_DISK_SPEED 5
 
@@ -107,7 +107,8 @@ typedef struct spdk_io_pacer {
 typedef struct spdk_io_pacer_shared {
     /* Required for slow disc algo. */
     rte_spinlock_t lock_for_pacer_initialization;
-    rte_atomic64_t slow_disk_var_initialization;
+    rte_spinlock_t lock_for_generic;
+    //rte_atomic64_t slow_disk_var_initialization;
     rte_atomic64_t total_allocated_mem;
     rte_atomic64_t number_of_inserted_disks;
     rte_atomic64_t max_number_of_supported_disks;
@@ -199,6 +200,8 @@ exit:
 static inline struct drive_stats * spdk_io_pacer_drive_stats_get(struct spdk_io_pacer_drives_stats *stats,
 								 uint64_t key)
 {
+	return 0;
+
 	struct drive_stats *data = NULL;
 	int ret = 0;
 	ret = rte_hash_lookup_data(stats->h, (void*) &key, (void**) &data);

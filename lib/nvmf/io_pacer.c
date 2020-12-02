@@ -72,6 +72,9 @@ io_pacer_get_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 	return io_pacer_get_queue(pacer, key);
 }
 
+// Global variable for slow disk initialization.
+static volatile uint64_t slow_disk_var_initialization = 0;
+
 struct spdk_io_pacer *
 spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
 		     uint32_t credit,
@@ -105,9 +108,11 @@ spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
     pacer->take_average_after_count = MAX_ITERATION_TO_COMPUTE_AVERAGE;
     //pacer->max_allowed_mem = BF2_CACHE_SIZE;
 
-    if ( ! pacer_shared->slow_disk_var_initialization.cnt) {
+    //if ( ! pacer_shared->slow_disk_var_initialization.cnt) {
+    if ( ! slow_disk_var_initialization) {
         rte_spinlock_lock(&pacer_shared->lock_for_pacer_initialization);
-            pacer_shared->slow_disk_var_initialization.cnt = 1;
+            //pacer_shared->slow_disk_var_initialization.cnt = 1;
+            slow_disk_var_initialization = 1;
             pacer_shared->max_queues.cnt = 64000 * 96;
             pacer_shared->num_queues.cnt = 0;
             pacer_shared->next_queue.cnt = 0;
@@ -118,6 +123,7 @@ spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
             pacer_shared->max_number_of_supported_disks.cnt = MAX_SUPPORTED_DISKS;
             pacer_shared->number_of_inserted_disks.cnt = MAX_SUPPORTED_DISKS;
             rte_spinlock_init(&pacer_shared->lock_for_total_allocated_mem);
+            rte_spinlock_init(&pacer_shared->lock_for_generic);
             pacer_shared->current_data_and_time_index.cnt = 0;
             //for (i = 0; i < MAX_SUPPORTED_DISKS; i++) {
             for (i = 0; i < pacer_shared->max_number_of_supported_disks.cnt; i++) {
@@ -134,7 +140,7 @@ spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
                     pacer_shared->per_disk_data_transfered[i][j].cnt = 0;
                     pacer_shared->per_disk_time_taken_to_transfer[i][j].cnt = 0;
                 }
-                SPDK_NOTICELOG("Created IO pacer %p: max_queues.cnt %u, core %u, pacer_shared->per_disk_used_buffer.cnt[i]: %d, pacer_shared->per_disk_max_buffer[i].cnt: %d\n",
+                SPDK_NOTICELOG("Created IO pacer %p: max_queues.cnt %lu, core %u, pacer_shared->per_disk_used_buffer.cnt[i]: %lu, pacer_shared->per_disk_max_buffer[i].cnt: %lu\n",
                                 pacer, pacer_shared->max_queues.cnt, spdk_env_get_current_core(),
                                 pacer_shared->per_disk_used_buffer[i].cnt, pacer_shared->per_disk_max_buffer[i].cnt);
             }
@@ -142,7 +148,7 @@ spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
     }
 
 
-	SPDK_NOTICELOG("Created IO pacer %p: period_ns %u, period_ticks %lu, max_queues.cnt %u, core %u, BF2_CACHE_SIZE: %d, MAX_SUPPORTED_DISKS: %d\n",
+	SPDK_NOTICELOG("Created IO pacer %p: period_ns %u, period_ticks %lu, max_queues.cnt %lu, core %u, BF2_CACHE_SIZE: %lu, MAX_SUPPORTED_DISKS: %lu\n",
                    pacer, period_ns, pacer->period_ticks, pacer_shared->max_queues.cnt,
                    spdk_env_get_current_core(), BF2_CACHE_SIZE, MAX_SUPPORTED_DISKS);
 
@@ -165,7 +171,6 @@ spdk_io_pacer_destroy(struct spdk_io_pacer_shared *pacer)
 	}
 
 	free(pacer->queues);
-	free(pacer);
 	SPDK_NOTICELOG("Destroyed IO pacer %p\n", pacer);
 }
 
@@ -208,6 +213,7 @@ spdk_io_pacer_create_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 {
 	assert(pacer != NULL);
 
+    SPDK_NOTICELOG("Ankit: \n");
 	if (pacer->num_queues.cnt <= 0 || pacer->num_queues.cnt >= pacer->max_queues.cnt) {
 		const uint64_t new_max_queues = pacer->max_queues.cnt ?
 			2 * pacer->max_queues.cnt : IO_PACER_DEFAULT_MAX_QUEUES;
@@ -215,16 +221,19 @@ spdk_io_pacer_create_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 			(struct io_pacer_queue *)realloc(pacer->queues,
 							 new_max_queues * sizeof(*pacer->queues));
 		if (!new_queues) {
-			SPDK_NOTICELOG("Failed to allocate more queues for IO pacer %p: max_queues %u\n",
+			SPDK_NOTICELOG("Failed to allocate more queues for IO pacer %p: max_queues %lu\n",
 				       pacer, new_max_queues);
 			return -1;
 		}
 
-		pacer->queues = new_queues;
+        // Below queue initialization should also be atomic. ~Ankit
+		rte_spinlock_lock(&pacer->lock_for_generic);
+        pacer->queues = new_queues;
+        rte_spinlock_unlock(&pacer->lock_for_generic);
         // Will pointer initialization be good for atomic64_set or I need to take lock? ~Ankit
 		// rte_atomic64_set(&pacer->queues, new_queues);
 		rte_atomic64_set(&pacer->max_queues, new_max_queues);
-		SPDK_NOTICELOG("Allocated more queues for IO pacer %p: max_queues.cnt %u\n",
+		SPDK_NOTICELOG("Allocated more queues for IO pacer %p: max_queues.cnt %lu\n",
 			       pacer, pacer->max_queues.cnt);
 	}
 
@@ -232,7 +241,9 @@ spdk_io_pacer_create_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 	STAILQ_INIT(&pacer->queues[pacer->num_queues.cnt].queue);
 	spdk_io_pacer_drive_stats_setup(&drives_stats, MAX_DRIVES_STATS);
     uint64_t disk_stats = spdk_io_pacer_drive_stats_get(&drives_stats, key); // Currently not using. ~Ankit
+    SPDK_NOTICELOG("Ankit: pacer->num_queues.cnt: %lu\n", pacer->num_queues.cnt);
 	rte_atomic64_set(&pacer->num_queues, pacer->num_queues.cnt + 1);
+    SPDK_NOTICELOG("Ankit: pacer->num_queues.cnt: %lu\n", pacer->num_queues.cnt);
 	SPDK_NOTICELOG("Created IO pacer queue: pacer %p, key %016lx\n",
 		       pacer, key);
 
@@ -270,6 +281,7 @@ spdk_io_pacer_push(struct spdk_io_pacer_shared *pacer, uint64_t key, struct io_p
 {
 	struct io_pacer_queue *queue;
 
+    SPDK_NOTICELOG("Ankit: \n");
 	assert(pacer != NULL);
 	assert(entry != NULL);
 
@@ -280,6 +292,7 @@ spdk_io_pacer_push(struct spdk_io_pacer_shared *pacer, uint64_t key, struct io_p
 	}
 
 	STAILQ_INSERT_TAIL(&queue->queue, entry, link);
+    SPDK_NOTICELOG("Ankit: \n");
 	return 0;
 }
 
