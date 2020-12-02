@@ -2141,6 +2141,14 @@ write_nvmf_transport_stats(struct spdk_json_write_ctx *w,
 						     stat->rdma.devices[i].pending_rdma_read);
 			spdk_json_write_named_uint64(w, "pending_rdma_write",
 						     stat->rdma.devices[i].pending_rdma_write);
+			spdk_json_write_named_uint64(w, "total_send_wrs",
+						     stat->rdma.devices[i].total_send_wrs);
+			spdk_json_write_named_uint64(w, "send_sq_doorbell_updates",
+						     stat->rdma.devices[i].send_sq_doorbell_updates);
+			spdk_json_write_named_uint64(w, "total_recv_wrs",
+						     stat->rdma.devices[i].total_recv_wrs);
+			spdk_json_write_named_uint64(w, "recv_sq_doorbell_updates",
+						     stat->rdma.devices[i].recv_sq_doorbell_updates);
 			spdk_json_write_object_end(w);
 		}
 		spdk_json_write_array_end(w);
