@@ -273,11 +273,6 @@ struct spdk_nvmf_rdma_resource_opts {
 	bool				shared;
 };
 
-struct spdk_nvmf_recv_wr_list {
-	struct ibv_recv_wr	*first;
-	struct ibv_recv_wr	*last;
-};
-
 struct spdk_nvmf_rdma_resources {
 	/* Array of size "max_queue_depth" containing RDMA requests. */
 	struct spdk_nvmf_rdma_request		*reqs;
@@ -302,9 +297,6 @@ struct spdk_nvmf_rdma_resources {
 	 */
 	void					*bufs;
 	struct ibv_mr				*bufs_mr;
-
-	/* The list of pending recvs to transfer */
-	struct spdk_nvmf_recv_wr_list		recvs_to_post;
 
 	/* Receives that are waiting for a request object */
 	STAILQ_HEAD(, spdk_nvmf_rdma_recv)	incoming_queue;
@@ -688,7 +680,7 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 	struct spdk_nvmf_rdma_resources	*resources;
 	struct spdk_nvmf_rdma_request	*rdma_req;
 	struct spdk_nvmf_rdma_recv	*rdma_recv;
-	struct ibv_qp			*qp = NULL;
+	struct spdk_rdma_qp		*qp = NULL;
 	struct spdk_rdma_srq		*srq = NULL;
 	struct ibv_recv_wr		*bad_wr = NULL;
 	uint32_t			i;
@@ -757,7 +749,7 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 	if (opts->shared) {
 		srq = (struct spdk_rdma_srq *)opts->qp;
 	} else {
-		qp = (struct ibv_qp *)opts->qp;
+		qp = (struct spdk_rdma_qp *)opts->qp;
 	}
 
 	for (i = 0; i < opts->max_queue_depth; i++) {
@@ -786,13 +778,10 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 
 		rdma_recv->wr.wr_id = (uintptr_t)&rdma_recv->rdma_wr;
 		rdma_recv->wr.sg_list = rdma_recv->sgl;
-		if (opts->shared) {
+		if (srq) {
 			spdk_rdma_srq_queue_recv_wrs(srq, &rdma_recv->wr);
 		} else {
-			rc = ibv_post_recv(qp, &rdma_recv->wr, &bad_wr);
-		}
-		if (rc) {
-			goto cleanup;
+			spdk_rdma_qp_queue_recv_wrs(qp, &rdma_recv->wr);
 		}
 	}
 
@@ -834,11 +823,14 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		STAILQ_INSERT_TAIL(&resources->free_queue, rdma_req, state_link);
 	}
 
-	if (opts->shared) {
+	if (srq) {
 		rc = spdk_rdma_srq_flush_recv_wrs(srq, &bad_wr);
-		if (rc) {
-			goto cleanup;
-		}
+	} else {
+		rc = spdk_rdma_qp_flush_recv_wrs(qp, &bad_wr);
+	}
+
+	if (rc) {
+		goto cleanup;
 	}
 
 	return resources;
@@ -1026,7 +1018,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 		rtransport = SPDK_CONTAINEROF(qpair->transport, struct spdk_nvmf_rdma_transport, transport);
 		transport = &rtransport->transport;
 
-		opts.qp = rqpair->rdma_qp->qp;
+		opts.qp = rqpair->rdma_qp;
 		opts.pd = rqpair->cm_id->pd;
 		opts.qpair = rqpair;
 		opts.shared = false;
@@ -1061,27 +1053,15 @@ error:
 static void
 nvmf_rdma_qpair_queue_recv_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_recv_wr *first)
 {
-	struct ibv_recv_wr *last;
 	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
 	if (rqpair->srq != NULL) {
 		spdk_rdma_srq_queue_recv_wrs(rqpair->srq, first);
-		return;
-	}
-
-	last = first;
-	while (last->next != NULL) {
-		last = last->next;
-	}
-
-	if (rqpair->resources->recvs_to_post.first == NULL) {
-		rqpair->resources->recvs_to_post.first = first;
-		rqpair->resources->recvs_to_post.last = last;
-		STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_recv, rqpair, recv_link);
 	} else {
-		rqpair->resources->recvs_to_post.last->next = first;
-		rqpair->resources->recvs_to_post.last = last;
+		if (spdk_rdma_qp_queue_recv_wrs(rqpair->rdma_qp, first)) {
+			STAILQ_INSERT_TAIL(&rqpair->poller->qpairs_pending_recv, rqpair, recv_link);
+		}
 	}
 
 	if (rtransport->rdma_opts.no_wr_batching) {
@@ -3752,13 +3732,10 @@ _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 	} else {
 		while (!STAILQ_EMPTY(&rpoller->qpairs_pending_recv)) {
 			rqpair = STAILQ_FIRST(&rpoller->qpairs_pending_recv);
-			assert(rqpair->resources->recvs_to_post.first != NULL);
-			rc = ibv_post_recv(rqpair->rdma_qp->qp, rqpair->resources->recvs_to_post.first, &bad_recv_wr);
+			rc = spdk_rdma_qp_flush_recv_wrs(rqpair->rdma_qp, &bad_recv_wr);
 			if (rc) {
 				_qp_reset_failed_recvs(rqpair, bad_recv_wr, rc);
 			}
-			rqpair->resources->recvs_to_post.first = NULL;
-			rqpair->resources->recvs_to_post.last = NULL;
 			STAILQ_REMOVE_HEAD(&rpoller->qpairs_pending_recv, recv_link);
 		}
 	}

@@ -54,3 +54,7 @@ DEFINE_STUB(spdk_rdma_srq_queue_recv_wrs, bool, (struct spdk_rdma_srq *rdma_srq,
 		struct ibv_recv_wr *first), true);
 DEFINE_STUB(spdk_rdma_srq_flush_recv_wrs, int, (struct spdk_rdma_srq *rdma_srq,
 		struct ibv_recv_wr **bad_wr), 0);
+DEFINE_STUB(spdk_rdma_qp_queue_recv_wrs, bool, (struct spdk_rdma_qp *spdk_rdma_qp,
+		struct ibv_recv_wr *first), true);
+DEFINE_STUB(spdk_rdma_qp_flush_recv_wrs, int, (struct spdk_rdma_qp *spdk_rdma_qp,
+		struct ibv_recv_wr **bad_wr), 0);
