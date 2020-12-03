@@ -13,6 +13,8 @@
 	spdk_rdma_qp_disconnect;
 	spdk_rdma_qp_queue_send_wrs;
 	spdk_rdma_qp_flush_send_wrs;
+	spdk_rdma_qp_queue_recv_wrs;
+	spdk_rdma_qp_flush_recv_wrs;
 
 	local: *;
 };
