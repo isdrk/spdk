@@ -53,6 +53,8 @@ DEFINE_STUB(nvme_poll_group_connect_qpair, int, (struct spdk_nvme_qpair *qpair),
 DEFINE_STUB_V(nvme_qpair_resubmit_requests, (struct spdk_nvme_qpair *qpair, uint32_t num_requests));
 DEFINE_STUB(spdk_nvme_poll_group_process_completions, int64_t, (struct spdk_nvme_poll_group *group,
 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb), 0)
+DEFINE_STUB(nvme_transport_get_name, const char *, (const struct spdk_nvme_transport *transport),
+	    NULL);
 
 /* used to mock out having to split an SGL over a memory region */
 uint64_t g_mr_size;

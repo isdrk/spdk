@@ -63,6 +63,11 @@ nvme_get_next_transport(const struct spdk_nvme_transport *transport)
 	return TAILQ_NEXT(transport, link);
 }
 
+const char *nvme_transport_get_name(const struct spdk_nvme_transport *transport)
+{
+	return transport->ops.name;
+}
+
 /*
  * Unfortunately, due to NVMe PCIe multiprocess support, we cannot store the
  * transport object in either the controller struct or the admin qpair. THis means
@@ -588,4 +593,23 @@ nvme_transport_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair)
 
 
 	return -EINVAL;
+}
+
+int
+nvme_transport_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
+				    struct spdk_nvme_transport_poll_group_stat **stats)
+{
+	if (tgroup->transport->ops.poll_group_get_stats) {
+		return tgroup->transport->ops.poll_group_get_stats(tgroup, stats);
+	}
+	return -ENOTSUP;
+}
+
+void
+nvme_transport_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
+				     struct spdk_nvme_transport_poll_group_stat *stats)
+{
+	if (tgroup->transport->ops.poll_group_free_stats) {
+		tgroup->transport->ops.poll_group_free_stats(tgroup, stats);
+	}
 }

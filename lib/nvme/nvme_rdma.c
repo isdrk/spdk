@@ -176,7 +176,7 @@ struct nvme_rdma_poller {
 struct nvme_rdma_poll_group {
 	struct spdk_nvme_transport_poll_group		group;
 	STAILQ_HEAD(, nvme_rdma_poller)			pollers;
-	int						num_pollers;
+	uint32_t						num_pollers;
 	STAILQ_HEAD(, nvme_rdma_destroyed_qpair)	destroyed_qpairs;
 };
 
@@ -2808,6 +2808,66 @@ nvme_rdma_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 	return 0;
 }
 
+static int
+nvme_rdma_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
+			       struct spdk_nvme_transport_poll_group_stat **_stats)
+{
+	struct nvme_rdma_poll_group *group;
+	struct spdk_nvme_transport_poll_group_stat *stats;
+	struct spdk_nvme_rdma_device_stat *device_stat;
+	struct nvme_rdma_poller *poller;
+	uint32_t i = 0;
+
+	if (tgroup == NULL || _stats == NULL) {
+		SPDK_ERRLOG("Invalid stats or group pointer\n");
+		return -EINVAL;
+	}
+
+	group = nvme_rdma_poll_group(tgroup);
+	stats = calloc(1, sizeof(*stats));
+	if (!stats) {
+		SPDK_ERRLOG("Can't allocate memory for RDMA stats\n");
+		return -ENOMEM;
+	}
+	stats->trtype = SPDK_NVME_TRANSPORT_RDMA;
+	stats->trname = nvme_transport_get_name(tgroup->transport);
+	stats->rdma.num_devices = group->num_pollers;
+	stats->rdma.device_stats = calloc(stats->rdma.num_devices, sizeof(*stats->rdma.device_stats));
+	if (!stats->rdma.device_stats) {
+		SPDK_ERRLOG("Can't allocate memory for RDMA device stats\n");
+		free(stats);
+		return -ENOMEM;
+	}
+
+	STAILQ_FOREACH(poller, &group->pollers, link) {
+		device_stat = &stats->rdma.device_stats[i];
+		device_stat->name = poller->device->device->name;
+		device_stat->polls = poller->stats.polls;
+		device_stat->idle_polls = poller->stats.idle_polls;
+		device_stat->completions = poller->stats.completions;
+		device_stat->queued_requests = poller->stats.queued_requests;
+		device_stat->total_send_wrs = poller->stats.rdma_stats.send.num_submitted_wrs;
+		device_stat->send_sq_doorbell_updates = poller->stats.rdma_stats.send.sq_doorbell_updates;
+		device_stat->total_recv_wrs = poller->stats.rdma_stats.recv.num_submitted_wrs;
+		device_stat->recv_sq_doorbell_updates = poller->stats.rdma_stats.recv.sq_doorbell_updates;
+		i++;
+	}
+
+	*_stats = stats;
+
+	return 0;
+}
+
+static void
+nvme_rdma_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
+				struct spdk_nvme_transport_poll_group_stat *stats)
+{
+	if (stats) {
+		free(stats->rdma.device_stats);
+	}
+	free(stats);
+}
+
 void
 spdk_nvme_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
 {
@@ -2849,7 +2909,8 @@ const struct spdk_nvme_transport_ops rdma_ops = {
 	.poll_group_remove = nvme_rdma_poll_group_remove,
 	.poll_group_process_completions = nvme_rdma_poll_group_process_completions,
 	.poll_group_destroy = nvme_rdma_poll_group_destroy,
-
+	.poll_group_get_stats = nvme_rdma_poll_group_get_stats,
+	.poll_group_free_stats = nvme_rdma_poll_group_free_stats
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(rdma, &rdma_ops);

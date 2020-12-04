@@ -414,6 +414,29 @@ struct spdk_nvme_host_id {
 	char hostsvcid[SPDK_NVMF_TRSVCID_MAX_LEN + 1];
 };
 
+struct spdk_nvme_rdma_device_stat {
+	const char *name;
+	uint64_t polls;
+	uint64_t idle_polls;
+	uint64_t completions;
+	uint64_t queued_requests;
+	uint64_t total_send_wrs;
+	uint64_t send_sq_doorbell_updates;
+	uint64_t total_recv_wrs;
+	uint64_t recv_sq_doorbell_updates;
+};
+
+struct spdk_nvme_transport_poll_group_stat {
+	spdk_nvme_transport_type_t trtype;
+	const char *trname;
+	union {
+		struct {
+			uint32_t num_devices;
+			struct spdk_nvme_rdma_device_stat *device_stats;
+		} rdma;
+	};
+};
+
 /*
  * Controller support flags
  *
@@ -3324,6 +3347,12 @@ struct spdk_nvme_transport_ops {
 			uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb);
 
 	int (*poll_group_destroy)(struct spdk_nvme_transport_poll_group *tgroup);
+
+	int (*poll_group_get_stats)(struct spdk_nvme_transport_poll_group *tgroup,
+				    struct spdk_nvme_transport_poll_group_stat **stats);
+
+	void (*poll_group_free_stats)(struct spdk_nvme_transport_poll_group *tgroup,
+				      struct spdk_nvme_transport_poll_group_stat *stats);
 };
 
 /**
