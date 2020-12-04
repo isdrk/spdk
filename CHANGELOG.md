@@ -29,6 +29,9 @@ listening on portals for a portal group until all associated target nodes are cr
 at startup, otherwise some iSCSI initiators may fail to re-login when SPDK iSCSI
 target application restarts.
 
+New RPC `bdev_nvme_transport_statistics` was added, it allows to get transport statistics
+of nvme poll groups.
+
 ## v20.10:
 
 ### accel
