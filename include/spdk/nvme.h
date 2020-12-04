@@ -437,6 +437,11 @@ struct spdk_nvme_transport_poll_group_stat {
 	};
 };
 
+struct spdk_nvme_poll_group_stat {
+	uint32_t num_transports;
+	struct spdk_nvme_transport_poll_group_stat **tranport_stat;
+};
+
 /*
  * Controller support flags
  *
@@ -2169,6 +2174,27 @@ int64_t spdk_nvme_poll_group_process_completions(struct spdk_nvme_poll_group *gr
  * \return A pointer to the user provided poll group context.
  */
 void *spdk_nvme_poll_group_get_ctx(struct spdk_nvme_poll_group *group);
+
+/**
+ * Retrieves transport statistics for the given poll group.
+ *
+ * Note: the structure returned by this function should later be freed with
+ * @b spdk_nvme_poll_group_free_stats function
+ *
+ * \param group Pointer to NVME poll group
+ * \return Pointer to statistics structure on success or NULL on failure
+ */
+struct spdk_nvme_poll_group_stat *spdk_nvme_poll_group_get_stats(struct spdk_nvme_poll_group
+		*group);
+
+/**
+ * Frees poll group statistics retrieved using @b spdk_nvme_poll_group_get_stats function
+ *
+ * @param group Pointer to a poll group
+ * @param stat Pointer to statistics to be released
+ */
+void spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
+				     struct spdk_nvme_poll_group_stat *stat);
 
 /**
  * Get the identify namespace data as defined by the NVMe specification.

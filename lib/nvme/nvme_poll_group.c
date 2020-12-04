@@ -162,3 +162,80 @@ spdk_nvme_poll_group_destroy(struct spdk_nvme_poll_group *group)
 
 	return 0;
 }
+
+struct spdk_nvme_poll_group_stat *
+spdk_nvme_poll_group_get_stats(struct spdk_nvme_poll_group *group)
+{
+	struct spdk_nvme_transport_poll_group *tgroup;
+	struct spdk_nvme_poll_group_stat *result;
+	uint32_t transports_count = 0;
+	/* Not all transports used by this poll group may support statistics reporting */
+	uint32_t reported_stats_count = 0;
+	int rc;
+
+	if (!group) {
+		SPDK_ERRLOG("Invalid nvme poll group pointer\n");
+		return NULL;
+	}
+
+	result = calloc(1, sizeof(*result));
+	if (!result) {
+		SPDK_ERRLOG("Failed to allocate memory for poll group statistics\n");
+		return NULL;
+	}
+
+	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
+		transports_count++;
+	}
+
+	result->tranport_stat = calloc(transports_count, sizeof(*result->tranport_stat));
+	if (!result->tranport_stat) {
+		SPDK_ERRLOG("Failed to allocate memory for poll group statistics\n");
+		free(result);
+		return NULL;
+	}
+
+	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
+		rc = nvme_transport_poll_group_get_stats(tgroup, &result->tranport_stat[reported_stats_count]);
+		if (rc == 0) {
+			reported_stats_count++;
+		}
+	}
+
+	if (reported_stats_count == 0) {
+		free(result->tranport_stat);
+		free(result);
+		SPDK_WARNLOG("No transport statistics available\n");
+		return NULL;
+	}
+
+	result->num_transports = reported_stats_count;
+	return result;
+}
+
+void
+spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
+				struct spdk_nvme_poll_group_stat *stat)
+{
+	struct spdk_nvme_transport_poll_group *tgroup;
+	uint32_t i, freed_stats = 0;
+
+	if (!group || !stat) {
+		SPDK_ERRLOG("Invalid arguments\n");
+		return;
+	}
+
+	for (i = 0; i < stat->num_transports; i++) {
+		STAILQ_FOREACH(tgroup, &group->tgroups, link) {
+			if (strcmp(nvme_transport_get_name(tgroup->transport), stat->tranport_stat[i]->trname) == 0) {
+				nvme_transport_poll_group_free_stats(tgroup, stat->tranport_stat[i]);
+				freed_stats++;
+			}
+		}
+	}
+
+	assert(freed_stats == stat->num_transports);
+
+	free(stat->tranport_stat);
+	free(stat);
+}

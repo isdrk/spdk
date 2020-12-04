@@ -2,6 +2,11 @@
 
 ## v21.01: (Upcoming Release)
 
+### nvme
+
+New functions `spdk_nvme_poll_group_get_stats` and `spdk_nvme_poll_group_free_stats`
+added. These functions allow to get transport statistics per NVME poll group.
+
 ### nvmf
 
 The functions `destroy` and `qpair_fini` in the transport interface now accept a
