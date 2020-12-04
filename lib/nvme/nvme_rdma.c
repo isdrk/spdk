@@ -157,6 +157,10 @@ struct nvme_rdma_destroyed_qpair {
 };
 
 struct nvme_rdma_poller_stats {
+	uint64_t polls;
+	uint64_t idle_polls;
+	uint64_t queued_requests;
+	uint64_t completions;
 	struct spdk_rdma_qp_stats rdma_stats;
 };
 
@@ -2063,7 +2067,10 @@ nvme_rdma_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 	assert(req != NULL);
 
 	rdma_req = nvme_rdma_req_get(rqpair);
-	if (!rdma_req) {
+	if (spdk_unlikely(!rdma_req)) {
+		if (rqpair->poller) {
+			rqpair->poller->stats.queued_requests++;
+		}
 		/* Inform the upper layer to try again later. */
 		return -EAGAIN;
 	}
@@ -2726,11 +2733,14 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 	STAILQ_FOREACH(poller, &group->pollers, link) {
 		poller_completions = 0;
 		do {
+			poller->stats.polls++;
 			batch_size = spdk_min((completions_per_poller - poller_completions), MAX_COMPLETIONS_PER_POLL);
 			rc = nvme_rdma_cq_process_completions(poller->cq, batch_size, group, NULL);
 			if (rc <= 0) {
 				if (rc == -ECANCELED) {
 					return -EIO;
+				} else if (rc == 0) {
+					poller->stats.idle_polls++;
 				}
 				break;
 			}
@@ -2738,6 +2748,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 			poller_completions += rc;
 		} while (poller_completions < completions_per_poller);
 		total_completions += poller_completions;
+		poller->stats.completions += poller_completions;
 	}
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->connected_qpairs, poll_group_stailq, tmp_qpair) {
