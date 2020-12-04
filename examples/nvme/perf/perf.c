@@ -207,6 +207,7 @@ struct ns_fn_table {
 	int	(*init_ns_worker_ctx)(struct ns_worker_ctx *ns_ctx);
 
 	void	(*cleanup_ns_worker_ctx)(struct ns_worker_ctx *ns_ctx);
+	void	(*dump_transport_stats)(uint32_t lcore, struct ns_worker_ctx *ns_ctx);
 };
 
 static int g_outstanding_commands;
@@ -255,6 +256,8 @@ static bool g_mix_specified;
 static bool g_exit;
 /* Default to 10 seconds for the keep alive value. This value is arbitrary. */
 static uint32_t g_keep_alive_timeout_in_ms = 10000;
+static bool g_dump_transport_stats;
+static pthread_mutex_t g_stats_mutex;
 
 static const char *g_core_mask;
 
@@ -867,6 +870,62 @@ nvme_cleanup_ns_worker_ctx(struct ns_worker_ctx *ns_ctx)
 	free(ns_ctx->u.nvme.qpair);
 }
 
+static void
+nvme_dump_rdma_statistics(struct spdk_nvme_transport_poll_group_stat *stat)
+{
+	struct spdk_nvme_rdma_device_stat *device_stats;
+	uint32_t i;
+
+	printf("RDMA transport:\n");
+	for (i = 0; i < stat->rdma.num_devices; i++) {
+		device_stats = &stat->rdma.device_stats[i];
+		printf("\tdev name: %s\n", device_stats->name);
+		printf("\tpolls: %"PRIu64"\n", device_stats->polls);
+		printf("\tidle_polls: %"PRIu64"\n", device_stats->idle_polls);
+		printf("\tcompletions: %"PRIu64"\n", device_stats->completions);
+		printf("\tqueued_requests: %"PRIu64"\n", device_stats->queued_requests);
+		printf("\ttotal_send_wrs: %"PRIu64"\n", device_stats->total_send_wrs);
+		printf("\tsend_sq_doorbell_updates: %"PRIu64"\n", device_stats->send_sq_doorbell_updates);
+		printf("\ttotal_recv_wrs: %"PRIu64"\n", device_stats->total_recv_wrs);
+		printf("\trecv_sq_doorbell_updates: %"PRIu64"\n", device_stats->recv_sq_doorbell_updates);
+		printf("\t---------------------------------\n");
+	}
+}
+
+static void
+nvme_dump_transport_stats(uint32_t lcore, struct ns_worker_ctx *ns_ctx)
+{
+	struct spdk_nvme_poll_group *group;
+	struct spdk_nvme_poll_group_stat *stat;
+	uint32_t i;
+
+	group = ns_ctx->u.nvme.group;
+	if (group == NULL) {
+		return;
+	}
+
+	stat = spdk_nvme_poll_group_get_stats(group);
+	if (!stat) {
+		return;
+	}
+
+	printf("\n====================\n");
+	printf("lcore %u, ns %s statistics:\n", lcore, ns_ctx->entry->name);
+
+	for (i = 0; i < stat->num_transports; i++) {
+		switch (stat->tranport_stat[i]->trtype) {
+		case SPDK_NVME_TRANSPORT_RDMA:
+			nvme_dump_rdma_statistics(stat->tranport_stat[i]);
+			break;
+		default:
+			fprintf(stderr, "Unknown transport statistics %d %s\n", stat->tranport_stat[i]->trtype,
+				stat->tranport_stat[i]->trname);
+		}
+	}
+
+	spdk_nvme_poll_group_free_stats(group, stat);
+}
+
 static const struct ns_fn_table nvme_fn_table = {
 	.setup_payload		= nvme_setup_payload,
 	.submit_io		= nvme_submit_io,
@@ -874,6 +933,7 @@ static const struct ns_fn_table nvme_fn_table = {
 	.verify_io		= nvme_verify_io,
 	.init_ns_worker_ctx	= nvme_init_ns_worker_ctx,
 	.cleanup_ns_worker_ctx	= nvme_cleanup_ns_worker_ctx,
+	.dump_transport_stats	= nvme_dump_transport_stats
 };
 
 static int
@@ -1272,6 +1332,18 @@ print_periodic_performance(bool warmup)
 	fflush(stdout);
 }
 
+static void
+perf_dump_transport_statistics(struct worker_thread *worker)
+{
+	struct ns_worker_ctx *ns_ctx;
+
+	TAILQ_FOREACH(ns_ctx, &worker->ns_ctx, link) {
+		if (ns_ctx->entry->fn_table->dump_transport_stats) {
+			ns_ctx->entry->fn_table->dump_transport_stats(worker->lcore, ns_ctx);
+		}
+	}
+}
+
 static int
 work_fn(void *arg)
 {
@@ -1341,6 +1413,12 @@ work_fn(void *arg)
 				break;
 			}
 		}
+	}
+
+	if (g_dump_transport_stats) {
+		pthread_mutex_lock(&g_stats_mutex);
+		perf_dump_transport_statistics(worker);
+		pthread_mutex_unlock(&g_stats_mutex);
 	}
 
 	/* drain the io of each ns_ctx in round robin to make the fairness */
@@ -1430,6 +1508,7 @@ static void usage(char *program_name)
 	printf("\t[-G, --enable-debug enable debug logging]\n");
 #else
 	printf("\t[-G, --enable-debug enable debug logging (flag disabled, must reconfigure with --enable-debug)\n");
+	printf("\t[--transport-stats dump transport statistics in the end of work\n");
 #endif
 }
 
@@ -1894,6 +1973,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"enable-vmd", no_argument, NULL, PERF_ENABLE_VMD},
 #define PERF_ENABLE_ZCOPY	'Z'
 	{"enable-zcopy",			required_argument,	NULL, PERF_ENABLE_ZCOPY},
+#define PERF_TRANSPORT_STATISTICS	257
+	{"transport-stats", no_argument, NULL, PERF_TRANSPORT_STATISTICS},
 	/* Should be the last element */
 	{0, 0, 0, 0}
 };
@@ -2062,6 +2143,9 @@ parse_args(int argc, char **argv)
 				fprintf(stderr, "Failed to set sock impl %s, err %d (%s)\n", optarg, errno, strerror(errno));
 				return 1;
 			}
+			break;
+		case PERF_TRANSPORT_STATISTICS:
+			g_dump_transport_stats = true;
 			break;
 		default:
 			usage(argv[0]);
@@ -2412,6 +2496,12 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	if (g_dump_transport_stats) {
+		/* Transport statistics are printed from each thread.
+		 * To avoid mess in terminal, init and use mutex */
+		pthread_mutex_init(&g_stats_mutex, NULL);
+	}
+
 	g_tsc_rate = spdk_get_ticks_hz();
 
 	if (register_workers() != 0) {
@@ -2480,6 +2570,10 @@ cleanup:
 	unregister_namespaces();
 	unregister_controllers();
 	unregister_workers();
+
+	if (g_dump_transport_stats) {
+		pthread_mutex_destroy(&g_stats_mutex);
+	}
 
 	if (rc != 0) {
 		fprintf(stderr, "%s: errors occured\n", argv[0]);
