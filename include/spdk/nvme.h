@@ -426,6 +426,16 @@ struct spdk_nvme_rdma_device_stat {
 	uint64_t recv_sq_doorbell_updates;
 };
 
+struct spdk_nvme_pcie_stat {
+	uint64_t polls;
+	uint64_t idle_polls;
+	uint64_t completions;
+	uint64_t cq_doorbell_updates;
+	uint64_t submitted_requests;
+	uint64_t queued_requests;
+	uint64_t sq_doobell_updates;
+};
+
 struct spdk_nvme_transport_poll_group_stat {
 	spdk_nvme_transport_type_t trtype;
 	const char *trname;
@@ -434,6 +444,7 @@ struct spdk_nvme_transport_poll_group_stat {
 			uint32_t num_devices;
 			struct spdk_nvme_rdma_device_stat *device_stats;
 		} rdma;
+		struct spdk_nvme_pcie_stat pcie;
 	};
 };
 

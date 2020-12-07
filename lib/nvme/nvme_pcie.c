@@ -132,6 +132,7 @@ SPDK_STATIC_ASSERT((offsetof(struct nvme_tracker, meta_sgl) & 7) == 0, "SGL must
 
 struct nvme_pcie_poll_group {
 	struct spdk_nvme_transport_poll_group group;
+	struct spdk_nvme_pcie_stat stats;
 };
 
 /* PCIe transport extensions for spdk_nvme_qpair */
@@ -153,6 +154,8 @@ struct nvme_pcie_qpair {
 
 	/* Array of trackers indexed by command ID. */
 	struct nvme_tracker *tr;
+
+	struct spdk_nvme_pcie_stat *stat;
 
 	uint16_t num_entries;
 
@@ -197,6 +200,7 @@ struct nvme_pcie_qpair {
 	 */
 
 	bool sq_in_cmb;
+	bool shared_stats;
 
 	uint64_t cmd_bus_addr;
 	uint64_t cpl_bus_addr;
@@ -722,6 +726,12 @@ nvme_pcie_ctrlr_construct_admin_qpair(struct spdk_nvme_ctrlr *ctrlr, uint16_t nu
 			     num_entries);
 	if (rc != 0) {
 		return rc;
+	}
+
+	pqpair->stat = calloc(1, sizeof(*pqpair->stat));
+	if (!pqpair->stat) {
+		SPDK_ERRLOG("Failed to allocate qpair statistics\n");
+		return -ENOMEM;
 	}
 
 	return nvme_pcie_qpair_construct(ctrlr->adminq, NULL);
@@ -1292,6 +1302,8 @@ nvme_pcie_qpair_ring_sq_doorbell(struct spdk_nvme_qpair *qpair)
 		return;
 	}
 
+	pqpair->stat->sq_doobell_updates++;
+
 	if (spdk_unlikely(pqpair->flags.has_shadow_doorbell)) {
 		need_mmio = nvme_pcie_qpair_update_mmio_required(qpair,
 				pqpair->sq_tail,
@@ -1313,6 +1325,8 @@ nvme_pcie_qpair_ring_cq_doorbell(struct spdk_nvme_qpair *qpair)
 	struct nvme_pcie_qpair	*pqpair = nvme_pcie_qpair(qpair);
 	struct nvme_pcie_ctrlr	*pctrlr = nvme_pcie_ctrlr(qpair->ctrlr);
 	bool need_mmio = true;
+
+	pqpair->stat->cq_doorbell_updates++;
 
 	if (spdk_unlikely(pqpair->flags.has_shadow_doorbell)) {
 		need_mmio = nvme_pcie_qpair_update_mmio_required(qpair,
@@ -1525,6 +1539,10 @@ nvme_pcie_qpair_destroy(struct spdk_nvme_qpair *qpair)
 		spdk_free(pqpair->tr);
 	}
 
+	if (!pqpair->shared_stats) {
+		free(pqpair->stat);
+	}
+
 	nvme_qpair_deinit(qpair);
 
 	spdk_free(pqpair);
@@ -1636,6 +1654,19 @@ _nvme_pcie_ctrlr_create_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 	struct nvme_pcie_qpair	*pqpair = nvme_pcie_qpair(qpair);
 	struct nvme_completion_poll_status	*status;
 	int					rc;
+
+	if (qpair->poll_group) {
+		struct nvme_pcie_poll_group *group = SPDK_CONTAINEROF(qpair->poll_group,
+						     struct nvme_pcie_poll_group, group);
+		pqpair->stat = &group->stats;
+		pqpair->shared_stats = true;
+	} else {
+		pqpair->stat = calloc(1, sizeof(*pqpair->stat));
+		if (!pqpair->stat) {
+			SPDK_ERRLOG("Failed to allocate qpair statistics\n");
+			return -ENOMEM;
+		}
+	}
 
 	status = calloc(1, sizeof(*status));
 	if (!status) {
@@ -2290,11 +2321,13 @@ nvme_pcie_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_reques
 	tr = TAILQ_FIRST(&pqpair->free_tr);
 
 	if (tr == NULL) {
+		pqpair->stat->queued_requests++;
 		/* Inform the upper layer to try again later. */
 		rc = -EAGAIN;
 		goto exit;
 	}
 
+	pqpair->stat->submitted_requests++;
 	TAILQ_REMOVE(&pqpair->free_tr, tr, tq_list); /* remove tr from free_tr */
 	TAILQ_INSERT_TAIL(&pqpair->outstanding_tr, tr, tq_list);
 	tr->req = req;
@@ -2398,6 +2431,8 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 		max_completions = pqpair->max_completions_cap;
 	}
 
+	pqpair->stat->polls++;
+
 	while (1) {
 		cpl = &pqpair->cpl[pqpair->cq_head];
 
@@ -2441,6 +2476,8 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 		__builtin_prefetch(&tr->req->stailq);
 		pqpair->sq_head = cpl->sqhd;
 
+		pqpair->stat->completions++;
+
 		if (tr->req) {
 			nvme_pcie_qpair_complete_tracker(qpair, tr, cpl, true);
 		} else {
@@ -2456,6 +2493,8 @@ nvme_pcie_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 
 	if (num_completions > 0) {
 		nvme_pcie_qpair_ring_cq_doorbell(qpair);
+	} else if (num_completions == 0) {
+		pqpair->stat->idle_polls++;
 	}
 
 	if (pqpair->flags.delay_cmd_submit) {
@@ -2557,6 +2596,40 @@ nvme_pcie_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 	return 0;
 }
 
+static int
+nvme_pcie_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
+			       struct spdk_nvme_transport_poll_group_stat **_stats)
+{
+	struct nvme_pcie_poll_group *group;
+	struct spdk_nvme_transport_poll_group_stat *stats;
+
+	if (tgroup == NULL || _stats == NULL) {
+		SPDK_ERRLOG("Invalid stats or group pointer\n");
+		return -EINVAL;
+	}
+
+	group = SPDK_CONTAINEROF(tgroup, struct nvme_pcie_poll_group, group);
+	stats = calloc(1, sizeof(*stats));
+	if (!stats) {
+		SPDK_ERRLOG("Can't allocate memory for RDMA stats\n");
+		return -ENOMEM;
+	}
+	stats->trtype = SPDK_NVME_TRANSPORT_PCIE;
+	stats->trname = nvme_transport_get_name(tgroup->transport);
+	memcpy(&stats->pcie, &group->stats, sizeof(group->stats));
+
+	*_stats = stats;
+
+	return 0;
+}
+
+static void
+nvme_pcie_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
+				struct spdk_nvme_transport_poll_group_stat *stats)
+{
+	free(stats);
+}
+
 static struct spdk_pci_id nvme_pci_driver_id[] = {
 	{
 		.class_id = SPDK_PCI_CLASS_NVME,
@@ -2610,6 +2683,8 @@ const struct spdk_nvme_transport_ops pcie_ops = {
 	.poll_group_remove = nvme_pcie_poll_group_remove,
 	.poll_group_process_completions = nvme_pcie_poll_group_process_completions,
 	.poll_group_destroy = nvme_pcie_poll_group_destroy,
+	.poll_group_get_stats = nvme_pcie_poll_group_get_stats,
+	.poll_group_free_stats = nvme_pcie_poll_group_free_stats
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(pcie, &pcie_ops);

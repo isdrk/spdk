@@ -2544,6 +2544,16 @@ Example response:
 				  "recv_sq_doorbell_updates": 348445
 				}
 			  ]
+			},
+			{
+			  "trname": "PCIE",
+			  "polls": 435419831,
+			  "idle_polls": 434901004,
+			  "completions": 1485543,
+			  "cq_doorbell_updates": 518827,
+			  "queued_requests": 0,
+			  "submitted_requests": 1485543,
+			  "sq_doobell_updates": 516081
 			}
 		  ]
 		},
@@ -2577,6 +2587,16 @@ Example response:
 				  "recv_sq_doorbell_updates": 357956
 				}
 			  ]
+			},
+			{
+			  "trname": "PCIE",
+			  "polls": 429044294,
+			  "idle_polls": 428525658,
+			  "completions": 1478730,
+			  "cq_doorbell_updates": 518636,
+			  "queued_requests": 0,
+			  "submitted_requests": 1478730,
+			  "sq_doobell_updates": 511658
 			}
 		  ]
 		}
