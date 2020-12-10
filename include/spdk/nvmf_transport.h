@@ -45,6 +45,7 @@
 #include "spdk/nvmf_cmd.h"
 #include "spdk/nvmf_spec.h"
 #include "spdk/memory.h"
+#include "../../lib/nvmf/io_pacer.h"
 
 #ifdef SPDK_CONFIG_VTUNE
 #include <ittnotify.h>
@@ -87,6 +88,9 @@ struct spdk_nvmf_dif_info {
 struct spdk_nvmf_request {
 	struct spdk_nvmf_qpair		*qpair;
 	uint32_t			length;
+    // Check about receive tse. ~Ankit
+    // Might we need to add to rdma_nvmf_request struct. ~Ankit
+    uint32_t            entry_time;
 	enum spdk_nvme_data_transfer	xfer;
 	void				*data;
 	union nvmf_h2c_msg		*cmd;

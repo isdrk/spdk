@@ -51,46 +51,13 @@ extern __itt_domain *io_pacer_domain;
 static rte_spinlock_t drives_stats_create_lock = RTE_SPINLOCK_INITIALIZER;
 struct spdk_io_pacer_drives_stats drives_stats = {0};
 
-struct io_pacer_queue {
-	uint64_t key;
-	struct drive_stats *stats;
-	STAILQ_HEAD(, io_pacer_queue_entry) queue;
-};
-
-struct spdk_io_pacer {
-	uint64_t period_ticks;
-	int64_t credit;
-	int64_t remaining_credit;
-	uint32_t max_queues;
-	spdk_io_pacer_pop_cb pop_cb;
-	uint32_t num_queues;
-	uint32_t next_queue;
-	uint64_t num_ios;
-	uint64_t first_tick;
-	uint64_t last_tick;
-	struct spdk_nvmf_io_pacer_stat stat;
-	struct io_pacer_queue *queues;
-	struct spdk_poller *poller;
-	uint32_t disk_credit;
-};
-
-struct spdk_io_pacer_tuner {
-	struct spdk_io_pacer *pacer;
-	uint64_t period_ns;
-	uint64_t step_ns;
-	uint64_t min_pacer_period_ticks;
-	uint64_t max_pacer_period_ticks;
-	uint64_t last_bytes;
-	struct spdk_poller *poller;
-};
-
 
 static struct io_pacer_queue *
-io_pacer_get_queue(struct spdk_io_pacer *pacer, uint64_t key)
+io_pacer_get_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 {
 	uint32_t i;
-	for (i = 0; i < pacer->num_queues; ++i) {
-		if (pacer->queues[i].key == key) {
+	for (i = 0; i < pacer->num_queues.cnt; ++i) {
+		if (pacer->queues[i].key.cnt == key) {
 			return &pacer->queues[i];
 		}
 	}
@@ -108,14 +75,15 @@ io_pacer_get_queue(struct spdk_io_pacer *pacer, uint64_t key)
 static int
 io_pacer_poll(void *arg)
 {
-	struct spdk_io_pacer *pacer = arg;
+    spdk_io_pacer_poller_struct *pacer_poller_struct = arg;
+	struct spdk_io_pacer_shared *pacer = pacer_poller_struct->pacer_shared;
+	struct spdk_io_pacer *pacer_local = pacer_poller_struct->pacer;
 	struct io_pacer_queue_entry *entry;
-	uint32_t next_queue = pacer->next_queue;
+	uint64_t next_queue = pacer->next_queue.cnt;
 	int rc = 0;
 	uint32_t ops_in_flight = 0;
 
 	const uint64_t cur_tick = spdk_get_ticks();
-	const uint64_t ticks_diff = cur_tick - pacer->last_tick;
 
 	uint32_t attempts_cnt = 0;
 
@@ -126,49 +94,18 @@ io_pacer_poll(void *arg)
 		__itt_task_begin(io_pacer_domain, __itt_null, __itt_null, io_pacer_poll_task);
 #endif /* SPDK_CONFIG_VTUNE */
 
-	pacer->stat.calls++;
-	if (ticks_diff < pacer->period_ticks) {
-		return 0;
-	}
-	pacer->stat.total_ticks = cur_tick - pacer->first_tick;
-	pacer->last_tick = cur_tick - ticks_diff % pacer->period_ticks;
-	pacer->stat.polls++;
 
-	pacer->remaining_credit = spdk_min(pacer->remaining_credit + pacer->credit,
-					   pacer->credit);
-
-	if (pacer->num_ios == 0) {
-		pacer->stat.no_ios++;
-	}
-
-	while ((pacer->num_ios > 0) &&
-	       (pacer->remaining_credit > 0) &&
-	       (attempts_cnt < pacer->num_queues)) {
-		next_queue %= pacer->num_queues;
-		attempts_cnt++;
-
-		if (pacer->disk_credit) {
-			ops_in_flight = rte_atomic32_read(&pacer->queues[next_queue].stats->ops_in_flight);
-			if (ops_in_flight > pacer->disk_credit) {
-				next_queue++;
-				continue;
-			}
-		}
+    // Need to add disk quota checks heres as are in rdma.c before pacer_push().
+		next_queue %= pacer->num_queues.cnt;
 		entry = STAILQ_FIRST(&pacer->queues[next_queue].queue);
 		next_queue++;
 		if (entry != NULL) {
 			STAILQ_REMOVE_HEAD(&pacer->queues[next_queue - 1].queue, link);
-			pacer->num_ios--;
-			pacer->next_queue = next_queue;
-			pacer->remaining_credit -= entry->size;
-			pacer->stat.ios++;
-			pacer->stat.bytes += entry->size;
-			rte_atomic32_add(&pacer->queues[next_queue - 1].stats->ops_in_flight, 1);
-			pacer->pop_cb(entry);
+			rte_atomic64_set(&pacer->next_queue, next_queue);
+			pacer_local->pop_cb(entry);
 			rc++;
 			attempts_cnt = 0;
 		}
-	}
 
 #ifdef  SPDK_CONFIG_VTUNE
 	if (poll_cnt % 100 == 0)
@@ -178,15 +115,21 @@ io_pacer_poll(void *arg)
 	return rc;
 }
 
+
+// Global variable for slow disk initialization.
+static volatile uint64_t slow_disk_var_initialization = 0;
+
 struct spdk_io_pacer *
-spdk_io_pacer_create(uint32_t period_ns,
+spdk_io_pacer_create(spdk_io_pacer_shared *pacer_shared, uint32_t period_ns,
 		     uint32_t credit,
 		     uint32_t disk_credit,
 		     spdk_io_pacer_pop_cb pop_cb)
 {
 	struct spdk_io_pacer *pacer;
+    uint32_t i, j;
 
 	assert(pop_cb != NULL);
+	assert(pacer_shared != NULL);
 
 	pacer = (struct spdk_io_pacer *)calloc(1, sizeof(struct spdk_io_pacer));
 	if (!pacer) {
@@ -201,43 +144,96 @@ spdk_io_pacer_create(uint32_t period_ns,
 	pacer->pop_cb = pop_cb;
 	pacer->first_tick = spdk_get_ticks();
 	pacer->last_tick = spdk_get_ticks();
-	pacer->poller = SPDK_POLLER_REGISTER(io_pacer_poll, (void *)pacer, 0);
-	if (!pacer->poller) {
-		SPDK_ERRLOG("Failed to create poller for IO pacer\n");
-		spdk_io_pacer_destroy(pacer);
-		return NULL;
-	}
+    // Just to test. ~Ankit
 
-	SPDK_NOTICELOG("Created IO pacer %p: period_ns %u, period_ticks %lu, max_queues %u, credit %ld, disk_credit %u, core %u\n",
-		       pacer,
-		       period_ns,
-		       pacer->period_ticks,
-		       pacer->max_queues,
-		       pacer->credit,
-		       pacer->disk_credit,
-		       spdk_env_get_current_core());
+            spdk_io_pacer_poller_struct *pacer_poller_struct;
+            pacer->pacer_poller_struct = (spdk_io_pacer_poller_struct *)calloc(1, sizeof(spdk_io_pacer_poller_struct));
+            pacer_poller_struct = pacer->pacer_poller_struct;
+            if (!pacer_poller_struct) {
+                SPDK_ERRLOG("Failed to allocate pacer_poller_struct\n");
+                return NULL;
+            }
+            pacer_poller_struct->pacer_shared = pacer_shared;
+            pacer_poller_struct->pacer = pacer;
+            pacer->poller = SPDK_POLLER_REGISTER(io_pacer_poll, (void *)pacer_poller_struct, 0);
+            if (!pacer->poller) {
+                SPDK_ERRLOG("Failed to create poller for IO pacer\n");
+                spdk_io_pacer_destroy(pacer_shared, pacer);
+                return NULL;
+            }
+    // Just to test. ~Ankit
+    
+    /* Required for slow disc algo. */
+    //pacer->start_pacer_at_startup = 1;
+    pacer->pacer_iteration_number = 1;
+    pacer->disk_start_index = 0;
+    pacer->take_average_after_count = MAX_ITERATION_TO_COMPUTE_AVERAGE;
+    //pacer->max_allowed_mem = BF2_CACHE_SIZE;
+
+    //if ( ! pacer_shared->slow_disk_var_initialization.cnt) {
+    if ( ! slow_disk_var_initialization) {
+        rte_spinlock_lock(&pacer_shared->lock_for_pacer_initialization);
+            //pacer_shared->slow_disk_var_initialization.cnt = 1;
+            slow_disk_var_initialization = 1;
+            //pacer_shared->max_queues.cnt = 64000 * 96; //Wrong, must be 0.
+            pacer_shared->max_queues.cnt = 0;
+            pacer_shared->num_queues.cnt = 0;
+            pacer_shared->next_queue.cnt = 0;
+            pacer_shared->num_items_pushed_to_io_pacer_queue.cnt = 0;
+            //pacer_shared->current_lock_priority = 0;
+            //rte_spinlock_init(&pacer_shared->lock_for_priority);
+            pacer_shared->total_allocated_mem.cnt = 0;
+            pacer->last_scheduling_disk_index = 0;
+            pacer_shared->max_number_of_supported_disks.cnt = MAX_SUPPORTED_DISKS;
+            pacer_shared->number_of_inserted_disks.cnt = MAX_SUPPORTED_DISKS;
+            rte_spinlock_init(&pacer_shared->lock_for_total_allocated_mem);
+            rte_spinlock_init(&pacer_shared->lock_for_generic);
+            pacer_shared->current_data_and_time_index.cnt = 0;
+            for (i = 0; i < pacer_shared->max_number_of_supported_disks.cnt; i++) {
+                rte_spinlock_init(&pacer_shared->lock_per_disk[i]);
+                rte_spinlock_init(&pacer_shared->lock_per_queue[i]);
+                pacer_shared->per_disk_used_buffer[i].cnt = 0;
+                pacer_shared->disk_speeds[i].cnt = AVG_5GbPS_DISK_SPEED; //Take from bdev. ~Ankit
+                pacer_shared->per_disk_max_buffer[i].cnt = MAX_ALLOCATION_SIZE_PER_DISK; //Check how to find inserted disks. Can be equal to max_nsid. ~Ankit
+                if(pacer_shared->number_of_inserted_disks.cnt < (MAX_SUPPORTED_DISKS / 2)) {
+                    pacer_shared->per_disk_max_buffer[i].cnt = 2 * BF2_CACHE_SIZE / (MAX_SUPPORTED_DISKS / 2); //Check how to find inserted disks. Can be equal to max_nsid ~Ankit
+                }
+                for (j = 0; j < pacer->take_average_after_count; j++) {
+                    pacer_shared->per_disk_data_transfered[i][j].cnt = 0;
+                    pacer_shared->per_disk_time_taken_to_transfer[i][j].cnt = 0;
+                }
+            }
+        rte_spinlock_unlock(&pacer_shared->lock_for_pacer_initialization);
+    }
+
+
+	SPDK_NOTICELOG("Created IO pacer %p: period_ns %u, period_ticks %lu, max_queues.cnt %lu, core %u, BF2_CACHE_SIZE: %lu, MAX_SUPPORTED_DISKS: %lu\n",
+                   pacer, period_ns, pacer->period_ticks, pacer_shared->max_queues.cnt,
+                   spdk_env_get_current_core(), BF2_CACHE_SIZE, MAX_SUPPORTED_DISKS);
 
 	return pacer;
 }
 
 void
-spdk_io_pacer_destroy(struct spdk_io_pacer *pacer)
+spdk_io_pacer_destroy(struct spdk_io_pacer_shared *pacer, struct spdk_io_pacer *pacer_local)
 {
+    SPDK_NOTICELOG("Ankit: \n");
 	uint32_t i;
 
 	assert(pacer != NULL);
 
 	/* Check if we have something in the queues */
-	for (i = 0; i < pacer->num_queues; ++i) {
+	for (i = 0; i < pacer->num_queues.cnt; ++i) {
 		if (!STAILQ_EMPTY(&pacer->queues[i].queue)) {
-			SPDK_WARNLOG("IO pacer queue is not empty on pacer destroy: pacer %p, key %016lx\n",
-				     pacer, pacer->queues[i].key);
+			SPDK_WARNLOG("IO pacer queue is not empty on pacer destroy: pacer %p, key.cnt %016lx\n",
+				     pacer, pacer->queues[i].key.cnt);
 		}
 	}
 
-	spdk_poller_unregister(&pacer->poller);
+            spdk_poller_unregister(&pacer_local->poller);
+    free(pacer_local->pacer_poller_struct);
 	free(pacer->queues);
-	free(pacer);
+	free(pacer_local);
 	SPDK_NOTICELOG("Destroyed IO pacer %p\n", pacer);
 }
 
@@ -276,55 +272,64 @@ void spdk_io_pacer_drive_stats_setup(struct spdk_io_pacer_drives_stats *stats, i
 }
 
 int
-spdk_io_pacer_create_queue(struct spdk_io_pacer *pacer, uint64_t key)
+spdk_io_pacer_create_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 {
+    SPDK_NOTICELOG("Ankit: \n");
 	assert(pacer != NULL);
 
-	if (pacer->num_queues >= pacer->max_queues) {
-		const uint32_t new_max_queues = pacer->max_queues ?
-			2 * pacer->max_queues : IO_PACER_DEFAULT_MAX_QUEUES;
+	if (pacer->num_queues.cnt <= 0 || pacer->num_queues.cnt >= pacer->max_queues.cnt) {
+		const uint64_t new_max_queues = pacer->max_queues.cnt ?
+			2 * pacer->max_queues.cnt : IO_PACER_DEFAULT_MAX_QUEUES;
 		struct io_pacer_queue *new_queues =
 			(struct io_pacer_queue *)realloc(pacer->queues,
 							 new_max_queues * sizeof(*pacer->queues));
 		if (!new_queues) {
-			SPDK_NOTICELOG("Failed to allocate more queues for IO pacer %p: max_queues %u\n",
+			SPDK_NOTICELOG("Failed to allocate more queues for IO pacer %p: max_queues %lu\n",
 				       pacer, new_max_queues);
 			return -1;
 		}
 
-		pacer->queues = new_queues;
-		pacer->max_queues = new_max_queues;
-		SPDK_NOTICELOG("Allocated more queues for IO pacer %p: max_queues %u\n",
-			       pacer, pacer->max_queues);
+		rte_spinlock_lock(&pacer->lock_for_generic);
+            pacer->queues = new_queues;
+        rte_spinlock_unlock(&pacer->lock_for_generic);
+        // Will pointer initialization be good for atomic64_set or I need to take lock? ~Ankit
+		// rte_atomic64_set(&pacer->queues, new_queues);
+		rte_atomic64_set(&pacer->max_queues, new_max_queues);
+		SPDK_NOTICELOG("Allocated more queues for IO pacer %p: max_queues.cnt %lu\n",
+                       pacer, pacer->max_queues.cnt);
+        SPDK_NOTICELOG("Ankit: pacer->max_queues.cnt: %lu\n", pacer->max_queues.cnt);
+        for (i =0; i < pacer->max_queues.cnt; i++) {
+            SPDK_NOTICELOG("Ankit: pacer->queues[%lu]: 0x%p\n", i, pacer->queues[i]);
+        }
 	}
 
-	pacer->queues[pacer->num_queues].key = key;
-	STAILQ_INIT(&pacer->queues[pacer->num_queues].queue);
+	rte_atomic64_set(&pacer->queues[pacer->num_queues.cnt].key, key);
+	STAILQ_INIT(&pacer->queues[pacer->num_queues.cnt].queue);
 	spdk_io_pacer_drive_stats_setup(&drives_stats, MAX_DRIVES_STATS);
-	pacer->queues[pacer->num_queues].stats = spdk_io_pacer_drive_stats_get(&drives_stats, key);
-	pacer->num_queues++;
-	SPDK_NOTICELOG("Created IO pacer queue: pacer %p, key %016lx\n",
-		       pacer, key);
+    uint64_t disk_stats = spdk_io_pacer_drive_stats_get(&drives_stats, key); // Currently not using. ~Ankit
+	rte_atomic64_set(&pacer->num_queues, pacer->num_queues.cnt + 1);
+	SPDK_NOTICELOG("Created IO pacer queue: pacer %p, key %016lx, num_queues: %lu\n",
+		       pacer, key, pacer->num_queues.cnt);
 
 	return 0;
 }
 
 int
-spdk_io_pacer_destroy_queue(struct spdk_io_pacer *pacer, uint64_t key)
+spdk_io_pacer_destroy_queue(struct spdk_io_pacer_shared *pacer, uint64_t key)
 {
 	uint32_t i;
 
 	assert(pacer != NULL);
 
-	for (i = 0; i < pacer->num_queues; ++i) {
-		if (pacer->queues[i].key == key) {
+	for (i = 0; i < pacer->num_queues.cnt; ++i) {
+		if (pacer->queues[i].key.cnt == key) {
 			if (!STAILQ_EMPTY(&pacer->queues[i].queue)) {
 				SPDK_WARNLOG("Destroying non empty IO pacer queue: key %016lx\n", key);
 			}
 
 			memmove(&pacer->queues[i], &pacer->queues[i + 1],
-				(pacer->num_queues - i - 1) * sizeof(struct io_pacer_queue));
-			pacer->num_queues--;
+				(pacer->num_queues.cnt - i - 1) * sizeof(struct io_pacer_queue));
+			pacer->num_queues.cnt--;
 			SPDK_NOTICELOG("Destroyed IO pacer queue: pacer %p, key %016lx\n",
 				       pacer, key);
 			return 0;
@@ -336,7 +341,7 @@ spdk_io_pacer_destroy_queue(struct spdk_io_pacer *pacer, uint64_t key)
 }
 
 int
-spdk_io_pacer_push(struct spdk_io_pacer *pacer, uint64_t key, struct io_pacer_queue_entry *entry)
+spdk_io_pacer_push(struct spdk_io_pacer_shared *pacer, uint64_t key, struct io_pacer_queue_entry *entry)
 {
 	struct io_pacer_queue *queue;
 
@@ -350,7 +355,38 @@ spdk_io_pacer_push(struct spdk_io_pacer *pacer, uint64_t key, struct io_pacer_qu
 	}
 
 	STAILQ_INSERT_TAIL(&queue->queue, entry, link);
-	pacer->num_ios++;
+
+
+	return 0;
+}
+
+int
+spdk_io_pacer_pop(struct spdk_io_pacer_shared *pacer, uint64_t key, struct io_pacer_queue_entry *entry)
+{
+    SPDK_NOTICELOG("Ankit: \n");
+	struct io_pacer_queue *queue;
+
+	assert(pacer != NULL);
+	assert(entry != NULL);
+
+	queue = io_pacer_get_queue(pacer, key);
+	if (spdk_unlikely(queue == NULL)) {
+		SPDK_ERRLOG("IO pacer queue not found: key %016lx\n", key);
+		return -1;
+	}
+
+    STAILQ_REMOVE(&queue->queue, entry, io_pacer_queue_entry, link);
+
+    uint64_t i;
+    SPDK_NOTICELOG("Ankit: pacer->max_queues.cnt: %lu, pacer->num_queues.cnt: %lu\n",
+            pacer->max_queues.cnt, pacer->num_queues.cnt);
+    for (i =0; i < pacer->num_queues.cnt; i++) {
+        SPDK_NOTICELOG("Ankit: pacer->queues[%lu]: 0x%x, 0x%x\n",
+                i, pacer->queues[i], &pacer->queues[i]);
+    }
+
+    SPDK_NOTICELOG("Ankit: queue: 0x%x, queue->queue: 0x%x, entry: 0x%x\n",
+                queue, queue->queue, entry);
 	return 0;
 }
 
@@ -369,208 +405,3 @@ spdk_io_pacer_get_stat(const struct spdk_io_pacer *pacer,
 	}
 }
 
-static int
-io_pacer_tune(void *arg)
-{
-	struct spdk_io_pacer_tuner *tuner = arg;
-	struct spdk_io_pacer *pacer = tuner->pacer;
-	const uint64_t ticks_hz = spdk_get_ticks_hz();
-	const uint64_t bytes = pacer->stat.bytes - tuner->last_bytes;
-	/* We do calculations in terms of credit sized IO */
-	const uint64_t io_period_ns = tuner->period_ns / ((bytes != 0) ? (bytes / pacer->credit) : 1);
-
-	const uint64_t cur_period_ns = (pacer->period_ticks * SPDK_SEC_TO_NSEC) / ticks_hz;
-	/* We always want to set pacer period one step shorter than measured IO period.
-	 * But we limit changes to one step at a time in any direction.
-	 */
-	uint64_t new_period_ns = io_period_ns - tuner->step_ns;
-	if (new_period_ns > cur_period_ns + tuner->step_ns) {
-		new_period_ns = cur_period_ns + tuner->step_ns;
-	} else if (new_period_ns < cur_period_ns - tuner->step_ns) {
-		new_period_ns = cur_period_ns - tuner->step_ns;
-	}
-
-	uint64_t new_period_ticks = (new_period_ns * ticks_hz) / SPDK_SEC_TO_NSEC;
-	new_period_ticks = spdk_max(spdk_min(new_period_ticks, tuner->max_pacer_period_ticks),
-				    tuner->min_pacer_period_ticks);
-
-	static __thread uint32_t log_counter = 0;
-	/* Try to log once per second */
-	if (log_counter % (SPDK_SEC_TO_NSEC / tuner->period_ns) == 0) {
-		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, bytes %lu, io period %lu ns, new period %lu ns, new period %lu ticks, min %lu, max %lu\n",
-			       tuner,
-			       pacer,
-			       pacer->stat.bytes - tuner->last_bytes,
-			       io_period_ns,
-			       new_period_ns,
-			       new_period_ticks,
-			       tuner->min_pacer_period_ticks,
-			       tuner->max_pacer_period_ticks);
-	}
-	log_counter++;
-
-	pacer->period_ticks = new_period_ticks;
-	tuner->last_bytes = pacer->stat.bytes;
-
-	return 1;
-}
-
-struct spdk_io_pacer_tuner *
-spdk_io_pacer_tuner_create(struct spdk_io_pacer *pacer,
-			   uint32_t period_us,
-			   uint32_t step_ns)
-{
-	struct spdk_io_pacer_tuner *tuner;
-
-	assert(pacer != NULL);
-
-	tuner = (struct spdk_io_pacer_tuner *)calloc(1, sizeof(struct spdk_io_pacer_tuner));
-	if (!tuner) {
-		SPDK_ERRLOG("Failed to allocate IO pacer tuner\n");
-		return NULL;
-	}
-
-	tuner->pacer = pacer;
-	tuner->period_ns = 1000ULL * period_us;
-	tuner->step_ns = step_ns;
-	tuner->min_pacer_period_ticks = pacer->period_ticks;
-	tuner->max_pacer_period_ticks = 2 * tuner->min_pacer_period_ticks;
-
-	if (0 != period_us) {
-		tuner->poller = SPDK_POLLER_REGISTER(io_pacer_tune, (void *)tuner, period_us);
-		if (!tuner->poller) {
-			SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
-			spdk_io_pacer_tuner_destroy(tuner);
-			return NULL;
-		}
-	}
-
-	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, step_ns %lu, min_pacer_period_ticks %lu, max_pacer_period_ticks %lu\n",
-		       tuner,
-		       pacer,
-		       tuner->period_ns,
-		       tuner->step_ns,
-		       tuner->min_pacer_period_ticks,
-		       tuner->max_pacer_period_ticks);
-
-	return tuner;
-}
-
-void
-spdk_io_pacer_tuner_destroy(struct spdk_io_pacer_tuner *tuner)
-{
-	assert(tuner != NULL);
-
-	spdk_poller_unregister(&tuner->poller);
-	free(tuner);
-	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
-}
-
-struct spdk_io_pacer_tuner2 {
-	struct spdk_io_pacer *pacer;
-	uint64_t period_ns;
-	uint32_t value;
-	uint32_t min_threshold;
-	uint64_t factor;
-	uint64_t min_pacer_period_ticks;
-	uint64_t max_pacer_period_ticks;
-	struct spdk_poller *poller;
-};
-
-static int
-io_pacer_tune2(void *arg)
-{
-	struct spdk_io_pacer_tuner2 *tuner = arg;
-	struct spdk_io_pacer *pacer = tuner->pacer;
-	uint32_t v = tuner->value;
-
-	uint64_t new_period_ticks = (v <= tuner->min_threshold) ?
-		tuner->min_pacer_period_ticks :
-		(v - tuner->min_threshold) * tuner->factor / 1000 + tuner->min_pacer_period_ticks;
-	new_period_ticks = spdk_min(new_period_ticks, tuner->max_pacer_period_ticks);
-
-	static __thread uint32_t log_counter = 0;
-	/* Try to log once per second */
-	if (log_counter % (SPDK_SEC_TO_NSEC / tuner->period_ns) == 0) {
-		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, value %u, new period %lu ticks, min %lu, polls %u. ios %u\n",
-			       tuner,
-			       pacer,
-			       v,
-			       new_period_ticks,
-			       tuner->min_pacer_period_ticks,
-			       pacer->stat.polls,
-			       pacer->stat.ios);
-	}
-	log_counter++;
-
-	pacer->period_ticks = new_period_ticks;
-
-	return 1;
-}
-
-struct spdk_io_pacer_tuner2 *
-spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
-			    uint32_t period_us,
-			    uint32_t min_threshold,
-			    uint64_t factor)
-{
-	struct spdk_io_pacer_tuner2 *tuner;
-
-	assert(pacer != NULL);
-
-	tuner = (struct spdk_io_pacer_tuner2 *)calloc(1, sizeof(struct spdk_io_pacer_tuner2));
-	if (!tuner) {
-		SPDK_ERRLOG("Failed to allocate IO pacer tuner\n");
-		return NULL;
-	}
-
-	tuner->pacer = pacer;
-	tuner->period_ns = 1000ULL * period_us;
-	tuner->value = 0;
-	tuner->min_threshold = min_threshold;
-	tuner->factor = factor;
-	tuner->min_pacer_period_ticks = pacer->period_ticks;
-	tuner->max_pacer_period_ticks = 4 * tuner->min_pacer_period_ticks;
-
-	if (0 != period_us) {
-		tuner->poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)tuner, period_us);
-		if (!tuner->poller) {
-			SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
-			spdk_io_pacer_tuner2_destroy(tuner);
-			return NULL;
-		}
-	}
-
-	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, threshold %u, factor %lu\n",
-		       tuner,
-		       pacer,
-		       tuner->period_ns,
-		       tuner->min_threshold,
-		       tuner->factor);
-
-	return tuner;
-}
-
-void
-spdk_io_pacer_tuner2_destroy(struct spdk_io_pacer_tuner2 *tuner)
-{
-	assert(tuner != NULL);
-
-	spdk_poller_unregister(&tuner->poller);
-	free(tuner);
-	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
-}
-
-void
-spdk_io_pacer_tuner2_add(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
-{
-	assert(tuner != NULL);
-	tuner->value += value;
-}
-
-void
-spdk_io_pacer_tuner2_sub(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
-{
-	assert(tuner != NULL);
-	tuner->value -= value;
-}
