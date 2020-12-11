@@ -31,6 +31,7 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <spdk/bdev_module.h>
 #include "spdk/stdinc.h"
 
 #include "bdev_nvme.h"
@@ -171,6 +172,9 @@ static int bdev_nvme_abort(struct nvme_io_channel *nvme_ch,
 static int bdev_nvme_reset(struct nvme_io_channel *nvme_ch, struct nvme_bdev_io *bio);
 static int bdev_nvme_failover(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr, bool remove);
 static void remove_cb(void *cb_ctx, struct spdk_nvme_ctrlr *ctrlr);
+static int bdev_nvme_data_passthru(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				   struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt, void *md, uint64_t lba_count, uint64_t lba,
+				   enum spdk_bdev_io_type type);
 
 typedef void (*populate_namespace_fn)(struct nvme_bdev_ctrlr *nvme_bdev_ctrlr,
 				      struct nvme_bdev_ns *nvme_ns, struct nvme_async_probe_ctx *ctx);
@@ -746,6 +750,16 @@ _bdev_nvme_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_
 		return bdev_nvme_abort(nvme_ch,
 				       nbdev_io,
 				       nbdev_io_to_abort);
+	case SPDK_BDEV_IO_TYPE_DATA_PASSTHRU:
+		return bdev_nvme_data_passthru(nbdev->nvme_ns->ns,
+					       nvme_ch->qpair,
+					       nbdev_io,
+					       bdev_io->u.data_passthru.iovs,
+					       bdev_io->u.data_passthru.iovcnt,
+					       bdev_io->u.data_passthru.md_buf,
+					       bdev_io->u.data_passthru.num_blocks,
+					       bdev_io->u.data_passthru.offset_blocks,
+					       bdev_io->u.data_passthru.type);
 
 	default:
 		return -EINVAL;
@@ -2714,6 +2728,80 @@ bdev_nvme_io_passthru_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 
 	return spdk_nvme_ctrlr_cmd_io_raw_with_md(ctrlr, qpair, cmd, buf,
 			(uint32_t)nbytes, md_buf, bdev_nvme_queued_done, bio);
+}
+
+static void
+bdev_nvme_data_passthru_done(void *ref, const struct spdk_nvme_cpl *cpl)
+{
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx((struct nvme_bdev_io *)ref);
+
+	if (spdk_nvme_cpl_is_pi_error(cpl)) {
+		SPDK_ERRLOG("writev completed with PI error (sct=%d, sc=%d)\n",
+			    cpl->status.sct, cpl->status.sc);
+		/* Run PI verification for write data buffer if PI error is detected. */
+		bdev_nvme_verify_pi_error(bdev_io);
+	}
+
+	spdk_bdev_io_complete_nvme_status(bdev_io, cpl->cdw0, cpl->status.sct, cpl->status.sc);
+}
+
+static int bdev_nvme_data_passthru_get_mkey(void *cb_arg, void *address,
+		size_t length, uintptr_t pd_ctx, uint32_t *mkey)
+{
+	struct nvme_bdev_io *bio = cb_arg;
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+
+	return bdev_io->u.data_passthru.mkey_cb(bdev_io->u.data_passthru.mkey_cb_arg, pd_ctx, address,
+						length, mkey);
+}
+
+static inline int
+bdev_nvme_data_passthru_bdev_io_type_to_nvme_opcode(enum spdk_bdev_io_type bdev_io_type,
+		enum spdk_nvme_nvm_opcode *nvme_opcode)
+{
+	enum spdk_nvme_nvm_opcode opcode = SPDK_NVME_OPC_WRITE;
+	int rc = 0;
+
+	switch (bdev_io_type) {
+	case SPDK_BDEV_IO_TYPE_READ:
+		opcode = SPDK_NVME_OPC_READ;
+		break;
+	case SPDK_BDEV_IO_TYPE_WRITE:
+		opcode = SPDK_NVME_OPC_WRITE;
+		break;
+	case SPDK_BDEV_IO_TYPE_COMPARE:
+		opcode = SPDK_NVME_OPC_COMPARE;
+		break;
+	default:
+		rc = -ENOTSUP;
+	}
+
+	if (!rc) {
+		*nvme_opcode = opcode;
+	}
+	return rc;
+}
+
+static int
+bdev_nvme_data_passthru(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			struct nvme_bdev_io *bio, struct iovec *iov, int iovcnt, void *md, uint64_t lba_count, uint64_t lba,
+			enum spdk_bdev_io_type type)
+{
+	bio->iovs = iov;
+	bio->iovcnt = iovcnt;
+	bio->iovpos = 0;
+	bio->iov_offset = 0;
+	enum spdk_nvme_nvm_opcode nvme_opcode;
+	int rc;
+
+	rc = bdev_nvme_data_passthru_bdev_io_type_to_nvme_opcode(type, &nvme_opcode);
+	if (rc) {
+		return rc;
+	}
+
+	return spdk_nvme_ns_cmd_data_passthru(ns, qpair, lba, lba_count, bdev_nvme_data_passthru_done, bio,
+					      0, nvme_opcode, bdev_nvme_queued_reset_sgl, bdev_nvme_queued_next_sge, md,
+					      bdev_nvme_data_passthru_get_mkey);
 }
 
 static void

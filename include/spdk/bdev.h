@@ -1546,6 +1546,51 @@ int spdk_bdev_nvme_io_passthru_md(struct spdk_bdev_desc *bdev_desc,
 				  spdk_bdev_io_completion_cb cb, void *cb_arg);
 
 /**
+ * Data passthru IO type callback
+ *
+ * Callback function to be called by low level driver to get an mkey
+ */
+///!!! problem - we can't pass pointer to qp or pd since bdev should not be aware of such types
+typedef int (*spdk_bdev_data_passthru_get_mkey)(void *cb_arg, uintptr_t pd_ctx, void *address,
+		size_t length, uint32_t *mkey);
+
+/**
+ * Submit a request to the bdev on the given channel. Memory used by this request
+ * belongs to another memory domain, e.g. it can be another's device memory.
+ * This type of IO can be submitted to block devices which support SPDK_BDEV_IO_TYPE_DATA_PASSTHRU,
+ * typically it is RDMA devices.
+ *
+ * \ingroup bdev_io_submit_functions
+ *
+ * \param desc Block device descriptor.
+ * \param ch I/O channel. Obtained by calling spdk_bdev_get_io_channel().
+ * \param iov A scatter gather list of buffers to be written from.
+ * \param iovcnt The number of elements in iov.
+ * \param offset_blocks The offset, in blocks, from the start of the block device.
+ * \param num_blocks The number of blocks to write.
+ * \param io_type IO type of this operation. bdev module must support both SPDK_BDEV_IO_TYPE_DATA_PASSTHRU
+ * 			and requests io_type
+ * \param comp_cb Called when the request is complete.
+ * \param comp_cb_arg Argument passed to comp_cb.
+ * \param mkey_cb Called to get an mkey per each SGL entry.
+ * \param mkey_cb_arg Argument passed to mkey_cb.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ *   * -EINVAL - offset_blocks and/or num_blocks are out of range
+ *   * -ENOMEM - spdk_bdev_io buffer cannot be allocated
+ *   * -EBADF - desc not open for writing
+ */
+// TODO: extend with t10dif fields
+int spdk_bdev_data_passthru(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+			    struct iovec *iov, int iovcnt, void *md,
+			    uint64_t offset_blocks, uint64_t num_blocks,
+			    enum spdk_bdev_io_type io_type,
+			    spdk_bdev_io_completion_cb comp_cb, void *comp_cb_arg,
+			    spdk_bdev_data_passthru_get_mkey mkey_cb, void *mkey_cb_arg);
+
+/**
  * Free an I/O request. This should only be called after the completion callback
  * for the I/O has been called and notifies the bdev layer that memory may now
  * be released.

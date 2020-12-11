@@ -2302,6 +2302,8 @@ nvme_pcie_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_reques
 	tr->cb_arg = req->cb_arg;
 	req->cmd.cid = tr->cid;
 
+	assert(req->payload.get_sge_mkey == NULL);
+
 	if (req->payload_size != 0) {
 		payload_type = nvme_payload_type(&req->payload);
 		/* According to the specification, PRPs shall be used for all

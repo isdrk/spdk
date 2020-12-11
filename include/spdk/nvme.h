@@ -2451,6 +2451,20 @@ typedef void (*spdk_nvme_req_reset_sgl_cb)(void *cb_arg, uint32_t offset);
 typedef int (*spdk_nvme_req_next_sge_cb)(void *cb_arg, void **address, uint32_t *length);
 
 /**
+ * Fill out provided @b mkey pointer with Memory Key of memory segment described
+ * by @b address and @b length.
+ *
+ * \param cb_arg Argument passed to @b spdk_nvme_ns_cmd_data_passthru
+ * \param address Virtual or physical addres
+ * \param length Length of memory segment
+ * \param pd_ctx Pointer to a ibv Protect Domain which is used by the driver
+ * \param mkey Pointer to store the result of translation
+ * \return 0 on success, errno on failure
+ */
+typedef int (*spdk_nvme_data_passthru_get_mkey)(void *cb_arg, void *address,
+		size_t length, uintptr_t pd_ctx, uint32_t *mkey);
+
+/**
  * Submit a write I/O to the specified NVMe namespace.
  *
  * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
@@ -3052,6 +3066,43 @@ int spdk_nvme_ns_cmd_compare_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_q
 				     uint64_t lba, uint32_t lba_count, spdk_nvme_cmd_cb cb_fn,
 				     void *cb_arg, uint32_t io_flags,
 				     uint16_t apptag_mask, uint16_t apptag);
+
+/**
+ * Submit a read I/O to the specified NVMe namespace.
+ *
+ * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+ * The user must ensure that only one thread submits I/O on a given qpair at any
+ * given time.
+ *
+ * \param ns NVMe namespace to submit the read I/O.
+ * \param qpair I/O queue pair to submit the request.
+ * \param lba Starting LBA to read the data.
+ * \param lba_count Length (in sectors) for the read operation.
+ * \param cb_fn Callback function to invoke when the I/O is completed.
+ * \param cb_arg Argument to pass to the callback function.
+ * \param io_flags Set flags, defined in nvme_spec.h, for this I/O.
+ * \param opcode Command operation type
+ * \param reset_sgl_fn Callback function to reset scattered payload.
+ * \param next_sge_fn Callback function to iterate each scattered payload memory
+ * segment.
+ *
+ * \return 0 if successfully submitted, negated errnos on the following error conditions:
+ * -EINVAL: The request is malformed.
+ * -ENOMEM: The request cannot be allocated.
+ * -ENXIO: The qpair is failed at the transport level.
+ * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
+ *          with error status including dnr=1 in this case.
+ */
+//TODO: add t10dif flags
+//TODO: alternative to opcode is to create 2 functions like spdk_nvme_ns_cmd_readv_data_passthru and
+// spdk_nvme_ns_cmd_writev_data_passthru.
+int spdk_nvme_ns_cmd_data_passthru(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				   uint64_t lba, uint32_t lba_count,
+				   spdk_nvme_cmd_cb cb_fn, void *cb_arg, uint32_t io_flags,
+				   enum spdk_nvme_nvm_opcode opcode,
+				   spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
+				   spdk_nvme_req_next_sge_cb next_sge_fn, void *metadata,
+				   spdk_nvme_data_passthru_get_mkey get_mkey_cb);
 
 /**
  * \brief Inject an error for the next request with a given opcode.

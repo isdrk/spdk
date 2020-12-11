@@ -31,6 +31,7 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <spdk/bdev_module.h>
 #include "spdk/stdinc.h"
 
 #include "spdk/bdev.h"
@@ -1659,6 +1660,12 @@ bdev_is_read_io(struct spdk_bdev_io *bdev_io)
 	case SPDK_BDEV_IO_TYPE_ZCOPY:
 		/* Populate to read from disk */
 		if (bdev_io->u.bdev.zcopy.populate) {
+			return true;
+		} else {
+			return false;
+		}
+	case SPDK_BDEV_IO_TYPE_DATA_PASSTHRU:
+		if (bdev_io->u.data_passthru.type == SPDK_BDEV_IO_TYPE_READ) {
 			return true;
 		} else {
 			return false;
@@ -4684,6 +4691,46 @@ spdk_bdev_nvme_io_passthru_md(struct spdk_bdev_desc *desc, struct spdk_io_channe
 	bdev_io->u.nvme_passthru.md_len = md_len;
 
 	bdev_io_init(bdev_io, bdev, cb_arg, cb);
+
+	bdev_io_submit(bdev_io);
+	return 0;
+}
+
+int spdk_bdev_data_passthru(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
+			    struct iovec *iov, int iovcnt, void *md,
+			    uint64_t offset_blocks, uint64_t num_blocks,
+			    enum spdk_bdev_io_type io_type,
+			    spdk_bdev_io_completion_cb comp_cb, void *comp_cb_arg,
+			    spdk_bdev_data_passthru_get_mkey mkey_cb, void *mkey_cb_arg)
+{
+	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+	struct spdk_bdev_io *bdev_io;
+	struct spdk_bdev_channel *channel = spdk_io_channel_get_ctx(ch);
+
+	if (!bdev_io_type_supported(bdev, SPDK_BDEV_IO_TYPE_DATA_PASSTHRU)) {
+		return -ENOTSUP;
+	}
+	if (!bdev_io_type_supported(bdev, io_type)) {
+		return -ENOTSUP;
+	}
+
+	bdev_io = bdev_channel_get_io(channel);
+	if (!bdev_io) {
+		return -ENOMEM;
+	}
+
+	bdev_io->internal.ch = channel;
+	bdev_io->internal.desc = desc;
+	bdev_io->type = SPDK_BDEV_IO_TYPE_DATA_PASSTHRU;
+	bdev_io->u.data_passthru.iovs = iov;
+	bdev_io->u.data_passthru.iovcnt = iovcnt;
+	bdev_io->u.data_passthru.md_buf = md;
+	bdev_io->u.data_passthru.num_blocks = num_blocks;
+	bdev_io->u.data_passthru.offset_blocks = offset_blocks;
+	bdev_io->u.data_passthru.type = io_type;
+	bdev_io->u.data_passthru.mkey_cb = mkey_cb;
+	bdev_io->u.data_passthru.mkey_cb_arg = mkey_cb_arg;
+	bdev_io_init(bdev_io, bdev, comp_cb_arg, comp_cb);
 
 	bdev_io_submit(bdev_io);
 	return 0;

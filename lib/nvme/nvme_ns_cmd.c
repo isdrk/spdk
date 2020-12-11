@@ -873,6 +873,43 @@ spdk_nvme_ns_cmd_write_zeroes(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *q
 }
 
 int
+spdk_nvme_ns_cmd_data_passthru(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			       uint64_t lba, uint32_t lba_count,
+			       spdk_nvme_cmd_cb cb_fn, void *cb_arg, uint32_t io_flags,
+			       enum spdk_nvme_nvm_opcode opcode,
+			       spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
+			       spdk_nvme_req_next_sge_cb next_sge_fn, void *metadata,
+			       spdk_nvme_data_passthru_get_mkey get_mkey_cb)
+{
+	struct nvme_request *req;
+	struct nvme_payload payload;
+
+	if (!_is_io_flags_valid(io_flags)) {
+		return -EINVAL;
+	}
+
+	if (reset_sgl_fn == NULL || next_sge_fn == NULL || get_mkey_cb == NULL) {
+		return -EINVAL;
+	}
+
+	payload = NVME_PAYLOAD_SGL(reset_sgl_fn, next_sge_fn, cb_arg, metadata);
+	payload.get_sge_mkey = get_mkey_cb;
+
+	req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, cb_fn, cb_arg,
+			      opcode, io_flags, 0, 0, true);
+	if (req != NULL) {
+		return nvme_qpair_submit_request(qpair, req);
+	} else if (nvme_ns_check_request_length(lba_count,
+						ns->sectors_per_max_io,
+						ns->sectors_per_stripe,
+						qpair->ctrlr->opts.io_queue_requests)) {
+		return -EINVAL;
+	} else {
+		return -ENOMEM;
+	}
+}
+
+int
 spdk_nvme_ns_cmd_write_uncorrectable(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 				     uint64_t lba, uint32_t lba_count,
 				     spdk_nvme_cmd_cb cb_fn, void *cb_arg)

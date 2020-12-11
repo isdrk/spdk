@@ -594,6 +594,24 @@ struct spdk_bdev_io {
 			/* The data buffer */
 			void *buf;
 		} zone_mgmt;
+		struct {
+			/** For SG buffer cases, array of iovecs to transfer. */
+			struct iovec *iovs;
+			/** For SG buffer cases, number of iovecs in iovec array. */
+			int iovcnt;
+			/** Metadata buffer */
+			void *md_buf;
+			/** Total size of data to be transferred. */
+			uint64_t num_blocks;
+			/** Starting offset (in blocks) of the bdev for this I/O. */
+			uint64_t offset_blocks;
+			/** Stored mkey_cb */
+			spdk_bdev_data_passthru_get_mkey mkey_cb;
+			/** Stored mkey_cb_arg */
+			void *mkey_cb_arg;
+			/** IO type of this operation */
+			enum spdk_bdev_io_type type;
+		} data_passthru;
 	} u;
 
 	/** It may be used by modules to put the bdev_io into its own list. */
