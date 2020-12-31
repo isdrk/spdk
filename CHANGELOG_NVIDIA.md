@@ -1,3 +1,4 @@
+- nvmf: Add support for security send/receive passthru [93a4e112f]
 - pkg: add spdk_top  [e418021]
 - rdma: Fix io_buffer alignment [896e4bcbf]
 - spdk.spec: add git sha1 sum to description [745c7e19a]
