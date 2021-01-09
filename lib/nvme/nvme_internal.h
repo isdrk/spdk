@@ -226,6 +226,15 @@ struct nvme_payload {
 	spdk_nvme_req_next_sge_cb next_sge_fn;
 
 	/**
+	 * Memory domain which describes data payload
+	 */
+	struct spdk_dma_memory_domain *memory_domain;
+	/**
+	 * User defined context to be used in memory domain operations
+	 */
+	void *memory_domain_ctx;
+
+	/**
 	 * If reset_sgl_fn == NULL, this is a contig payload, and contig_or_cb_arg contains the
 	 * virtual memory address of a single virtually contiguous buffer.
 	 *

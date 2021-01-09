@@ -57,6 +57,8 @@ extern "C" {
 
 #define SPDK_NVMF_PRIORITY_MAX_LEN 4
 
+struct spdk_dma_memory_domain;
+
 /**
  * Opaque handle to a controller. Returned by spdk_nvme_probe()'s attach_cb.
  */
@@ -501,6 +503,19 @@ enum spdk_nvme_ctrlr_flags {
 	SPDK_NVME_CTRLR_SGL_REQUIRES_DWORD_ALIGNMENT	= 1 << 4, /**< Dword alignment is required for SGL */
 	SPDK_NVME_CTRLR_ZONE_APPEND_SUPPORTED		= 1 << 5, /**< Zone Append is supported (within Zoned Namespaces) */
 	SPDK_NVME_CTRLR_DIRECTIVES_SUPPORTED		= 1 << 6, /**< The Directives is supported */
+};
+
+/**
+ * Structure with optional IO request parameters
+ */
+struct spdk_nvme_ns_cmd_ext_io_opts {
+	/** size of this structure in bytes */
+	size_t size;
+	/** DMA memory domain which describes data payload in IO request. The controller must support
+	 * the corresponding memory domain, refer to \ref spdk_nvme_ctrlr_get_ext_caps */
+	struct spdk_dma_memory_domain *memory_domain;
+	/** User context to be passed to memory domain operations */
+	void *memory_domain_ctx;
 };
 
 /**
@@ -2823,6 +2838,45 @@ int spdk_nvme_ns_cmd_writev_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qp
  * The user must ensure that only one thread submits I/O on a given qpair at any
  * given time.
  *
+ * \param ns NVMe namespace to submit the write I/O
+ * \param qpair I/O queue pair to submit the request
+ * \param lba starting LBA to write the data
+ * \param lba_count length (in sectors) for the write operation
+ * \param cb_fn callback function to invoke when the I/O is completed
+ * \param cb_arg argument to pass to the callback function
+ * \param io_flags set flags, defined in nvme_spec.h, for this I/O
+ * \param reset_sgl_fn callback function to reset scattered payload
+ * \param next_sge_fn callback function to iterate each scattered
+ * payload memory segment
+ * \param metadata virtual address pointer to the metadata payload, the length
+ * of metadata is specified by spdk_nvme_ns_get_md_size()
+ * \param apptag_mask application tag mask.
+ * \param apptag application tag to use end-to-end protection information.
+ * \param opts Optional structure with extended IO request options. If provided, the caller must
+ * guarantee that this structure is accessible until IO completes
+ *
+ * \return 0 if successfully submitted, negated errnos on the following error conditions:
+ * -EINVAL: The request is malformed.
+ * -ENOMEM: The request cannot be allocated.
+ * -ENXIO: The qpair is failed at the transport level.
+ * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
+ *          with error status including dnr=1 in this case.
+ */
+int spdk_nvme_ns_cmd_writev_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+					uint64_t lba, uint32_t lba_count,
+					spdk_nvme_cmd_cb cb_fn, void *cb_arg, uint32_t io_flags,
+					spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
+					spdk_nvme_req_next_sge_cb next_sge_fn, void *metadata,
+					uint16_t apptag_mask, uint16_t apptag,
+					struct spdk_nvme_ns_cmd_ext_io_opts *opts);
+
+/**
+ * Submit a write I/O to the specified NVMe namespace.
+ *
+ * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+ * The user must ensure that only one thread submits I/O on a given qpair at any
+ * given time.
+ *
  * \param ns NVMe namespace to submit the write I/O.
  * \param qpair I/O queue pair to submit the request.
  * \param payload Virtual address pointer to the data payload.
@@ -2995,6 +3049,44 @@ int spdk_nvme_ns_cmd_readv_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpa
 				   spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
 				   spdk_nvme_req_next_sge_cb next_sge_fn, void *metadata,
 				   uint16_t apptag_mask, uint16_t apptag);
+
+/**
+ * Submit a read I/O to the specified NVMe namespace.
+ *
+ * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+ * The user must ensure that only one thread submits I/O on a given qpair at any given time.
+ *
+ * \param ns NVMe namespace to submit the read I/O
+ * \param qpair I/O queue pair to submit the request
+ * \param lba starting LBA to read the data
+ * \param lba_count length (in sectors) for the read operation
+ * \param cb_fn callback function to invoke when the I/O is completed
+ * \param cb_arg argument to pass to the callback function
+ * \param io_flags set flags, defined in nvme_spec.h, for this I/O
+ * \param reset_sgl_fn callback function to reset scattered payload
+ * \param next_sge_fn callback function to iterate each scattered
+ * payload memory segment
+ * \param metadata virtual address pointer to the metadata payload, the length
+ *	           of metadata is specified by spdk_nvme_ns_get_md_size()
+ * \param apptag_mask application tag mask.
+ * \param apptag application tag to use end-to-end protection information.
+ * \param opts Optional structure with extended IO request options. If provided, the caller must
+ * guarantee that this structure is accessible until IO completes
+ *
+ * \return 0 if successfully submitted, negated errnos on the following error conditions:
+ * -EINVAL: The request is malformed.
+ * -ENOMEM: The request cannot be allocated.
+ * -ENXIO: The qpair is failed at the transport level.
+ * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
+ *          with error status including dnr=1 in this case.
+ */
+int spdk_nvme_ns_cmd_readv_with_md_ext(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				       uint64_t lba, uint32_t lba_count,
+				       spdk_nvme_cmd_cb cb_fn, void *cb_arg, uint32_t io_flags,
+				       spdk_nvme_req_reset_sgl_cb reset_sgl_fn,
+				       spdk_nvme_req_next_sge_cb next_sge_fn, void *metadata,
+				       uint16_t apptag_mask, uint16_t apptag,
+				       struct spdk_nvme_ns_cmd_ext_io_opts *opts);
 
 /**
  * Submits a read I/O to the specified NVMe namespace.
