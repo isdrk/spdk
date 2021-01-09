@@ -179,6 +179,10 @@ the block device opened by the specified descriptor.
 Added `max_segment_size` and `max_num_segments` to `spdk_bdev` structure for
 bdev modules to specify splitting requirements.
 
+New API functions `spdk_bdev_readv_blocks_with_md_ext` and `spdk_bdev_writev_blocks_with_md_ext`
+have been added. These function accept `spdk_bdev_ext_io_opts` structure with extended IO request
+options. `opts_size` member of this structure must be set to valid value.
+
 ### blob
 
 An `opts_size` element was added in the `spdk_bs_opts` structure to solve the
