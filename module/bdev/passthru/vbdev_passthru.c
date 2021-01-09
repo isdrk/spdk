@@ -550,6 +550,21 @@ vbdev_passthru_write_config_json(struct spdk_bdev *bdev, struct spdk_json_write_
 	/* No config per bdev needed */
 }
 
+static void
+vbdev_passthru_get_caps(void *ctx, struct spdk_bdev_capability *_caps)
+{
+	struct vbdev_passthru *pt_node = (struct vbdev_passthru *)ctx;
+	struct spdk_bdev_capability caps = {.size = _caps->size};
+	int rc;
+
+	rc = spdk_bdev_get_ext_caps(pt_node->base_bdev, &caps);
+	/* Check each reported flag independently to prevent reporting of possibly unsupported caps */
+	if (rc == 0) {
+		/* Passthru bdev doesn't work with data buffers, so it supports any memory domain */
+		_caps->supported_dma_memory_domains = caps.supported_dma_memory_domains;
+	}
+}
+
 /* When we register our bdev this is how we specify our entry points. */
 static const struct spdk_bdev_fn_table vbdev_passthru_fn_table = {
 	.destruct		= vbdev_passthru_destruct,
@@ -558,6 +573,7 @@ static const struct spdk_bdev_fn_table vbdev_passthru_fn_table = {
 	.get_io_channel		= vbdev_passthru_get_io_channel,
 	.dump_info_json		= vbdev_passthru_dump_info_json,
 	.write_config_json	= vbdev_passthru_write_config_json,
+	.get_ext_caps		= vbdev_passthru_get_caps,
 };
 
 static void

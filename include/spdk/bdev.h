@@ -1738,6 +1738,30 @@ void spdk_bdev_histogram_get(struct spdk_bdev *bdev, struct spdk_histogram_data 
 size_t spdk_bdev_get_media_events(struct spdk_bdev_desc *bdev_desc,
 				  struct spdk_bdev_media_event *events, size_t max_events);
 
+/** SPDK DMA memory domains supported by bdev. Local memory domain
+ * is always supported by default. Refer to \ref enum spdk_memory_domain_type */
+enum spdk_bdev_supported_dma_memory_domains {
+	SPDK_BDEV_SUPPORTED_DMA_MEMORY_DOMAIN_RDMA = 1u << 0u,
+	SPDK_BDEV_SUPPORTED_DMA_MEMORY_DOMAIN_REMOTE = 1u << 1u
+};
+
+/** Describes capabilities of Block device */
+struct spdk_bdev_capability {
+	/** Size of this structure in bytes, should be set by the user */
+	size_t size;
+	/** bitwise combination of \ref spdk_bdev_supported_dma_memory_domains */
+	uint32_t supported_dma_memory_domains;
+};
+
+/**
+ * Get extended bdev capabilities
+ *
+ * \param bdev Block device
+ * \param caps Capabilities of Block device to be filled by this function
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_bdev_get_ext_caps(struct spdk_bdev *bdev, struct spdk_bdev_capability *caps);
+
 #ifdef __cplusplus
 }
 #endif

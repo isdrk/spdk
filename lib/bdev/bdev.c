@@ -6839,6 +6839,34 @@ bdev_unlock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_channel *_ch,
 	return 0;
 }
 
+int
+spdk_bdev_get_ext_caps(struct spdk_bdev *bdev, struct spdk_bdev_capability *caps)
+{
+	struct spdk_bdev_capability caps_local;
+
+	if (!caps || !caps->size) {
+		return -EINVAL;
+	}
+	if (caps->size > sizeof(caps_local)) {
+		SPDK_ERRLOG("Requested capability size %zu bytes, but only %zu bytes are supported\n", caps->size,
+			    sizeof(caps_local));
+		return -EINVAL;
+	}
+
+	memset(&caps_local, 0, sizeof(caps_local));
+	caps_local.size = spdk_min(sizeof(caps_local), caps->size);
+
+	if (bdev->fn_table->get_ext_caps) {
+		bdev->fn_table->get_ext_caps(bdev->ctxt, &caps_local);
+	}
+
+	/* The user may use a newer SPDK version where size of this structure can be different.
+	 * Here we copy only the number of bytes requested by the user */
+	memcpy(caps, &caps_local, caps_local.size);
+
+	return 0;
+}
+
 SPDK_LOG_REGISTER_COMPONENT(bdev)
 
 SPDK_TRACE_REGISTER_FN(bdev_trace, "bdev", TRACE_GROUP_BDEV)

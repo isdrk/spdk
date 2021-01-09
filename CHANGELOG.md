@@ -32,6 +32,8 @@ Removed the `spdk_bdev_open` from bdev library API.
 Removed the `spdk_vbdev_register` and `spdk_bdev_part_base_construct` from bdev module API.
 Removed the `config_text` function for bdev modules to report legacy config.
 
+New API `spdk_bdev_get_ext_caps` has been added, it allows to get extended bdev capabilities.
+
 ### blobstore
 
 Removed the `spdk_bdev_create_bs_dev_from_desc` and `spdk_bdev_create_bs_dev` API.

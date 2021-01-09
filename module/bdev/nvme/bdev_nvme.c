@@ -1129,6 +1129,28 @@ bdev_nvme_get_module_ctx(void *ctx)
 	return bdev_nvme_get_ctrlr(&nvme_bdev->disk);
 }
 
+static void
+bdev_nvme_get_ext_caps(void *ctx, struct spdk_bdev_capability *caps)
+{
+	struct nvme_bdev *nbdev = ctx;
+	struct spdk_nvme_ctrlr_capability nvme_caps = {
+		.size = sizeof(nvme_caps)
+	};
+	int rc;
+
+	rc = spdk_nvme_ctrlr_get_ext_caps(nbdev->nvme_ns->ctrlr->ctrlr, &nvme_caps);
+	if (rc) {
+		return;
+	}
+
+	if (nvme_caps.supported_dma_memory_domains & SPDK_NVME_CTRLR_SUPPORTED_DMA_MEMORY_DOMAIN_RDMA) {
+		caps->supported_dma_memory_domains |= SPDK_BDEV_SUPPORTED_DMA_MEMORY_DOMAIN_RDMA;
+	}
+	if (nvme_caps.supported_dma_memory_domains & SPDK_NVME_CTRLR_SUPPORTED_DMA_MEMORY_DOMAIN_REMOTE) {
+		caps->supported_dma_memory_domains |= SPDK_BDEV_SUPPORTED_DMA_MEMORY_DOMAIN_REMOTE;
+	}
+}
+
 static int
 bdev_nvme_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 {
@@ -1281,6 +1303,7 @@ static const struct spdk_bdev_fn_table nvmelib_fn_table = {
 	.write_config_json	= bdev_nvme_write_config_json,
 	.get_spin_time		= bdev_nvme_get_spin_time,
 	.get_module_ctx		= bdev_nvme_get_module_ctx,
+	.get_ext_caps		= bdev_nvme_get_ext_caps,
 };
 
 static int

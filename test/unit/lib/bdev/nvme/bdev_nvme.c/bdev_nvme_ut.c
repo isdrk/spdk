@@ -70,6 +70,9 @@ DEFINE_STUB_V(spdk_nvme_ctrlr_set_remove_cb, (struct spdk_nvme_ctrlr *ctrlr,
 
 DEFINE_STUB(spdk_nvme_ctrlr_get_flags, uint64_t, (struct spdk_nvme_ctrlr *ctrlr), 0);
 
+DEFINE_STUB(spdk_nvme_ctrlr_get_ext_caps, int, (const struct spdk_nvme_ctrlr *ctrlr,
+		struct spdk_nvme_ctrlr_capability *caps), 0);
+
 DEFINE_STUB(accel_engine_create_cb, int, (void *io_device, void *ctx_buf), 0);
 DEFINE_STUB_V(accel_engine_destroy_cb, (void *io_device, void *ctx_buf));
 
