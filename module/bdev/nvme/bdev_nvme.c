@@ -980,6 +980,16 @@ bdev_nvme_get_module_ctx(void *ctx)
 	return bdev_nvme_get_ctrlr(&nvme_bdev->disk);
 }
 
+static void
+bdev_nvme_get_caps(void *ctx, struct spdk_bdev_capability *caps)
+{
+	struct nvme_bdev *nbdev = ctx;
+
+	if (nbdev->nvme_ns->ctrlr->connected_trid->trtype == SPDK_NVME_TRANSPORT_RDMA) {
+		caps->flags |= SPDK_BDEV_CAP_EXT_MEMORY_TYPE_MKEY;
+	}
+}
+
 static int
 bdev_nvme_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 {
@@ -1132,6 +1142,7 @@ static const struct spdk_bdev_fn_table nvmelib_fn_table = {
 	.write_config_json	= bdev_nvme_write_config_json,
 	.get_spin_time		= bdev_nvme_get_spin_time,
 	.get_module_ctx		= bdev_nvme_get_module_ctx,
+	.get_caps			= bdev_nvme_get_caps,
 };
 
 static int

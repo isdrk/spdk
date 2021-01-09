@@ -222,6 +222,9 @@ struct spdk_bdev_fn_table {
 
 	/** Get bdev module context. */
 	void *(*get_module_ctx)(void *ctx);
+
+	/** Get block device capabilities */
+	void (*get_caps)(void *ctx, struct spdk_bdev_capability *caps);
 };
 
 /** bdev I/O completion status */
