@@ -73,6 +73,7 @@ static int g_mbuf_offset;
 
 #define ISAL_PMD "compress_isal"
 #define QAT_PMD "compress_qat"
+#define MLX_PMD "mlx5_pci"
 #define NUM_MBUFS		8192
 #define POOL_CACHE_SIZE		256
 
@@ -170,6 +171,7 @@ static struct rte_mempool *g_comp_op_mp = NULL;			/* comp operations, must be rt
 static struct rte_mbuf_ext_shared_info g_shinfo = {};		/* used by DPDK mbuf macros */
 static bool g_qat_available = false;
 static bool g_isal_available = false;
+static bool g_mlx5_available = false;
 
 /* Create shared (between all ops per PMD) compress xforms. */
 static struct rte_comp_xform g_comp_xform = {
@@ -300,7 +302,7 @@ create_compress_dev(uint8_t index)
 			goto err;
 		}
 	} else {
-		SPDK_ERRLOG("PMD does not support shared transforms\n");
+		SPDK_ERRLOG("PMD %s does not support shared transforms\n", device->cdev_info.driver_name);
 		goto err;
 	}
 
@@ -325,6 +327,9 @@ create_compress_dev(uint8_t index)
 	if (strcmp(device->cdev_info.driver_name, ISAL_PMD) == 0) {
 		g_isal_available = true;
 	}
+	if (strcmp(device->cdev_info.driver_name, MLX_PMD) == 0) {
+		g_mlx5_available = true;
+    }
 
 	return 0;
 
@@ -1366,6 +1371,8 @@ _set_pmd(struct vbdev_compress *comp_dev)
 		comp_dev->drv_name = QAT_PMD;
 	} else if (g_opts == COMPRESS_PMD_ISAL_ONLY && g_isal_available) {
 		comp_dev->drv_name = ISAL_PMD;
+	} else if (g_opts == COMPRESS_PMD_MLX5_ONLY && g_mlx5_available) {
+		comp_dev->drv_name = MLX_PMD;
 	} else {
 		SPDK_ERRLOG("Requested PMD is not available.\n");
 		return false;

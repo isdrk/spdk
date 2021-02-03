@@ -363,6 +363,11 @@ build_eal_cmdline(const struct spdk_env_opts *opts)
 		}
 	}
 
+	args = push_arg(args, &argcount, _sprintf_alloc("%s=%s", DPDK_ALLOW_PARAM, "0000:03:00.0,class=compress"));
+	if (args == NULL) {
+		return -1;
+	}
+
 	/* Lower default EAL loglevel to RTE_LOG_NOTICE - normal, but significant messages.
 	 * This can be overridden by specifying the same option in opts->env_context
 	 */
