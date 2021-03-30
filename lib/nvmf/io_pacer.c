@@ -51,6 +51,8 @@ extern __itt_domain *io_pacer_domain;
 static rte_spinlock_t drives_stats_create_lock = RTE_SPINLOCK_INITIALIZER;
 struct spdk_io_pacer_drives_stats drives_stats = {0};
 
+rte_atomic64_t global_ios = RTE_ATOMIC64_INIT(0);
+
 struct io_pacer_queue {
 	uint64_t key;
 	struct drive_stats *stats;
@@ -162,6 +164,7 @@ io_pacer_poll(void *arg)
 			pacer->next_queue = next_queue;
 			pacer->remaining_credit -= entry->size;
 			pacer->stat.ios++;
+			rte_atomic64_inc(&global_ios);
 			pacer->stat.bytes += entry->size;
 			rte_atomic32_add(&pacer->queues[next_queue - 1].stats->ops_in_flight, 1);
 			pacer->pop_cb(entry);
@@ -469,12 +472,15 @@ spdk_io_pacer_tuner_destroy(struct spdk_io_pacer_tuner *tuner)
 struct spdk_io_pacer_tuner2 {
 	struct spdk_io_pacer *pacer;
 	uint64_t period_ns;
-	uint32_t value;
+	rte_atomic32_t value;
 	uint32_t min_threshold;
 	uint64_t factor;
 	uint64_t min_pacer_period_ticks;
 	uint64_t max_pacer_period_ticks;
 	struct spdk_poller *poller;
+	uint32_t refs;
+	pthread_mutex_t lock;
+	struct spdk_thread *thread;
 };
 
 static int
@@ -482,7 +488,7 @@ io_pacer_tune2(void *arg)
 {
 	struct spdk_io_pacer_tuner2 *tuner = arg;
 	struct spdk_io_pacer *pacer = tuner->pacer;
-	uint32_t v = tuner->value;
+	uint32_t v = rte_atomic32_read(&tuner->value);
 
 	uint64_t new_period_ticks = (v <= tuner->min_threshold) ?
 		tuner->min_pacer_period_ticks :
@@ -492,14 +498,14 @@ io_pacer_tune2(void *arg)
 	static __thread uint32_t log_counter = 0;
 	/* Try to log once per second */
 	if (log_counter % (SPDK_SEC_TO_NSEC / tuner->period_ns) == 0) {
-		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, value %u, new period %lu ticks, min %lu, polls %u. ios %u\n",
+		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, value %u, new period %lu ticks, min %lu, polls %u. ios %ld\n",
 			       tuner,
 			       pacer,
 			       v,
 			       new_period_ticks,
 			       tuner->min_pacer_period_ticks,
 			       pacer->stat.polls,
-			       pacer->stat.ios);
+			       rte_atomic64_read(&global_ios));
 	}
 	log_counter++;
 
@@ -514,41 +520,57 @@ spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
 			    uint32_t min_threshold,
 			    uint64_t factor)
 {
-	struct spdk_io_pacer_tuner2 *tuner;
+	/* Tuner 2 is singleton */
+	static struct spdk_io_pacer_tuner2 tuner = {
+		.lock = PTHREAD_MUTEX_INITIALIZER
+	};
 
 	assert(pacer != NULL);
 
-	tuner = (struct spdk_io_pacer_tuner2 *)calloc(1, sizeof(struct spdk_io_pacer_tuner2));
-	if (!tuner) {
-		SPDK_ERRLOG("Failed to allocate IO pacer tuner\n");
-		return NULL;
-	}
+	pthread_mutex_lock(&tuner.lock);
+	if (tuner.refs == 0) {
+		tuner.thread = spdk_get_thread();
+		tuner.pacer = pacer;
+		tuner.period_ns = 1000ULL * period_us;
+		rte_atomic32_init(&tuner.value);
+		tuner.min_threshold = min_threshold;
+		tuner.factor = factor;
+		tuner.min_pacer_period_ticks = pacer->period_ticks;
+		tuner.max_pacer_period_ticks = 4 * tuner.min_pacer_period_ticks;
 
-	tuner->pacer = pacer;
-	tuner->period_ns = 1000ULL * period_us;
-	tuner->value = 0;
-	tuner->min_threshold = min_threshold;
-	tuner->factor = factor;
-	tuner->min_pacer_period_ticks = pacer->period_ticks;
-	tuner->max_pacer_period_ticks = 4 * tuner->min_pacer_period_ticks;
-
-	if (0 != period_us) {
-		tuner->poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)tuner, period_us);
-		if (!tuner->poller) {
-			SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
-			spdk_io_pacer_tuner2_destroy(tuner);
-			return NULL;
+		if (0 != period_us) {
+			/* Poller function will be bound to the core that first created the tuner */
+			tuner.poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)&tuner, period_us);
+			if (!tuner.poller) {
+				SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
+				pthread_mutex_unlock(&tuner.lock);
+				return NULL;
+			}
 		}
+
+		SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, threshold %u, factor %lu, core %u\n",
+			       &tuner,
+			       pacer,
+			       tuner.period_ns,
+			       tuner.min_threshold,
+			       tuner.factor,
+			       spdk_env_get_current_core());
 	}
 
-	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, threshold %u, factor %lu\n",
-		       tuner,
-		       pacer,
-		       tuner->period_ns,
-		       tuner->min_threshold,
-		       tuner->factor);
+	tuner.refs++;
+	pthread_mutex_unlock(&tuner.lock);
+	return &tuner;
+}
 
-	return tuner;
+static void tuner2_unregister(void *ctx)
+{
+	struct spdk_io_pacer_tuner2 *tuner = ctx;
+
+	spdk_poller_unregister(&tuner->poller);
+	tuner->refs = 0;
+	tuner->thread = NULL;
+	pthread_mutex_unlock(&tuner->lock);
+	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
 }
 
 void
@@ -556,21 +578,26 @@ spdk_io_pacer_tuner2_destroy(struct spdk_io_pacer_tuner2 *tuner)
 {
 	assert(tuner != NULL);
 
-	spdk_poller_unregister(&tuner->poller);
-	free(tuner);
-	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
+	pthread_mutex_lock(&tuner->lock);
+	assert(tuner->refs > 0);
+	if (tuner->refs == 1) {
+		spdk_thread_send_msg(tuner->thread, tuner2_unregister, tuner);
+	} else {
+		tuner->refs--;
+		pthread_mutex_unlock(&tuner->lock);
+	}
 }
 
 void
 spdk_io_pacer_tuner2_add(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
 {
 	assert(tuner != NULL);
-	tuner->value += value;
+	rte_atomic32_add(&tuner->value, value);
 }
 
 void
 spdk_io_pacer_tuner2_sub(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
 {
 	assert(tuner != NULL);
-	tuner->value -= value;
+	rte_atomic32_sub(&tuner->value, value);
 }
