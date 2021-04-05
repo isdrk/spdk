@@ -10,6 +10,11 @@ SoC may be running SPDK on the SoC. That SoC has its own local memory, but SPDK 
 devices that can also access the host system memory. This library provides infrastructure to enumerate
 the memory domains and request hardware perform DMA transfers between them.
 
+### nvme
+
+New API `spdk_nvme_ctrlr_get_memory_domain` has been added, it allows to get SPDK memory domain used by nvme controller.
+
+## v21.07:
 
 ### accel_fw
 
