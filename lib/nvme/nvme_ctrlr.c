@@ -4487,3 +4487,34 @@ spdk_nvme_map_cmd(void *prv, struct spdk_nvme_cmd *cmd, struct iovec *iovs, uint
 
 	return nvme_cmd_map_sgls(prv, cmd, iovs, max_iovcnt, len, mps, gpa_to_vva);
 }
+
+int
+spdk_nvme_ctrlr_get_ext_caps(const struct spdk_nvme_ctrlr *ctrlr,
+			     struct spdk_nvme_ctrlr_capability *caps)
+{
+	struct spdk_nvme_ctrlr_capability caps_local;
+	int rc;
+
+	if (!caps || !caps->size) {
+		return -EINVAL;
+	}
+	if (caps->size > sizeof(caps_local)) {
+		SPDK_ERRLOG("Requested capability size %zu bytes, but only %zu bytes are supported\n", caps->size,
+			    sizeof(caps_local));
+		return -EINVAL;
+	}
+
+	memset(&caps_local, 0, sizeof(caps_local));
+	caps_local.size = spdk_min(sizeof(caps_local), caps->size);
+
+	rc = nvme_transport_ctrlr_get_ext_caps(ctrlr, &caps_local);
+	if (rc) {
+		return rc;
+	}
+
+	/* The user may use a newer SPDK version where size of this structure can be different.
+	 * Here we copy only the number of bytes requested by the user */
+	memcpy(caps, &caps_local, caps_local.size);
+
+	return 0;
+}

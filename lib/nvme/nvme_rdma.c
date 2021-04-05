@@ -2728,6 +2728,15 @@ nvme_rdma_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 	free(stats);
 }
 
+static int
+nvme_rdma_ctrlr_get_ext_caps(const struct spdk_nvme_ctrlr *ctrlr,
+			     struct spdk_nvme_ctrlr_capability *caps)
+{
+	caps->supported_dma_memory_domains |= SPDK_NVME_CTRLR_SUPPORTED_DMA_MEMORY_DOMAIN_RDMA;
+
+	return 0;
+}
+
 void
 spdk_nvme_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
 {
@@ -2754,6 +2763,8 @@ const struct spdk_nvme_transport_ops rdma_ops = {
 	.ctrlr_delete_io_qpair = nvme_rdma_ctrlr_delete_io_qpair,
 	.ctrlr_connect_qpair = nvme_rdma_ctrlr_connect_qpair,
 	.ctrlr_disconnect_qpair = nvme_rdma_ctrlr_disconnect_qpair,
+
+	.ctrlr_get_ext_caps = nvme_rdma_ctrlr_get_ext_caps,
 
 	.qpair_abort_reqs = nvme_rdma_qpair_abort_reqs,
 	.qpair_reset = nvme_rdma_qpair_reset,

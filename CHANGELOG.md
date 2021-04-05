@@ -83,6 +83,9 @@ the new SSD's PCI address.
 New functions `spdk_nvme_poll_group_get_stats` and `spdk_nvme_poll_group_free_stats`
 added. These functions allow to get transport statistics per NVME poll group.
 
+New API `spdk_nvme_ctrlr_get_ext_caps` has been added, it allows to get extended NVME
+controller capabilities.
+
 ### nvmf
 
 Removed the `spdk_nvmf_tgt_listen` and `spdk_nvmf_subsystem_add_ns` API.

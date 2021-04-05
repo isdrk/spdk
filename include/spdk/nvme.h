@@ -3531,6 +3531,31 @@ int spdk_nvme_map_prps(void *prv, struct spdk_nvme_cmd *cmd, struct iovec *iovs,
 		       uint32_t len, size_t mps,
 		       void *(*gpa_to_vva)(void *prv, uint64_t addr, uint64_t len));
 
+/** SPDK DMA memory domains supported by NVME controller. Local memory domain
+ * is always supported by default. Refer to \ref enum spdk_memory_domain_type */
+enum spdk_nvme_ctrlr_supported_dma_memory_domains {
+	SPDK_NVME_CTRLR_SUPPORTED_DMA_MEMORY_DOMAIN_RDMA = 1u << 0u,
+	SPDK_NVME_CTRLR_SUPPORTED_DMA_MEMORY_DOMAIN_REMOTE = 1u << 1u
+};
+
+/** Describes capabilities of NVME controller */
+struct spdk_nvme_ctrlr_capability {
+	/** Size of this structure in bytes, should be set by the user */
+	size_t size;
+	/** bitwise combination of \ref spdk_nvme_ctrlr_supported_dma_memory_domains */
+	uint32_t supported_dma_memory_domains;
+};
+
+/**
+ * Get extended NVME ctrlr capabilities
+ *
+ * \param ctrlr NVME controller
+ * \param caps NVME controller capabilities to be filled by this function
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_nvme_ctrlr_get_ext_caps(const struct spdk_nvme_ctrlr *ctrlr,
+				 struct spdk_nvme_ctrlr_capability *caps);
+
 /**
  * Map NVMe command data buffers sent from Virtual Machine to virtual addresses
  *
@@ -3650,6 +3675,9 @@ struct spdk_nvme_transport_ops {
 
 	void (*poll_group_free_stats)(struct spdk_nvme_transport_poll_group *tgroup,
 				      struct spdk_nvme_transport_poll_group_stat *stats);
+
+	int (*ctrlr_get_ext_caps)(const struct spdk_nvme_ctrlr *ctrlr,
+				  struct spdk_nvme_ctrlr_capability *caps);
 };
 
 /**

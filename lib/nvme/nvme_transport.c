@@ -404,6 +404,20 @@ nvme_transport_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk
 	nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTED);
 }
 
+int
+nvme_transport_ctrlr_get_ext_caps(const struct spdk_nvme_ctrlr *ctrlr,
+				  struct spdk_nvme_ctrlr_capability *caps)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+
+	assert(transport != NULL);
+	if (transport->ops.ctrlr_get_ext_caps) {
+		return transport->ops.ctrlr_get_ext_caps(ctrlr, caps);
+	}
+
+	return 0;
+}
+
 void
 nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
 {
