@@ -1515,6 +1515,8 @@ static void
 nvme_ctrlr_identify_done(void *arg, const struct spdk_nvme_cpl *cpl)
 {
 	struct spdk_nvme_ctrlr *ctrlr = (struct spdk_nvme_ctrlr *)arg;
+	char *enable_sgl_str;
+	int enable_sgl = 0;
 
 	if (spdk_nvme_cpl_is_error(cpl)) {
 		SPDK_ERRLOG("nvme_identify_controller failed!\n");
@@ -1551,7 +1553,12 @@ nvme_ctrlr_identify_done(void *arg, const struct spdk_nvme_cpl *cpl)
 		}
 	}
 
-	if (ctrlr->cdata.sgls.supported) {
+	enable_sgl_str = getenv("SPDK_ENABLE_SGL");
+	if (enable_sgl_str) {
+		enable_sgl = atoi(enable_sgl_str);
+	}
+
+	if (enable_sgl && ctrlr->cdata.sgls.supported) {
 		assert(ctrlr->cdata.sgls.supported != 0x3);
 		ctrlr->flags |= SPDK_NVME_CTRLR_SGL_SUPPORTED;
 		if (ctrlr->cdata.sgls.supported == 0x2) {
