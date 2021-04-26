@@ -1,0 +1,14 @@
+{
+	global:
+
+	# public functions
+	spdk_dma_device_create;
+	spdk_dma_device_add_memory_domain;
+	spdk_dma_memory_domain_add_translation;
+	spdk_dma_device_remove_memory_domain;
+	spdk_dma_device_destroy;
+	spdk_dma_fetch_data;
+	spdk_dma_translate_data;
+
+	local: *;
+};
