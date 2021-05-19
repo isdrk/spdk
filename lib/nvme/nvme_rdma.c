@@ -38,6 +38,7 @@
 #include "spdk/stdinc.h"
 
 #include "spdk/assert.h"
+#include "spdk/dma.h"
 #include "spdk/log.h"
 #include "spdk/trace.h"
 #include "spdk/queue.h"
@@ -140,6 +141,9 @@ struct nvme_rdma_ctrlr {
 	STAILQ_HEAD(, nvme_rdma_cm_event_entry)	free_cm_events;
 
 	struct nvme_rdma_cm_event_entry		*cm_events;
+
+	struct spdk_dma_device *dma_device;
+	struct spdk_dma_memory_domain *memory_domain;
 };
 
 struct nvme_rdma_destroyed_qpair {
@@ -1742,6 +1746,7 @@ static struct spdk_nvme_ctrlr *nvme_rdma_ctrlr_construct(const struct spdk_nvme_
 	union spdk_nvme_vs_register vs;
 	struct ibv_context **contexts;
 	struct ibv_device_attr dev_attr;
+	struct spdk_dma_device_ctx dma_ctx;
 	int i, flag, rc;
 
 	rctrlr = nvme_rdma_calloc(1, sizeof(struct nvme_rdma_ctrlr));
@@ -1833,6 +1838,20 @@ static struct spdk_nvme_ctrlr *nvme_rdma_ctrlr_construct(const struct spdk_nvme_
 		goto destruct_ctrlr;
 	}
 
+	dma_ctx.rdma.ibv_pd = rctrlr->pd;
+	rc = spdk_dma_device_create(&rctrlr->dma_device, SPDK_DMA_DEVICE_TYPE_RDMA, &dma_ctx);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create DMA device, rc %d\n", rc);
+		goto destruct_ctrlr;
+	}
+
+	rc = spdk_dma_device_add_memory_domain(&rctrlr->memory_domain, SPDK_MEMORY_DOMAIN_TYPE_RDMA,
+					       rctrlr->dma_device, NULL);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create DMA memory domain, rc %d\n", rc);
+		goto destruct_ctrlr;
+	}
+
 	if (nvme_ctrlr_get_cap(&rctrlr->ctrlr, &cap)) {
 		SPDK_ERRLOG("get_cap() failed\n");
 		goto destruct_ctrlr;
@@ -1882,6 +1901,8 @@ nvme_rdma_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
 	}
 
 	nvme_ctrlr_destruct_finish(ctrlr);
+
+	spdk_dma_device_destroy(rctrlr->dma_device);
 
 	nvme_rdma_free(rctrlr);
 

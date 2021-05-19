@@ -63,7 +63,7 @@ DEPDIRS-thread := log util
 
 DEPDIRS-nvme := log sock util
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvme += rdma
+DEPDIRS-nvme += rdma dma
 endif
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-nvme += vfio_user

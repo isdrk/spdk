@@ -61,6 +61,26 @@ DEFINE_STUB_V(rdma_destroy_event_channel, (struct rdma_event_channel *channel));
 
 DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
 
+DEFINE_STUB(spdk_dma_device_create, int, (struct spdk_dma_device **device,
+		enum spdk_dma_device_type type, struct spdk_dma_device_ctx *ctx), 0);
+DEFINE_STUB(spdk_dma_device_add_memory_domain, int, (struct spdk_dma_memory_domain **domain,
+		enum spdk_memory_domain_type type, struct spdk_dma_device *device, spdk_dma_fetch_data_cb fetch_cb),
+	    0);
+DEFINE_STUB(spdk_dma_memory_domain_add_translation, int, (struct spdk_dma_memory_domain *domain,
+		enum spdk_memory_domain_type dst_type, spdk_dma_translate_data_cb translate_cb), 0);
+DEFINE_STUB_V(spdk_dma_device_remove_memory_domain, (struct spdk_dma_device *device,
+		struct spdk_dma_memory_domain *domain));
+DEFINE_STUB_V(spdk_dma_device_destroy, (struct spdk_dma_device *device));
+DEFINE_STUB(spdk_dma_fetch_data, int, (struct spdk_dma_memory_domain *src_domain,
+				       void *src_domain_ctx,
+				       struct spdk_dma_memory_domain *dst_domain, struct iovec *src_iov, uint32_t src_iov_cnt,
+				       struct iovec *dst_iov, uint32_t dst_iov_cnt, spdk_dma_fetch_data_cpl_cb cpl_cb, void *cpl_cb_arg),
+	    0);
+DEFINE_STUB(spdk_dma_translate_data, int, (struct spdk_dma_memory_domain *src_domain,
+		void *src_domain_ctx,
+		struct spdk_dma_memory_domain *dst_domain, struct spdk_dma_translation_context *dst_domain_ctx,
+		void *addr, size_t len, struct spdk_dma_translation_result *result), 0);
+
 /* ibv_reg_mr can be a macro, need to undefine it */
 #ifdef ibv_reg_mr
 #undef ibv_reg_mr
