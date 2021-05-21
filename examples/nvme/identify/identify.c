@@ -111,6 +111,8 @@ static bool g_vmd = false;
 
 static bool g_ocssd_verbose = false;
 
+static int g_admin_queue_size = SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE;
+
 static void
 hex_dump(const void *data, size_t size)
 {
@@ -2064,6 +2066,7 @@ usage(const char *program_name)
 	printf(" -x         print hex dump of raw data\n");
 	printf(" -z         For NVMe Zoned Namespaces, dump the full zone report (-z) or the first N entries (-z N)\n");
 	printf(" -V         enumerate VMD\n");
+	printf(" -a         admin queue size\n");
 	printf(" -H         show this usage\n");
 }
 
@@ -2076,8 +2079,16 @@ parse_args(int argc, char **argv)
 	spdk_nvme_trid_populate_transport(&g_trid, SPDK_NVME_TRANSPORT_PCIE);
 	snprintf(g_trid.subnqn, sizeof(g_trid.subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
 
-	while ((op = getopt(argc, argv, "d:gi:op:r:xz::HL:V")) != -1) {
+	while ((op = getopt(argc, argv, "a:d:gi:op:r:xz::HL:V")) != -1) {
 		switch (op) {
+		case 'a':
+			g_admin_queue_size = spdk_strtol(optarg, 10);
+			if (g_admin_queue_size < 0) {
+				fprintf(stderr, "Invalid admin queue size\n");
+				return g_admin_queue_size;
+			}
+			setenv("SPDK_ADMIN_QUEUE_SIZE", optarg, 1);
+			break;
 		case 'd':
 			g_dpdk_mem = spdk_strtol(optarg, 10);
 			if (g_dpdk_mem < 0) {
@@ -2176,6 +2187,7 @@ static bool
 probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	 struct spdk_nvme_ctrlr_opts *opts)
 {
+	opts->admin_queue_size = g_admin_queue_size;
 	memcpy(opts->hostnqn, g_hostnqn, sizeof(opts->hostnqn));
 	return true;
 }
@@ -2226,6 +2238,7 @@ int main(int argc, char **argv)
 		struct spdk_nvme_ctrlr_opts opts;
 
 		spdk_nvme_ctrlr_get_default_ctrlr_opts(&opts, sizeof(opts));
+		opts.admin_queue_size = g_admin_queue_size;
 		memcpy(opts.hostnqn, g_hostnqn, sizeof(opts.hostnqn));
 		ctrlr = spdk_nvme_connect(&g_trid, &opts, sizeof(opts));
 		if (!ctrlr) {
