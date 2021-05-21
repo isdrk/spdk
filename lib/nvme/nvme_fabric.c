@@ -268,7 +268,9 @@ nvme_fabric_ctrlr_scan(struct spdk_nvme_probe_ctx *probe_ctx,
 	union spdk_nvme_cc_register cc;
 	int rc;
 	struct nvme_completion_poll_status *status;
+	char *str;
 
+	SPDK_NOTICELOG("Connecting to NQN %s\n", probe_ctx->trid.subnqn);
 	if (strcmp(probe_ctx->trid.subnqn, SPDK_NVMF_DISCOVERY_NQN) != 0) {
 		/* It is not a discovery_ctrlr info and try to directly connect it */
 		rc = nvme_ctrlr_probe(&probe_ctx->trid, probe_ctx, NULL);
@@ -278,6 +280,13 @@ nvme_fabric_ctrlr_scan(struct spdk_nvme_probe_ctx *probe_ctx,
 	spdk_nvme_ctrlr_get_default_ctrlr_opts(&discovery_opts, sizeof(discovery_opts));
 	/* For discovery_ctrlr set the timeout to 0 */
 	discovery_opts.keep_alive_timeout_ms = 0;
+	str = getenv("SPDK_ADMIN_QUEUE_SIZE");
+	if (str) {
+		int num = spdk_strtol(str, 10);
+		if (num >= 0) {
+			discovery_opts.admin_queue_size = num;
+		}
+	}
 
 	discovery_ctrlr = nvme_transport_ctrlr_construct(&probe_ctx->trid, &discovery_opts, NULL);
 	if (discovery_ctrlr == NULL) {
