@@ -178,7 +178,7 @@ spdk_nvmf_transport_create(const char *transport_name, struct spdk_nvmf_transpor
 	if (opts_local.max_aq_depth < SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE) {
 		SPDK_ERRLOG("max_aq_depth %u is less than minimum defined by NVMf spec, use min value\n",
 			    opts_local.max_aq_depth);
-		opts_local.max_aq_depth = SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE;
+		/* opts_local.max_aq_depth = SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE; */
 	}
 
 	transport = ops->create(&opts_local);
