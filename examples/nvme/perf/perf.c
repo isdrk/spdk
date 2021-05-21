@@ -271,6 +271,7 @@ static bool g_exit;
 static uint32_t g_keep_alive_timeout_in_ms = 10000;
 static uint32_t g_quiet_count = 1;
 static double g_zipf_theta;
+static uint32_t g_admin_queue_size = SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE;
 
 /* When user specifies -Q, some error messages are rate limited.  When rate
  * limited, we only print the error message every g_quiet_count times the
@@ -1766,9 +1767,10 @@ static void usage(char *program_name)
 	printf("\t[-G, --enable-debug enable debug logging]\n");
 #else
 	printf("\t[-G, --enable-debug enable debug logging (flag disabled, must reconfigure with --enable-debug)\n");
+#endif
 	printf("\t[--transport-stats dump transport statistics]\n");
 	printf("\t[--iova-mode <mode> specify DPDK IOVA mode: va|pa]\n");
-#endif
+	printf("\t[--admin-queue-size <val> admin queue size]\n");
 }
 
 static void
@@ -2262,6 +2264,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"transport-stats", no_argument, NULL, PERF_TRANSPORT_STATISTICS},
 #define PERF_IOVA_MODE		258
 	{"iova-mode", required_argument, NULL, PERF_IOVA_MODE},
+#define PERF_ADMIN_QUEUE_SIZE	259
+	{"admin-queue-size", required_argument, NULL, PERF_ADMIN_QUEUE_SIZE},
 	/* Should be the last element */
 	{0, 0, 0, 0}
 };
@@ -2290,6 +2294,7 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 		case PERF_RW_MIXREAD:
 		case PERF_NUM_UNUSED_IO_QPAIRS:
 		case PERF_SKIP_ERRRORS:
+		case PERF_ADMIN_QUEUE_SIZE:
 			val = spdk_strtol(optarg, 10);
 			if (val < 0) {
 				fprintf(stderr, "Converting a string to integer failed\n");
@@ -2345,6 +2350,10 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 					return 1;
 				}
 				g_io_align_specified = true;
+				break;
+			case PERF_ADMIN_QUEUE_SIZE:
+				g_admin_queue_size = val;
+				setenv("SPDK_ADMIN_QUEUE_SIZE", optarg, 1);
 				break;
 			}
 			break;
@@ -2606,6 +2615,8 @@ probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	 * the io_queue_size as much as possible.
 	 */
 	opts->io_queue_size = UINT16_MAX;
+	opts->admin_queue_size = g_admin_queue_size;
+	printf("Probing controller with admin queue depth %u\n", g_admin_queue_size);
 
 	/* Set the header and data_digest */
 	opts->header_digest = g_header_digest;
