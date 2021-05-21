@@ -1230,6 +1230,10 @@ nvmf_rdma_event_accept(struct rdma_cm_id *id, struct spdk_nvmf_rdma_qpair *rqpai
 	ctrlr_event_data.srq = rqpair->srq ? 1 : 0;
 	ctrlr_event_data.qp_num = rqpair->rdma_qp->qp->qp_num;
 
+	SPDK_NOTICELOG("RDMA ACCEPT: qid %u, crqsize %u\n",
+		       rqpair->qpair.qid,
+		       accept_data.crqsize);
+
 	rc = spdk_rdma_qp_accept(rqpair->rdma_qp, &ctrlr_event_data);
 	if (rc) {
 		SPDK_ERRLOG("Error %d on spdk_rdma_qp_accept\n", errno);
@@ -1285,6 +1289,12 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	SPDK_DEBUGLOG(rdma, "Connect Recv on fabric intf name %s, dev_name %s\n",
 		      event->id->verbs->device->name, event->id->verbs->device->dev_name);
 
+	SPDK_NOTICELOG("RDMA CONNECT: qid %u, hrqsize %u, hsqsize %u, cntlid %u\n",
+		       private_data->qid,
+		       private_data->hrqsize,
+		       private_data->hsqsize,
+		       private_data->cntlid);
+
 	port = event->listen_id->context;
 	SPDK_DEBUGLOG(rdma, "Listen Id was %p with verbs %p. ListenAddr: %p\n",
 		      event->listen_id, event->listen_id->verbs, port);
@@ -1326,8 +1336,8 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 		max_queue_depth = spdk_min(max_queue_depth, private_data->hsqsize + 1);
 	}
 
-	SPDK_DEBUGLOG(rdma, "Final Negotiated Queue Depth: %d R/W Depth: %d\n",
-		      max_queue_depth, max_read_depth);
+	SPDK_NOTICELOG("Final Negotiated Queue Depth: %d R/W Depth: %d\n",
+		       max_queue_depth, max_read_depth);
 
 	rqpair = calloc(1, sizeof(struct spdk_nvmf_rdma_qpair));
 	if (rqpair == NULL) {

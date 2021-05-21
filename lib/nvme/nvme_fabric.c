@@ -443,6 +443,11 @@ nvme_fabric_qpair_connect(struct spdk_nvme_qpair *qpair, uint32_t num_entries)
 	snprintf(nvmf_data->hostnqn, sizeof(nvmf_data->hostnqn), "%s", ctrlr->opts.hostnqn);
 	snprintf(nvmf_data->subnqn, sizeof(nvmf_data->subnqn), "%s", ctrlr->trid.subnqn);
 
+	SPDK_NOTICELOG("NVMF CONNECT: qid %u, sqsize %u, cntlid %u\n",
+		       cmd.qid,
+		       cmd.sqsize,
+		       nvmf_data->cntlid);
+
 	rc = spdk_nvme_ctrlr_cmd_io_raw(ctrlr, qpair,
 					(struct spdk_nvme_cmd *)&cmd,
 					nvmf_data, sizeof(*nvmf_data),

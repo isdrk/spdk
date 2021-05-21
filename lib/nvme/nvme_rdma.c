@@ -417,6 +417,9 @@ nvme_rdma_qpair_process_cm_event(struct nvme_rdma_qpair *rqpair)
 				SPDK_DEBUGLOG(nvme, "Requested queue depth %d. Actually got queue depth %d.\n",
 					      rqpair->num_entries, accept_data->crqsize);
 				rqpair->num_entries = spdk_min(rqpair->num_entries, accept_data->crqsize);
+				SPDK_NOTICELOG("RDMA ESTABLISHED: qid %u, crqsize %u\n",
+					       rqpair->qpair.id,
+					       accept_data->crqsize);
 			}
 			break;
 		case RDMA_CM_EVENT_DISCONNECTED:
@@ -1056,6 +1059,12 @@ nvme_rdma_connect(struct nvme_rdma_qpair *rqpair)
 	request_data.hrqsize = rqpair->num_entries;
 	request_data.hsqsize = rqpair->num_entries - 1;
 	request_data.cntlid = ctrlr->cntlid;
+
+	SPDK_NOTICELOG("RDMA CONNECT: qid %u, hrqsize %u, hsqsize %u, cntlid %u\n",
+		       request_data.qid,
+		       request_data.hrqsize,
+		       request_data.hsqsize,
+		       request_data.cntlid);
 
 	param.private_data = &request_data;
 	param.private_data_len = sizeof(request_data);

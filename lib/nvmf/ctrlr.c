@@ -810,6 +810,11 @@ nvmf_ctrlr_cmd_connect(struct spdk_nvmf_request *req)
 		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 	}
 
+	SPDK_NOTICELOG("NVMF CONNECT: qid %u,sqsize %u, cntlid %u\n",
+		       req->cmd->connect_cmd.qid,
+		       req->cmd->connect_cmd.sqsize,
+		       data->cntlid);
+
 	subsystem = spdk_nvmf_tgt_find_subsystem(transport->tgt, data->subnqn);
 	if (!subsystem) {
 		SPDK_NVMF_INVALID_CONNECT_DATA(rsp, subnqn);
