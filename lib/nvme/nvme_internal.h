@@ -462,6 +462,7 @@ struct spdk_nvme_poll_group {
 	void						*ctx;
 	struct spdk_nvme_accel_fn_table			accel_fn_table;
 	STAILQ_HEAD(, spdk_nvme_transport_poll_group)	tgroups;
+	bool						busy;
 };
 
 struct spdk_nvme_transport_poll_group {

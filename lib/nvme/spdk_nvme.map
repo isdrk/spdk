@@ -107,6 +107,7 @@
 	spdk_nvme_poll_group_destroy;
 	spdk_nvme_poll_group_process_completions;
 	spdk_nvme_poll_group_get_ctx;
+	spdk_nvme_poll_group_is_busy;
 
 	spdk_nvme_ns_get_data;
 	spdk_nvme_ns_get_id;

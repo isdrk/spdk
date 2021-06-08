@@ -2,7 +2,7 @@
  *   BSD LICENSE
  *
  *   Copyright (c) Intel Corporation. All rights reserved.
- *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1716,6 +1716,8 @@ nvme_tcp_qpair_sock_cb(void *ctx, struct spdk_sock_group *group, struct spdk_soc
 	} else {
 		pgroup->num_completions = -ENXIO;
 	}
+
+	qpair->poll_group->group->busy = true;
 }
 
 static void

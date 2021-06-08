@@ -911,7 +911,7 @@ nvme_check_io(struct ns_worker_ctx *ns_ctx)
 		fprintf(stderr, "NVMe io qpair process completion error\n");
 		exit(1);
 	}
-	return rc;
+	return (int64_t)spdk_nvme_poll_group_is_busy(ns_ctx->u.nvme.group);
 }
 
 static void

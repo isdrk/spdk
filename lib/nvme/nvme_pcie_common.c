@@ -1105,6 +1105,8 @@ nvme_pcie_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		total_completions += local_completions;
 	}
 
+	tgroup->group->busy = tgroup->group->busy || total_completions > 0;
+
 	return total_completions;
 }
 

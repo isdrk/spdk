@@ -154,6 +154,8 @@ spdk_nvme_poll_group_process_completions(struct spdk_nvme_poll_group *group,
 		return -EINVAL;
 	}
 
+	group->busy = false;
+
 	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
 		local_completions = nvme_transport_poll_group_process_completions(tgroup, completions_per_qpair,
 				    disconnected_qpair_cb);
@@ -270,4 +272,10 @@ spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
 
 	free(stat->transport_stat);
 	free(stat);
+}
+
+bool
+spdk_nvme_poll_group_is_busy(struct spdk_nvme_poll_group *group)
+{
+	return group->busy;
 }
