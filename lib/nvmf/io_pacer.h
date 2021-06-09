@@ -88,6 +88,11 @@ struct spdk_io_pacer_tuner2 *spdk_io_pacer_tuner2_create(struct spdk_io_pacer *p
 void spdk_io_pacer_tuner2_destroy(struct spdk_io_pacer_tuner2 *tuner);
 void spdk_io_pacer_tuner2_add(struct spdk_io_pacer_tuner2 *tuner, uint32_t value);
 void spdk_io_pacer_tuner2_sub(struct spdk_io_pacer_tuner2 *tuner, uint32_t value);
+void spdk_io_pacer_tuner2_add_in_flight(uint64_t value);
+void spdk_io_pacer_tuner2_sub_in_flight(uint64_t value);
+
+uint64_t norm_period(uint64_t period);
+uint64_t unorm_period(uint64_t period);
 
 static inline void drive_stats_lock(struct spdk_io_pacer_drives_stats *stats) {
 	rte_spinlock_lock(&stats->lock);

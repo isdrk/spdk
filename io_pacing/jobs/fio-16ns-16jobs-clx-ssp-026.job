@@ -1,0 +1,30 @@
+[global]
+ioengine=spdk
+
+cpus_allowed=12-19
+cpus_allowed_policy=split
+
+[job1]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=1
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=2
+[job2]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=3
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=4
+[job3]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=5
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=6
+[job4]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=7
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=8
+[job5]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=9
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=10
+[job6]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=11
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=12
+[job7]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=13
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=14
+[job8]
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=15
+filename=trtype=rdma adrfam=ipv4 traddr=10.10.3.20 trsvcid=4420 ns=16

@@ -270,10 +270,14 @@ struct spdk_nvmf_rdma_request {
 	uint32_t				num_outstanding_data_wr;
 	uint64_t				receive_tsc;
 
-	union {
-		STAILQ_ENTRY(spdk_nvmf_rdma_request)	state_link;
-		struct io_pacer_queue_entry		pacer_entry;
-	};
+	// union {
+	// 	STAILQ_ENTRY(spdk_nvmf_rdma_request)	state_link;
+	// 	struct io_pacer_queue_entry		pacer_entry;
+	// };
+
+	STAILQ_ENTRY(spdk_nvmf_rdma_request)	state_link;
+	struct io_pacer_queue_entry		pacer_entry;
+
 	uint64_t				pacer_key;
 };
 
@@ -2071,7 +2075,8 @@ nvmf_rdma_io_pacer_pop_cb(void *io)
 	struct spdk_nvmf_rdma_qpair *rqpair;
 	struct spdk_nvmf_rdma_transport *rtransport;
 
-	rdma_req = SPDK_CONTAINEROF(io, struct spdk_nvmf_rdma_request, state_link);
+	// rdma_req = SPDK_CONTAINEROF(io, struct spdk_nvmf_rdma_request, state_link);
+	rdma_req = SPDK_CONTAINEROF(io, struct spdk_nvmf_rdma_request, pacer_entry);
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 				      struct spdk_nvmf_rdma_transport,
@@ -2134,6 +2139,7 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_NEW, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair->cm_id);
 			rdma_recv = rdma_req->recv;
+			rdma_req->pacer_entry.size = 0;
 
 			/* The first element of the SGL is the NVMe command */
 			rdma_req->req.cmd = (union nvmf_h2c_msg *)rdma_recv->sgl[0].addr;
@@ -2186,6 +2192,9 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			/* @todo: check if size is calculated correctly for all types of commands */
 			rdma_req->pacer_entry.size = spdk_bdev_get_block_size(ns->bdev) *
 				((from_le32(&rdma_req->req.cmd->nvme_cmd.cdw12) & 0xFFFFu) + 1);
+			if (rgroup->pacer_tuner2 && (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
+				spdk_io_pacer_tuner2_add_in_flight(rdma_req->pacer_entry.size);
+			}
 			if (rdma_req->pacer_entry.size <= rtransport->transport.opts.io_pacer_threshold) {
 				rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
 				STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->req, buf_link);
@@ -2408,6 +2417,9 @@ spdk_nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			if (rgroup->pacer_tuner2 &&
 			    (rtransport->transport.opts.io_pacer_tuner_type == 1)) {
 				spdk_io_pacer_tuner2_sub(rgroup->pacer_tuner2, rdma_req->req.length);
+				if (rdma_req->pacer_entry.size > 0) {
+				spdk_io_pacer_tuner2_sub_in_flight(rdma_req->pacer_entry.size);
+				}
 			}
 
 			nvmf_rdma_request_free(rdma_req, rtransport);
@@ -3582,8 +3594,9 @@ spdk_nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport)
 		} else {
 			rgroup->pacer_tuner2 = spdk_io_pacer_tuner2_create(rgroup->pacer,
 									   transport->opts.io_pacer_tuner_period,
-									   transport->opts.io_pacer_tuner_threshold /
-									   spdk_env_get_core_count(),
+									   transport->opts.io_pacer_tuner_threshold,
+									//    transport->opts.io_pacer_tuner_threshold /
+									//    spdk_env_get_core_count(),
 									   transport->opts.io_pacer_tuner_factor);
 			if (!rgroup->pacer_tuner2) {
 				SPDK_ERRLOG("Failed to create IO pacer tuner\n");

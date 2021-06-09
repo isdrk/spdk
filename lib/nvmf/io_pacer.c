@@ -8,14 +8,14 @@
  *   are met:
  *
  *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
+ *	notice, this list of conditions and the following disclaimer.
  *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
+ *	notice, this list of conditions and the following disclaimer in
+ *	the documentation and/or other materials provided with the
+ *	distribution.
  *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
+ *	contributors may be used to endorse or promote products derived
+ *	from this software without specific prior written permission.
  *
  *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
  *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
@@ -37,8 +37,27 @@
 #include "spdk/likely.h"
 #include "spdk_internal/assert.h"
 #include "spdk_internal/log.h"
+#include "io_pacer_agent.h"
+/* Socket includes */
+#include <sys/socket.h>
+#include <arpa/inet.h>	// inet_addr
+#include <unistd.h>	// write
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "l3_counters.h"
+#include "random_pacer.h"
+
+#define CONSTANT 0
+
+// #include <stdatomic.h>	// atomic
+/* END */
 
 #define IO_PACER_DEFAULT_MAX_QUEUES 32
+#define RANDOM_STEP 10
 
 #ifdef SPDK_CONFIG_VTUNE
 #include <ittnotify.h>
@@ -46,10 +65,29 @@ extern __itt_string_handle *io_pacer_poll_task;
 extern __itt_domain *io_pacer_domain;
 #endif /* SPDK_CONFIG_VTUNE */
 
+#define randnum(min, max) ((rand() % (int)(((max) + 1) - (min))) + (min))
 
 #define MAX_DRIVES_STATS 256
 static rte_spinlock_t drives_stats_create_lock = RTE_SPINLOCK_INITIALIZER;
 struct spdk_io_pacer_drives_stats drives_stats = {0};
+
+rte_atomic64_t global_ios_input = RTE_ATOMIC64_INIT(0);
+rte_atomic64_t global_ios = RTE_ATOMIC64_INIT(0);
+rte_atomic64_t global_ios_output = RTE_ATOMIC64_INIT(0);
+rte_atomic64_t in_flight_value = RTE_ATOMIC64_INIT(0);
+
+// int8_t epoch = 0;
+float l3_hit_rate = 1.0;
+uint32_t core_number;
+double prev_time = 0.0;
+uint64_t a = 10968;
+uint64_t timer = 0;
+int64_t prev_ios = 0;
+int64_t prev_ios_input = 0;
+int64_t prev_ios_output = 0;
+
+uint8_t ascend = 1;
+// static uint8_t is_random = 0;
 
 struct io_pacer_queue {
 	uint64_t key;
@@ -142,8 +180,8 @@ io_pacer_poll(void *arg)
 	}
 
 	while ((pacer->num_ios > 0) &&
-	       (pacer->remaining_credit > 0) &&
-	       (attempts_cnt < pacer->num_queues)) {
+		(pacer->remaining_credit > 0) &&
+		(attempts_cnt < pacer->num_queues)) {
 		next_queue %= pacer->num_queues;
 		attempts_cnt++;
 
@@ -162,6 +200,8 @@ io_pacer_poll(void *arg)
 			pacer->next_queue = next_queue;
 			pacer->remaining_credit -= entry->size;
 			pacer->stat.ios++;
+			// rte_atomic64_inc(&global_ios);
+			rte_atomic64_add(&global_ios, entry->size);
 			pacer->stat.bytes += entry->size;
 			rte_atomic32_add(&pacer->queues[next_queue - 1].stats->ops_in_flight, 1);
 			pacer->pop_cb(entry);
@@ -209,13 +249,13 @@ spdk_io_pacer_create(uint32_t period_ns,
 	}
 
 	SPDK_NOTICELOG("Created IO pacer %p: period_ns %u, period_ticks %lu, max_queues %u, credit %ld, disk_credit %u, core %u\n",
-		       pacer,
-		       period_ns,
-		       pacer->period_ticks,
-		       pacer->max_queues,
-		       pacer->credit,
-		       pacer->disk_credit,
-		       spdk_env_get_current_core());
+			pacer,
+			period_ns,
+			pacer->period_ticks,
+			pacer->max_queues,
+			pacer->credit,
+			pacer->disk_credit,
+			spdk_env_get_current_core());
 
 	return pacer;
 }
@@ -288,14 +328,14 @@ spdk_io_pacer_create_queue(struct spdk_io_pacer *pacer, uint64_t key)
 							 new_max_queues * sizeof(*pacer->queues));
 		if (!new_queues) {
 			SPDK_NOTICELOG("Failed to allocate more queues for IO pacer %p: max_queues %u\n",
-				       pacer, new_max_queues);
+					pacer, new_max_queues);
 			return -1;
 		}
 
 		pacer->queues = new_queues;
 		pacer->max_queues = new_max_queues;
 		SPDK_NOTICELOG("Allocated more queues for IO pacer %p: max_queues %u\n",
-			       pacer, pacer->max_queues);
+				pacer, pacer->max_queues);
 	}
 
 	pacer->queues[pacer->num_queues].key = key;
@@ -304,7 +344,7 @@ spdk_io_pacer_create_queue(struct spdk_io_pacer *pacer, uint64_t key)
 	pacer->queues[pacer->num_queues].stats = spdk_io_pacer_drive_stats_get(&drives_stats, key);
 	pacer->num_queues++;
 	SPDK_NOTICELOG("Created IO pacer queue: pacer %p, key %016lx\n",
-		       pacer, key);
+			pacer, key);
 
 	return 0;
 }
@@ -326,7 +366,7 @@ spdk_io_pacer_destroy_queue(struct spdk_io_pacer *pacer, uint64_t key)
 				(pacer->num_queues - i - 1) * sizeof(struct io_pacer_queue));
 			pacer->num_queues--;
 			SPDK_NOTICELOG("Destroyed IO pacer queue: pacer %p, key %016lx\n",
-				       pacer, key);
+					pacer, key);
 			return 0;
 		}
 	}
@@ -356,7 +396,7 @@ spdk_io_pacer_push(struct spdk_io_pacer *pacer, uint64_t key, struct io_pacer_qu
 
 void
 spdk_io_pacer_get_stat(const struct spdk_io_pacer *pacer,
-		       struct spdk_nvmf_transport_poll_group_stat *stat)
+			struct spdk_nvmf_transport_poll_group_stat *stat)
 {
 	if (pacer && stat) {
 		stat->io_pacer.total_ticks = pacer->stat.total_ticks;
@@ -398,14 +438,14 @@ io_pacer_tune(void *arg)
 	/* Try to log once per second */
 	if (log_counter % (SPDK_SEC_TO_NSEC / tuner->period_ns) == 0) {
 		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, bytes %lu, io period %lu ns, new period %lu ns, new period %lu ticks, min %lu, max %lu\n",
-			       tuner,
-			       pacer,
-			       pacer->stat.bytes - tuner->last_bytes,
-			       io_period_ns,
-			       new_period_ns,
-			       new_period_ticks,
-			       tuner->min_pacer_period_ticks,
-			       tuner->max_pacer_period_ticks);
+				tuner,
+				pacer,
+				pacer->stat.bytes - tuner->last_bytes,
+				io_period_ns,
+				new_period_ns,
+				new_period_ticks,
+				tuner->min_pacer_period_ticks,
+				tuner->max_pacer_period_ticks);
 	}
 	log_counter++;
 
@@ -446,15 +486,16 @@ spdk_io_pacer_tuner_create(struct spdk_io_pacer *pacer,
 	}
 
 	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, step_ns %lu, min_pacer_period_ticks %lu, max_pacer_period_ticks %lu\n",
-		       tuner,
-		       pacer,
-		       tuner->period_ns,
-		       tuner->step_ns,
-		       tuner->min_pacer_period_ticks,
-		       tuner->max_pacer_period_ticks);
+			tuner,
+			pacer,
+			tuner->period_ns,
+			tuner->step_ns,
+			tuner->min_pacer_period_ticks,
+			tuner->max_pacer_period_ticks);
 
 	return tuner;
 }
+
 
 void
 spdk_io_pacer_tuner_destroy(struct spdk_io_pacer_tuner *tuner)
@@ -469,42 +510,243 @@ spdk_io_pacer_tuner_destroy(struct spdk_io_pacer_tuner *tuner)
 struct spdk_io_pacer_tuner2 {
 	struct spdk_io_pacer *pacer;
 	uint64_t period_ns;
-	uint32_t value;
+	// uint32_t value;
+	rte_atomic32_t value;
 	uint32_t min_threshold;
 	uint64_t factor;
 	uint64_t min_pacer_period_ticks;
 	uint64_t max_pacer_period_ticks;
+	// FILE *file;
 	struct spdk_poller *poller;
+
+	uint32_t refs;
+	pthread_mutex_t lock;
+	struct spdk_thread *thread;
 };
 
+
+
+/* for socket START */
+/* struct for data passing */
+typedef struct payload_t
+{
+    uint64_t io_pacer_period;
+    uint32_t buffers_in_flight;
+} payload;
+
+// int create_socket(int port)
+// {
+//     int sock;
+//     struct sockaddr_in server;
+
+//     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+//     {
+// 	 SPDK_NOTICELOG("ERROR: Socket creation failed\n");
+// 	 goto out;
+//     }
+//     SPDK_NOTICELOG("Socket created\n");
+
+//     bzero((char *)&server, sizeof(server));
+//     server.sin_family = AF_INET;
+//     server.sin_addr.s_addr = INADDR_ANY;
+//     server.sin_port = htons(port);
+//     if (bind(sock, (struct sockaddr *)&server, sizeof(server)) < 0)
+//     {
+// 	 SPDK_NOTICELOG("ERROR: Bind failed\n");
+// 	goto close_socket;
+//     }
+//     SPDK_NOTICELOG("Bind done\n");
+//     listen(sock, 3);
+//     return sock;
+// close_socket:
+//     close(sock);
+// out:
+//     return -1;
+// }
+
+// void send_msg(int sock, void *msg, uint32_t msgsize)
+// {
+//     if (write(sock, msg, msgsize) < 0)
+//     {
+// 	 SPDK_NOTICELOG("Can't send message.\n");
+// 	 close(sock);
+//     }
+//     else
+//     	SPDK_NOTICELOG("Message sent (%d bytes).\n", msgsize);
+// }
+// /* for socket END */
+
+// // Returns hostname for the local computer
+// void checkHostName(int hostname)
+// {
+//     if (hostname == -1)
+//     {
+//         perror("gethostname");
+//         exit(1);
+//     }
+// }
+
+// // Returns host information corresponding to host name
+// void checkHostEntry(struct hostent * hostentry)
+// {
+//     if (hostentry == NULL)
+//     {
+//         perror("gethostbyname");
+//         exit(1);
+//     }
+// }
+
+// // Converts space-delimited IPv4 addresses
+// // to dotted-decimal format
+// void checkIPbuffer(char *IPbuffer)
+// {
+//     if (NULL == IPbuffer)
+//     {
+//         perror("inet_ntoa");
+//         exit(1);
+//     }
+// }
+
+
+// int print_host()
+// {
+//     char hostbuffer[256];
+//     char *IPbuffer;
+//     struct hostent *host_entry;
+//     int hostname;
+
+//     // To retrieve hostname
+//     hostname = gethostname(hostbuffer, sizeof(hostbuffer));
+//     checkHostName(hostname);
+
+//     // To retrieve host information
+//     host_entry = gethostbyname(hostbuffer);
+//     checkHostEntry(host_entry);
+
+//     // To convert an Internet network
+//     // address into ASCII string
+//     IPbuffer = inet_ntoa(*((struct in_addr*)
+//                            host_entry->h_addr_list[0]));
+
+//     SPDK_NOTICELOG("Hostname: %s\n", hostbuffer);
+//     SPDK_NOTICELOG("Host IP: %s\n", IPbuffer);
+//     return 0;
+// }
+
+#define PORT 2300
+#define BUFFSIZE 16
+
+uint64_t norm_period(uint64_t period)
+{
+	double new_period = (double)period / (double)spdk_env_get_core_count();
+	// new_period *= credit / 131072.0;
+	return (uint64_t)round(new_period);
+}
+
+uint64_t unorm_period(uint64_t period)
+{
+	double new_period = (double)period * (double)spdk_env_get_core_count();
+	// new_period *= 131072.0 / credit;
+	return (uint64_t)round(new_period);
+}
+/* called every 10ms - you can change it */
 static int
 io_pacer_tune2(void *arg)
 {
+
 	struct spdk_io_pacer_tuner2 *tuner = arg;
 	struct spdk_io_pacer *pacer = tuner->pacer;
-	uint32_t v = tuner->value;
+	uint32_t v = rte_atomic32_read(&tuner->value); /* num buffers inflight */
+	uint64_t new_period_ticks;
 
-	uint64_t new_period_ticks = (v <= tuner->min_threshold) ?
-		tuner->min_pacer_period_ticks :
-		(v - tuner->min_threshold) * tuner->factor / 1000 + tuner->min_pacer_period_ticks;
-	new_period_ticks = spdk_min(new_period_ticks, tuner->max_pacer_period_ticks);
+	/*
+	Constant + Linear when thershold crossed solution
+	*/
+	// new_period_ticks = (v  <= tuner->min_threshold) ?
+	// 	tuner->min_pacer_period_ticks :
+	// 	(v  - tuner->min_threshold) * tuner->factor / 1000 + tuner->min_pacer_period_ticks;
+	// new_period_ticks = spdk_min(new_period_ticks, tuner->max_pacer_period_ticks);
+	/*
+	 Linear
+	*/
+	// new_period_ticks = (a*timer/2500)   + tuner->min_pacer_period_ticks;
+	// if (new_period_ticks >= tuner->max_pacer_period_ticks)
+	// 	ascend = 0;
+	// if (new_period_ticks <= tuner->min_pacer_period_ticks)
+	// 	ascend = 1;
+
+	// if (ascend == 1)
+	// 	timer++;
+	// else
+	// 	timer--;
+	// new_period_ticks = spdk_min(new_period_ticks, tuner->max_pacer_period_ticks);
+	/*
+	Constant solution
+	*/
+	// new_period_ticks = tuner->min_pacer_period_ticks;
+
+	struct timespec res;
+
+	clock_gettime(CLOCK_REALTIME, &res);
+
+	double current_time = (double)res.tv_sec + (double)res.tv_nsec*1e-9;
+
+	double time_diff = current_time - prev_time;
+
+	// SPDK_NOTICELOG("time diff: %f\n", time_diff);
+
+	prev_time = current_time;
+
+	uint64_t current_period = (pacer->period_ticks * SPDK_SEC_TO_NSEC) / spdk_get_ticks_hz();
+	int64_t bw_diff = rte_atomic64_read(&global_ios) - prev_ios;
+	int64_t bw_diff_input = rte_atomic64_read(&global_ios_input) - prev_ios_input;
+	int64_t bw_diff_output = rte_atomic64_read(&global_ios_output) - prev_ios_output;
+	double total_system_bytes = (double)rte_atomic64_read(&in_flight_value) * 1e-6;
+
+	double bw = ((double)bw_diff / time_diff) * 8e-9;
+	double bw_input = ((double)bw_diff_input / time_diff) * 8e-9;
+	double bw_output = ((double)bw_diff_output / time_diff) * 8e-9;
+
+	double buff = (double)(v) * 1e-6;
 
 	static __thread uint32_t log_counter = 0;
-	/* Try to log once per second */
-	if (log_counter % (SPDK_SEC_TO_NSEC / tuner->period_ns) == 0) {
-		SPDK_NOTICELOG("IO pacer tuner %p: pacer %p, value %u, new period %lu ticks, min %lu, polls %u. ios %u\n",
-			       tuner,
-			       pacer,
-			       v,
-			       new_period_ticks,
-			       tuner->min_pacer_period_ticks,
-			       pacer->stat.polls,
-			       pacer->stat.ios);
-	}
-	log_counter++;
+
+	double bytes_left = spdk_max(total_system_bytes - buff, 0.0);
+
+
+	uint64_t norm_current_period = norm_period(current_period);
+
+
+
+	/*
+	Random solution
+	*/
+// 	norm_current_period = get_smart_random_period((double)norm_current_period, buff);
+// 	// norm_current_period = get_new_random_period((double)norm_current_period);
+// 	current_period = unorm_period(norm_current_period);
+// 	new_period_ticks = current_period * spdk_get_ticks_hz() / SPDK_SEC_TO_NSEC;
+// // 	// limit answer to range
+// 	new_period_ticks = spdk_max(new_period_ticks, tuner->min_pacer_period_ticks);
+// 	new_period_ticks = spdk_min(new_period_ticks, (spdk_env_get_core_count() * MAX_PERIOD * spdk_get_ticks_hz()) / SPDK_SEC_TO_NSEC);
+
+
+	/*
+	RL solution
+	*/
+	norm_current_period = rl_agent(bw_output, buff, bytes_left, (double)norm_current_period);
+	current_period = unorm_period(norm_current_period);
+	new_period_ticks = (current_period * spdk_get_ticks_hz()) / SPDK_SEC_TO_NSEC;
+
 
 	pacer->period_ticks = new_period_ticks;
+	current_period = (pacer->period_ticks * SPDK_SEC_TO_NSEC / spdk_get_ticks_hz());
+	norm_current_period = norm_period(current_period);
 
+	SPDK_NOTICELOG("tuner_info - bytes_to_be_processed: %f, buffers: %f, norm_period: %lu, period: %lu, bw_pacer: %f, bw_input: %f, bw_output: %f, num_cores: %f, credit: %ld\n", bytes_left,  buff, norm_current_period, current_period, bw, bw_input, bw_output, (double)spdk_env_get_core_count(), pacer->credit);
+
+	prev_ios = rte_atomic64_read(&global_ios);
+	prev_ios_input = rte_atomic64_read(&global_ios_input);
+	prev_ios_output = rte_atomic64_read(&global_ios_output);
 	return 1;
 }
 
@@ -514,63 +756,126 @@ spdk_io_pacer_tuner2_create(struct spdk_io_pacer *pacer,
 			    uint32_t min_threshold,
 			    uint64_t factor)
 {
-	struct spdk_io_pacer_tuner2 *tuner;
+	// struct spdk_io_pacer_tuner2 *tuner;
+	/* Tuner 2 is singleton */
+	static struct spdk_io_pacer_tuner2 tuner = {
+		.lock = PTHREAD_MUTEX_INITIALIZER
+	};
 
 	assert(pacer != NULL);
 
-	tuner = (struct spdk_io_pacer_tuner2 *)calloc(1, sizeof(struct spdk_io_pacer_tuner2));
-	if (!tuner) {
-		SPDK_ERRLOG("Failed to allocate IO pacer tuner\n");
-		return NULL;
-	}
+	// tuner = (struct spdk_io_pacer_tuner2 *)calloc(1, sizeof(struct spdk_io_pacer_tuner2));
+	// if (!tuner) {
+	// 	SPDK_ERRLOG("Failed to allocate IO pacer tuner\n");
+	// 	return NULL;
+	// }
 
-	tuner->pacer = pacer;
-	tuner->period_ns = 1000ULL * period_us;
-	tuner->value = 0;
-	tuner->min_threshold = min_threshold;
-	tuner->factor = factor;
-	tuner->min_pacer_period_ticks = pacer->period_ticks;
-	tuner->max_pacer_period_ticks = 4 * tuner->min_pacer_period_ticks;
+	// tuner->pacer = pacer;
+	// tuner->period_ns = 1000ULL * period_us;
+	// tuner->value = 0;
+	// tuner->min_threshold = min_threshold;
+	// tuner->factor = factor;
+	// tuner->min_pacer_period_ticks = pacer->period_ticks;
+	// tuner->max_pacer_period_ticks = 4 * tuner->min_pacer_period_ticks;
 
-	if (0 != period_us) {
-		tuner->poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)tuner, period_us);
-		if (!tuner->poller) {
-			SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
-			spdk_io_pacer_tuner2_destroy(tuner);
-			return NULL;
+	// if (0 != period_us) {
+	// 	tuner->poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)tuner, period_us);
+	// 	if (!tuner->poller) {
+	// 		SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
+	// 		spdk_io_pacer_tuner2_destroy(tuner);
+	// 		return NULL;
+	// 	}
+	// }t
+
+	pthread_mutex_lock(&tuner.lock);
+	if (tuner.refs == 0) {
+		tuner.thread = spdk_get_thread();
+		tuner.pacer = pacer;
+		tuner.period_ns = 1000ULL * period_us;
+		rte_atomic32_init(&tuner.value);
+		tuner.min_threshold = min_threshold;
+		tuner.factor = factor;
+		tuner.min_pacer_period_ticks = pacer->period_ticks;
+		tuner.max_pacer_period_ticks = 4 * tuner.min_pacer_period_ticks;
+
+		if (0 != period_us) {
+			/* Poller function will be bound to the core that first created the tuner */
+			tuner.poller = SPDK_POLLER_REGISTER(io_pacer_tune2, (void *)&tuner, period_us);
+			if (!tuner.poller) {
+				SPDK_ERRLOG("Failed to create tuner poller for IO pacer\n");
+				pthread_mutex_unlock(&tuner.lock);
+				return NULL;
+			}
 		}
-	}
 
 	SPDK_NOTICELOG("Created IO pacer tuner %p: pacer %p, period_ns %lu, threshold %u, factor %lu\n",
-		       tuner,
-		       pacer,
-		       tuner->period_ns,
-		       tuner->min_threshold,
-		       tuner->factor);
+			tuner,
+			pacer,
+			tuner.period_ns,
+			tuner.min_threshold,
+			tuner.factor);
+	}
+	tuner.refs++;
+	pthread_mutex_unlock(&tuner.lock);
+	return &tuner;
+}
 
-	return tuner;
+static void tuner2_unregister(void *ctx)
+{
+	struct spdk_io_pacer_tuner2 *tuner = ctx;
+
+	spdk_poller_unregister(&tuner->poller);
+	tuner->refs = 0;
+	tuner->thread = NULL;
+	pthread_mutex_unlock(&tuner->lock);
+	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
 }
 
 void
 spdk_io_pacer_tuner2_destroy(struct spdk_io_pacer_tuner2 *tuner)
 {
 	assert(tuner != NULL);
-
-	spdk_poller_unregister(&tuner->poller);
-	free(tuner);
-	SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
+	// tuner->file.fclose();
+	// spdk_poller_unregister(&tuner->poller);
+	// free(tuner);
+	// SPDK_NOTICELOG("Destroyed IO pacer tuner %p\n", tuner);
+	pthread_mutex_lock(&tuner->lock);
+	assert(tuner->refs > 0);
+	if (tuner->refs == 1) {
+		spdk_thread_send_msg(tuner->thread, tuner2_unregister, tuner);
+	} else {
+		tuner->refs--;
+		pthread_mutex_unlock(&tuner->lock);
+	}
 }
 
 void
 spdk_io_pacer_tuner2_add(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
 {
 	assert(tuner != NULL);
-	tuner->value += value;
+	// tuner->value += value;
+	rte_atomic32_add(&tuner->value, value);
 }
 
 void
 spdk_io_pacer_tuner2_sub(struct spdk_io_pacer_tuner2 *tuner, uint32_t value)
 {
 	assert(tuner != NULL);
-	tuner->value -= value;
+	// tuner->value -= value;
+	rte_atomic32_sub(&tuner->value, value);
+}
+
+void
+spdk_io_pacer_tuner2_add_in_flight(uint64_t value)
+{
+ rte_atomic64_add(&in_flight_value, value);
+ rte_atomic64_add(&global_ios_input, value);
+}
+
+
+void
+spdk_io_pacer_tuner2_sub_in_flight(uint64_t value)
+{
+ rte_atomic64_sub(&in_flight_value, value);
+ rte_atomic64_add(&global_ios_output, value);
 }

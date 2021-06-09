@@ -11,17 +11,24 @@ KERNEL_DRIVER=${KERNEL_DRIVER-0}
 
 # Test setup configuration
 if [ "1" == "$SETUP" ]; then
-    HOSTS="spdk08.swx.labs.mlnx spdk03.swx.labs.mlnx"
+    HOSTS="spdk05.swx.labs.mlnx spdk03.swx.labs.mlnx"
     TARGET="ubuntu@spdk-tgt-bw-03"
     TARGET_ADDRS="1.1.103.1 2.2.103.1"
-    TARGET_SPDK_PATH="/home/evgeniik/spdk"
-    TARGET_BF_COUNTERS="/home/evgeniik/bf_counters.py"
+    TARGET_SPDK_PATH="/home/garym/spdk"
+    TARGET_BF_COUNTERS="/home/garym/bf_counters.py"
 elif [ "2" == "$SETUP" ]; then
     HOSTS="spdk04.swx.labs.mlnx spdk05.swx.labs.mlnx"
     TARGET="ubuntu@swx-bw-07"
     TARGET_ADDRS="1.1.107.1 2.2.107.1"
     TARGET_SPDK_PATH="/home/ubuntu/work/spdk"
     TARGET_BF_COUNTERS="/home/ubuntu/work/bf_counters.py"
+elif [ "3" == "$SETUP" ]; then
+	HOSTS="clx-ssp-025 clx-ssp-026"
+	TARGET="root@localhost"
+	SSH_OPS="-p 5000"
+	TARGET_ADDRS="10.10.2.20 10.10.3.20"
+	TARGET_SPDK_PATH="/root/bfuhrer_spdk/spdk"
+	TARGET_BF_COUNTERS="/root/bf_counters_backup.py"
 else
     echo "Unknown setup. Please, set SETUP variable."
     exit 1
@@ -37,6 +44,11 @@ mkdir -p $OUT_PATH
 # Other configurations
 ENABLE_DEVICE_COUNTERS=1
 ENABLE_DETAILED_STATS=
+ENABLE_LOG_PER_TEST=1
+TEST_OUT_FILE=tgt.log
+TEST_OUT_EXT_FILE=tgt.log
+
+TEST_TXT='rl_agent_second_attempt_0.001'
 
 # Internal variables
 
@@ -48,12 +60,12 @@ function m()
 
 function get_device_counters()
 {
-    ssh $TARGET sudo python /opt/neohost/sdk/get_device_performance_counters.py --dev-uid=0000:17:00.0 --output-format=JSON > $OUT_PATH/device-counters.json
+    ssh $TARGET $SSH_OPS sudo python /opt/neohost/sdk/get_device_performance_counters.py --dev-uid=0000:17:00.0 --output-format=JSON > $OUT_PATH/device-counters.json
 }
 
 function get_bf_counters()
 {
-    ssh $TARGET sudo python $TARGET_BF_COUNTERS > $OUT_PATH/bf_counters.log
+    ssh $TARGET $SSH_OPS sudo python $TARGET_BF_COUNTERS > $OUT_PATH/bf_counters.log
 }
 
 function parse_fio()
@@ -164,12 +176,16 @@ function print_report()
     fi
 
     # @todo: add support for mixed case
+	echo "benjamin debug print: check if read/write source of info"
     if [[ "$RW" == *"read"* ]]; then
 	printf "$FORMAT" "Total" $(m $SUM_IOPS_R/1000) $(m $SUM_BW_R*8/1000^3)  $(m $SUM_BW_MAX_R*8*1024/1000^3) "$(m $SUM_LAT_AVG_R/1000)" "$TX_BW_WIRE" "$(m $SUM_BW_STDDEV_R*8*1024/1000^3)" "$L3_HIT_RATE" "$BUFFERS_ALLOCATED" "$PACER_PERIOD"
+	echo "read"
     elif  [[ "$RW" == *"write"* ]]; then
 	printf "$FORMAT" "Total" $(m $SUM_IOPS_W/1000) $(m $SUM_BW_W*8/1000^3)  $(m $SUM_BW_MAX_W*8*1024/1000^3) "$(m $SUM_LAT_AVG_W/1000)" "$RX_BW_WIRE" "$(m $SUM_BW_STDDEV_W*8*1024/1000^3)" "$L3_HIT_RATE" "$BUFFERS_ALLOCATED" "$PACER_PERIOD"
+	echo "write"
     else
 	printf "$FORMAT" "$host" "N/A"
+	echo "neither"
     fi
 }
 
@@ -185,7 +201,7 @@ function run_fio()
 
     local FIO_PARAMS="--stats=1 --group_reporting=1 --thread=1 --direct=1 --norandommap \
     --time_based=1 --runtime=$TEST_TIME --ramp_time=$FIO_RAMP_TIME --file_service_type=roundrobin:1 \
-    --readwrite=$RW --bssplit=$IO_SIZE --iodepth=$QD"
+    --rw=$RW --bssplit=$IO_SIZE --iodepth=$QD"
 
     [ -z "$FIO_NO_JSON" ] && FIO_PARAMS="--output-format=json --output=$OUT_PATH/fio-$HOST.json $FIO_PARAMS"
 
@@ -225,7 +241,7 @@ function run_test()
 	RPC_OUT=$OUT_PATH/nvmf_stats.log rpc nvmf_get_stats
 	progress_bar $((TEST_TIME/5))
 	get_device_counters
-	get_bf_counters
+	# get_bf_counters
 	RPC_OUT=$OUT_PATH/nvmf_stats.log rpc nvmf_get_stats
 	echo -n "-"
 	progress_bar $((TEST_TIME/5))
@@ -249,14 +265,25 @@ function run_test()
 function start_tgt()
 {
     local CPU_MASK=$1; shift
-
-    ssh $TARGET sudo $TARGET_SPDK_PATH/install/bin/spdk_tgt --wait-for-rpc -m $CPU_MASK > $OUT_PATH/tgt.log 2>&1 &
+	# ssh $TARGET $SSH_OPS sudo pkill -9 reactor* > $OUT_PATH/$TEST_OUT_EXT_FILE 2>&1                                 |  --------------------------------------------------------------------------------------------------------------------
+    # sleep 10
+    # ssh $TARGET sudo $TARGET_SPDK_PATH/install/bin/spdk_tgt --wait-for-rpc -m $CPU_MASK > $OUT_PATH/tgt.log 2>&1 &
+    ssh $TARGET $SSH_OPS sudo $TARGET_SPDK_PATH/install/bin/spdk_tgt --wait-for-rpc -m $CPU_MASK > $OUT_PATH/tgt.log 2>&1 &
+    sleep 10
+}
+function start_tgt_extract_data()
+{
+    local CPU_MASK=$1; shift
+	# ssh $TARGET $SSH_OPS sudo pkill -9 reactor* > $OUT_PATH/$TEST_OUT_EXT_FILE 2>&1                                 |  --------------------------------------------------------------------------------------------------------------------
+    # sleep 10
+    # ssh $TARGET sudo $TARGET_SPDK_PATH/install/bin/spdk_tgt --wait-for-rpc -m $CPU_MASK > $OUT_PATH/tgt.log 2>&1 &
+    ssh $TARGET $SSH_OPS sudo $TARGET_SPDK_PATH/install/bin/spdk_tgt --wait-for-rpc -m $CPU_MASK > $OUT_PATH/tgt_${io_pacer}_${repeat}_${TEST_TXT}.log 2>&1 &
     sleep 10
 }
 
 function stop_tgt()
 {
-    ssh $TARGET 'sudo kill -15 $(pidof spdk_tgt)' >> $OUT_PATH/rpc.log 2>&1
+    ssh $TARGET $SSH_OPS 'sudo kill -15 $(pidof spdk_tgt)' >> $OUT_PATH/rpc.log 2>&1
     sleep 5
 }
 
@@ -272,6 +299,7 @@ function connect_hosts()
 	# Assuming that each host has path to only one listener and
 	# another one will fail to connect
 	for addr in $TARGET_ADDRS; do
+	    # $SSH sudo nvme connect -t rdma -a $addr  -s 4420 -n nqn.2016-06.io.spdk:cnode1 -i $NUM_QUEUES >> $OUT_PATH/rpc.log 2>&1
 	    $SSH sudo nvme connect -t rdma -a $addr  -s 4420 -n nqn.2016-06.io.spdk:cnode1 -i $NUM_QUEUES >> $OUT_PATH/rpc.log 2>&1
 	done
     done
@@ -292,7 +320,7 @@ function disconnect_hosts()
 function rpc()
 {
     RPC_OUT=${RPC_OUT-"$OUT_PATH/rpc.log"}
-    ssh $TARGET sudo $TARGET_SPDK_PATH/scripts/rpc.py $@ >> $RPC_OUT 2>&1
+    ssh $TARGET $SSH_OPS sudo $TARGET_SPDK_PATH/scripts/rpc.py $@ >> $RPC_OUT 2>&1
 }
 
 function rpc_start()
@@ -301,7 +329,7 @@ function rpc_start()
     mkfifo rpc_pipe
     tail -f > rpc_pipe &
     RPC_PID=$!
-    ssh $TARGET sudo $TARGET_SPDK_PATH/scripts/rpc.py -v --server >> $OUT_PATH/rpc.log 2>&1 < rpc_pipe &
+    ssh $TARGET $SSH_OPS sudo $TARGET_SPDK_PATH/scripts/rpc.py -v --server >> $OUT_PATH/rpc.log 2>&1 < rpc_pipe &
     SSH_PID=$!
 }
 
@@ -389,7 +417,7 @@ function config_null_1()
 	rpc_send nvmf_subsystem_add_listener --trtype rdma \
 		 --traddr "$addr" \
 		 --adrfam ipv4 \
-		 --trsvcid 4420 \
+		 --trsvcid cd  \
 		 nqn.2016-06.io.spdk:cnode1
     done
 
@@ -604,6 +632,13 @@ function test_base()
     basic_test
     stop_tgt
 }
+function test_base_extract_data()
+{
+    start_tgt_extract_data $TGT_CPU_MASK
+    $CONFIG
+    basic_test
+    stop_tgt
+}
 
 function test_base_kernel()
 {
@@ -620,7 +655,7 @@ function test_1()
     CONFIG=config_null_1 \
 	  TGT_CPU_MASK=0xF \
 	  FIO_JOB=fio-1ns \
-	  QD_LIST="32 64 128 1024 2048" \
+	  QD_LIST="32" \
 	  test_base
 }
 
@@ -629,7 +664,7 @@ function test_2()
     CONFIG=config_null_16 \
 	  TGT_CPU_MASK=0xF \
 	  FIO_JOB=fio-16ns \
-	  QD_LIST="32 64 128 1024 2048" \
+	  QD_LIST="32" \
 	  test_base
 }
 
@@ -675,9 +710,10 @@ function test_2_16k()
 function test_3()
 {
     CONFIG=config_nvme \
-	  TGT_CPU_MASK=0xF \
+	  TGT_CPU_MASK=0xFFF \
 	  FIO_JOB=fio-16ns \
-	  QD_LIST="32 36 40 44 48 64 128 256 1024 2048" \
+	  QD_LIST="32 48 256" \
+	#   QD_LIST="32" \
 	  test_base
 }
 
@@ -1243,13 +1279,14 @@ function test_14()
     local TGT_CPU_MASK=0xF0
     local NUM_CORES=4
 
-    for io_pacer in 5600 5650 5700 5750 5800 6000; do
+    for io_pacer in 6000; do
+    # for io_pacer in 100; do
 	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
 	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD"
 	CONFIG=config_nvme \
 	      TGT_CPU_MASK=$TGT_CPU_MASK \
 	      FIO_JOB=fio-16ns \
-	      QD_LIST="256 2048" \
+	      QD_LIST="256" \
 	      IO_SIZE=128k \
 	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
 	      test_base
@@ -1257,32 +1294,64 @@ function test_14()
     done
 }
 
+function test_extract_data()
+{
+	# copy of test_14() for data extraction
+    local TGT_CPU_MASK=0xF0
+    # local TGT_CPU_MASK=0x10
+    local NUM_CORES=4
+	# repeat = "1_core"
+	# repeat="1_core"
+    # for io_pacer in $(seq 4500 100 6000); do
+    for io_pacer in $(seq 5500 100 6000); do
+	for repeat in $(seq 1 1 3); do
+    # for io_pacer in 5500; do
+	# for repeat in 3; do
+    # for io_pacer in 6500; do
+    # for io_pacer in 8001; do
+	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
+	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD"
+	CONFIG=config_nvme \
+	      TGT_CPU_MASK=$TGT_CPU_MASK \
+	      FIO_JOB=fio-16ns \
+	      QD_LIST="256" \
+	      IO_SIZE=128k \
+	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
+	      test_base_extract_data
+	sleep 3
+	done
+    done
+	# done
+}
+
 function test_14_16_cores()
 {
     local TGT_CPU_MASK=0xFFFF
     local NUM_CORES=16
 
-    for io_pacer in 2800 2875 3000; do
+    for io_pacer in 2800 3000; do
+	for io_treshold_pacer in 9437184 6291456; do
 #    for io_pacer in 2875; do
-	ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
-	num_buffers=131072
-	buf_cache=$((num_buffers/NUM_CORES))
-	echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache"
+		ADJUSTED_PERIOD="$(M_SCALE=0 m $io_pacer*$NUM_CORES/1)"
+		num_buffers=131072
+		buf_cache=$((num_buffers/NUM_CORES))
+		echo "CPU mask $CPU_MASK, num cores $NUM_CORES, IO pacer period $io_pacer, adjusted period $ADJUSTED_PERIOD, num buffers $num_buffers, buf cache $buf_cache, io_treshold_pacer $io_treshold_pacer"
 
-	CONFIG=config_nvme \
-	      TGT_CPU_MASK=$TGT_CPU_MASK \
-	      FIO_JOB=fio-16ns-16jobs \
-	      NUM_SHARED_BUFFERS=$num_buffers \
-	      BUF_CACHE_SIZE=$buf_cache \
-	      IO_UNIT_SIZE=8192 \
-	      BUFFER_SIZE=8192 \
-	      QD_LIST="256" \
-	      IO_SIZE=128k \
-	      IO_PACER_PERIOD=$ADJUSTED_PERIOD \
-	      IO_PACER_CREDIT=65536 \
-	      IO_PACER_TUNER_FACTOR=5 \
-	      test_base
-	sleep 3
+		CONFIG=config_nvme \
+		TGT_CPU_MASK=$TGT_CPU_MASK \
+		FIO_JOB=fio-16ns-16jobs \
+		NUM_SHARED_BUFFERS=$num_buffers \
+		BUF_CACHE_SIZE=$buf_cache \
+		IO_UNIT_SIZE=8192 \
+		BUFFER_SIZE=8192 \
+		QD_LIST="256" \
+		IO_SIZE=128k \
+		IO_PACER_PERIOD=$ADJUSTED_PERIOD \
+		IO_PACER_CREDIT=65536 \
+		IO_PACER_TUNER_FACTOR=5 \
+		test_base
+		sleep 3
+	done
     done
 }
 
