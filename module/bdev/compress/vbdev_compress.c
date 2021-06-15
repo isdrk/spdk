@@ -231,6 +231,7 @@ create_compress_dev(uint8_t index)
 	rte_compressdev_info_get(index, &device->cdev_info);
 
 	cdev_id = device->cdev_id = index;
+	SPDK_NOTICELOG("creating PMD %s\n", device->cdev_info.driver_name);
 
 	/* Zero means no limit so choose number of lcores. */
 	if (device->cdev_info.max_nb_queue_pairs == 0) {
@@ -359,6 +360,7 @@ vbdev_init_compress_drivers(void)
 
 	/* If we have no compression devices, there's no reason to continue. */
 	cdev_count = rte_compressdev_count();
+	SPDK_NOTICELOG("found %u compress PMDs\n", cdev_count);
 	if (cdev_count == 0) {
 		return 0;
 	}

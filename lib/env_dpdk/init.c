@@ -481,6 +481,8 @@ build_eal_cmdline(const struct spdk_env_opts *opts)
 	}
 #endif
 
+	args = push_arg(args, &argcount, _sprintf_alloc("--allow=0000:03:00.0,class=compress"));
+
 	g_eal_cmdline = args;
 	g_eal_cmdline_argcount = argcount;
 	return argcount;
