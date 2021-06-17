@@ -639,7 +639,6 @@ typedef struct payload_t
 uint64_t norm_period(uint64_t period)
 {
 	double new_period = (double)period / (double)spdk_env_get_core_count();
-	// new_period *= credit / 131072.0;
 	return (uint64_t)round(new_period);
 }
 
