@@ -2834,12 +2834,17 @@ nvme_rdma_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 	free(stats);
 }
 
-static struct spdk_memory_domain *
-nvme_rdma_ctrlr_get_memory_domain(const struct spdk_nvme_ctrlr *ctrlr)
+static int
+nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
+				   struct spdk_memory_domain **domains, int array_size)
 {
 	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(ctrlr->adminq);
 
-	return rqpair->memory_domain->domain;
+	if (domains && array_size > 0) {
+		domains[0] = rqpair->memory_domain->domain;
+	}
+
+	return 1;
 }
 
 void
@@ -2869,7 +2874,7 @@ const struct spdk_nvme_transport_ops rdma_ops = {
 	.ctrlr_connect_qpair = nvme_rdma_ctrlr_connect_qpair,
 	.ctrlr_disconnect_qpair = nvme_rdma_ctrlr_disconnect_qpair,
 
-	.ctrlr_get_memory_domain = nvme_rdma_ctrlr_get_memory_domain,
+	.ctrlr_get_memory_domains = nvme_rdma_ctrlr_get_memory_domains,
 
 	.qpair_abort_reqs = nvme_rdma_qpair_abort_reqs,
 	.qpair_reset = nvme_rdma_qpair_reset,

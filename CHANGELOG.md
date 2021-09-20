@@ -21,7 +21,7 @@ the memory domains and request hardware perform DMA transfers between them.
 
 ### nvme
 
-New API `spdk_nvme_ctrlr_get_memory_domain` has been added, it allows to get SPDK memory domain used by nvme controller.
+New API `spdk_nvme_ctrlr_get_memory_domains` has been added, it allows to get SPDK memory domains used by nvme controller.
 
 New API functions `spdk_nvme_ns_cmd_readv_ext` and `spdk_nvme_ns_cmd_writev_ext`
 have been added. These functions accept `spdk_nvme_ns_cmd_ext_io_opts` structure with extended IO request
