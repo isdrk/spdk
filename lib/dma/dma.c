@@ -42,6 +42,7 @@ TAILQ_HEAD(, spdk_memory_domain) g_dma_memory_domains = TAILQ_HEAD_INITIALIZER(
 struct spdk_memory_domain {
 	enum spdk_dma_device_type type;
 	spdk_memory_domain_fetch_data_cb fetch_cb;
+	spdk_memory_domain_upload_data_cb upload_cb;
 	spdk_memory_domain_translate_memory_cb translate_cb;
 	TAILQ_ENTRY(spdk_memory_domain) link;
 	struct spdk_memory_domain_ctx *ctx;
@@ -126,6 +127,17 @@ spdk_memory_domain_set_fetch(struct spdk_memory_domain *domain,
 	domain->fetch_cb = fetch_cb;
 }
 
+void
+spdk_memory_domain_set_upload(struct spdk_memory_domain *domain,
+			      spdk_memory_domain_upload_data_cb upload_cb)
+{
+	if (!domain) {
+		return;
+	}
+
+	domain->upload_cb = upload_cb;
+}
+
 struct spdk_memory_domain_ctx *
 spdk_memory_domain_get_context(struct spdk_memory_domain *domain)
 {
@@ -180,6 +192,23 @@ spdk_memory_domain_fetch_data(struct spdk_memory_domain *src_domain, void *src_d
 
 	return src_domain->fetch_cb(src_domain, src_domain_ctx, src_iov, src_iov_cnt, dst_iov, dst_iov_cnt,
 				    cpl_cb, cpl_cb_arg);
+}
+
+int
+spdk_memory_domain_upload_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+			       struct iovec *dst_iov, uint32_t dst_iovcnt, struct iovec *src_iov, uint32_t src_iovcnt,
+			       spdk_memory_domain_upload_data_cpl_cb cpl_cb, void *cpl_cb_arg)
+{
+	assert(dst_domain);
+	assert(dst_iov);
+	assert(src_iov);
+
+	if (spdk_unlikely(!dst_domain->upload_cb)) {
+		return -ENOTSUP;
+	}
+
+	return dst_domain->upload_cb(dst_domain, dst_domain_ctx, dst_iov, dst_iovcnt, src_iov, src_iovcnt,
+				     cpl_cb, cpl_cb_arg);
 }
 
 int

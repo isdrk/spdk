@@ -37,6 +37,7 @@
 #include "dma/dma.c"
 
 static bool g_memory_domain_fetch_called;
+static bool g_memory_domain_upload_called;
 static bool g_memory_domain_translate_called;
 static int g_memory_domain_cb_rc = 123;
 
@@ -50,6 +51,21 @@ static int test_memory_domain_fetch_data_cb(struct spdk_memory_domain *src_devic
 		uint32_t dst_iovcnt, spdk_memory_domain_fetch_data_cpl_cb cpl_cb, void *cpl_cb_arg)
 {
 	g_memory_domain_fetch_called = true;
+
+	return g_memory_domain_cb_rc;
+}
+
+static void
+test_memory_domain_upload_data_cpl_cb(void *ctx, int rc)
+{
+}
+
+static int test_memory_domain_upload_data_cb(struct spdk_memory_domain *dst_domain,
+		void *dst_domain_ctx,
+		struct iovec *dst_iov, uint32_t dst_iovcnt, struct iovec *src_iov, uint32_t src_iovcnt,
+		spdk_memory_domain_upload_data_cpl_cb cpl_cb, void *cpl_cb_arg)
+{
+	g_memory_domain_upload_called = true;
 
 	return g_memory_domain_cb_rc;
 }
@@ -120,6 +136,22 @@ test_dma(void)
 					   test_memory_domain_fetch_data_cpl_cb, NULL);
 	CU_ASSERT(rc == g_memory_domain_cb_rc);
 	CU_ASSERT(g_memory_domain_fetch_called == true);
+
+	/* Upload data, callback is NULL. Expect fail */
+	g_memory_domain_upload_called = false;
+	rc = spdk_memory_domain_upload_data(domain, NULL, &dst_iov, 1, &src_iov, 1,
+					    test_memory_domain_upload_data_cpl_cb, NULL);
+	CU_ASSERT(rc == -ENOTSUP);
+	CU_ASSERT(g_memory_domain_upload_called == false);
+
+	/* Set upload callback */
+	spdk_memory_domain_set_upload(domain, test_memory_domain_upload_data_cb);
+
+	/* Upload data. Expect pass */
+	rc = spdk_memory_domain_upload_data(domain, NULL, &dst_iov, 1, &src_iov, 1,
+					    test_memory_domain_upload_data_cpl_cb, NULL);
+	CU_ASSERT(rc == g_memory_domain_cb_rc);
+	CU_ASSERT(g_memory_domain_upload_called == true);
 
 	/* Translate data, callback is NULL. Expect fail */
 	g_memory_domain_translate_called = false;
