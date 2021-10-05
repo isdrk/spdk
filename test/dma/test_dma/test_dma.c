@@ -34,30 +34,50 @@
 
 #include "spdk/bdev.h"
 #include "spdk/event.h"
+#include "spdk/env.h"
 #include "spdk/dma.h"
 #include <infiniband/verbs.h>
 
 #define DMA_TEST_IO_BUFFER_SIZE 4096
 
+struct dma_test_task;
+
+struct dma_test_req {
+	void *buffer;
+	struct ibv_mr *mr;
+	struct dma_test_task *task;
+};
+
+struct dma_test_task {
+	struct spdk_bdev_desc *desc;
+	struct spdk_io_channel *channel;
+	bool is_draining;
+	struct dma_test_req *reqs;
+	uint32_t reqs_inflight;
+
+	struct spdk_thread *thread;
+	struct spdk_poller *stop_poller;
+
+	TAILQ_ENTRY(dma_test_task) link;
+
+};
+
+TAILQ_HEAD(, dma_test_task) g_tasks = TAILQ_HEAD_INITIALIZER(g_tasks);
+
+/* User's input */
 static char *g_bdev_name;
+static const char *g_rw_mode_str;
+struct spdk_thread *g_main_thread;
+static int g_rw_percentage = -1;
+static uint32_t g_queue_depth;
+static uint32_t g_io_size;
+static uint32_t g_run_time_sec;
+static bool g_is_random;
 
-static int
-parse_arg(int ch, char *arg)
-{
-	if (ch == 'b') {
-		g_bdev_name = optarg;
-	} else {
-		fprintf(stderr, "Unknown option %c\n", ch);
-		return 1;
-	}
-	return 0;
-}
-
-static void
-print_usage(void)
-{
-	printf(" -b <bdev>                bdev name for test\n");
-}
+static struct spdk_memory_domain *g_domain;
+static uint64_t g_num_blocks_per_io;
+static uint64_t g_local_barrier;
+static bool g_shutdown;
 
 static void
 dma_test_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
@@ -190,24 +210,47 @@ dma_test_write_completed(struct spdk_bdev_io *bdev_io, bool success, void *cb_ar
 	}
 }
 
+static void
+dma_test_drain_task(void *ctx)
+{
+	struct dma_test_task *task = ctx;
+
+	spdk_poller_unregister(&task->stop_poller);
+	task->is_draining = true;
+}
+
+static void
+dma_test_shutdown_cb(void)
+{
+	struct dma_test_task *task;
+
+	g_shutdown = true;
+
+	TAILQ_FOREACH(task, &g_tasks, link) {
+		spdk_thread_send_msg(task->thread, dma_test_drain_task, task);
+	}
+
+}
+
 static bool
-dma_test_check_bdev_supports_rdma_memory_domain(struct dma_test_ctx *ctx)
+dma_test_check_bdev_supports_rdma_memory_domain(struct spdk_bdev *bdev)
 {
 	struct spdk_memory_domain **bdev_domains;
 	int bdev_domains_count, bdev_domains_count_tmp, i;
 	bool rdma_domain_supported = false;
 
-	bdev_domains_count = spdk_bdev_get_memory_domains(spdk_bdev_desc_get_bdev(ctx->desc), NULL, 0);
+	bdev_domains_count = spdk_bdev_get_memory_domains(bdev, NULL, 0);
 
 	if (bdev_domains_count < 0) {
 		fprintf(stderr, "Failed to get bdev memory domains count, rc %d\n", bdev_domains_count);
 		return false;
 	} else if (bdev_domains_count == 0) {
-		fprintf(stderr, "bdev %s doesn't support any memory domains\n", ctx->bdev_name);
+		fprintf(stderr, "bdev %s doesn't support any memory domains\n", spdk_bdev_get_name(bdev));
 		return false;
 	}
 
-	fprintf(stdout, "bdev %s reports %d memory domains\n", ctx->bdev_name, bdev_domains_count);
+	fprintf(stdout, "bdev %s reports %d memory domains\n", spdk_bdev_get_name(bdev),
+		bdev_domains_count);
 
 	bdev_domains = calloc((size_t)bdev_domains_count, sizeof(*bdev_domains));
 	if (!bdev_domains) {
@@ -215,8 +258,7 @@ dma_test_check_bdev_supports_rdma_memory_domain(struct dma_test_ctx *ctx)
 		return false;
 	}
 
-	bdev_domains_count_tmp = spdk_bdev_get_memory_domains(spdk_bdev_desc_get_bdev(ctx->desc),
-				 bdev_domains, bdev_domains_count);
+	bdev_domains_count_tmp = spdk_bdev_get_memory_domains(bdev, bdev_domains, bdev_domains_count);
 	if (bdev_domains_count_tmp != bdev_domains_count) {
 		fprintf(stderr, "Unexpected bdev domains return value %d\n", bdev_domains_count_tmp);
 		return false;
@@ -231,94 +273,211 @@ dma_test_check_bdev_supports_rdma_memory_domain(struct dma_test_ctx *ctx)
 		}
 	}
 
-	fprintf(stdout, "bdev %s %s RDMA memory domain\n", ctx->bdev_name,
+	fprintf(stdout, "bdev %s %s RDMA memory domain\n", spdk_bdev_get_name(bdev),
 		rdma_domain_supported ? "supports" : "doesn't support");
 	free(bdev_domains);
 
 	return rdma_domain_supported;
 }
 
-static void
-dma_test_run(void *arg)
+static int
+allocate_task(uint32_t core)
 {
-	struct dma_test_ctx *ctx = arg;
+	char thread_name[32];
+	struct spdk_cpuset cpu_set;
+	uint32_t i;
+	struct dma_test_task *task;
 
-	struct iovec iov;
+	task = calloc(1, sizeof(*task));
+	if (!task) {
+		fprintf(stderr, "Failed to allocate per thread task\n");
+		return -ENOMEM;
+	}
+
+	TAILQ_INSERT_TAIL(&g_tasks, task, link);
+
+	task->reqs = calloc(g_queue_depth, sizeof(task->reqs));
+	if (!task->reqs) {
+		fprintf(stderr, "Failed to allocate requests\n");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < g_queue_depth; i++) {
+		task->reqs[i].task = task;
+		task->reqs[i].buffer = malloc(g_io_size);
+		if (!task->reqs[i].buffer) {
+			fprintf(stderr, "Failed to allocate request data buffer\n");
+			return -ENOMEM;
+		}
+		memset(task->reqs[i].buffer, 0xc, g_io_size);
+	}
+
+	snprintf(thread_name, 32, "task_%u", core);
+	spdk_cpuset_zero(&cpu_set);
+	spdk_cpuset_set_cpu(&cpu_set, core, true);
+	task->thread = spdk_thread_create(thread_name, &cpu_set);
+	if (!task->thread) {
+		fprintf(stderr, "Failed to create SPDK thread\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void
+destroy_tasks(void)
+{
+	struct dma_test_task *task, *tmp_task;
+
+	TAILQ_FOREACH_SAFE(task, &g_tasks, link, tmp_task) {
+		TAILQ_REMOVE(&g_tasks, task, link);
+		free(task);
+	}
+}
+
+static void
+dma_test_start(void *arg)
+{
+	uint32_t i;
 	int rc;
+	struct spdk_bdev *bdev;
 
-	/* Test scenario:
-	 * 1. Open bdev, check that it supports RDMA memory domain
-	 * 2. Allocate IO buffer using regular malloc. In that case SPDK NVME_RDMA driver won't create a
-	 * memory region for this IO and won't be able to find memory keys
-	 * 3. Create dma memory domain which translation callback creates a memory region and
-	 * returns memory keys to NVME RDMA driver
-	 * 4. Do the same for read operation, compare buffers when done */
-
-	/* Prepare bdev */
-	rc = spdk_bdev_open_ext(ctx->bdev_name, true, dma_test_bdev_event_cb, NULL, &ctx->desc);
-	if (rc) {
-		fprintf(stderr, "Failed to open bdev %s\n", ctx->bdev_name);
-		spdk_app_stop(-1);
+	bdev = spdk_bdev_get_by_name(g_bdev_name);
+	if (!bdev) {
+		fprintf(stderr, "Can't find bdev %s\n", g_bdev_name);
+		spdk_app_stop(-ENODEV);
+		return;
+	}
+	if (!dma_test_check_bdev_supports_rdma_memory_domain(bdev)) {
+		spdk_app_stop(-ENODEV);
 		return;
 	}
 
-	ctx->ch = spdk_bdev_get_io_channel(ctx->desc);
-	if (!ctx->ch) {
-		fprintf(stderr, "Failed to get io chanel for bdev %s\n", ctx->bdev_name);
-		spdk_bdev_close(ctx->desc);
-		spdk_app_stop(-1);
-		return;
-	}
-
-	if (!dma_test_check_bdev_supports_rdma_memory_domain(ctx)) {
-		spdk_bdev_close(ctx->desc);
-		spdk_app_stop(-1);
-		return;
-	}
-
-	ctx->num_blocks = DMA_TEST_IO_BUFFER_SIZE / spdk_bdev_get_block_size(spdk_bdev_desc_get_bdev(
-				  ctx->desc));
+	g_main_thread = spdk_get_thread();
+	g_num_blocks_per_io = g_io_size / spdk_bdev_get_block_size(bdev);
+	assert(g_num_blocks_per_io);
 
 	/* Create a memory domain to represent the source memory domain.
 	 * Since we don't actually have a remote memory domain in this test, this will describe memory
 	 * on the local system and the translation to the destination memory domain will be trivial.
 	 * But this at least allows us to demonstrate the flow and test the functionality. */
-	rc = spdk_memory_domain_create(&ctx->memory_domain, SPDK_DMA_DEVICE_TYPE_RDMA, NULL, "test_dma");
-	if (rc) {
-		fprintf(stderr, "Can't create memory domain, rc %d\n", rc);
-		spdk_app_stop(-1);
+	rc = spdk_memory_domain_create(&g_domain, SPDK_DMA_DEVICE_TYPE_RDMA, NULL, "test_dma");
+	if (rc != 0) {
+		spdk_app_stop(rc);
 		return;
 	}
+	spdk_memory_domain_set_translation(g_domain, dma_test_translate_memory_cb);
 
-	spdk_memory_domain_set_translation(ctx->memory_domain, dma_test_translate_memory_cb);
-
-	ctx->write_io_buffer = malloc(DMA_TEST_IO_BUFFER_SIZE);
-	if (!ctx->write_io_buffer) {
-		fprintf(stderr, "IO buffer allocation failed");
-		spdk_app_stop(-1);;
-		return;
+	SPDK_ENV_FOREACH_CORE(i) {
+		rc = allocate_task(i);
+		if (rc) {
+			destroy_tasks();
+			spdk_app_stop(rc);
+			return;
+		}
 	}
-	memset(ctx->write_io_buffer, 0xd, DMA_TEST_IO_BUFFER_SIZE);
+	SPDK_ENV_FOREACH_CORE(i) {
 
-	ctx->read_io_buffer = malloc(DMA_TEST_IO_BUFFER_SIZE);
-	if (!ctx->read_io_buffer) {
-		fprintf(stderr, "IO buffer allocation failed");
-		spdk_app_stop(-1);;
-		return;
+	}
+}
+
+static void
+print_usage(void)
+{
+	printf(" -b <bdev>         bdev name for test\n");
+	printf(" -q <val>          io depth\n");
+	printf(" -o <val>          io size in bytes\n");
+	printf(" -t <val>          run time in seconds\n");
+	printf(" -w <str>          io pattern (read, write, randread, randwrite, randrw)\n");
+	printf(" -M <0-100>        rw percentage (100 for reads, 0 for writes)\n");
+}
+
+static int
+parse_arg(int ch, char *arg)
+{
+	long tmp;
+
+	switch (ch) {
+	case 'q':
+	case 'o':
+	case 't':
+	case 'M':
+		tmp = spdk_strtol(arg, 10);
+		if (tmp < 0) {
+			fprintf(stderr, "Invalid option %c value %s\n", ch, arg);
+			return 1;
+		}
+
+		switch (ch) {
+		case 'q':
+			g_queue_depth = (uint32_t) tmp;
+			break;
+		case 'o':
+			g_io_size = (uint32_t) tmp;
+			break;
+		case 't':
+			g_run_time_sec = (uint32_t) tmp;
+			break;
+		case 'M':
+			g_rw_percentage = (uint32_t) tmp;
+			break;
+		}
+		break;
+	case 'w':
+		g_rw_mode_str = arg;
+		break;
+	case 'b':
+		g_bdev_name = arg;
+		break;
+
+	default:
+		fprintf(stderr, "Unknown option %c\n", ch);
+		return 1;
 	}
 
-	ctx->ext_io_opts.memory_domain = ctx->memory_domain;
-	ctx->ext_io_opts.memory_domain_ctx = ctx;
-	iov.iov_base = ctx->write_io_buffer;
-	iov.iov_len = DMA_TEST_IO_BUFFER_SIZE;
+	return 0;
+}
 
-	fprintf(stdout, "Submitting write IO\n");
-
-	rc = spdk_bdev_writev_blocks_ext(ctx->desc, ctx->ch, &iov, 1, 0, ctx->num_blocks,
-					 dma_test_write_completed, ctx, &ctx->ext_io_opts);
-	if (rc) {
-		fprintf(stderr, "Falied to submit write operation");
-		spdk_app_stop(-1);
+static int
+verify_args(void)
+{
+	if (g_queue_depth == 0) {
+		fprintf(stderr, "queue depth (-q) is not set\n");
+		return 1;
+	}
+	if (g_io_size == 0) {
+		fprintf(stderr, "io size (-o) is not set\n");
+		return 1;
+	}
+	if (g_run_time_sec == 0) {
+		fprintf(stderr, "test run time (-t) is not set\n");
+		return 1;
+	}
+	if (!g_rw_mode_str) {
+		fprintf(stderr, "io pattern (-w) is not set\n");
+		return 1;
+	}
+	if (strncmp(g_rw_mode_str, "rand", 4) == 0) {
+		g_is_random = true;
+		g_rw_mode_str = &g_rw_mode_str[4];
+	}
+	if (strcmp(g_rw_mode_str, "read") == 0 || strcmp(g_rw_mode_str, "write") == 0) {
+		g_rw_percentage = strcmp(g_rw_mode_str, "read") == 0 ? 100 : 0;
+		if (g_rw_percentage > 0) {
+			fprintf(stderr, "Ignoring -M option\n");
+		}
+	} else if (strcmp(g_rw_mode_str, "rw") == 0) {
+		if (g_rw_percentage < 0 || g_rw_percentage > 100) {
+			fprintf(stderr, "Invalid -M value (%d) must be 0..100\n", g_rw_percentage);
+			return 1;
+		}
+	} else {
+		fprintf(stderr, "io pattern (-w) one of [read, write, randread, randwrite, rw, randrw]\n");
+		return 1;
+	}
+	if (!g_bdev_name) {
+		fprintf(stderr, "bdev name (-b) is not set\n");
+		return 1;
 	}
 }
 
@@ -331,19 +490,20 @@ main(int argc, char **argv)
 
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "test_dma";
+	opts.shutdown_cb =
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "b:", NULL, parse_arg, print_usage)) !=
-	    SPDK_APP_PARSE_ARGS_SUCCESS) {
+		if ((rc = spdk_app_parse_args(argc, argv, &opts, "b:q:o:t:w:M:", NULL, parse_arg, print_usage)) !=
+	SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
 
-	if (!g_bdev_name) {
-		fprintf(stderr, "bdev name for test is not set\n");
-		exit(1);
+	if (!verify_args()) {
+		return -1;
 	}
+
 	ctx.bdev_name = g_bdev_name;
 
-	rc = spdk_app_start(&opts, dma_test_run, &ctx);
+	rc = spdk_app_start(&opts, dma_test_start, &ctx);
 
 	dma_test_cleanup(&ctx);
 
