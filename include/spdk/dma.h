@@ -130,10 +130,11 @@ typedef int (*spdk_memory_domain_upload_data_cb)(struct spdk_memory_domain *dst_
 struct spdk_memory_domain_translation_result {
 	/** size of this structure in bytes */
 	size_t size;
-	/** Address of data buffer translated into destination memory domain space */
-	void *addr;
-	/** Size of the data buffer */
-	size_t len;
+	/** Translation results, array of addresses lengths. The implementer of the translation callback is
+	 * responsible for allocating and storing of this array until IO request completes */
+	struct iovec *iov;
+	/** Number of elements in iov */
+	uint32_t iov_count;
 	/** Destination domain passed to translation function */
 	struct spdk_memory_domain *dst_domain;
 	union {

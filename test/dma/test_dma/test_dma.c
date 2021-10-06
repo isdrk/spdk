@@ -73,6 +73,7 @@ struct dma_test_ctx {
 	void *read_io_buffer;
 	struct spdk_bdev_ext_io_opts ext_io_opts;
 	struct ibv_mr *mr;
+	struct iovec iov;
 	uint64_t num_blocks;
 };
 
@@ -94,8 +95,10 @@ dma_test_translate_memory_cb(struct spdk_memory_domain *src_domain, void *src_do
 		return -1;
 	}
 
-	result->len = len;
-	result->addr = addr;
+	ctx->iov.iov_base = addr;
+	ctx->iov.iov_len = len;
+	result->iov = &ctx->iov;
+	result->iov_count = 1;
 	result->rdma.lkey = ctx->mr->lkey;
 	result->rdma.rkey = ctx->mr->rkey;
 	result->dst_domain = dst_domain;

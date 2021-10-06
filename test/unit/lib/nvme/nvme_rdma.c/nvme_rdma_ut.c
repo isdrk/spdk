@@ -1261,8 +1261,11 @@ test_rdma_get_memory_translation(void)
 		.addr = (void *) 0xBAADF00D,
 		.length = 0x100
 	};
+	struct iovec iov;
 	int rc;
 
+	g_memory_translation_translation.iov = &iov;
+	g_memory_translation_translation.iov_count = 1;
 	rqpair.memory_domain = nvme_rdma_get_memory_domain(rqpair.rdma_qp->qp->pd);
 	SPDK_CU_ASSERT_FATAL(rqpair.memory_domain != NULL);
 
