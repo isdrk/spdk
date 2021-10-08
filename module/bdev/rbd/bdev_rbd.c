@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -67,7 +68,7 @@ struct bdev_rbd {
 
 	rbd_image_info_t info;
 	pthread_mutex_t mutex;
-	struct spdk_thread *main_td;
+	struct spdk_thread *construct_td;
 	struct spdk_thread *destruct_td;
 	uint32_t ch_count;
 	struct spdk_io_channel *group_ch;
@@ -547,18 +548,17 @@ bdev_rbd_destruct(void *ctx)
 	struct bdev_rbd *rbd = ctx;
 	struct spdk_thread *td;
 
-	if (rbd->main_td == NULL) {
+	if (rbd->construct_td == NULL) {
 		td = spdk_get_thread();
 	} else {
-		td = rbd->main_td;
+		td = rbd->construct_td;
 	}
-
 	/* Start the destruct operation on the rbd bdev's
-	 * main thread.  This guarantees it will only start
+	 * construct thread.  This guarantees it will only start
 	 * executing after any messages related to channel
 	 * deletions have finished completing.  *Always*
 	 * send a message, even if this function gets called
-	 * from the main thread, in case there are pending
+	 * from the construct thread, in case there are pending
 	 * channel delete messages in flight to this thread.
 	 */
 	assert(rbd->destruct_td == NULL);
@@ -627,14 +627,9 @@ bdev_rbd_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io
 {
 	struct spdk_thread *submit_td = spdk_io_channel_get_thread(ch);
 	struct bdev_rbd_io *rbd_io = (struct bdev_rbd_io *)bdev_io->driver_ctx;
-	struct bdev_rbd *disk = (struct bdev_rbd *)bdev_io->bdev->ctxt;
 
 	rbd_io->submit_td = submit_td;
-	if (disk->main_td != submit_td) {
-		spdk_thread_send_msg(disk->main_td, _bdev_rbd_submit_request, bdev_io);
-	} else {
-		_bdev_rbd_submit_request(bdev_io);
-	}
+	_bdev_rbd_submit_request(bdev_io);
 }
 
 static bool
@@ -656,7 +651,7 @@ static void
 bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 {
 	assert(disk != NULL);
-	assert(disk->main_td == spdk_get_thread());
+	assert(disk->construct_td == spdk_get_thread());
 	assert(disk->ch_count == 0);
 
 	spdk_put_io_channel(disk->group_ch);
@@ -664,7 +659,7 @@ bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 		bdev_rbd_exit(disk->image);
 	}
 
-	disk->main_td = NULL;
+	disk->construct_td = NULL;
 	disk->group_ch = NULL;
 }
 
@@ -706,7 +701,7 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 	ch->disk = disk;
 	pthread_mutex_lock(&disk->mutex);
 	if (disk->ch_count == 0) {
-		assert(disk->main_td == NULL);
+		assert(disk->construct_td == NULL);
 		rc = _bdev_rbd_create_cb(disk);
 		if (rc) {
 			SPDK_ERRLOG("Cannot create channel for disk=%p\n", disk);
@@ -714,7 +709,7 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 			return rc;
 		}
 
-		disk->main_td = spdk_get_thread();
+		disk->construct_td = spdk_get_thread();
 	}
 
 	disk->ch_count++;
@@ -752,13 +747,13 @@ bdev_rbd_destroy_cb(void *io_device, void *ctx_buf)
 	assert(disk->ch_count > 0);
 	disk->ch_count--;
 	if (disk->ch_count == 0) {
-		assert(disk->main_td != NULL);
-		if (disk->main_td != spdk_get_thread()) {
+		assert(disk->construct_td != NULL);
+		if (disk->construct_td != spdk_get_thread()) {
 			/* The final channel was destroyed on a different thread
 			 * than where the first channel was created. Pass a message
-			 * to the main thread to unregister the poller. */
+			 * to the construct thread to unregister the poller. */
 			disk->ch_count++;
-			thread = disk->main_td;
+			thread = disk->construct_td;
 			pthread_mutex_unlock(&disk->mutex);
 			spdk_thread_send_msg(thread, _bdev_rbd_destroy_cb, disk);
 			return;
