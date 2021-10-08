@@ -56,6 +56,11 @@
 
 static int bdev_rbd_count = 0;
 
+struct bdev_rbd_thread {
+	struct spdk_thread *thread;
+	STAILQ_ENTRY(bdev_rbd_thread) link;
+};
+
 struct bdev_rbd {
 	struct spdk_bdev disk;
 	char *rbd_name;
@@ -112,6 +117,9 @@ struct bdev_rbd_cluster {
 static STAILQ_HEAD(, bdev_rbd_cluster) g_map_bdev_rbd_cluster = STAILQ_HEAD_INITIALIZER(
 			g_map_bdev_rbd_cluster);
 static pthread_mutex_t g_map_bdev_rbd_cluster_mutex = PTHREAD_MUTEX_INITIALIZER;
+static STAILQ_HEAD(, bdev_rbd_thread) g_bdev_rbd_threads =
+	STAILQ_HEAD_INITIALIZER(g_bdev_rbd_threads);
+static struct bdev_rbd_thread *g_bdev_rbd_next_thread;
 
 static void
 bdev_rbd_cluster_free(struct bdev_rbd_cluster *entry)
@@ -717,12 +725,14 @@ bdev_rbd_handle(void *arg)
 	return ret;
 }
 
-static int
-_bdev_rbd_create_cb(struct bdev_rbd *disk)
+static void
+_bdev_rbd_create_cb(void *ctx)
 {
 	int ret;
+	struct bdev_rbd *disk = ctx;
 	struct epoll_event event = {};
 
+	pthread_mutex_lock(&disk->mutex);
 	disk->group_ch = spdk_io_channel_get_ctx(spdk_get_io_channel(&rbd_if));
 	assert(disk->group_ch != NULL);
 	event.events = EPOLLIN;
@@ -751,11 +761,14 @@ _bdev_rbd_create_cb(struct bdev_rbd *disk)
 		goto err;
 	}
 
-	return 0;
+	pthread_mutex_unlock(&disk->mutex);
+	return;
 
 err:
+	/* @todo: get_io_channel succeeded but this one failed */
 	bdev_rbd_free_channel_resources(disk);
-	return -1;
+	pthread_mutex_unlock(&disk->mutex);
+	return;
 }
 
 static int
@@ -763,24 +776,31 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 {
 	struct bdev_rbd_io_channel *ch = ctx_buf;
 	struct bdev_rbd *disk = io_device;
-	int rc;
 
 	ch->disk = disk;
 	pthread_mutex_lock(&disk->mutex);
 	if (disk->ch_count == 0) {
 		assert(disk->main_td == NULL);
-		rc = _bdev_rbd_create_cb(disk);
-		if (rc) {
-			SPDK_ERRLOG("Cannot create channel for disk=%p\n", disk);
-			pthread_mutex_unlock(&disk->mutex);
-			return rc;
+		assert(g_bdev_rbd_next_thread != NULL);
+		disk->main_td = g_bdev_rbd_next_thread->thread;
+		g_bdev_rbd_next_thread = STAILQ_NEXT(g_bdev_rbd_next_thread, link);
+		if (g_bdev_rbd_next_thread == NULL) {
+			g_bdev_rbd_next_thread = STAILQ_FIRST(&g_bdev_rbd_threads);
 		}
 
-		disk->main_td = spdk_get_thread();
+		SPDK_NOTICELOG("Assigned rbd bdev %s to thread %s\n",
+			       disk->rbd_name,
+			       spdk_thread_get_name(disk->main_td));
+
+		spdk_thread_send_msg(disk->main_td, _bdev_rbd_create_cb, disk);
+		/* @todo: bdev auto examine funcionality may send IOs before disk is fully created */
 	}
 
 	disk->ch_count++;
 	pthread_mutex_unlock(&disk->mutex);
+	SPDK_NOTICELOG("Created IO channel for rbd bdev %s on thread %s\n",
+		       disk->rbd_name,
+		       spdk_thread_get_name(spdk_get_thread()));
 
 	return 0;
 }
@@ -1390,6 +1410,32 @@ bdev_rbd_group_destroy_cb(void *io_device, void *ctx_buf)
 static int
 bdev_rbd_library_init(void)
 {
+	uint32_t i;
+	char thread_name[32];
+	struct bdev_rbd_thread *rbd_thread;
+
+	SPDK_ENV_FOREACH_CORE(i) {
+		snprintf(thread_name, sizeof(thread_name), "bdev_rbd_thread_%u", i);
+
+		rbd_thread = calloc(1, sizeof(struct bdev_rbd_thread));
+		if (!rbd_thread) {
+			SPDK_ERRLOG("Failed to allocate thread for bdev_rbd on core %u\n", i);
+			return -1;
+		}
+
+		rbd_thread->thread = spdk_thread_create(thread_name, NULL);
+		if (!rbd_thread->thread) {
+			SPDK_ERRLOG("Failed to create thread for bdev_rbd on core %u\n", i);
+			return -1;
+		}
+
+		STAILQ_INSERT_TAIL(&g_bdev_rbd_threads, rbd_thread, link);
+		SPDK_NOTICELOG("Added thread %s to bdev_rbd threads, core %u\n",
+			       spdk_thread_get_name(rbd_thread->thread), i);
+	}
+
+	g_bdev_rbd_next_thread = STAILQ_FIRST(&g_bdev_rbd_threads);
+
 	spdk_io_device_register(&rbd_if, bdev_rbd_group_create_cb, bdev_rbd_group_destroy_cb,
 				sizeof(struct bdev_rbd_group_channel), "bdev_rbd_poll_groups");
 
@@ -1399,6 +1445,15 @@ bdev_rbd_library_init(void)
 static void
 bdev_rbd_library_fini(void)
 {
+	struct bdev_rbd_thread *rbd_thread;
+
+	while (rbd_thread = STAILQ_FIRST(&g_bdev_rbd_threads)) {
+		STAILQ_REMOVE_HEAD(&g_bdev_rbd_threads, link);
+		SPDK_NOTICELOG("Stopping rbd bdev thread %s\n", spdk_thread_get_name(rbd_thread->thread));
+		spdk_thread_exit(rbd_thread->thread);
+		free(rbd_thread);
+	}
+
 	spdk_io_device_unregister(&rbd_if, NULL);
 }
 
