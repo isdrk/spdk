@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -51,6 +52,11 @@
 
 static int bdev_rbd_count = 0;
 
+struct bdev_rbd_thread {
+	struct spdk_thread *thread;
+	STAILQ_ENTRY(bdev_rbd_thread) link;
+};
+
 struct bdev_rbd {
 	struct spdk_bdev disk;
 	char *rbd_name;
@@ -68,6 +74,7 @@ struct bdev_rbd {
 	rbd_image_info_t info;
 	pthread_mutex_t mutex;
 	struct spdk_thread *main_td;
+	struct spdk_thread *construct_td;
 	struct spdk_thread *destruct_td;
 	uint32_t ch_count;
 	struct spdk_io_channel *group_ch;
@@ -101,6 +108,9 @@ struct bdev_rbd_cluster {
 static STAILQ_HEAD(, bdev_rbd_cluster) g_map_bdev_rbd_cluster = STAILQ_HEAD_INITIALIZER(
 			g_map_bdev_rbd_cluster);
 static pthread_mutex_t g_map_bdev_rbd_cluster_mutex = PTHREAD_MUTEX_INITIALIZER;
+static STAILQ_HEAD(, bdev_rbd_thread) g_bdev_rbd_threads =
+	STAILQ_HEAD_INITIALIZER(g_bdev_rbd_threads);
+static struct bdev_rbd_thread *g_bdev_rbd_next_thread;
 
 static void
 bdev_rbd_cluster_free(struct bdev_rbd_cluster *entry)
@@ -547,18 +557,17 @@ bdev_rbd_destruct(void *ctx)
 	struct bdev_rbd *rbd = ctx;
 	struct spdk_thread *td;
 
-	if (rbd->main_td == NULL) {
+	if (rbd->construct_td == NULL) {
 		td = spdk_get_thread();
 	} else {
-		td = rbd->main_td;
+		td = rbd->construct_td;
 	}
-
 	/* Start the destruct operation on the rbd bdev's
-	 * main thread.  This guarantees it will only start
+	 * construct thread.  This guarantees it will only start
 	 * executing after any messages related to channel
 	 * deletions have finished completing.  *Always*
 	 * send a message, even if this function gets called
-	 * from the main thread, in case there are pending
+	 * from the construct thread, in case there are pending
 	 * channel delete messages in flight to this thread.
 	 */
 	assert(rbd->destruct_td == NULL);
@@ -656,7 +665,7 @@ static void
 bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 {
 	assert(disk != NULL);
-	assert(disk->main_td == spdk_get_thread());
+	assert(disk->construct_td == spdk_get_thread());
 	assert(disk->ch_count == 0);
 
 	spdk_put_io_channel(disk->group_ch);
@@ -664,6 +673,7 @@ bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 		bdev_rbd_exit(disk->image);
 	}
 
+	disk->construct_td = NULL;
 	disk->main_td = NULL;
 	disk->group_ch = NULL;
 }
@@ -707,6 +717,7 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 	pthread_mutex_lock(&disk->mutex);
 	if (disk->ch_count == 0) {
 		assert(disk->main_td == NULL);
+		assert(disk->construct_td == NULL);
 		rc = _bdev_rbd_create_cb(disk);
 		if (rc) {
 			SPDK_ERRLOG("Cannot create channel for disk=%p\n", disk);
@@ -714,7 +725,13 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 			return rc;
 		}
 
-		disk->main_td = spdk_get_thread();
+		assert(g_bdev_rbd_next_thread != NULL);
+		disk->main_td = g_bdev_rbd_next_thread->thread;
+		g_bdev_rbd_next_thread = STAILQ_NEXT(g_bdev_rbd_next_thread, link);
+		if (g_bdev_rbd_next_thread == NULL) {
+			g_bdev_rbd_next_thread = STAILQ_FIRST(&g_bdev_rbd_threads);
+		}
+		disk->construct_td = spdk_get_thread();
 	}
 
 	disk->ch_count++;
@@ -752,13 +769,13 @@ bdev_rbd_destroy_cb(void *io_device, void *ctx_buf)
 	assert(disk->ch_count > 0);
 	disk->ch_count--;
 	if (disk->ch_count == 0) {
-		assert(disk->main_td != NULL);
-		if (disk->main_td != spdk_get_thread()) {
+		assert(disk->construct_td != NULL);
+		if (disk->construct_td != spdk_get_thread()) {
 			/* The final channel was destroyed on a different thread
 			 * than where the first channel was created. Pass a message
-			 * to the main thread to unregister the poller. */
+			 * to the construct thread to unregister the poller. */
 			disk->ch_count++;
-			thread = disk->main_td;
+			thread = disk->construct_td;
 			pthread_mutex_unlock(&disk->mutex);
 			spdk_thread_send_msg(thread, _bdev_rbd_destroy_cb, disk);
 			return;
@@ -1301,6 +1318,30 @@ bdev_rbd_group_destroy_cb(void *io_device, void *ctx_buf)
 static int
 bdev_rbd_library_init(void)
 {
+	uint32_t i;
+	char thread_name[32];
+	struct bdev_rbd_thread *rbd_thread;
+
+	SPDK_ENV_FOREACH_CORE(i) {
+		snprintf(thread_name, sizeof(thread_name), "bdev_rbd_thread_%u", i);
+
+		rbd_thread = calloc(1, sizeof(struct bdev_rbd_thread));
+		if (!rbd_thread) {
+			SPDK_ERRLOG("Failed to allocate thread for bdev_rbd on core %u\n", i);
+			return -1;
+		}
+
+		rbd_thread->thread = spdk_thread_create(thread_name, NULL);
+		if (!rbd_thread->thread) {
+			SPDK_ERRLOG("Failed to create thread for bdev_rbd on core %u\n", i);
+			return -1;
+		}
+
+		STAILQ_INSERT_TAIL(&g_bdev_rbd_threads, rbd_thread, link);
+	}
+
+	g_bdev_rbd_next_thread = STAILQ_FIRST(&g_bdev_rbd_threads);
+
 	spdk_io_device_register(&rbd_if, bdev_rbd_group_create_cb, bdev_rbd_group_destroy_cb,
 				0, "bdev_rbd_poll_groups");
 	return 0;
@@ -1309,6 +1350,17 @@ bdev_rbd_library_init(void)
 static void
 bdev_rbd_library_fini(void)
 {
+	struct bdev_rbd_thread *rbd_thread;
+	struct spdk_thread *orig_thread = spdk_get_thread();
+
+	while ((rbd_thread = STAILQ_FIRST(&g_bdev_rbd_threads)) != NULL) {
+		STAILQ_REMOVE_HEAD(&g_bdev_rbd_threads, link);
+		spdk_set_thread(rbd_thread->thread);
+		spdk_thread_exit(rbd_thread->thread);
+		free(rbd_thread);
+	}
+
+	spdk_set_thread(orig_thread);
 	spdk_io_device_unregister(&rbd_if, NULL);
 }
 
