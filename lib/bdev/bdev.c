@@ -61,7 +61,7 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 
 #define SPDK_BDEV_IO_POOL_SIZE			(64 * 1024 - 1)
 #define SPDK_BDEV_IO_CACHE_SIZE			256
-#define SPDK_BDEV_AUTO_EXAMINE			true
+#define SPDK_BDEV_AUTO_EXAMINE			false
 #define BUF_SMALL_POOL_SIZE			8191
 #define BUF_LARGE_POOL_SIZE			1023
 #define NOMEM_THRESHOLD_COUNT			8
@@ -467,7 +467,7 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 
 	SET_FIELD(bdev_io_pool_size);
 	SET_FIELD(bdev_io_cache_size);
-	SET_FIELD(bdev_auto_examine);
+	/* SET_FIELD(bdev_auto_examine); */
 	SET_FIELD(small_buf_pool_size);
 	SET_FIELD(large_buf_pool_size);
 
