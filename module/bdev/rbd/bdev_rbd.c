@@ -542,25 +542,19 @@ static int
 bdev_rbd_destruct(void *ctx)
 {
 	struct bdev_rbd *rbd = ctx;
-	struct spdk_thread *td;
 
-	if (rbd->main_td == NULL) {
-		td = spdk_get_thread();
-	} else {
-		td = rbd->main_td;
+	if (rbd->destruct_td == NULL) {
+		rbd->destruct_td = spdk_get_thread();
 	}
-
 	/* Start the destruct operation on the rbd bdev's
-	 * main thread.  This guarantees it will only start
+	 * destruct thread.  This guarantees it will only start
 	 * executing after any messages related to channel
 	 * deletions have finished completing.  *Always*
 	 * send a message, even if this function gets called
-	 * from the main thread, in case there are pending
+	 * from the destruct thread, in case there are pending
 	 * channel delete messages in flight to this thread.
 	 */
-	assert(rbd->destruct_td == NULL);
-	rbd->destruct_td = td;
-	spdk_thread_send_msg(td, _bdev_rbd_destruct, rbd);
+	spdk_thread_send_msg(rbd->destruct_td, _bdev_rbd_destruct, rbd);
 
 	/* Return 1 to indicate the destruct path is asynchronous. */
 	return 1;
@@ -688,7 +682,7 @@ bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 	int rc;
 
 	assert(disk != NULL);
-	assert(disk->main_td == spdk_get_thread());
+	assert(disk->destruct_td == spdk_get_thread());
 	assert(disk->ch_count == 0);
 	assert(disk->group_ch != NULL);
 	rc = epoll_ctl(disk->group_ch->epoll_fd, EPOLL_CTL_DEL,
@@ -707,6 +701,7 @@ bdev_rbd_free_channel_resources(struct bdev_rbd *disk)
 		close(disk->pfd);
 	}
 
+	disk->destruct_td = NULL;
 	disk->main_td = NULL;
 	disk->group_ch = NULL;
 }
@@ -725,14 +720,12 @@ bdev_rbd_handle(void *arg)
 	return ret;
 }
 
-static void
-_bdev_rbd_create_cb(void *ctx)
+static int
+_bdev_rbd_create_cb(struct bdev_rbd *disk)
 {
 	int ret;
-	struct bdev_rbd *disk = ctx;
 	struct epoll_event event = {};
 
-	pthread_mutex_lock(&disk->mutex);
 	disk->group_ch = spdk_io_channel_get_ctx(spdk_get_io_channel(&rbd_if));
 	assert(disk->group_ch != NULL);
 	event.events = EPOLLIN;
@@ -761,14 +754,11 @@ _bdev_rbd_create_cb(void *ctx)
 		goto err;
 	}
 
-	pthread_mutex_unlock(&disk->mutex);
-	return;
+	return 0;
 
 err:
-	/* @todo: get_io_channel succeeded but this one failed */
 	bdev_rbd_free_channel_resources(disk);
-	pthread_mutex_unlock(&disk->mutex);
-	return;
+	return -1;
 }
 
 static int
@@ -776,11 +766,23 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 {
 	struct bdev_rbd_io_channel *ch = ctx_buf;
 	struct bdev_rbd *disk = io_device;
+	int rc;
 
 	ch->disk = disk;
 	pthread_mutex_lock(&disk->mutex);
 	if (disk->ch_count == 0) {
 		assert(disk->main_td == NULL);
+		assert(disk->destruct_td == NULL);
+		rc = _bdev_rbd_create_cb(disk);
+		if (rc) {
+			SPDK_ERRLOG("Cannot create channel for disk=%p\n", disk);
+			pthread_mutex_unlock(&disk->mutex);
+			return rc;
+		}
+
+		/* The thread creating rbd bdev is used as destruct thread. */
+		disk->destruct_td = spdk_get_thread();
+
 		assert(g_bdev_rbd_next_thread != NULL);
 		disk->main_td = g_bdev_rbd_next_thread->thread;
 		g_bdev_rbd_next_thread = STAILQ_NEXT(g_bdev_rbd_next_thread, link);
@@ -791,9 +793,6 @@ bdev_rbd_create_cb(void *io_device, void *ctx_buf)
 		SPDK_NOTICELOG("Assigned rbd bdev %s to thread %s\n",
 			       disk->rbd_name,
 			       spdk_thread_get_name(disk->main_td));
-
-		spdk_thread_send_msg(disk->main_td, _bdev_rbd_create_cb, disk);
-		/* @todo: bdev auto examine funcionality may send IOs before disk is fully created */
 	}
 
 	disk->ch_count++;
@@ -834,13 +833,13 @@ bdev_rbd_destroy_cb(void *io_device, void *ctx_buf)
 	assert(disk->ch_count > 0);
 	disk->ch_count--;
 	if (disk->ch_count == 0) {
-		assert(disk->main_td != NULL);
-		if (disk->main_td != spdk_get_thread()) {
+		assert(disk->destruct_td != NULL);
+		if (disk->destruct_td != spdk_get_thread()) {
 			/* The final channel was destroyed on a different thread
 			 * than where the first channel was created. Pass a message
 			 * to the main thread to unregister the poller. */
 			disk->ch_count++;
-			thread = disk->main_td;
+			thread = disk->destruct_td;
 			pthread_mutex_unlock(&disk->mutex);
 			spdk_thread_send_msg(thread, _bdev_rbd_destroy_cb, disk);
 			return;
