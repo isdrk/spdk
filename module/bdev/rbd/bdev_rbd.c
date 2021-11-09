@@ -1445,14 +1445,18 @@ static void
 bdev_rbd_library_fini(void)
 {
 	struct bdev_rbd_thread *rbd_thread;
+	struct spdk_thread *orig_thread = spdk_get_thread();
 
 	while (rbd_thread = STAILQ_FIRST(&g_bdev_rbd_threads)) {
 		STAILQ_REMOVE_HEAD(&g_bdev_rbd_threads, link);
 		SPDK_NOTICELOG("Stopping rbd bdev thread %s\n", spdk_thread_get_name(rbd_thread->thread));
+		spdk_set_thread(rbd_thread->thread);
 		spdk_thread_exit(rbd_thread->thread);
+		spdk_set_thread(NULL);
 		free(rbd_thread);
 	}
 
+	spdk_set_thread(orig_thread);
 	spdk_io_device_unregister(&rbd_if, NULL);
 }
 
