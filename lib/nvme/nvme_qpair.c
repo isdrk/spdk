@@ -721,8 +721,8 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 	if (spdk_unlikely(qpair->ctrlr->is_failed)) {
 		if (qpair->ctrlr->is_removed) {
 			nvme_qpair_set_state(qpair, NVME_QPAIR_DESTROYING);
-			nvme_qpair_abort_all_queued_reqs(qpair, 1 /* Do not retry */);
-			nvme_transport_qpair_abort_reqs(qpair, 1);
+			nvme_qpair_abort_all_queued_reqs(qpair, 0);
+			nvme_transport_qpair_abort_reqs(qpair, 0);
 		}
 		return -ENXIO;
 	}
