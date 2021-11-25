@@ -2788,6 +2788,8 @@ io_queue_requests          | Optional | number      | The number of requests all
 delay_cmd_submit           | Optional | boolean     | Enable delaying NVMe command submission to allow batching of multiple commands. Default: `true`.
 transport_retry_count      | Optional | number      | The number of attempts per I/O in the transport layer before an I/O fails.
 bdev_retry_count           | Optional | number      | The number of attempts per I/O in the bdev layer before an I/O fails. -1 means infinite retries.
+path_loss_timeout_sec      | Optional | number      | Time to wait until path is recovered before deleting path.  -1 means infinite reconnects. 0 means no reconnect.
+reconnect_delay_sec        | Optional | number      | Time to delay a reconnect trial. 0 means no reconnect.
 
 #### Example
 

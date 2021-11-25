@@ -468,7 +468,9 @@ if __name__ == "__main__":
                                        io_queue_requests=args.io_queue_requests,
                                        delay_cmd_submit=args.delay_cmd_submit,
                                        transport_retry_count=args.transport_retry_count,
-                                       bdev_retry_count=args.bdev_retry_count)
+                                       bdev_retry_count=args.bdev_retry_count,
+                                       path_loss_timeout_sec=args.path_loss_timeout_sec,
+                                       reconnect_delay_sec=args.reconnect_delay_sec)
 
     p = subparsers.add_parser('bdev_nvme_set_options', aliases=['set_bdev_nvme_options'],
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -503,6 +505,12 @@ if __name__ == "__main__":
                    help='the number of attempts per I/O in the transport layer when an I/O fails.', type=int)
     p.add_argument('-r', '--bdev-retry-count',
                    help='the number of attempts per I/O in the bdev layer when an I/O fails. -1 means infinite retries.', type=int)
+    p.add_argument('-b', '--path-loss-timeout-sec',
+                   help="""Time to wait until path is recovered before deleting the path.
+                   -1 means infinite reconnect retries. 0 means no reconnect retry.""",
+                   type=int)
+    p.add_argument('-e', '--reconnect-delay-sec',
+                   help='Time to delay a reconnect trial.', type=int)
 
     p.set_defaults(func=bdev_nvme_set_options)
 

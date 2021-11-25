@@ -125,6 +125,9 @@ struct nvme_ctrlr {
 	struct spdk_poller			*reset_detach_poller;
 	struct spdk_nvme_detach_ctx		*detach_ctx;
 
+	struct spdk_poller			*reconnect_timer;
+	uint64_t				reconnect_start_tsc;
+
 	/** linked list pointer for device list */
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
 	struct nvme_bdev_ctrlr			*nbdev_ctrlr;
@@ -238,6 +241,8 @@ struct spdk_bdev_nvme_opts {
 	bool delay_cmd_submit;
 	/* The number of attempts per I/O in the bdev layer before an I/O fails. */
 	int32_t bdev_retry_count;
+	int32_t path_loss_timeout_sec;
+	uint32_t reconnect_delay_sec;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);
