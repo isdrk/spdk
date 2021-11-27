@@ -92,6 +92,7 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_options_decoders[] = 
 	{"bdev_retry_count", offsetof(struct spdk_bdev_nvme_opts, bdev_retry_count), spdk_json_decode_int32, true},
 	{"path_loss_timeout_sec", offsetof(struct spdk_bdev_nvme_opts, path_loss_timeout_sec), spdk_json_decode_int32, true},
 	{"reconnect_delay_sec", offsetof(struct spdk_bdev_nvme_opts, reconnect_delay_sec), spdk_json_decode_uint32, true},
+	{"path_fail_timeout_sec", offsetof(struct spdk_bdev_nvme_opts, path_fail_timeout_sec), spdk_json_decode_uint32, true},
 };
 
 static void

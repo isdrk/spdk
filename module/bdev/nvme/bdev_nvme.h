@@ -106,6 +106,7 @@ struct nvme_ctrlr {
 	uint32_t				resetting : 1;
 	uint32_t				destruct : 1;
 	uint32_t				ana_log_page_updating : 1;
+	uint32_t				reconnect_failed : 1;
 	/**
 	 * PI check flags. This flags is set to NVMe controllers created only
 	 * through bdev_nvme_attach_controller RPC or .INI config file. Hot added
@@ -243,6 +244,7 @@ struct spdk_bdev_nvme_opts {
 	int32_t bdev_retry_count;
 	int32_t path_loss_timeout_sec;
 	uint32_t reconnect_delay_sec;
+	uint32_t path_fail_timeout_sec;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);

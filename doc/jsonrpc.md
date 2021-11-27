@@ -2790,6 +2790,7 @@ transport_retry_count      | Optional | number      | The number of attempts per
 bdev_retry_count           | Optional | number      | The number of attempts per I/O in the bdev layer before an I/O fails. -1 means infinite retries.
 path_loss_timeout_sec      | Optional | number      | Time to wait until path is recovered before deleting path.  -1 means infinite reconnects. 0 means no reconnect.
 reconnect_delay_sec        | Optional | number      | Time to delay a reconnect trial. 0 means no reconnect.
+path_fail_timeout_sec      | Optional | number      | Time to wait until path is recovered before failing I/O to the path. 0 means no such timeout.
 
 #### Example
 

@@ -430,7 +430,7 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
                           low_priority_weight=None, medium_priority_weight=None, high_priority_weight=None,
                           nvme_adminq_poll_period_us=None, nvme_ioq_poll_period_us=None, io_queue_requests=None,
                           delay_cmd_submit=None, transport_retry_count=None, bdev_retry_count=None,
-                          path_loss_timeout_sec=None, reconnect_delay_sec=None):
+                          path_loss_timeout_sec=None, reconnect_delay_sec=None, path_fail_timeout_sec=None):
     """Set options for the bdev nvme. This is startup command.
 
     Args:
@@ -452,6 +452,8 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         path_loss_timeout_sec: Time to wait until path is recovered before deleting the path.
         -1 means infinite reconnect retries. 0 means no reconnect retry. (optional)
         reconnect_delay_sec: Time to delay a reconnect trial. (optional)
+        path_fail_timeout_sec: Time to wait until path is recovered before failing I/O to the path.
+        0 means no such timeout. (optional)
     """
     params = {}
 
@@ -506,6 +508,9 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
 
     if reconnect_delay_sec is not None:
         params['reconnect_delay_sec'] = reconnect_delay_sec
+
+    if path_fail_timeout_sec is not None:
+        params['path_fail_timeout_sec'] = path_fail_timeout_sec
 
     return client.call('bdev_nvme_set_options', params)
 

@@ -147,6 +147,7 @@ static struct spdk_bdev_nvme_opts g_opts = {
 	.bdev_retry_count = 0,
 	.path_loss_timeout_sec = 0,
 	.reconnect_delay_sec = 0,
+	.path_fail_timeout_sec = 0,
 };
 
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
@@ -748,6 +749,10 @@ nvme_io_path_is_failed(struct nvme_io_path *io_path)
 		return true;
 	}
 
+	if (nvme_ctrlr->reconnect_failed) {
+		return true;
+	}
+
 	/* In a full reset sequence, ctrlr is set to unfailed but it is after
 	 * destroying all qpairs. Ctrlr may be still failed even after starting
 	 * a full reset sequence. Hence we check the resetting flag first.
@@ -1316,11 +1321,32 @@ bdev_nvme_check_path_loss_timeout(struct nvme_ctrlr *nvme_ctrlr)
 	}
 }
 
+static bool
+bdev_nvme_check_path_fail_timeout(struct nvme_ctrlr *nvme_ctrlr)
+{
+	uint32_t elapsed;
+
+	if (g_opts.path_fail_timeout_sec == 0) {
+		return false;
+	}
+
+	elapsed = (spdk_get_ticks() - nvme_ctrlr->reconnect_start_tsc) / spdk_get_ticks_hz();
+	if (elapsed >= g_opts.path_fail_timeout_sec) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
 static int bdev_nvme_reconnect_ctrlr(void *ctx);
 
 static bool
 bdev_nvme_delete_or_reconnect(struct nvme_ctrlr *nvme_ctrlr)
 {
+	if (bdev_nvme_check_path_fail_timeout(nvme_ctrlr)) {
+		nvme_ctrlr->reconnect_failed = true;
+	}
+
 	if (bdev_nvme_check_path_loss_timeout(nvme_ctrlr)) {
 		return true;
 	}
@@ -1334,6 +1360,7 @@ bdev_nvme_delete_or_reconnect(struct nvme_ctrlr *nvme_ctrlr)
 	nvme_ctrlr->reconnect_timer = SPDK_POLLER_REGISTER(bdev_nvme_reconnect_ctrlr,
 				      nvme_ctrlr,
 				      g_opts.reconnect_delay_sec * SPDK_SEC_TO_USEC);
+
 	return false;
 }
 
@@ -1375,6 +1402,7 @@ _bdev_nvme_reset_complete(struct spdk_io_channel_iter *i, int status)
 		complete_pending_destruct = true;
 	} else if (success || g_opts.path_loss_timeout_sec == 0) {
 		nvme_ctrlr->reconnect_start_tsc = 0;
+		nvme_ctrlr->reconnect_failed = false;
 	} else {
 		destruct = bdev_nvme_delete_or_reconnect(nvme_ctrlr);
 	}
@@ -3537,6 +3565,17 @@ bdev_nvme_validate_opts(const struct spdk_bdev_nvme_opts *opts)
 				     " path_loss_timeout_sec.\n");
 			return -EINVAL;
 		}
+		if (opts->path_fail_timeout_sec > (uint32_t)opts->path_loss_timeout_sec) {
+			SPDK_WARNLOG("Invalid option: path_fail_timeout_sec can't be more than"
+				     " path_loss_timeout_sec.\n");
+			return -EINVAL;
+		}
+		if (opts->path_fail_timeout_sec != 0 &&
+		    opts->reconnect_delay_sec > opts->path_fail_timeout_sec) {
+			SPDK_WARNLOG("Invalid option: reconnect_delay_sec can't be more than"
+				     " path_fail_timeout_sec if path_fail_timeout_sec is not 0.\n");
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -5073,6 +5112,7 @@ bdev_nvme_opts_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_int32(w, "bdev_retry_count", g_opts.bdev_retry_count);
 	spdk_json_write_named_int32(w, "path_loss_timeout_sec", g_opts.path_loss_timeout_sec);
 	spdk_json_write_named_uint32(w, "reconnect_delay_sec", g_opts.reconnect_delay_sec);
+	spdk_json_write_named_uint32(w, "path_fail_timeout_sec", g_opts.path_fail_timeout_sec);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);
