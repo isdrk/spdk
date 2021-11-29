@@ -55,6 +55,8 @@ struct nvme_async_probe_ctx {
 	const char **names;
 	uint32_t count;
 	uint32_t prchk_flags;
+	int32_t ctrlr_loss_timeout_sec;
+	uint32_t reconnect_delay_sec;
 	struct spdk_poller *poller;
 	struct spdk_nvme_transport_id trid;
 	struct spdk_nvme_ctrlr_opts opts;
@@ -124,6 +126,11 @@ struct nvme_ctrlr {
 	/* Poller used to check for reset/detach completion */
 	struct spdk_poller			*reset_detach_poller;
 	struct spdk_nvme_detach_ctx		*detach_ctx;
+
+	struct spdk_poller			*reconnect_timer;
+	uint64_t				reconnect_start_tsc;
+	int32_t					ctrlr_loss_timeout_sec;
+	uint32_t				reconnect_delay_sec;
 
 	/** linked list pointer for device list */
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
@@ -253,7 +260,9 @@ int bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		     spdk_bdev_create_nvme_fn cb_fn,
 		     void *cb_ctx,
 		     struct spdk_nvme_ctrlr_opts *opts,
-		     bool multipath);
+		     bool multipath,
+		     int32_t ctrlr_loss_timeout_sec,
+		     uint32_t reconnect_delay_sec);
 struct spdk_nvme_ctrlr *bdev_nvme_get_ctrlr(struct spdk_bdev *bdev);
 
 /**
