@@ -57,6 +57,7 @@ struct nvme_async_probe_ctx {
 	uint32_t prchk_flags;
 	int32_t ctrlr_loss_timeout_sec;
 	uint32_t reconnect_delay_sec;
+	uint32_t ctrlr_fail_timeout_sec;
 	struct spdk_poller *poller;
 	struct spdk_nvme_transport_id trid;
 	struct spdk_nvme_ctrlr_opts opts;
@@ -108,6 +109,7 @@ struct nvme_ctrlr {
 	uint32_t				resetting : 1;
 	uint32_t				destruct : 1;
 	uint32_t				ana_log_page_updating : 1;
+	uint32_t				reconnect_failed : 1;
 	/**
 	 * PI check flags. This flags is set to NVMe controllers created only
 	 * through bdev_nvme_attach_controller RPC or .INI config file. Hot added
@@ -131,6 +133,7 @@ struct nvme_ctrlr {
 	uint64_t				reconnect_start_tsc;
 	int32_t					ctrlr_loss_timeout_sec;
 	uint32_t				reconnect_delay_sec;
+	uint32_t				ctrlr_fail_timeout_sec;
 
 	/** linked list pointer for device list */
 	TAILQ_ENTRY(nvme_ctrlr)			tailq;
@@ -262,7 +265,8 @@ int bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		     struct spdk_nvme_ctrlr_opts *opts,
 		     bool multipath,
 		     int32_t ctrlr_loss_timeout_sec,
-		     uint32_t reconnect_delay_sec);
+		     uint32_t reconnect_delay_sec,
+		     uint32_t ctrlr_fail_timeout_sec);
 struct spdk_nvme_ctrlr *bdev_nvme_get_ctrlr(struct spdk_bdev *bdev);
 
 /**

@@ -448,6 +448,7 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         delay_cmd_submit: Enable delayed NVMe command submission to allow batching of multiple commands (optional)
         transport_retry_count: The number of attempts per I/O in the transport layer when an I/O fails (optional)
         bdev_retry_count: The number of attempts per I/O in the bdev layer when an I/O fails. -1 means infinite retries. (optional)
+
     """
     params = {}
 
@@ -521,7 +522,8 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
                                 priority=None, subnqn=None, hostnqn=None, hostaddr=None,
                                 hostsvcid=None, prchk_reftag=None, prchk_guard=None,
                                 hdgst=None, ddgst=None, fabrics_timeout=None, multipath=None, num_io_queues=None,
-                                ctrlr_loss_timeout_sec=None, reconnect_delay_sec=None):
+                                ctrlr_loss_timeout_sec=None, reconnect_delay_sec=None,
+                                ctrlr_fail_timeout_sec=None):
     """Construct block device for each NVMe namespace in the attached controller.
 
     Args:
@@ -545,6 +547,8 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
         ctrlr_loss_timeout_sec: Time to wait until ctrlr is reconnected before deleting ctrlr.
         -1 means infinite reconnect retries. 0 means no reconnect retry. (optional)
         reconnect_delay_sec: Time to delay a reconnect trial. (optional)
+        ctrlr_fail_timeout_sec: Time to wait until ctrlr is reconnected before failing I/O to ctrlr.
+        0 means no such timeout. (optional)
 
     Returns:
         Names of created block devices.
@@ -600,6 +604,9 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
 
     if reconnect_delay_sec is not None:
         params['reconnect_delay_sec'] = reconnect_delay_sec
+
+    if ctrlr_fail_timeout_sec is not None:
+        params['ctrlr_fail_timeout_sec'] = ctrlr_fail_timeout_sec
 
     return client.call('bdev_nvme_attach_controller', params)
 

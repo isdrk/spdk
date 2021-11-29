@@ -185,6 +185,7 @@ struct rpc_bdev_nvme_attach_controller {
 	char *multipath;
 	int32_t ctrlr_loss_timeout_sec;
 	uint32_t reconnect_delay_sec;
+	uint32_t ctrlr_fail_timeout_sec;
 	struct spdk_nvme_ctrlr_opts opts;
 };
 
@@ -226,6 +227,7 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_attach_controller_dec
 	{"num_io_queues", offsetof(struct rpc_bdev_nvme_attach_controller, opts.num_io_queues), spdk_json_decode_uint32, true},
 	{"ctrlr_loss_timeout_sec", offsetof(struct rpc_bdev_nvme_attach_controller, ctrlr_loss_timeout_sec), spdk_json_decode_int32, true},
 	{"reconnect_delay_sec", offsetof(struct rpc_bdev_nvme_attach_controller, reconnect_delay_sec), spdk_json_decode_uint32, true},
+	{"ctrlr_fail_timeout_sec", offsetof(struct rpc_bdev_nvme_attach_controller, ctrlr_fail_timeout_sec), spdk_json_decode_uint32, true},
 };
 
 #define NVME_MAX_BDEVS_PER_RPC 128
@@ -412,6 +414,18 @@ rpc_bdev_nvme_attach_controller(struct spdk_jsonrpc_request *request,
 							 "reconnect_delay_sec can't be more than ctrlr_loss_timeout_sec");
 			goto cleanup;
 		}
+		if (ctx->req.ctrlr_fail_timeout_sec > (uint32_t)ctx->req.ctrlr_loss_timeout_sec) {
+			spdk_jsonrpc_send_error_response(request, -EINVAL,
+							 "ctrlr_fail_timeout_sec can't be more than ctrlr_loss_timeout_sec");
+			goto cleanup;
+		}
+		if (ctx->req.ctrlr_fail_timeout_sec != 0 &&
+		    ctx->req.reconnect_delay_sec > ctx->req.ctrlr_fail_timeout_sec) {
+			spdk_jsonrpc_send_error_response(request, -EINVAL,
+							 "reconnect_delay_sec can't be more than ctrlr_fail_timeout_sec"
+							 " if ctrlr_fail_timeout_sec is not 0");
+			goto cleanup;
+		}
 	}
 
 	ctrlr = nvme_ctrlr_get_by_name(ctx->req.name);
@@ -514,7 +528,7 @@ rpc_bdev_nvme_attach_controller(struct spdk_jsonrpc_request *request,
 	rc = bdev_nvme_create(&trid, ctx->req.name, ctx->names, ctx->count, prchk_flags,
 			      rpc_bdev_nvme_attach_controller_done, ctx, &ctx->req.opts,
 			      multipath, ctx->req.ctrlr_loss_timeout_sec,
-			      ctx->req.reconnect_delay_sec);
+			      ctx->req.reconnect_delay_sec, ctx->req.ctrlr_fail_timeout_sec);
 	if (rc) {
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
 		goto cleanup;
