@@ -519,6 +519,49 @@ err:
 }
 
 void
+nvme_transport_ctrlr_disconnect_qpair_async(struct spdk_nvme_ctrlr *ctrlr,
+		struct spdk_nvme_qpair *qpair)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+
+	if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING ||
+	    nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED) {
+		return;
+	}
+
+	nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTING);
+	assert(transport != NULL);
+	if (qpair->poll_group) {
+		nvme_poll_group_disconnect_qpair(qpair);
+	}
+
+	transport->ops.ctrlr_disconnect_qpair_async(ctrlr, qpair);
+}
+
+int
+nvme_transport_ctrlr_disconnect_qpair_poll_async(struct spdk_nvme_ctrlr *ctrlr,
+		struct spdk_nvme_qpair *qpair)
+{
+	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
+	int rc;
+
+	if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING) {
+		return 0;
+	}
+
+	assert(transport != NULL);
+
+	rc = transport->ops.ctrlr_disconnect_qpair_poll_async(ctrlr, qpair);
+	if (rc == 0) {
+		nvme_qpair_abort_all_queued_reqs(qpair, 0);
+		nvme_transport_qpair_abort_reqs(qpair, 0);
+		nvme_qpair_set_state(qpair, NVME_QPAIR_DISCONNECTED);
+	}
+
+	return rc;
+}
+
+void
 nvme_transport_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
 	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);

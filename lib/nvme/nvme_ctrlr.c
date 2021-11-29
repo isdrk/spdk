@@ -578,6 +578,31 @@ nvme_ctrlr_disconnect_qpair(struct spdk_nvme_qpair *qpair)
 	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 }
 
+void
+nvme_ctrlr_disconnect_qpair_async(struct spdk_nvme_qpair *qpair)
+{
+	struct spdk_nvme_ctrlr *ctrlr = qpair->ctrlr;
+
+	assert(ctrlr != NULL);
+	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+	nvme_transport_ctrlr_disconnect_qpair_async(ctrlr, qpair);
+	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+}
+
+int
+nvme_ctrlr_disconnect_qpair_poll_async(struct spdk_nvme_qpair *qpair)
+{
+	struct spdk_nvme_ctrlr *ctrlr = qpair->ctrlr;
+	int rc;
+
+	assert(ctrlr != NULL);
+	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
+	rc = nvme_transport_ctrlr_disconnect_qpair_poll_async(ctrlr, qpair);
+	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
+
+	return rc;
+}
+
 int
 spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 {

@@ -3920,6 +3920,12 @@ struct spdk_nvme_transport_ops {
 
 	void (*ctrlr_disconnect_qpair)(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair);
 
+	void (*ctrlr_disconnect_qpair_async)(struct spdk_nvme_ctrlr *ctrlr,
+					     struct spdk_nvme_qpair *qpair);
+
+	int (*ctrlr_disconnect_qpair_poll_async)(struct spdk_nvme_ctrlr *ctrlr,
+			struct spdk_nvme_qpair *qpair);
+
 	void (*qpair_abort_reqs)(struct spdk_nvme_qpair *qpair, uint32_t dnr);
 
 	int (*qpair_reset)(struct spdk_nvme_qpair *qpair);
