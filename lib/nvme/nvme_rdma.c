@@ -1816,7 +1816,7 @@ nvme_rdma_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 }
 
 static void
-nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
+nvme_rdma_ctrlr_disconnect_qpair_async(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(qpair);
 	struct nvme_rdma_ctrlr *rctrlr = NULL;
@@ -1851,14 +1851,41 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 		if (rqpair->rdma_qp) {
 			rc = spdk_rdma_qp_disconnect(rqpair->rdma_qp);
 			if ((rctrlr != NULL) && (rc == 0)) {
-				if (nvme_rdma_process_event(rqpair, rctrlr->cm_channel, RDMA_CM_EVENT_DISCONNECTED)) {
-					SPDK_DEBUGLOG(nvme, "Target did not respond to qpair disconnect.\n");
+				rc = nvme_rdma_process_event_async(rqpair);
+				if (rc == 0) {
+					return;
 				}
 			}
 			spdk_rdma_qp_destroy(rqpair->rdma_qp);
 			rqpair->rdma_qp = NULL;
 		}
+	}
+}
 
+static int
+nvme_rdma_ctrlr_disconnect_qpair_poll_async(struct spdk_nvme_ctrlr *ctrlr,
+		struct spdk_nvme_qpair *qpair)
+{
+	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(qpair);
+	struct nvme_rdma_ctrlr *rctrlr;
+	int rc;
+
+	if (rqpair->cm_id) {
+		if (rqpair->rdma_qp) {
+			assert(qpair->ctrlr != NULL);
+			rctrlr = nvme_rdma_ctrlr(qpair->ctrlr);
+
+			rc = nvme_rdma_process_event_poll_async(rqpair, rctrlr->cm_channel,
+								RDMA_CM_EVENT_DISCONNECTED);
+			if (rc == -EAGAIN || rc == -EWOULDBLOCK) {
+				return rc;
+			} else if (rc != 0) {
+				SPDK_DEBUGLOG(nvme, "Target did not respond to qpair disconnect.\n");
+			}
+
+			spdk_rdma_qp_destroy(rqpair->rdma_qp);
+			rqpair->rdma_qp = NULL;
+		}
 		rdma_destroy_id(rqpair->cm_id);
 		rqpair->cm_id = NULL;
 	}
@@ -1866,6 +1893,23 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 	if (rqpair->cq) {
 		ibv_destroy_cq(rqpair->cq);
 		rqpair->cq = NULL;
+	}
+
+	return 0;
+}
+
+static void
+nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
+{
+	int rc;
+
+	nvme_rdma_ctrlr_disconnect_qpair_async(ctrlr, qpair);
+
+	while (1) {
+		rc = nvme_rdma_ctrlr_disconnect_qpair_poll_async(ctrlr, qpair);
+		if (rc != -EAGAIN && rc != -EWOULDBLOCK) {
+			break;
+		}
 	}
 }
 
