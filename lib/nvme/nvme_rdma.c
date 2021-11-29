@@ -2223,6 +2223,18 @@ nvme_rdma_fail_qpair(struct spdk_nvme_qpair *qpair, int failure_reason)
 }
 
 static void
+nvme_rdma_fail_qpair_async(struct spdk_nvme_qpair *qpair, int failure_reason)
+{
+	if (failure_reason == IBV_WC_RETRY_EXC_ERR) {
+		qpair->transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_REMOTE;
+	} else if (qpair->transport_failure_reason == SPDK_NVME_QPAIR_FAILURE_NONE) {
+		qpair->transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_UNKNOWN;
+	}
+
+	nvme_ctrlr_disconnect_qpair_async(qpair);
+}
+
+static void
 nvme_rdma_conditional_fail_qpair(struct nvme_rdma_qpair *rqpair, struct nvme_rdma_poll_group *group)
 {
 	struct nvme_rdma_destroyed_qpair	*qpair_tracker;
@@ -2780,7 +2792,9 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 
 	group = nvme_rdma_poll_group(tgroup);
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
-		disconnected_qpair_cb(qpair, tgroup->group->ctx);
+		if (nvme_ctrlr_disconnect_qpair_poll_async(qpair) == 0) {
+			disconnected_qpair_cb(qpair, tgroup->group->ctx);
+		}
 	}
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->connected_qpairs, poll_group_stailq, tmp_qpair) {
@@ -2789,8 +2803,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		nvme_rdma_qpair_process_cm_event(rqpair);
 
 		if (spdk_unlikely(qpair->transport_failure_reason != SPDK_NVME_QPAIR_FAILURE_NONE)) {
-			nvme_rdma_fail_qpair(qpair, 0);
-			disconnected_qpair_cb(qpair, tgroup->group->ctx);
+			nvme_rdma_fail_qpair_async(qpair, 0);
 			continue;
 		}
 		num_qpairs++;

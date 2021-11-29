@@ -93,6 +93,8 @@ DEFINE_STUB(spdk_nvme_qpair_process_completions, int32_t, (struct spdk_nvme_qpai
 
 /* Fabric transports only */
 DEFINE_STUB_V(nvme_ctrlr_disconnect_qpair, (struct spdk_nvme_qpair *qpair));
+DEFINE_STUB_V(nvme_ctrlr_disconnect_qpair_async, (struct spdk_nvme_qpair *qpair));
+DEFINE_STUB(nvme_ctrlr_disconnect_qpair_poll_async, int, (struct spdk_nvme_qpair *qpair), 0);
 DEFINE_STUB(nvme_fabric_ctrlr_set_reg_4, int, (struct spdk_nvme_ctrlr *ctrlr, uint32_t offset,
 		uint32_t value), 0);
 DEFINE_STUB(nvme_fabric_ctrlr_set_reg_8, int, (struct spdk_nvme_ctrlr *ctrlr, uint32_t offset,
