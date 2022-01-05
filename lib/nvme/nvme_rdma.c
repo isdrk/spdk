@@ -2364,9 +2364,7 @@ nvme_rdma_ctrlr_get_max_xfer_size(struct spdk_nvme_ctrlr *ctrlr)
 static uint16_t
 nvme_rdma_ctrlr_get_max_sges(struct spdk_nvme_ctrlr *ctrlr)
 {
-	struct nvme_rdma_ctrlr *rctrlr = nvme_rdma_ctrlr(ctrlr);
-
-	return rctrlr->max_sge;
+	return 1;
 }
 
 static int
