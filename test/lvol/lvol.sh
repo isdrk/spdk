@@ -19,6 +19,7 @@ run_test "lvol_snapshot_clone" test/lvol/snapshot_clone.sh
 run_test "lvol_rename" test/lvol/rename.sh
 run_test "lvol_provisioning" test/lvol/thin_provisioning.sh
 run_test "lvol_esnap" test/lvol/esnap/esnap
+run_test "lvol_external_snapshot" test/lvol/external_snapshot.sh
 timing_exit basic
 
 timing_exit lvol
