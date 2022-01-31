@@ -2,6 +2,12 @@
 
 ## v22.01: NVMe multipath, NVMe TCP zero-copy, NVMe-oF discovery service
 
+### blobstore
+
+Structure `spdk_bs_opts` is extended with operation callback `memory_domains supported`.
+When the new callback returns true, blobstore reserves an additional cluster for internal usage. This cluster will
+be used to read unallocated clusters/snapshot instead of `memset` in existing zeroes device. That allows to supportSPDK memory domains API in blobstore.
+
 ### accel
 
 The batching capability was removed. Batching is now considered an implementation

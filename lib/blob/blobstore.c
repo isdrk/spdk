@@ -4418,6 +4418,7 @@ bs_parse_super(struct spdk_bs_load_ctx *ctx)
 					       ctx->bs->md_start + ctx->bs->md_len, ctx->bs->pages_per_cluster);
 	ctx->bs->super_blob = ctx->super->super_blob;
 	memcpy(&ctx->bs->bstype, &ctx->super->bstype, sizeof(ctx->super->bstype));
+	ctx->bs->zero_cluster_page_start = ctx->super->zero_cluster_page_start;
 
 	return 0;
 }
@@ -5143,6 +5144,19 @@ spdk_bs_init(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 	/* Claim all of the clusters used by the metadata */
 	for (i = 0; i < num_md_clusters; i++) {
 		spdk_bit_array_set(ctx->used_clusters, i);
+	}
+
+	if (dev->memory_domains_supported(dev)) {
+		if (num_md_clusters + 1 > bs->total_clusters) {
+			SPDK_ERRLOG("Zero cluster is disabled due to there is not enough free clusters\n");
+		} else {
+			spdk_bit_array_set(ctx->used_clusters, num_md_clusters);
+			num_md_clusters++;
+			ctx->super->zero_cluster_page_start = num_md_clusters * bs->pages_per_cluster;
+			SPDK_DEBUGLOG(blob, "Use zero cluster %"PRIx64", page %"PRIx64"\n", num_md_clusters,
+				      bs->pages_per_cluster);
+			bs->zero_cluster_page_start = ctx->super->zero_cluster_page_start;
+		}
 	}
 
 	bs->num_free_clusters -= num_md_clusters;

@@ -236,16 +236,34 @@ blob_init(void)
 	poll_threads();
 	CU_ASSERT(g_bserrno == -EINVAL);
 
+	g_memory_domains_supported = false;
 	dev = init_dev();
 	spdk_bs_init(dev, NULL, bs_op_with_handle_complete, NULL);
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
 	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
 	bs = g_bs;
+	CU_ASSERT(bs->zero_cluster_page_start == 0);
 
 	spdk_bs_unload(bs, bs_op_complete, NULL);
 	poll_threads();
 	CU_ASSERT(g_bserrno == 0);
+
+	/* bs_dev supports memory domains */
+	g_memory_domains_supported = true;
+	dev = init_dev();
+	spdk_bs_init(dev, NULL, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	bs = g_bs;
+	CU_ASSERT(bs->zero_cluster_page_start != 0);
+
+	spdk_bs_unload(bs, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	g_memory_domains_supported = false;
+
 	g_bs = NULL;
 }
 
@@ -2748,7 +2766,7 @@ bs_test_recover_cluster_count(void)
 	memset(super_block.bstype.bstype, 0, sizeof(super_block.bstype.bstype));
 	super_block.size = dev->blockcnt * dev->blocklen;
 	super_block.io_unit_size = 0x1000;
-	memset(super_block.reserved, 0, 4000);
+	memset(super_block.reserved, 0, sizeof(super_block.reserved));
 	super_block.crc = blob_md_page_calc_crc(&super_block);
 	memcpy(g_dev_buffer, &super_block, sizeof(struct spdk_bs_super_block));
 

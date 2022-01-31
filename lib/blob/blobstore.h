@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -210,6 +211,8 @@ struct spdk_blob_store {
 
 	RB_HEAD(spdk_blob_tree, spdk_blob) open_blobs;
 	TAILQ_HEAD(, spdk_blob_list)	snapshots;
+
+	uint64_t			zero_cluster_page_start;
 
 	bool				clean;
 };
@@ -428,7 +431,9 @@ struct spdk_bs_super_block {
 	uint64_t	size; /* size of blobstore in bytes */
 	uint32_t	io_unit_size; /* Size of io unit in bytes */
 
-	uint8_t		reserved[4000];
+	uint64_t	zero_cluster_page_start;	/* Page idx of zero cluster */
+
+	uint8_t		reserved[3992];
 	uint32_t	crc;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bs_super_block) == 0x1000, "Invalid super block size");

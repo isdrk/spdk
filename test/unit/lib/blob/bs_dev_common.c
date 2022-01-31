@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -41,6 +42,7 @@
 uint8_t *g_dev_buffer;
 uint64_t g_dev_write_bytes;
 uint64_t g_dev_read_bytes;
+bool g_memory_domains_supported;
 
 struct spdk_power_failure_counters {
 	uint64_t general_counter;
@@ -373,6 +375,12 @@ dev_write_zeroes(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 	spdk_thread_send_msg(spdk_get_thread(), dev_complete, cb_args);
 }
 
+static bool
+dev_memory_domains_supported(struct spdk_bs_dev *dev)
+{
+	return g_memory_domains_supported;
+}
+
 static struct spdk_bs_dev *
 init_dev(void)
 {
@@ -390,6 +398,7 @@ init_dev(void)
 	dev->flush = dev_flush;
 	dev->unmap = dev_unmap;
 	dev->write_zeroes = dev_write_zeroes;
+	dev->memory_domains_supported = dev_memory_domains_supported;
 	dev->blockcnt = DEV_BUFFER_BLOCKCNT;
 	dev->blocklen = DEV_BUFFER_BLOCKLEN;
 

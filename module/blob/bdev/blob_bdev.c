@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -326,6 +327,14 @@ bdev_blob_get_base_bdev(struct spdk_bs_dev *bs_dev)
 	return __get_bdev(bs_dev);
 }
 
+static bool
+bdev_blob_memory_domains_supported(struct spdk_bs_dev *bs_dev)
+{
+	struct spdk_bdev *bdev = __get_bdev(bs_dev);
+
+	return spdk_bdev_get_memory_domains(bdev, NULL, 0) > 0;
+}
+
 static void
 blob_bdev_init(struct blob_bdev *b, struct spdk_bdev_desc *desc)
 {
@@ -348,6 +357,7 @@ blob_bdev_init(struct blob_bdev *b, struct spdk_bdev_desc *desc)
 	b->bs_dev.write_zeroes = bdev_blob_write_zeroes;
 	b->bs_dev.unmap = bdev_blob_unmap;
 	b->bs_dev.get_base_bdev = bdev_blob_get_base_bdev;
+	b->bs_dev.memory_domains_supported = bdev_blob_memory_domains_supported;
 }
 
 int
