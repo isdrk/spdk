@@ -6266,7 +6266,6 @@ test_io_zeroes(struct spdk_bs_dev *dev, struct spdk_blob *blob, struct spdk_io_c
 	CU_ASSERT(memcmp(cluster1 + 0 * 512, payload_00, 32 * 512) == 0);
 }
 
-
 static void
 test_iov_write(struct spdk_bs_dev *dev, struct spdk_blob *blob, struct spdk_io_channel *channel)
 {
@@ -6550,6 +6549,324 @@ test_iov_read(struct spdk_bs_dev *dev, struct spdk_blob *blob, struct spdk_io_ch
 }
 
 static void
+test_iov_write_ext(struct spdk_bs_dev *dev, struct spdk_blob *blob, struct spdk_io_channel *channel)
+{
+	uint8_t payload_ff[64 * 512];
+	uint8_t payload_aa[64 * 512];
+	uint8_t payload_00[64 * 512];
+	uint8_t *cluster0, *cluster1;
+	struct iovec iov[4];
+	struct spdk_blob_ext_io_opts ext_opts = {};
+
+	memset(payload_ff, 0xFF, sizeof(payload_ff));
+	memset(payload_aa, 0xAA, sizeof(payload_aa));
+	memset(payload_00, 0x00, sizeof(payload_00));
+
+	/* Try to perform I/O with io unit = 512 */
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 1 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 0, 1, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	/* If thin provisioned is set cluster should be allocated now */
+	SPDK_CU_ASSERT_FATAL(blob->active.clusters[0] != 0);
+	cluster0 = &g_dev_buffer[blob->active.clusters[0] * dev->blocklen];
+
+	/* Each character 0-F symbolizes single io_unit containing 512 bytes block filled with that character.
+	* Each page is separated by |. Whole block [...] symbolizes one cluster (containing 4 pages). */
+	/* cluster0: [ F000 0000 | 0000 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 31 * 512) == 0);
+
+	/* Verify write with offset on first page */
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 1 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 2, 1, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	/* cluster0: [ F0F0 0000 | 0000 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_00, 28 * 512) == 0);
+
+	/* Verify write with offset on first page */
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 4 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 4, 4, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	/* cluster0: [ F0F0 FFFF | 0000 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_ff, 4 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 8 * 512, payload_00, 24 * 512) == 0);
+
+	/* Verify write with offset on second page */
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 4 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 8, 4, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	/* cluster0: [ F0F0 FFFF | FFFF 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_ff, 8 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 12 * 512, payload_00, 20 * 512) == 0);
+
+	/* Verify write across multiple pages */
+	iov[0].iov_base = payload_aa;
+	iov[0].iov_len = 8 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 4, 8, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	/* cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_aa, 8 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 12 * 512, payload_00, 20 * 512) == 0);
+
+	/* Verify write across multiple clusters */
+
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 8 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 28, 8, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	SPDK_CU_ASSERT_FATAL(blob->active.clusters[1] != 0);
+	cluster1 = &g_dev_buffer[blob->active.clusters[1] * dev->blocklen];
+
+	/* cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 0000 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_aa, 8 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 12 * 512, payload_00, 16 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 28 * 512, payload_ff, 4 * 512) == 0);
+
+	CU_ASSERT(memcmp(cluster1 + 0 * 512, payload_ff, 4 * 512) == 0);
+	CU_ASSERT(memcmp(cluster1 + 4 * 512, payload_00, 28 * 512) == 0);
+
+	/* Verify write to second cluster */
+
+	iov[0].iov_base = payload_ff;
+	iov[0].iov_len = 2 * 512;
+	g_dev_writev_ext_called = false;
+	spdk_blob_io_writev_ext(blob, channel, iov, 1, 32 + 12, 2, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_writev_ext_called);
+
+	SPDK_CU_ASSERT_FATAL(blob->active.clusters[1] != 0);
+	cluster1 = &g_dev_buffer[blob->active.clusters[1] * dev->blocklen];
+
+	/* cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000 ] */
+	CU_ASSERT(memcmp(cluster0 + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 4 * 512, payload_aa, 8 * 512) == 0);
+	CU_ASSERT(memcmp(cluster0 + 28 * 512, payload_ff, 4 * 512) == 0);
+
+	CU_ASSERT(memcmp(cluster1 + 0 * 512, payload_ff, 4 * 512) == 0);
+	CU_ASSERT(memcmp(cluster1 + 4 * 512, payload_00, 8 * 512) == 0);
+	CU_ASSERT(memcmp(cluster1 + 12 * 512, payload_ff, 2 * 512) == 0);
+	CU_ASSERT(memcmp(cluster1 + 14 * 512, payload_00, 18 * 512) == 0);
+}
+
+static void
+test_iov_read_ext(struct spdk_bs_dev *dev, struct spdk_blob *blob, struct spdk_io_channel *channel)
+{
+	uint8_t payload_read[64 * 512];
+	uint8_t payload_ff[64 * 512];
+	uint8_t payload_aa[64 * 512];
+	uint8_t payload_00[64 * 512];
+	struct iovec iov[4];
+	struct spdk_blob_ext_io_opts ext_opts = {};
+
+	memset(payload_ff, 0xFF, sizeof(payload_ff));
+	memset(payload_aa, 0xAA, sizeof(payload_aa));
+	memset(payload_00, 0x00, sizeof(payload_00));
+
+	/* Read only first io unit */
+	/* cluster0: [ (F)0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000 ]
+	 * payload_read: F000 0000 | 0000 0000 ... */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 1 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 1, 0, 1, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 1 * 512, payload_00, 31 * 512) == 0);
+
+	/* Read four io_units starting from offset = 2
+	 * cluster0: [ F0(F0 AA)AA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000 ]
+	 * payload_read: F0AA 0000 | 0000 0000 ... */
+
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 4 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 1, 2, 4, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 2 * 512, payload_aa, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 3 * 512, payload_aa, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 4 * 512, payload_00, 28 * 512) == 0);
+
+	/* Read eight io_units across multiple pages
+	 * cluster0: [ F0F0 (AAAA | AAAA) 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000 ]
+	 * payload_read: AAAA AAAA | 0000 0000 ... */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 4 * 512;
+	iov[1].iov_base = payload_read + 4 * 512;
+	iov[1].iov_len = 4 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 2, 4, 8, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_aa, 8 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 8 * 512, payload_00, 24 * 512) == 0);
+
+	/* Read eight io_units across multiple clusters
+	 * cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 (FFFF ]
+	 * cluster1: [ FFFF) 0000 | 0000 FF00 | 0000 0000 | 0000 0000 ]
+	 * payload_read: FFFF FFFF | 0000 0000 ... */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 2 * 512;
+	iov[1].iov_base = payload_read + 2 * 512;
+	iov[1].iov_len = 2 * 512;
+	iov[2].iov_base = payload_read + 4 * 512;
+	iov[2].iov_len = 2 * 512;
+	iov[3].iov_base = payload_read + 6 * 512;
+	iov[3].iov_len = 2 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 4, 28, 8, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_ff, 8 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 8 * 512, payload_00, 24 * 512) == 0);
+
+	/* Read four io_units from second cluster
+	 * cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 00(00 FF)00 | 0000 0000 | 0000 0000 ]
+	 * payload_read: 00FF 0000 | 0000 0000 ... */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 1 * 512;
+	iov[1].iov_base = payload_read + 1 * 512;
+	iov[1].iov_len = 3 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 2, 32 + 10, 4, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_00, 2 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 2 * 512, payload_ff, 2 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 4 * 512, payload_00, 28 * 512) == 0);
+
+	/* Read second cluster
+	 * cluster0: [ F0F0 AAAA | AAAA 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ (FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000) ]
+	 * payload_read: FFFF 0000 | 0000 FF00 ... */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 1 * 512;
+	iov[1].iov_base = payload_read + 1 * 512;
+	iov[1].iov_len = 2 * 512;
+	iov[2].iov_base = payload_read + 3 * 512;
+	iov[2].iov_len = 4 * 512;
+	iov[3].iov_base = payload_read + 7 * 512;
+	iov[3].iov_len = 25 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 4, 32, 32, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_ff, 4 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 4 * 512, payload_00, 8 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 12 * 512, payload_ff, 2 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 14 * 512, payload_00, 18 * 512) == 0);
+
+	/* Read whole two clusters
+	 * cluster0: [ (F0F0 AAAA | AAAA) 0000 | 0000 0000 | 0000 FFFF ]
+	 * cluster1: [ FFFF 0000 | 0000 FF00 | 0000 0000 | 0000 0000) ] */
+	memset(payload_read, 0x00, sizeof(payload_read));
+	iov[0].iov_base = payload_read;
+	iov[0].iov_len = 1 * 512;
+	iov[1].iov_base = payload_read + 1 * 512;
+	iov[1].iov_len = 8 * 512;
+	iov[2].iov_base = payload_read + 9 * 512;
+	iov[2].iov_len = 16 * 512;
+	iov[3].iov_base = payload_read + 25 * 512;
+	iov[3].iov_len = 39 * 512;
+	g_dev_readv_ext_called = false;
+	spdk_blob_io_readv_ext(blob, channel, iov, 4, 0, 64, blob_op_complete, NULL, &ext_opts);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_dev_readv_ext_called);
+
+	CU_ASSERT(memcmp(payload_read + 0 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 1 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 2 * 512, payload_ff, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 3 * 512, payload_00, 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 4 * 512, payload_aa, 8 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + 28 * 512, payload_ff, 4 * 512) == 0);
+
+	CU_ASSERT(memcmp(payload_read + (32 + 0) * 512, payload_ff, 4 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + (32 + 4) * 512, payload_00, 8 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + (32 + 12) * 512, payload_ff, 2 * 512) == 0);
+	CU_ASSERT(memcmp(payload_read + (32 + 14) * 512, payload_00, 18 * 512) == 0);
+}
+
+static void
 blob_io_unit(void)
 {
 	struct spdk_bs_opts bsopts;
@@ -6687,6 +7004,128 @@ blob_io_unit(void)
 	g_bs = NULL;
 	g_blob = NULL;
 	g_blobid = 0;
+}
+
+static void
+blob_io_unit_ext(void)
+{
+	struct spdk_bs_opts bsopts;
+	struct spdk_blob_opts opts;
+	struct spdk_blob_store *bs;
+	struct spdk_bs_dev *dev;
+	struct spdk_blob *blob, *snapshot, *clone;
+	spdk_blob_id blobid;
+	struct spdk_io_channel *channel;
+
+	/* Create dev with 512 bytes io unit size */
+
+	spdk_bs_opts_init(&bsopts, sizeof(bsopts));
+	bsopts.cluster_sz = SPDK_BS_PAGE_SIZE * 4;	/* 8 * 4 = 32 io_unit */
+	snprintf(bsopts.bstype.bstype, sizeof(bsopts.bstype.bstype), "TESTTYPE");
+
+	/* Try to initialize a new blob store with unsupported io_unit */
+	g_memory_domains_supported = true;
+	dev = init_dev();
+	dev->blocklen = 512;
+	dev->blockcnt =  DEV_BUFFER_SIZE / dev->blocklen;
+
+	/* Initialize a new blob store */
+	spdk_bs_init(dev, &bsopts, bs_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	SPDK_CU_ASSERT_FATAL(g_bs != NULL);
+	bs = g_bs;
+	CU_ASSERT(bs->zero_cluster_page_start != 0);
+
+	CU_ASSERT(spdk_bs_get_io_unit_size(bs) == 512);
+	channel = spdk_bs_alloc_io_channel(bs);
+
+	/* Create thick provisioned blob */
+	ut_spdk_blob_opts_init(&opts);
+	opts.thin_provision = false;
+	opts.num_clusters = 32;
+
+	blob = ut_blob_create_and_open(bs, &opts);
+	blobid = spdk_blob_get_id(blob);
+
+	test_iov_write_ext(dev, blob, channel);
+	test_iov_read_ext(dev, blob, channel);
+
+	spdk_blob_close(blob, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	blob = NULL;
+	g_blob = NULL;
+
+	/* Create thin provisioned blob */
+	ut_spdk_blob_opts_init(&opts);
+	opts.thin_provision = true;
+	opts.num_clusters = 32;
+
+	blob = ut_blob_create_and_open(bs, &opts);
+	blobid = spdk_blob_get_id(blob);
+
+	test_iov_write_ext(dev, blob, channel);
+	test_iov_read_ext(dev, blob, channel);
+
+	/* Create snapshot */
+	spdk_bs_create_snapshot(bs, blobid, NULL, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blob != NULL);
+	snapshot = g_blob;
+
+	spdk_bs_create_clone(bs, blobid, NULL, blob_op_with_id_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blobid != SPDK_BLOBID_INVALID);
+	blobid = g_blobid;
+
+	spdk_bs_open_blob(bs, blobid, blob_op_with_handle_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	CU_ASSERT(g_blob != NULL);
+	clone = g_blob;
+
+	test_iov_read_ext(dev, blob, channel);
+	test_iov_read_ext(dev, snapshot, channel);
+	test_iov_read_ext(dev, clone, channel);
+
+	/* Inflate clone */
+	spdk_bs_inflate_blob(bs, channel, blobid, blob_op_complete, NULL);
+	poll_threads();
+
+	CU_ASSERT(g_bserrno == 0);
+
+	test_io_unmap(dev, clone, channel);
+	test_iov_write_ext(dev, clone, channel);
+	test_iov_read_ext(dev, clone, channel);
+
+	spdk_blob_close(blob, blob_op_complete, NULL);
+	spdk_blob_close(snapshot, blob_op_complete, NULL);
+	spdk_blob_close(clone, blob_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	blob = NULL;
+	g_blob = NULL;
+
+	spdk_bs_free_io_channel(channel);
+	poll_threads();
+
+	/* Unload the blob store */
+	spdk_bs_unload(bs, bs_op_complete, NULL);
+	poll_threads();
+	CU_ASSERT(g_bserrno == 0);
+	g_bs = NULL;
+	g_blob = NULL;
+	g_blobid = 0;
+	g_memory_domains_supported = false;
 }
 
 static void
@@ -7244,6 +7683,7 @@ int main(int argc, char **argv)
 	CU_ADD_TEST(suite_bs, blob_operation_split_rw_iov);
 	CU_ADD_TEST(suite, blob_io_unit);
 	CU_ADD_TEST(suite, blob_io_unit_compatibility);
+	CU_ADD_TEST(suite, blob_io_unit_ext);
 	CU_ADD_TEST(suite_bs, blob_simultaneous_operations);
 	CU_ADD_TEST(suite_bs, blob_persist_test);
 	CU_ADD_TEST(suite_bs, blob_decouple_snapshot);

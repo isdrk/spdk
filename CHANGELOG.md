@@ -8,6 +8,9 @@ Structure `spdk_bs_opts` is extended with operation callback `memory_domains sup
 When the new callback returns true, blobstore reserves an additional cluster for internal usage. This cluster will
 be used to read unallocated clusters/snapshot instead of `memset` in existing zeroes device. That allows to supportSPDK memory domains API in blobstore.
 
+New functions `spdk_blob_io_writev_ext` and `spdk_blob_io_readv_ext` are added. The new functions accept
+`spdk_blob_ext_io_opts` structure with extended IO request options.
+
 ### accel
 
 The batching capability was removed. Batching is now considered an implementation
