@@ -1378,7 +1378,7 @@ blob_load_backing_dev(void *cb_arg)
 			return;
 		} else {
 			/* add zeroes_dev for thin provisioned blob */
-			blob->back_bs_dev = bs_create_zeroes_dev();
+			blob->back_bs_dev = bs_create_zeroes_dev(blob);
 		}
 	} else {
 		/* standard blob */
@@ -6345,7 +6345,7 @@ bs_inflate_blob_done(struct spdk_clone_snapshot_ctx *ctx)
 		blob_remove_xattr(_blob, BLOB_SNAPSHOT, true);
 		_blob->parent_id = SPDK_BLOBID_INVALID;
 		_blob->back_bs_dev->destroy(_blob->back_bs_dev);
-		_blob->back_bs_dev = bs_create_zeroes_dev();
+		_blob->back_bs_dev = bs_create_zeroes_dev(_blob);
 	}
 
 	/* Temporarily override md_ro flag for MD modification */
@@ -6833,7 +6833,7 @@ delete_snapshot_update_extent_pages_cpl(struct delete_snapshot_ctx *ctx)
 	} else {
 		/* ...to blobid invalid and zeroes dev */
 		ctx->clone->parent_id = SPDK_BLOBID_INVALID;
-		ctx->clone->back_bs_dev = bs_create_zeroes_dev();
+		ctx->clone->back_bs_dev = bs_create_zeroes_dev(ctx->clone);
 		blob_remove_xattr(ctx->clone, BLOB_SNAPSHOT, true);
 	}
 

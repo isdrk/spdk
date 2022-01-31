@@ -34,8 +34,23 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/blob.h"
+#include "spdk/thread.h"
+#include "spdk/log.h"
 
 #include "blobstore.h"
+
+struct spdk_bs_zero_ext_dev {
+	struct spdk_bs_dev dev;
+	struct spdk_blob_store *bs;
+};
+
+static void
+zero_ext_dev_destroy(struct spdk_bs_dev *bs_dev)
+{
+	struct spdk_bs_zero_ext_dev *zero_dev = (struct spdk_bs_zero_ext_dev *)bs_dev;
+
+	free(zero_dev);
+}
 
 static void
 zeroes_destroy(struct spdk_bs_dev *bs_dev)
@@ -92,7 +107,7 @@ zeroes_readv_ext_memset(struct spdk_bs_dev *dev, struct spdk_io_channel *channel
 {
 	int i;
 
-	if (ext_io_opts->memory_domain) {
+	if (ext_io_opts && ext_io_opts->memory_domain) {
 		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOTSUP);
 		return;
 	}
@@ -102,6 +117,27 @@ zeroes_readv_ext_memset(struct spdk_bs_dev *dev, struct spdk_io_channel *channel
 	}
 
 	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, 0);
+}
+
+static void
+zeroes_readv_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		 struct iovec *iov, int iovcnt,
+		 uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
+		 struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	struct spdk_bs_zero_ext_dev *zero_dev = (struct spdk_bs_zero_ext_dev *)dev;
+	struct spdk_blob_store *bs = zero_dev->bs;
+	struct spdk_bs_channel *ch = spdk_io_channel_get_ctx(channel);
+	uint64_t zeroes_lba;
+
+	if (ext_io_opts && ext_io_opts->memory_domain) {
+		assert(bs->zero_cluster_page_start);
+		zeroes_lba = bs_page_to_lba(bs, bs->zero_cluster_page_start);
+		ch->dev->readv_ext(ch->dev, ch->dev_channel, iov, iovcnt, zeroes_lba, lba_count, cb_args,
+				   ext_io_opts);
+	} else {
+		zeroes_readv_ext_memset(dev, channel, iov, iovcnt, lba, lba_count, cb_args, ext_io_opts);
+	}
 }
 
 static void
@@ -150,7 +186,29 @@ static struct spdk_bs_dev g_zeroes_bs_dev = {
 };
 
 struct spdk_bs_dev *
-bs_create_zeroes_dev(void)
+bs_create_zeroes_dev(struct spdk_blob *blob)
 {
-	return &g_zeroes_bs_dev;
+	struct spdk_blob_store *bs = blob->bs;
+	struct spdk_bs_zero_ext_dev *zero_dev;
+
+	if (bs->zero_cluster_page_start) {
+		SPDK_DEBUGLOG(blob, "Creating ext zeroes dev\n");
+		zero_dev = calloc(1, sizeof(*zero_dev));
+		if (!zero_dev) {
+			SPDK_ERRLOG("Memory allocation failed");
+			return NULL;
+		}
+
+		zero_dev->bs = bs;
+		memcpy(&zero_dev->dev, &g_zeroes_bs_dev, sizeof(g_zeroes_bs_dev));
+		zero_dev->dev.blockcnt = blob->bs->pages_per_cluster * bs_io_unit_per_page(blob->bs);
+		zero_dev->dev.blocklen = spdk_bs_get_io_unit_size(blob->bs);
+		zero_dev->dev.destroy = zero_ext_dev_destroy;
+		zero_dev->dev.readv_ext = zeroes_readv_ext;
+
+		return &zero_dev->dev;
+	} else {
+		SPDK_DEBUGLOG(blob, "Creating regular memset zeroes dev\n");
+		return &g_zeroes_bs_dev;
+	}
 }
