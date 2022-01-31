@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -84,6 +85,37 @@ zeroes_writev(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 }
 
 static void
+zeroes_readv_ext_memset(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+			struct iovec *iov, int iovcnt,
+			uint64_t lba, uint32_t lba_count, struct spdk_bs_dev_cb_args *cb_args,
+			struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	int i;
+
+	if (ext_io_opts->memory_domain) {
+		cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -ENOTSUP);
+		return;
+	}
+
+	for (i = 0; i < iovcnt; i++) {
+		memset(iov[i].iov_base, 0, iov[i].iov_len);
+	}
+
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, 0);
+}
+
+static void
+zeroes_writev_ext(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
+		  struct iovec *iov, int iovcnt,
+		  uint64_t lba, uint32_t lba_count,
+		  struct spdk_bs_dev_cb_args *cb_args,
+		  struct spdk_blob_ext_io_opts *ext_io_opts)
+{
+	cb_args->cb_fn(cb_args->channel, cb_args->cb_arg, -EPERM);
+	assert(false);
+}
+
+static void
 zeroes_write_zeroes(struct spdk_bs_dev *dev, struct spdk_io_channel *channel,
 		    uint64_t lba, uint64_t lba_count,
 		    struct spdk_bs_dev_cb_args *cb_args)
@@ -111,6 +143,8 @@ static struct spdk_bs_dev g_zeroes_bs_dev = {
 	.write = zeroes_write,
 	.readv = zeroes_readv,
 	.writev = zeroes_writev,
+	.readv_ext = zeroes_readv_ext_memset,
+	.writev_ext = zeroes_writev_ext,
 	.write_zeroes = zeroes_write_zeroes,
 	.unmap = zeroes_unmap,
 };
