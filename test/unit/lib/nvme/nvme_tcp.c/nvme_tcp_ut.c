@@ -3,6 +3,7 @@
  *
  *   Copyright (c) Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2021,2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *
  *   Redistribution and use in source and binary forms, with or without
  *   modification, are permitted provided that the following conditions
@@ -1461,8 +1462,8 @@ test_nvme_tcp_ctrlr_create_io_qpair(void)
 	struct spdk_nvme_qpair *qpair = NULL;
 	struct spdk_nvme_ctrlr ctrlr = {};
 	uint16_t qid = 1;
-	const struct spdk_nvme_io_qpair_opts opts = {
-		.io_queue_size = 1,
+	struct spdk_nvme_io_qpair_opts opts = {
+		.io_queue_size = 2,
 		.qprio = SPDK_NVME_QPRIO_URGENT,
 		.io_queue_requests = 1,
 	};
@@ -1489,6 +1490,16 @@ test_nvme_tcp_ctrlr_create_io_qpair(void)
 	free(tqpair->tcp_reqs);
 	spdk_free(tqpair->send_pdus);
 	free(tqpair);
+
+	/* Queue size 0 shall fail */
+	opts.io_queue_size = 0;
+	qpair = nvme_tcp_ctrlr_create_io_qpair(&ctrlr, qid, &opts);
+	CU_ASSERT(qpair == NULL);
+
+	/* Queue size 1 shall fail */
+	opts.io_queue_size = 1;
+	qpair = nvme_tcp_ctrlr_create_io_qpair(&ctrlr, qid, &opts);
+	CU_ASSERT(qpair == NULL);
 }
 
 static void
