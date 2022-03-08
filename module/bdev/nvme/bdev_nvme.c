@@ -3412,8 +3412,8 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 
 	path_id->trid = *trid;
 	if (ctx != NULL) {
-		memcpy(path_id->hostid.hostaddr, ctx->opts.src_addr, sizeof(path_id->hostid.hostaddr));
-		memcpy(path_id->hostid.hostsvcid, ctx->opts.src_svcid, sizeof(path_id->hostid.hostsvcid));
+		memcpy(path_id->hostid.hostaddr, ctx->drv_opts.src_addr, sizeof(path_id->hostid.hostaddr));
+		memcpy(path_id->hostid.hostsvcid, ctx->drv_opts.src_svcid, sizeof(path_id->hostid.hostsvcid));
 	}
 	nvme_ctrlr->active_path_id = path_id;
 	TAILQ_INSERT_HEAD(&nvme_ctrlr->trids, path_id, link);
@@ -3479,7 +3479,7 @@ err:
 
 static void
 attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
-	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts)
+	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *drv_opts)
 {
 	char *name;
 
@@ -3837,7 +3837,7 @@ connect_attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	struct nvme_async_probe_ctx *ctx;
 	int rc;
 
-	ctx = SPDK_CONTAINEROF(user_opts, struct nvme_async_probe_ctx, opts);
+	ctx = SPDK_CONTAINEROF(user_opts, struct nvme_async_probe_ctx, drv_opts);
 	ctx->ctrlr_attached = true;
 
 	rc = nvme_ctrlr_create(ctrlr, ctx->base_name, &ctx->trid, ctx);
@@ -3856,7 +3856,7 @@ connect_set_failover_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	struct nvme_async_probe_ctx *ctx;
 	int rc;
 
-	ctx = SPDK_CONTAINEROF(user_opts, struct nvme_async_probe_ctx, opts);
+	ctx = SPDK_CONTAINEROF(user_opts, struct nvme_async_probe_ctx, drv_opts);
 	ctx->ctrlr_attached = true;
 
 	nvme_ctrlr = nvme_ctrlr_get_by_name(ctx->base_name);
@@ -3947,7 +3947,7 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		 uint32_t prchk_flags,
 		 spdk_bdev_create_nvme_fn cb_fn,
 		 void *cb_ctx,
-		 struct spdk_nvme_ctrlr_opts *opts,
+		 struct spdk_nvme_ctrlr_opts *drv_opts,
 		 bool multipath,
 		 int32_t ctrlr_loss_timeout_sec,
 		 uint32_t reconnect_delay_sec,
@@ -3995,16 +3995,16 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		}
 	}
 
-	if (opts) {
-		memcpy(&ctx->opts, opts, sizeof(*opts));
+	if (drv_opts) {
+		memcpy(&ctx->drv_opts, drv_opts, sizeof(*drv_opts));
 	} else {
-		spdk_nvme_ctrlr_get_default_ctrlr_opts(&ctx->opts, sizeof(ctx->opts));
+		spdk_nvme_ctrlr_get_default_ctrlr_opts(&ctx->drv_opts, sizeof(ctx->drv_opts));
 	}
 
-	ctx->opts.transport_retry_count = g_opts.transport_retry_count;
-	ctx->opts.transport_ack_timeout = g_opts.transport_ack_timeout;
-	ctx->opts.keep_alive_timeout_ms = g_opts.keep_alive_timeout_ms;
-	ctx->opts.disable_read_ana_log_page = true;
+	ctx->drv_opts.transport_retry_count = g_opts.transport_retry_count;
+	ctx->drv_opts.transport_ack_timeout = g_opts.transport_ack_timeout;
+	ctx->drv_opts.keep_alive_timeout_ms = g_opts.keep_alive_timeout_ms;
+	ctx->drv_opts.disable_read_ana_log_page = true;
 
 	if (nvme_bdev_ctrlr_get_by_name(base_name) == NULL || multipath) {
 		attach_cb = connect_attach_cb;
@@ -4012,7 +4012,7 @@ bdev_nvme_create(struct spdk_nvme_transport_id *trid,
 		attach_cb = connect_set_failover_cb;
 	}
 
-	ctx->probe_ctx = spdk_nvme_connect_async(trid, &ctx->opts, attach_cb);
+	ctx->probe_ctx = spdk_nvme_connect_async(trid, &ctx->drv_opts, attach_cb);
 	if (ctx->probe_ctx == NULL) {
 		SPDK_ERRLOG("No controller was found with provided trid (traddr: %s)\n", trid->traddr);
 		free(ctx);
@@ -4124,7 +4124,7 @@ bdev_nvme_delete(const char *name, const struct nvme_path_id *path_id)
 struct discovery_ctrlr_ctx {
 	char						name[128];
 	struct spdk_nvme_transport_id			trid;
-	struct spdk_nvme_ctrlr_opts			opts;
+	struct spdk_nvme_ctrlr_opts			drv_opts;
 	struct spdk_nvmf_discovery_log_page_entry	entry;
 	TAILQ_ENTRY(discovery_ctrlr_ctx)		tailq;
 	struct discovery_ctx				*ctx;
@@ -4139,7 +4139,7 @@ struct discovery_ctx {
 	struct spdk_nvme_detach_ctx		*detach_ctx;
 	struct spdk_nvme_ctrlr			*ctrlr;
 	struct spdk_poller			*poller;
-	struct spdk_nvme_ctrlr_opts		opts;
+	struct spdk_nvme_ctrlr_opts		drv_opts;
 	TAILQ_ENTRY(discovery_ctx)		tailq;
 	TAILQ_HEAD(, discovery_ctrlr_ctx)	ctrlr_ctxs;
 	int					rc;
@@ -4306,11 +4306,11 @@ discovery_log_page_cb(void *cb_arg, int rc, const struct spdk_nvme_cpl *cpl,
 			} else {
 				snprintf(new_ctx->name, sizeof(new_ctx->name), "%s%d", ctx->name, ctx->index++);
 			}
-			spdk_nvme_ctrlr_get_default_ctrlr_opts(&new_ctx->opts, sizeof(new_ctx->opts));
-			snprintf(new_ctx->opts.hostnqn, sizeof(new_ctx->opts.hostnqn), "%s", ctx->hostnqn);
+			spdk_nvme_ctrlr_get_default_ctrlr_opts(&new_ctx->drv_opts, sizeof(new_ctx->drv_opts));
+			snprintf(new_ctx->drv_opts.hostnqn, sizeof(new_ctx->drv_opts.hostnqn), "%s", ctx->hostnqn);
 			rc = bdev_nvme_create(&new_ctx->trid, new_ctx->name, NULL, 0, 0,
 					      discovery_attach_controller_done, new_ctx,
-					      &new_ctx->opts, true, 0, 0, 0);
+					      &new_ctx->drv_opts, true, 0, 0, 0);
 			if (rc == 0) {
 				TAILQ_INSERT_TAIL(&ctx->ctrlr_ctxs, new_ctx, tailq);
 				ctx->attach_in_progress++;
@@ -4429,7 +4429,7 @@ discovery_attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	struct spdk_nvme_ctrlr_opts *user_opts = cb_ctx;
 	struct discovery_ctx *ctx;
 
-	ctx = SPDK_CONTAINEROF(user_opts, struct discovery_ctx, opts);
+	ctx = SPDK_CONTAINEROF(user_opts, struct discovery_ctx, drv_opts);
 
 	SPDK_DEBUGLOG(bdev_nvme, "discovery ctrlr attached\n");
 	ctx->probe_ctx = NULL;
@@ -4449,7 +4449,7 @@ start_discovery_poller(void *arg)
 int
 bdev_nvme_start_discovery(struct spdk_nvme_transport_id *trid,
 			  const char *base_name,
-			  struct spdk_nvme_ctrlr_opts *opts,
+			  struct spdk_nvme_ctrlr_opts *drv_opts,
 			  spdk_bdev_nvme_start_discovery_fn cb_fn,
 			  void *cb_ctx)
 {
@@ -4467,17 +4467,17 @@ bdev_nvme_start_discovery(struct spdk_nvme_transport_id *trid,
 	}
 	ctx->start_cb_fn = cb_fn;
 	ctx->cb_ctx = cb_ctx;
-	memcpy(&ctx->opts, opts, sizeof(*opts));
+	memcpy(&ctx->drv_opts, drv_opts, sizeof(*drv_opts));
 	ctx->calling_thread = spdk_get_thread();
 	TAILQ_INIT(&ctx->ctrlr_ctxs);
 	snprintf(trid->subnqn, sizeof(trid->subnqn), "%s", SPDK_NVMF_DISCOVERY_NQN);
 	/* Even if user did not specify hostnqn, we can still strdup("\0"); */
-	ctx->hostnqn = strdup(ctx->opts.hostnqn);
+	ctx->hostnqn = strdup(ctx->drv_opts.hostnqn);
 	if (ctx->hostnqn == NULL) {
 		free_discovery_ctx(ctx);
 		return -ENOMEM;
 	}
-	ctx->probe_ctx = spdk_nvme_connect_async(trid, &ctx->opts, discovery_attach_cb);
+	ctx->probe_ctx = spdk_nvme_connect_async(trid, &ctx->drv_opts, discovery_attach_cb);
 	if (ctx->probe_ctx == NULL) {
 		SPDK_ERRLOG("could not start discovery connect\n");
 		free_discovery_ctx(ctx);
