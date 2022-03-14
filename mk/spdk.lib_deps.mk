@@ -59,13 +59,13 @@ endif
 
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
-DEPDIRS-rdma := log util
+DEPDIRS-rdma := log util dma
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 
 DEPDIRS-nvme := log sock util trace
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvme += rdma dma
+DEPDIRS-nvme += rdma
 endif
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-nvme += vfio_user
@@ -127,6 +127,7 @@ DEPDIRS-env_dpdk_rpc := log $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util
 DEPDIRS-sock_uring := log sock util
+DEPDIRS-sock_xlio := log sock util rdma env_dpdk
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util

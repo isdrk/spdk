@@ -50,6 +50,9 @@ DEFINE_STUB(spdk_sock_close, int, (struct spdk_sock **sock), 0);
 DEFINE_STUB(spdk_sock_recv, ssize_t, (struct spdk_sock *sock, void *buf, size_t len), 1);
 DEFINE_STUB(spdk_sock_writev, ssize_t, (struct spdk_sock *sock, struct iovec *iov, int iovcnt), 0);
 DEFINE_STUB(spdk_sock_readv, ssize_t, (struct spdk_sock *sock, struct iovec *iov, int iovcnt), 0);
+DEFINE_STUB(spdk_sock_recv_zcopy, ssize_t, (struct spdk_sock *sock, size_t len,
+					    struct spdk_sock_buf **sock_buf), 0);
+DEFINE_STUB(spdk_sock_free_bufs, int, (struct spdk_sock *sock, struct spdk_sock_buf *sock_buf), 0);
 DEFINE_STUB(spdk_sock_set_recvlowat, int, (struct spdk_sock *sock, int nbytes), 0);
 DEFINE_STUB(spdk_sock_set_recvbuf, int, (struct spdk_sock *sock, int sz), 0);
 DEFINE_STUB(spdk_sock_set_sendbuf, int, (struct spdk_sock *sock, int sz), 0);

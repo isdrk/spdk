@@ -612,6 +612,82 @@ spdk_nvme_ns_cmd_comparev_with_md(struct spdk_nvme_ns *ns, struct spdk_nvme_qpai
 }
 
 int
+spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			   bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io)
+{
+	assert(nvme_zcopy_io != NULL);
+
+	if (nvme_zcopy_io->commit) {
+		/* TODO: support zcopy write here */
+		SPDK_ERRLOG("zcopy write is not supported\n");
+		return -ENOTSUP;
+	} else {
+		struct nvme_request *req = SPDK_CONTAINEROF(nvme_zcopy_io,
+					   struct nvme_request,
+					   zcopy);
+		struct spdk_nvme_cpl cpl;
+		int rc;
+		struct spdk_nvme_qpair *qpair;
+
+		assert(req != NULL);
+
+		qpair = req->qpair;
+
+		/* For Zcopy read, just need to free zcopy buffer here */
+		rc = nvme_transport_qpair_free_request(qpair, req);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to free request %p for zcopy on qpair %d\n",
+				    req, qpair->id);
+			return rc;
+		}
+
+		cpl.status.sc = SPDK_NVME_SC_SUCCESS;
+		cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+		cb_fn(cb_arg, &cpl, NULL);
+
+		return 0;
+	}
+}
+
+/* TODO: Add support for MD as a separate buffer */
+int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
+{
+	struct nvme_request *req;
+	struct nvme_payload payload;
+	int rc = 0;
+
+	if (!_is_io_flags_valid(io_flags)) {
+		return -EINVAL;
+	}
+
+	if (populate) {
+		req = _nvme_ns_cmd_rw(ns, qpair, &payload, 0, 0, lba, lba_count, NULL,
+				      cb_arg, SPDK_NVME_OPC_READ, io_flags,
+				      apptag_mask, apptag, false, &rc);
+		if (req != NULL) {
+			req->zcopy.zcopy_cb_fn = cb_fn;
+			req->zcopy.populate = populate;
+			req->payload.zcopy = &req->zcopy;
+			return nvme_qpair_submit_request(qpair, req);
+		} else {
+			return nvme_ns_map_failure_rc(lba_count,
+						      ns->sectors_per_max_io,
+						      ns->sectors_per_stripe,
+						      qpair->ctrlr->opts.io_queue_requests,
+						      rc);
+		}
+	} else {
+		/* TODO: support zcopy write here */
+		return -ENOTSUP;
+	}
+}
+
+int
 spdk_nvme_ns_cmd_read(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair, void *buffer,
 		      uint64_t lba,
 		      uint32_t lba_count, spdk_nvme_cmd_cb cb_fn, void *cb_arg,

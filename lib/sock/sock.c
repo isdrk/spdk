@@ -421,6 +421,38 @@ spdk_sock_readv(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 }
 
 ssize_t
+spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf)
+{
+	if (sock == NULL || sock->flags.closed) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->recv_zcopy) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->recv_zcopy(sock, len, sock_buf);
+}
+
+int
+spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf)
+{
+	if (sock == NULL) {
+		errno = EBADF;
+		return -1;
+	}
+
+	if (!sock->net_impl->free_bufs) {
+		errno = ENOTSUP;
+		return -1;
+	}
+
+	return sock->net_impl->free_bufs(sock, sock_buf);
+}
+
+ssize_t
 spdk_sock_writev(struct spdk_sock *sock, struct iovec *iov, int iovcnt)
 {
 	if (sock == NULL || sock->flags.closed) {
@@ -796,6 +828,7 @@ spdk_sock_write_config_json(struct spdk_json_write_ctx *w)
 			spdk_json_write_named_uint32(w, "enable_placement_id", opts.enable_placement_id);
 			spdk_json_write_named_bool(w, "enable_zerocopy_send_server", opts.enable_zerocopy_send_server);
 			spdk_json_write_named_bool(w, "enable_zerocopy_send_client", opts.enable_zerocopy_send_client);
+			spdk_json_write_named_bool(w, "enable_zerocopy_recv", opts.enable_zerocopy_recv);
 			spdk_json_write_object_end(w);
 			spdk_json_write_object_end(w);
 		} else {
@@ -838,6 +871,7 @@ int spdk_sock_set_default_impl(const char *impl_name)
 
 	impl = sock_get_impl_by_name(impl_name);
 	if (!impl) {
+		SPDK_ERRLOG("no impls %s\n", impl_name);
 		errno = EINVAL;
 		return -1;
 	}
@@ -856,6 +890,19 @@ int spdk_sock_set_default_impl(const char *impl_name)
 	g_default_impl = impl;
 
 	return 0;
+}
+
+int
+spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
+{
+	assert(sock);
+	assert(caps);
+
+	if (sock->net_impl->get_caps) {
+		return sock->net_impl->get_caps(sock, caps);
+	}
+
+	return -ENOTSUP;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(sock)

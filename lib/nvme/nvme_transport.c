@@ -598,6 +598,17 @@ nvme_transport_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_r
 	return transport->ops.qpair_submit_request(qpair, req);
 }
 
+int
+nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	assert(qpair->transport != NULL);
+	if (qpair->transport->ops.qpair_free_request) {
+		return qpair->transport->ops.qpair_free_request(qpair, req);
+	}
+
+	return -ENOTSUP;
+}
+
 int32_t
 nvme_transport_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
 {

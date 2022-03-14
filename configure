@@ -105,6 +105,9 @@ function usage() {
 	echo "                           Path to clang_rt.fuzzer_no_main library required."
 	echo "                           Requires setting CC and CXX to clang."
 	echo "                           (Typically /usr/lib/llvm-VER/lib/clang/VER/lib/linux/libclang_rt.fuzzer_no_main-ARCH.a)"
+	echo " --with-xlio=[DIR]         Build xlio socket layer."
+	echo " --without-xlio            Path to custom libxlio installation directory may be specified."
+	echo "                           If path is given, it should contain 'include/mellanox/xlio_extra.h' file."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -621,6 +624,19 @@ for i in "$@"; do
 		--without-fuzzer)
 			CONFIG[FUZZER]=n
 			CONFIG[FUZZER_LIB]=
+			;;
+		--with-xlio=*)
+			check_dir "$i"
+			CONFIG[XLIO_DIR]=$(readlink -f ${i#*=})
+			CONFIG[XLIO]=y
+			;;
+		--with-xlio)
+			CONFIG[XLIO_DIR]=
+			CONFIG[XLIO]=y
+			;;
+		--without-xlio)
+			CONFIG[XLIO_DIR]=
+			CONFIG[XLIO]=n
 			;;
 		--)
 			break

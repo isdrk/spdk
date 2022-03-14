@@ -50,6 +50,7 @@
  * Maximum number of SGL elements.
  */
 #define NVME_TCP_MAX_SGL_DESCRIPTORS	(16)
+#define NVME_TCP_MAX_ZCOPY_IOVS	(128)
 
 #define MAKE_DIGEST_WORD(BUF, CRC32C) \
         (   ((*((uint8_t *)(BUF)+0)) = (uint8_t)((uint32_t)(CRC32C) >> 0)), \
@@ -111,7 +112,7 @@ struct nvme_tcp_pdu {
 	 * any unwanted padding */
 	struct spdk_sock_request			sock_req;
 	struct iovec					iov[NVME_TCP_MAX_SGL_DESCRIPTORS * 2];
-
+	uint32_t					mkeys[NVME_TCP_MAX_SGL_DESCRIPTORS * 2];
 	struct iovec					data_iov[NVME_TCP_MAX_SGL_DESCRIPTORS];
 	uint32_t					data_iovcnt;
 	uint32_t					data_len;
@@ -518,7 +519,7 @@ nvme_tcp_pdu_set_data_buf(struct nvme_tcp_pdu *pdu,
 
 	if (iovcnt == 1) {
 		_nvme_tcp_pdu_set_data(pdu, (void *)((uint64_t)iov[0].iov_base + buf_offset), buf_len);
-	} else {
+	} else if (iovcnt != 0) {
 		pdu_sgl = &pdu->sgl;
 
 		spdk_iov_sgl_init(pdu_sgl, pdu->data_iov, NVME_TCP_MAX_SGL_DESCRIPTORS, 0);

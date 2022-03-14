@@ -2760,7 +2760,8 @@ nvme_ctrlr_update_nvmf_ioccsz(struct spdk_nvme_ctrlr *ctrlr)
 {
 	if (ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_RDMA ||
 	    ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_TCP ||
-	    ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_FC) {
+	    ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_FC ||
+	    ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_CUSTOM) {
 		if (ctrlr->cdata.nvmf_specific.ioccsz < 4) {
 			NVME_CTRLR_ERRLOG(ctrlr, "Incorrect IOCCSZ %u, the minimum value should be 4\n",
 					  ctrlr->cdata.nvmf_specific.ioccsz);

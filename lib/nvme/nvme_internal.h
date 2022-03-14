@@ -207,6 +207,38 @@ extern pid_t g_spdk_nvme_pid;
 /* This value indicates that a read from a PCIe register is invalid. This can happen when a device is no longer present */
 #define SPDK_NVME_INVALID_REGISTER_VALUE 0xFFFFFFFFu
 
+struct spdk_nvme_zcopy_io {
+	/**
+	 * Array of iovecs allocated for zcopy
+	 */
+	struct iovec			*iovs;
+
+	/**
+	 * Number of iovecs in iovec array.
+	 */
+	int				iovcnt;
+
+	/**
+	 * Callback for zcopy
+	 */
+	spdk_nvme_cmd_zcopy_cb		zcopy_cb_fn;
+
+	/**
+	 * Whether the buffer should be populated with the real data
+	 */
+	uint8_t				populate : 1;
+
+	/**
+	 * Whether the buffer should be committed back to disk
+	 */
+	uint8_t				commit : 1;
+
+	/**
+	 * True if this request is in the 'start' phase of zcopy. False if in 'end'.
+	 */
+	uint8_t				start : 1;
+};
+
 enum nvme_payload_type {
 	NVME_PAYLOAD_TYPE_INVALID = 0,
 
@@ -215,6 +247,9 @@ enum nvme_payload_type {
 
 	/** nvme_request::u.sgl is valid for this request */
 	NVME_PAYLOAD_TYPE_SGL,
+
+	/** payload for this request is zcopy buffer*/
+	NVME_PAYLOAD_TYPE_ZCOPY,
 };
 
 /** Boot partition write states */
@@ -229,6 +264,11 @@ enum nvme_bp_write_state {
  * Descriptor for a request data payload.
  */
 struct nvme_payload {
+	/**
+	 * If zcopy != NULL, this is a zcopy payload.
+	 */
+	struct spdk_nvme_zcopy_io *zcopy;
+
 	/**
 	 * Functions for retrieving physical addresses for scattered payloads.
 	 */
@@ -270,7 +310,13 @@ struct nvme_payload {
 
 static inline enum nvme_payload_type
 nvme_payload_type(const struct nvme_payload *payload) {
-	return payload->reset_sgl_fn ? NVME_PAYLOAD_TYPE_SGL : NVME_PAYLOAD_TYPE_CONTIG;
+	if (payload->zcopy) {
+		return NVME_PAYLOAD_TYPE_ZCOPY;
+	} else if (payload->reset_sgl_fn) {
+		return NVME_PAYLOAD_TYPE_SGL;
+	} else {
+		return NVME_PAYLOAD_TYPE_CONTIG;
+	}
 }
 
 struct nvme_error_cmd {
@@ -324,6 +370,11 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		cb_fn;
 	void				*cb_arg;
 	STAILQ_ENTRY(nvme_request)	stailq;
+
+	/**
+	 * Zcopy information of this request's command.
+	 */
+	struct spdk_nvme_zcopy_io	zcopy;
 
 	struct spdk_nvme_qpair		*qpair;
 
@@ -1353,6 +1404,45 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 }
 
 static inline void
+nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
+			    void *cb_arg,
+			    struct spdk_nvme_qpair *qpair,
+			    struct nvme_request *req,
+			    struct spdk_nvme_cpl *cpl)
+{
+	struct spdk_nvme_cpl            err_cpl;
+	struct nvme_error_cmd           *cmd;
+
+	/* error injection at completion path,
+	 * only inject for successful completed commands
+	 */
+	if (spdk_unlikely(!TAILQ_EMPTY(&qpair->err_cmd_head) &&
+			  !spdk_nvme_cpl_is_error(cpl))) {
+		TAILQ_FOREACH(cmd, &qpair->err_cmd_head, link) {
+
+			if (cmd->do_not_submit) {
+				continue;
+			}
+
+			if ((cmd->opc == req->cmd.opc) && cmd->err_count) {
+
+				err_cpl = *cpl;
+				err_cpl.status.sct = cmd->status.sct;
+				err_cpl.status.sc = cmd->status.sc;
+
+				cpl = &err_cpl;
+				cmd->err_count--;
+				break;
+			}
+		}
+	}
+
+	if (cb_fn) {
+		cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+}
+
+static inline void
 nvme_free_request(struct nvme_request *req)
 {
 	assert(req != NULL);
@@ -1522,6 +1612,7 @@ int nvme_transport_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 void nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
 int nvme_transport_qpair_reset(struct spdk_nvme_qpair *qpair);
 int nvme_transport_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+int nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 int32_t nvme_transport_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 		uint32_t max_completions);
 void nvme_transport_admin_qpair_abort_aers(struct spdk_nvme_qpair *qpair);
