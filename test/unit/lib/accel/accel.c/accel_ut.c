@@ -623,8 +623,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(completed, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 1);
@@ -650,8 +649,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 1);
@@ -677,8 +675,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 3);
@@ -717,8 +714,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 3);
@@ -746,8 +742,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -786,8 +781,7 @@ test_sequence_fill_copy(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 3);
@@ -1051,8 +1045,7 @@ test_sequence_completion_error(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -1078,8 +1071,7 @@ test_sequence_completion_error(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -1107,8 +1099,7 @@ test_sequence_completion_error(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -1134,8 +1125,7 @@ test_sequence_completion_error(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -1201,8 +1191,7 @@ test_sequence_decompress(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1242,8 +1231,7 @@ test_sequence_decompress(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1277,8 +1265,7 @@ test_sequence_decompress(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1333,8 +1320,7 @@ test_sequence_reverse(void)
 	spdk_accel_sequence_reverse(seq);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1373,8 +1359,7 @@ test_sequence_reverse(void)
 	spdk_accel_sequence_reverse(seq);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1417,8 +1402,7 @@ test_sequence_reverse(void)
 	spdk_accel_sequence_reverse(seq);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1459,8 +1443,7 @@ test_sequence_reverse(void)
 	spdk_accel_sequence_reverse(seq);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1532,8 +1515,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1574,8 +1556,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1625,8 +1606,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1681,8 +1661,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1725,8 +1704,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1761,8 +1739,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1814,8 +1791,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -1867,8 +1843,7 @@ test_sequence_copy_elision(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2021,8 +1996,7 @@ test_sequence_accel_buffers(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2072,8 +2046,7 @@ test_sequence_accel_buffers(void)
 				    ut_sequence_step_cb, &completed);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2130,8 +2103,7 @@ test_sequence_accel_buffers(void)
 				    ut_sequence_step_cb, &completed);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2178,8 +2150,7 @@ test_sequence_accel_buffers(void)
 				    ut_sequence_step_cb, &completed);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2242,8 +2213,7 @@ test_sequence_accel_buffers(void)
 				    ut_sequence_step_cb, &completed);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2292,8 +2262,7 @@ test_sequence_accel_buffers(void)
 					  ut_sequence_step_cb, &completed);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2362,8 +2331,7 @@ test_sequence_accel_buffers(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2481,8 +2449,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 1);
@@ -2510,8 +2477,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 1);
@@ -2552,8 +2518,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -2594,8 +2559,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 2);
@@ -2632,8 +2596,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 	CU_ASSERT_EQUAL(completed, 0);
@@ -2694,8 +2657,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	CU_ASSERT_EQUAL(completed, 1);
 	CU_ASSERT(ut_seq.complete);
@@ -2719,8 +2681,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	CU_ASSERT_EQUAL(completed, 1);
 	CU_ASSERT(ut_seq.complete);
@@ -2744,8 +2705,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	CU_ASSERT_EQUAL(completed, 1);
 	CU_ASSERT(ut_seq.complete);
@@ -2769,8 +2729,7 @@ test_sequence_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	CU_ASSERT_EQUAL(completed, 1);
 	CU_ASSERT(ut_seq.complete);
@@ -2864,8 +2823,7 @@ test_sequence_module_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2905,8 +2863,7 @@ test_sequence_module_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -2941,8 +2898,7 @@ test_sequence_module_memory_domain(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3048,8 +3004,7 @@ test_sequence_crypto(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3091,8 +3046,7 @@ test_sequence_crypto(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3144,8 +3098,7 @@ test_sequence_crypto(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3300,8 +3253,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3360,8 +3312,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3424,8 +3375,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3487,8 +3437,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3540,8 +3489,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3590,8 +3538,7 @@ test_sequence_driver(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3692,8 +3639,7 @@ test_sequence_same_iovs(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 
@@ -3748,8 +3694,7 @@ test_sequence_same_iovs(void)
 	CU_ASSERT_EQUAL(rc, 0);
 
 	ut_seq.complete = false;
-	rc = spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
-	CU_ASSERT_EQUAL(rc, 0);
+	spdk_accel_sequence_finish(seq, ut_sequence_complete_cb, &ut_seq);
 
 	poll_threads();
 

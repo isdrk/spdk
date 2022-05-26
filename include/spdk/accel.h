@@ -580,11 +580,9 @@ int spdk_accel_append_check_crc32c(struct spdk_accel_sequence **seq,
  * \param seq Sequence to finish.
  * \param cb_fn Completion callback to be executed once all operations are executed.
  * \param cb_arg Argument to be passed to `cb_fn`.
- *
- * \return 0 on success, negative errno otherwise.
  */
-int spdk_accel_sequence_finish(struct spdk_accel_sequence *seq,
-			       spdk_accel_completion_cb cb_fn, void *cb_arg);
+void spdk_accel_sequence_finish(struct spdk_accel_sequence *seq,
+				spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Reverse a sequence, so that the last operation becomes the first and vice versa.

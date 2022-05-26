@@ -984,18 +984,7 @@ nvme_tcp_apply_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 		}
 	}
 
-	rc = spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_in_capsule, tcp_req);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n",
-			    tcp_req, req->payload.opts->accel_seq);
-		if (!req->payload.opts->accel_seq) {
-			/* There was no sequence from the upper layer but we added a copy.
-			 * In that case we are responsible to abort the sequence */
-			spdk_accel_sequence_abort(accel_seq);
-		}
-		return rc;
-	}
-
+	spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_in_capsule, tcp_req);
 	TAILQ_INSERT_TAIL(&tcp_req->tqpair->outstanding_reqs, tcp_req, link);
 	tcp_req->ordering.bits.in_progress_accel = 1;
 	return -EINPROGRESS;
@@ -1547,20 +1536,9 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 
 		}
 		spdk_accel_sequence_reverse(accel_seq);
-		rc = spdk_accel_sequence_finish(accel_seq,
+		spdk_accel_sequence_finish(accel_seq,
 						nvme_tcp_req_accel_seq_complete_cb,
 						tcp_req);
-		if (spdk_unlikely(rc)) {
-			SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n",
-				    tcp_req, accel_seq);
-			if (!req->payload.opts->accel_seq) {
-				/* There was no sequence from the upper layer but we added a copy.
-				 * In that case we are responsible to abort the sequence */
-				spdk_accel_sequence_abort(accel_seq);
-			}
-			goto out;
-		}
-
 		tcp_req->ordering.bits.in_progress_accel = 1;
 		return;
 	}
@@ -2040,11 +2018,7 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 	}
 
 	spdk_accel_sequence_reverse(accel_seq);
-	rc = spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb, tcp_req);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n", tcp_req, accel_seq);
-		goto abort_sequence;
-	}
+	spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb, tcp_req);
 	tcp_req->ordering.bits.in_progress_accel = 1;
 
 	return 0;
@@ -2511,13 +2485,7 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 		}
 	}
 
-	rc = spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n", tcp_req, accel_seq);
-		if (!req->payload.opts->accel_seq) {
-			spdk_accel_sequence_abort(accel_seq);
-		}
-	}
+	spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
 	tcp_req->ordering.bits.in_progress_accel = 1;
 
 	return rc;
