@@ -1919,3 +1919,122 @@ spdk_lvs_esnap_missing_remove(struct spdk_lvol *lvol)
 	free((char *)missing->esnap_id);
 	free(missing);
 }
+
+static void
+lvs_esnap_hotplug_done(void *cb_arg, int bserrno)
+{
+	struct spdk_lvol	*lvol = cb_arg;
+	struct spdk_lvol_store	*lvs = lvol->lvol_store;
+
+	if (bserrno != 0) {
+		SPDK_ERRLOG("lvol %s/%s: failed to hotplug blob_bdev due to error %d\n",
+			    lvs->name, lvol->name, bserrno);
+	}
+}
+
+static void
+lvs_esnap_missing_hotplug(struct spdk_lvs_missing_esnap *missing)
+{
+	struct spdk_lvol_store	*lvs = missing->lvol_store;
+	struct spdk_lvol	*lvol, *tmp, *last_missing;
+	struct spdk_bs_dev	*bs_dev;
+	const void		*esnap_id = missing->esnap_id;
+	uint32_t		id_len = missing->id_len;
+	int			rc;
+
+	assert(lvs->thread == spdk_get_thread());
+
+	/*
+	 * When lvs->esnap_bs_bdev_create() tries to load an external snapshot, it can encounter
+	 * errors that lead it to calling spdk_lvs_esnap_missing_add(). This function needs to be
+	 * sure that such modifications do not lead to missing->lvols tailqs or references to memory
+	 * that this function will free.
+	 *
+	 * While this function is running, no other thread can add items to missing->lvols. If the
+	 * list is mutated, it must have been done by this function or something in its call graph
+	 * running on this thread.
+	 */
+
+	/* Remember the last lvol on the list. Iteration will stop once it has been processed. */
+	last_missing = TAILQ_LAST(&missing->lvols, missing_lvols);
+
+	TAILQ_FOREACH_SAFE(lvol, &missing->lvols, missing_link, tmp) {
+		/*
+		 * Remove the lvol from the tailq so that tailq corruption is avoided if
+		 * lvs->esnap_bs_dev_create() calls spdk_lvs_esnap_missing_add(lvol).
+		 */
+		TAILQ_REMOVE(&missing->lvols, lvol, missing_link);
+		lvol->missing = NULL;
+
+		bs_dev = NULL;
+		rc = lvs->esnap_bs_dev_create(lvs, lvol, lvol->blob, esnap_id, id_len, &bs_dev);
+		if (rc != 0) {
+			SPDK_ERRLOG("lvol %s: failed to create esnap bs_dev: error %d\n",
+				    lvol->unique_id, rc);
+			lvol->missing = missing;
+			TAILQ_INSERT_TAIL(&missing->lvols, lvol, missing_link);
+		} else {
+			spdk_blob_set_esnap_bs_dev(lvol->blob, bs_dev,
+						   lvs_esnap_hotplug_done, lvol);
+		}
+
+		if (lvol == last_missing) {
+			/*
+			 * Anything after last_missing was added due to some problem encountered
+			 * while trying to create the esnap bs_dev.
+			 */
+			break;
+		}
+	}
+
+	if (TAILQ_EMPTY(&missing->lvols)) {
+		RB_REMOVE(missing_esnap_tree, &lvs->missing_esnaps, missing);
+		free((void *)missing->esnap_id);
+		free(missing);
+	}
+}
+
+/*
+ * Notify each lvstore created on this thread that is missing a bdev by the specified name or uuid
+ * that the bdev now exists.
+ */
+bool
+spdk_lvs_esnap_notify_hotplug(const void *esnap_id, uint32_t id_len)
+{
+	struct spdk_lvs_missing_esnap *found;
+	struct spdk_lvs_missing_esnap find = { 0 };
+	struct spdk_lvol_store	*lvs;
+	struct spdk_thread	*thread = spdk_get_thread();
+	bool			ret = false;
+
+	find.esnap_id = esnap_id;
+	find.id_len = id_len;
+
+	pthread_mutex_lock(&g_lvol_stores_mutex);
+	TAILQ_FOREACH(lvs, &g_lvol_stores, link) {
+		if (thread != lvs->thread) {
+			/*
+			 * It is expected that this is called from vbdev_lvol's examine_config()
+			 * callback. The lvstore was likely loaded do a creation happening as a
+			 * result of an RPC call or opening of an existing lvstore via
+			 * examine_disk() callback. RPC calls, examine_disk(), and examine_config()
+			 * should all be happening only on the app thread. The "wrong thread"
+			 * condition will only happen when an application is doing something weird.
+			 */
+			SPDK_NOTICELOG("Discarded examine for lvstore %s: wrong thread\n",
+				       lvs->name);
+			continue;
+		}
+
+		found = RB_FIND(missing_esnap_tree, &lvs->missing_esnaps, &find);
+		if (found == NULL) {
+			continue;
+		}
+
+		ret = true;
+		lvs_esnap_missing_hotplug(found);
+	}
+	pthread_mutex_unlock(&g_lvol_stores_mutex);
+
+	return ret;
+}
