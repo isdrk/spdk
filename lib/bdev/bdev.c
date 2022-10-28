@@ -394,6 +394,7 @@ static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bi
 static bool bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *ch, struct spdk_bdev_io *bio_to_abort);
 static bool claim_type_is_v2(enum spdk_bdev_claim_type type);
 static void bdev_desc_release_claims(struct spdk_bdev_desc *desc);
+static void claim_reset(struct spdk_bdev *bdev);
 
 #define bdev_get_ext_io_opt(opts, field, defval) \
 	(((opts) != NULL && offsetof(struct spdk_bdev_ext_io_opts, field) + \
@@ -664,6 +665,7 @@ static void
 bdev_examine(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_module *module;
+	struct spdk_bdev_module_claim *claim, *tmpclaim;
 	uint32_t action;
 
 	if (!bdev_ok_to_examine(bdev)) {
@@ -713,7 +715,53 @@ bdev_examine(struct spdk_bdev *bdev)
 		}
 		break;
 	default:
-		break;
+		/* Examine by all bdev modules with a v2 claim */
+		assert(claim_type_is_v2(bdev->internal.claim_type));
+		/*
+		 * Removal of tailq nodes while iterating can cause the iteration to jump out of the
+		 * list, perhaps accessing freed memory. Without protection, this could happen
+		 * while the lock is dropped during the examine callback.
+		 */
+		bdev->internal.examine_in_progress++;
+
+		TAILQ_FOREACH(claim, &bdev->internal.claim.v2.claims, link) {
+			module = claim->module;
+
+			if (module == NULL) {
+				/* This is a vestigial claim, held by examine_count */
+				continue;
+			}
+
+			if (module->examine_disk == NULL) {
+				continue;
+			}
+
+			spdk_spin_lock(&module->internal.spinlock);
+			module->internal.action_in_progress++;
+			spdk_spin_unlock(&module->internal.spinlock);
+
+			/* Call examine_disk without holding internal.spinlock. */
+			spdk_spin_unlock(&bdev->internal.spinlock);
+			module->examine_disk(bdev);
+			spdk_spin_lock(&bdev->internal.spinlock);
+		}
+
+		assert(bdev->internal.examine_in_progress > 0);
+		bdev->internal.examine_in_progress--;
+		if (bdev->internal.examine_in_progress == 0) {
+			/* Remove any claims that were released during examine_disk */
+			TAILQ_FOREACH_SAFE(claim, &bdev->internal.claim.v2.claims, link, tmpclaim) {
+				if (claim->desc != NULL) {
+					continue;
+				}
+
+				TAILQ_REMOVE(&bdev->internal.claim.v2.claims, claim, link);
+				free(claim);
+			}
+			if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
+				claim_reset(bdev);
+			}
+		}
 	}
 
 	spdk_spin_unlock(&bdev->internal.spinlock);
@@ -8016,13 +8064,18 @@ bdev_desc_release_claims(struct spdk_bdev_desc *desc)
 	assert(spdk_spin_held(&bdev->internal.spinlock));
 	assert(claim_type_is_v2(bdev->internal.claim_type));
 
-	TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
-	free(desc->claim);
-	desc->claim = NULL;
-
-	if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
-		claim_reset(bdev);
+	if (bdev->internal.examine_in_progress == 0) {
+		TAILQ_REMOVE(&bdev->internal.claim.v2.claims, desc->claim, link);
+		free(desc->claim);
+		if (TAILQ_EMPTY(&bdev->internal.claim.v2.claims)) {
+			claim_reset(bdev);
+		}
+	} else {
+		/* This is a dead claim that will be cleaned up when bdev_examine() is done. */
+		desc->claim->module = NULL;
+		desc->claim->desc = NULL;
 	}
+	desc->claim = NULL;
 }
 
 /*
