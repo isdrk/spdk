@@ -14,7 +14,7 @@ C_SRCS = nvme_ctrlr_cmd.c nvme_ctrlr.c nvme_fabric.c nvme_ns_cmd.c \
 	nvme_quirks.c nvme_transport.c nvme_discovery.c \
 	nvme_ctrlr_ocssd_cmd.c nvme_ns_ocssd_cmd.c nvme_tcp.c \
 	nvme_opal.c nvme_io_msg.c nvme_poll_group.c nvme_zns.c \
-	nvme_cuse.c
+	nvme_cuse.c nvme_nvda_tcp.c
 ifeq ($(OS),Linux)
 C_SRCS += nvme_vfio_user.c
 endif

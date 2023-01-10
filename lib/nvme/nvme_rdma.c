@@ -78,14 +78,6 @@
 #define NVME_RDMA_POLL_GROUP_CHECK_QPN(_rqpair, qpn)				\
 	((_rqpair)->rdma_qp && (_rqpair)->rdma_qp->qp->qp_num == (qpn))	\
 
-struct nvme_rdma_memory_domain {
-	TAILQ_ENTRY(nvme_rdma_memory_domain) link;
-	uint32_t ref;
-	struct ibv_pd *pd;
-	struct spdk_memory_domain *domain;
-	struct spdk_memory_domain_rdma_ctx rdma_ctx;
-};
-
 enum nvme_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
 	RDMA_WR_TYPE_SEND,
@@ -226,7 +218,7 @@ struct nvme_rdma_qpair {
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	free_reqs;
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	outstanding_reqs;
 
-	struct nvme_rdma_memory_domain		*memory_domain;
+	struct spdk_rdma_memory_domain		*memory_domain;
 
 	/* Count of outstanding send objects */
 	uint16_t				current_num_sends;
@@ -278,13 +270,6 @@ struct spdk_nvme_rdma_rsp {
 	struct nvme_rdma_wr	rdma_wr;
 };
 
-struct nvme_rdma_memory_translation_ctx {
-	void *addr;
-	size_t length;
-	uint32_t lkey;
-	uint32_t rkey;
-};
-
 static const char *rdma_cm_event_str[] = {
 	"RDMA_CM_EVENT_ADDR_RESOLVED",
 	"RDMA_CM_EVENT_ADDR_ERROR",
@@ -309,77 +294,28 @@ static struct nvme_rdma_poller *nvme_rdma_poll_group_get_poller(struct nvme_rdma
 static void nvme_rdma_poll_group_put_poller(struct nvme_rdma_poll_group *group,
 		struct nvme_rdma_poller *poller);
 
-static TAILQ_HEAD(, nvme_rdma_memory_domain) g_memory_domains = TAILQ_HEAD_INITIALIZER(
-			g_memory_domains);
-static pthread_mutex_t g_memory_domains_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static struct nvme_rdma_memory_domain *
-nvme_rdma_get_memory_domain(struct ibv_pd *pd)
+static inline void *
+nvme_rdma_calloc(size_t nmemb, size_t size)
 {
-	struct nvme_rdma_memory_domain *domain = NULL;
-	struct spdk_memory_domain_ctx ctx;
-	int rc;
-
-	pthread_mutex_lock(&g_memory_domains_lock);
-
-	TAILQ_FOREACH(domain, &g_memory_domains, link) {
-		if (domain->pd == pd) {
-			domain->ref++;
-			pthread_mutex_unlock(&g_memory_domains_lock);
-			return domain;
-		}
-	}
-
-	domain = calloc(1, sizeof(*domain));
-	if (!domain) {
-		SPDK_ERRLOG("Memory allocation failed\n");
-		pthread_mutex_unlock(&g_memory_domains_lock);
+	if (!nmemb || !size) {
 		return NULL;
 	}
 
-	domain->rdma_ctx.size = sizeof(domain->rdma_ctx);
-	domain->rdma_ctx.ibv_pd = pd;
-	ctx.size = sizeof(ctx);
-	ctx.user_ctx = &domain->rdma_ctx;
-
-	rc = spdk_memory_domain_create(&domain->domain, SPDK_DMA_DEVICE_TYPE_RDMA, &ctx,
-				       SPDK_RDMA_DMA_DEVICE);
-	if (rc) {
-		SPDK_ERRLOG("Failed to create memory domain\n");
-		free(domain);
-		pthread_mutex_unlock(&g_memory_domains_lock);
-		return NULL;
+	if (!g_nvme_hooks.get_rkey) {
+		return calloc(nmemb, size);
+	} else {
+		return spdk_zmalloc(nmemb * size, 0, NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
 	}
-
-	domain->pd = pd;
-	domain->ref = 1;
-	TAILQ_INSERT_TAIL(&g_memory_domains, domain, link);
-
-	pthread_mutex_unlock(&g_memory_domains_lock);
-
-	return domain;
 }
 
-static void
-nvme_rdma_put_memory_domain(struct nvme_rdma_memory_domain *device)
+static inline void
+nvme_rdma_free(void *buf)
 {
-	if (!device) {
-		return;
+	if (!g_nvme_hooks.get_rkey) {
+		free(buf);
+	} else {
+		spdk_free(buf);
 	}
-
-	pthread_mutex_lock(&g_memory_domains_lock);
-
-	assert(device->ref > 0);
-
-	device->ref--;
-
-	if (device->ref == 0) {
-		spdk_memory_domain_destroy(device->domain);
-		TAILQ_REMOVE(&g_memory_domains, device, link);
-		free(device);
-	}
-
-	pthread_mutex_unlock(&g_memory_domains_lock);
 }
 
 static int nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
@@ -785,7 +721,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 		return -1;
 	}
 
-	rqpair->memory_domain = nvme_rdma_get_memory_domain(rqpair->rdma_qp->qp->pd);
+	rqpair->memory_domain = spdk_rdma_get_memory_domain(rqpair->rdma_qp->qp->pd);
 	if (!rqpair->memory_domain) {
 		SPDK_ERRLOG("Failed to get memory domain\n");
 		return -1;
@@ -1426,7 +1362,7 @@ nvme_rdma_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
 
 static inline int
 nvme_rdma_get_memory_translation(struct nvme_request *req, struct nvme_rdma_qpair *rqpair,
-				 struct nvme_rdma_memory_translation_ctx *_ctx)
+				 struct spdk_rdma_memory_translation_ctx *_ctx)
 {
 	struct spdk_memory_domain_translation_ctx ctx;
 	struct spdk_memory_domain_translation_result dma_translation = {.iov_count = 0};
@@ -1509,7 +1445,7 @@ nvme_rdma_build_contig_inline_request(struct nvme_rdma_qpair *rqpair,
 				      struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct nvme_rdma_memory_translation_ctx ctx = {
+	struct spdk_rdma_memory_translation_ctx ctx = {
 		.addr = req->payload.contig_or_cb_arg + req->payload_offset,
 		.length = req->payload_size
 	};
@@ -1558,7 +1494,7 @@ nvme_rdma_build_contig_request(struct nvme_rdma_qpair *rqpair,
 			       struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct nvme_rdma_memory_translation_ctx ctx = {
+	struct spdk_rdma_memory_translation_ctx ctx = {
 		.addr = req->payload.contig_or_cb_arg + req->payload_offset,
 		.length = req->payload_size
 	};
@@ -1607,7 +1543,7 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 {
 	struct nvme_request *req = rdma_req->req;
 	struct spdk_nvmf_cmd *cmd = &rqpair->cmds[rdma_req->id];
-	struct nvme_rdma_memory_translation_ctx ctx;
+	struct spdk_rdma_memory_translation_ctx ctx;
 	uint32_t remaining_size;
 	uint32_t sge_length;
 	int rc, max_num_sgl, num_sgl_desc;
@@ -1710,7 +1646,7 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 				   struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct nvme_rdma_memory_translation_ctx ctx;
+	struct spdk_rdma_memory_translation_ctx ctx;
 	uint32_t length;
 	int rc;
 
@@ -2124,7 +2060,7 @@ nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	nvme_rdma_qpair_abort_reqs(qpair, 0);
 	nvme_qpair_deinit(qpair);
 
-	nvme_rdma_put_memory_domain(rqpair->memory_domain);
+	spdk_rdma_put_memory_domain(rqpair->memory_domain);
 
 	spdk_free(rqpair);
 

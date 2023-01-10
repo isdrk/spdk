@@ -38,6 +38,8 @@ DEFINE_STUB(spdk_nvme_transport_available, bool,
 DEFINE_STUB(spdk_pci_event_listen, int, (void), 0);
 DEFINE_STUB(spdk_nvme_poll_group_process_completions, int64_t, (struct spdk_nvme_poll_group *group,
 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb), 0);
+DEFINE_STUB(nvme_get_transport, const struct spdk_nvme_transport *, (const char *transport_name), NULL);
+DEFINE_STUB(nvme_transport_get_trtype, spdk_nvme_transport_type_t, (const struct spdk_nvme_transport *transport), 0);
 
 static bool ut_destruct_called = false;
 void
@@ -1035,8 +1037,7 @@ test_spdk_nvme_transport_id_parse_trtype(void)
 	/* test function returned value when str and strtype not NULL, but str value
 	 * not "PCIe" or "RDMA" */
 	str = "unit_test";
-	CU_ASSERT(spdk_nvme_transport_id_parse_trtype(trtype, str) == 0);
-	CU_ASSERT((*trtype) == SPDK_NVME_TRANSPORT_CUSTOM);
+	CU_ASSERT(spdk_nvme_transport_id_parse_trtype(trtype, str) == -ENOENT);
 
 	/* test trtype value when use function "strcasecmp" to compare str and "PCIe"，not case-sensitive */
 	str = "PCIe";

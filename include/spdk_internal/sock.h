@@ -101,7 +101,12 @@ struct spdk_net_impl {
 	int (*get_opts)(struct spdk_sock_impl_opts *opts, size_t *len);
 	int (*set_opts)(const struct spdk_sock_impl_opts *opts, size_t len);
 
+	int (*get_caps)(struct spdk_sock *sock, struct spdk_sock_caps *caps);
+
 	STAILQ_ENTRY(spdk_net_impl) link;
+
+	ssize_t (*recv_zcopy)(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
+	int (*free_bufs)(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
 };
 
 void spdk_net_impl_register(struct spdk_net_impl *impl, int priority);
@@ -143,7 +148,8 @@ spdk_sock_request_complete(struct spdk_sock *sock, struct spdk_sock_request *req
 	int rc = 0;
 
 	req->internal.offset = 0;
-	req->internal.is_zcopy = 0;
+	req->internal.is_zcopy = false;
+	req->has_memory_domain_data = false;
 
 	closed = sock->flags.closed;
 	sock->cb_cnt++;

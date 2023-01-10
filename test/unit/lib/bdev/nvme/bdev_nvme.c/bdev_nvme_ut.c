@@ -225,6 +225,12 @@ DEFINE_STUB(spdk_accel_submit_crc32cv, int, (struct spdk_io_channel *ch, uint32_
 
 DEFINE_STUB_V(spdk_nvme_ctrlr_prepare_for_reset, (struct spdk_nvme_ctrlr *ctrlr));
 
+DEFINE_STUB_V(spdk_nvme_zcopy_io_get_iovec, (struct spdk_nvme_zcopy_io *zcopy_io,
+		struct iovec **iovs, int *iovcnt));
+
+DEFINE_STUB(spdk_nvme_ns_cmd_zcopy_end, int, (spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+	    bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io), 0);
+
 struct ut_nvme_req {
 	uint16_t			opc;
 	spdk_nvme_cmd_cb		cb_fn;
@@ -988,6 +994,16 @@ spdk_nvme_ns_get_uuid(const struct spdk_nvme_ns *ns)
 enum spdk_nvme_csi
 spdk_nvme_ns_get_csi(const struct spdk_nvme_ns *ns) {
 	return ns->csi;
+}
+
+int
+spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+			     uint64_t lba, uint32_t lba_count,
+			     spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
+			     uint32_t io_flags, bool populate,
+			     uint16_t apptag_mask, uint16_t apptag)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_READ, NULL, cb_arg);
 }
 
 int

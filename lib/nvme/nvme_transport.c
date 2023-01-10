@@ -110,6 +110,15 @@ struct spdk_nvme_ctrlr *nvme_transport_ctrlr_construct(const struct spdk_nvme_tr
 
 	ctrlr = transport->ops.ctrlr_construct(trid, opts, devhandle);
 
+	if (ctrlr && (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED)) {
+		int rc;
+		rc = spdk_nvme_init_zcopy_resource();
+		if (rc) {
+			nvme_transport_ctrlr_destruct(ctrlr);
+			ctrlr = NULL;
+		}
+	}
+
 	return ctrlr;
 }
 
@@ -133,6 +142,11 @@ nvme_transport_ctrlr_destruct(struct spdk_nvme_ctrlr *ctrlr)
 	const struct spdk_nvme_transport *transport = nvme_get_transport(ctrlr->trid.trstring);
 
 	assert(transport != NULL);
+
+	if (ctrlr->flags & SPDK_NVME_CTRLR_ZCOPY_SUPPORTED) {
+		spdk_nvme_free_zcopy_resource();
+	}
+
 	return transport->ops.ctrlr_destruct(ctrlr);
 }
 
@@ -600,6 +614,17 @@ nvme_transport_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_r
 	return transport->ops.qpair_submit_request(qpair, req);
 }
 
+int
+nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	assert(qpair->transport != NULL);
+	if (qpair->transport->ops.qpair_free_request) {
+		return qpair->transport->ops.qpair_free_request(qpair, req);
+	}
+
+	return -ENOTSUP;
+}
+
 int32_t
 nvme_transport_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
 {
@@ -851,4 +876,10 @@ spdk_nvme_transport_set_opts(const struct spdk_nvme_transport_opts *opts, size_t
 #undef SET_FIELD
 
 	return 0;
+}
+
+const char *
+nvme_transport_get_trname(const struct spdk_nvme_transport *transport)
+{
+	return transport->ops.name;
 }

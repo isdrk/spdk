@@ -23,6 +23,11 @@ extern "C" {
 struct spdk_sock;
 struct spdk_sock_group;
 
+struct spdk_sock_buf {
+	struct iovec iov;
+	struct spdk_sock_buf *next;
+};
+
 /**
  * Anywhere this struct is used, an iovec array is assumed to
  * immediately follow the last member in memory, without any
@@ -57,6 +62,8 @@ struct spdk_sock_request {
 		bool				is_zcopy;
 	} internal;
 
+	bool				has_memory_domain_data;
+	uint32_t			*mkeys;
 	int				iovcnt;
 	/* struct iovec			iov[]; */
 };
@@ -149,6 +156,20 @@ struct spdk_sock_impl_opts {
 	 * Set default PSK identity. Used by ssl socket module.
 	 */
 	char *psk_identity;
+
+	/**
+	 * Enable or disable use of zero copy flow on receive. Used by vma socket module.
+	 */
+	bool enable_zerocopy_recv;
+};
+
+/**
+ * SPDK socket capabilities. The structure is used to get capabilities specific for a socket instance
+ */
+struct spdk_sock_caps {
+	bool zcopy_send;
+	void *ibv_pd;
+	bool zcopy_recv;
 };
 
 /**
@@ -561,6 +582,38 @@ int spdk_sock_set_default_impl(const char *impl_name);
  * \param w JSON write context
  */
 void spdk_sock_write_config_json(struct spdk_json_write_ctx *w);
+
+int spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps);
+
+/**
+ * Receive a message from the given socket in zero copy mode.
+ *
+ * Messages are delivered in chunks as a list of @ref spdk_sock_buf
+ * structures. These structures point to buffers which belong to
+ * socket layer. When data in the buffers is consumed buffers shall be
+ * released with @ref spdk_sock_free_bufs function.
+ *
+ * \param sock Socket to receive message.
+ * \param len Length of the data to be read.
+ * \param sock_buf Placeholder for pointer to socket buffers list.
+ *
+ * \return the length of the received message on success, -1 on failure.
+ */
+ssize_t spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
+
+/**
+ * Release socket buffers.
+ *
+ * This function can be used to release multiple buffers at once if
+ * they are chained together. Buffers do not have to be released in
+ * the same order and same batches as they were received.
+ *
+ * \param sock Socket on which buffers were received.
+ * \param sock_buf Pointer to buffers list to release.
+ *
+ * \return 0 on success, -1 on failure.
+ */
+int spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
 
 #ifdef __cplusplus
 }

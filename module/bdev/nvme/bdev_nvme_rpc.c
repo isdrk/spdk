@@ -1171,7 +1171,11 @@ rpc_bdev_nvme_stats_per_channel(struct spdk_io_channel_iter *i)
 	for (j = 0; j < stat->num_transports; j++) {
 		tr_stat = stat->transport_stat[j];
 		spdk_json_write_object_begin(ctx->w);
-		spdk_json_write_named_string(ctx->w, "trname", spdk_nvme_transport_id_trtype_str(tr_stat->trtype));
+		if (!strlen(tr_stat->trname)) {
+			spdk_json_write_named_string(ctx->w, "trname", spdk_nvme_transport_id_trtype_str(tr_stat->trtype));
+		} else {
+			spdk_json_write_named_string(ctx->w, "trname", tr_stat->trname);
+		}
 
 		switch (stat->transport_stat[j]->trtype) {
 		case SPDK_NVME_TRANSPORT_RDMA:
@@ -1183,6 +1187,11 @@ rpc_bdev_nvme_stats_per_channel(struct spdk_io_channel_iter *i)
 			break;
 		case SPDK_NVME_TRANSPORT_TCP:
 			rpc_bdev_nvme_tcp_stats(ctx->w, tr_stat);
+			break;
+		case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
+			if (strcasecmp(tr_stat->trname, "NVDA_TCP") == 0) {
+				rpc_bdev_nvme_tcp_stats(ctx->w, tr_stat);
+			}
 			break;
 		default:
 			SPDK_WARNLOG("Can't handle trtype %d %s\n", tr_stat->trtype,

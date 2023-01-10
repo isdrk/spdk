@@ -171,6 +171,7 @@ struct perf_task {
 #if HAVE_LIBAIO
 	struct iocb		iocb;
 #endif
+	struct spdk_nvme_zcopy_io	*zcopy_io;
 };
 
 struct worker_thread {
@@ -201,6 +202,8 @@ static int g_outstanding_commands;
 
 static bool g_latency_ssd_tracking_enable;
 static int g_latency_sw_tracking_level;
+
+static bool g_zcopy = false;
 
 static bool g_vmd;
 static const char *g_workload_type;
@@ -354,6 +357,8 @@ perf_set_sock_opts(const char *impl_name, const char *field, uint32_t val, const
 		}
 	} else if (strcmp(field, "zerocopy_threshold") == 0) {
 		sock_opts.zerocopy_threshold = val;
+	} else if (strcmp(field, "enable_zerocopy_recv") == 0) {
+		sock_opts.enable_zerocopy_recv = val;
 	} else {
 		fprintf(stderr, "Warning: invalid or unprocessed socket opts field: %s\n", field);
 		return;
@@ -779,6 +784,7 @@ register_files(int argc, char **argv)
 }
 #endif
 
+static void check_io_complete(void *ctx, const struct spdk_nvme_cpl *cpl);
 static void io_complete(void *ctx, const struct spdk_nvme_cpl *cpl);
 
 static void
@@ -787,6 +793,10 @@ nvme_setup_payload(struct perf_task *task, uint8_t pattern)
 	uint32_t max_io_size_bytes, max_io_md_size;
 	void *buf;
 	int rc;
+
+	if (g_zcopy) {
+		return;
+	}
 
 	/* maximum extended lba format size from all active namespace,
 	 * it's same with g_io_size_bytes for namespace without metadata.
@@ -817,6 +827,62 @@ nvme_setup_payload(struct perf_task *task, uint8_t pattern)
 			exit(1);
 		}
 	}
+}
+
+static void
+nvme_read_zcopy_end_done(void *ctx,
+			 const struct spdk_nvme_cpl *cpl,
+			 struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	io_complete(ctx,cpl);
+}
+
+static int
+nvme_read_zcopy_end(struct perf_task *task)
+{
+	int rc;
+
+	rc = spdk_nvme_ns_cmd_zcopy_end(nvme_read_zcopy_end_done,
+					task, false, task->zcopy_io);
+
+	if (rc != 0) {
+		fprintf(stderr, "zcopy end failed: rc = %d\n", rc);
+
+		task_complete(task);
+	}
+
+	return rc;
+}
+
+static void
+nvme_read_zcopy_start_done(void *ctx,
+			   const struct spdk_nvme_cpl *cpl,
+			   struct spdk_nvme_zcopy_io *zcopy_io)
+{
+	struct iovec *iovs;
+	int iovcnt;
+	struct perf_task *task = ctx;
+
+	/* only check cpl here, for rx zcopy, always need to free zcopy buffer */
+	check_io_complete(ctx, cpl);
+
+	spdk_nvme_zcopy_io_get_iovec(zcopy_io, &iovs, &iovcnt);
+
+	if (!iovs) {
+		/* TODO: handle error case */
+		fprintf(stderr, "zcopy iovs is NULL\n");
+		/* task->ns_ctx->is_draining = true; */
+	}
+
+	assert(task->iovs == NULL);
+	assert(task->iovcnt == 0);
+
+	task->iovs = iovs;
+	task->iovcnt = iovcnt;
+	task->zcopy_io = zcopy_io;
+
+	nvme_read_zcopy_end(task);
+
 }
 
 static int
@@ -861,7 +927,14 @@ nvme_submit_io(struct perf_task *task, struct ns_worker_ctx *ns_ctx,
 	}
 
 	if (task->is_read) {
-		if (task->iovcnt == 1) {
+		if (g_zcopy) {
+			return spdk_nvme_ns_cmd_zcopy_start(entry->u.nvme.ns, ns_ctx->u.nvme.qpair[qp_num],
+							    lba, entry->io_size_blocks,
+							    nvme_read_zcopy_start_done,
+							    task, entry->io_flags, true,
+							    task->dif_ctx.apptag_mask, task->dif_ctx.app_tag);
+
+		} else if (task->iovcnt == 1) {
 			return spdk_nvme_ns_cmd_read_with_md(entry->u.nvme.ns, ns_ctx->u.nvme.qpair[qp_num],
 							     task->iovs[0].iov_base, task->md_iov.iov_base,
 							     lba,
@@ -1490,6 +1563,11 @@ task_complete(struct perf_task *task)
 		entry->fn_table->verify_io(task, entry);
 	}
 
+	if (g_zcopy) {
+		task->iovs = NULL;
+		task->iovcnt = 0;
+	}
+
 	/*
 	 * is_draining indicates when time has expired or io_submitted exceeded
 	 * g_number_ios for the test run and we are just waiting for the previously
@@ -1497,9 +1575,11 @@ task_complete(struct perf_task *task)
 	 * replace the one just completed.
 	 */
 	if (spdk_unlikely(ns_ctx->is_draining)) {
-		spdk_dma_free(task->iovs[0].iov_base);
-		free(task->iovs);
-		spdk_dma_free(task->md_iov.iov_base);
+		if (!g_zcopy) {
+			spdk_dma_free(task->iovs[0].iov_base);
+			free(task->iovs);
+			spdk_dma_free(task->md_iov.iov_base);
+		}
 		free(task);
 	} else {
 		submit_single_io(task);
@@ -1507,7 +1587,7 @@ task_complete(struct perf_task *task)
 }
 
 static void
-io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
+check_io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
 {
 	struct perf_task *task = ctx;
 
@@ -1525,6 +1605,14 @@ io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
 			task->ns_ctx->is_draining = true;
 		}
 	}
+}
+
+static void
+io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
+{
+	struct perf_task *task = ctx;
+
+	check_io_complete(ctx, cpl);
 
 	task_complete(task);
 }
@@ -1835,8 +1923,11 @@ usage(char *program_name)
 	printf("\t");
 	spdk_log_usage(stdout, "-T");
 	printf("\t[-V, --enable-vmd enable VMD enumeration]\n");
-	printf("\t[-z, --disable-zcopy <impl> disable zero copy send for the given sock implementation. Default for posix impl]\n");
-	printf("\t[-Z, --enable-zcopy <impl> enable zero copy send for the given sock implementation]\n");
+	printf("\t[-z, --disable-zcopy-send <impl> disable zero copy send for the given sock implementation. Default for posix impl]\n");
+	printf("\t[-Z, --enable-zcopy-send <impl> enable zero copy send for the given sock implementation]\n");
+	printf("\t[--disable-zcopy-recv <impl> disable zero copy receive for the given sock implementation. Default for posix impl]\n");
+	printf("\t[--enable-zcopy-recv <impl> enable zero copy receive for the given sock implementation]\n");
+	printf("\t[-n, --enable-nvme-zcopy enable use of nvme zero copy]\n");
 	printf("\t[-A, --buffer-alignment IO buffer alignment. Must be power of 2 and not less than cache line (%u)]\n",
 	       SPDK_CACHE_LINE_SIZE);
 	printf("\t[-S, --default-sock-impl <impl> set the default sock impl, e.g. \"posix\"]\n");
@@ -2274,7 +2365,7 @@ parse_metadata(const char *metacfg_str)
 	return 0;
 }
 
-#define PERF_GETOPT_SHORT "a:b:c:d:e:gi:lmo:q:r:k:s:t:w:z:A:C:DF:GHILM:NO:P:Q:RS:T:U:VZ:"
+#define PERF_GETOPT_SHORT "a:b:c:d:e:gi:lmno:q:r:k:s:t:w:z:A:C:DF:GHILM:NO:P:Q:RS:T:U:VZ:"
 
 static const struct option g_perf_cmdline_opts[] = {
 #define PERF_WARMUP_TIME	'a'
@@ -2293,6 +2384,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"enable-ssd-latency-tracking", no_argument, NULL, PERF_ENABLE_SSD_LATENCY_TRACING},
 #define PERF_CPU_USAGE	'm'
 	{"cpu-usage", no_argument, NULL, PERF_CPU_USAGE},
+#define PERF_ENABLE_NVME_ZCOPY	'n'
+	{"enable-nvme-zcopy",			no_argument,	NULL, PERF_ENABLE_NVME_ZCOPY},
 #define PERF_IO_SIZE	'o'
 	{"io-size",			required_argument,	NULL, PERF_IO_SIZE},
 #define PERF_IO_DEPTH	'q'
@@ -2309,8 +2402,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"number-ios",			required_argument,	NULL, PERF_NUMBER_IOS},
 #define PERF_IO_PATTERN	'w'
 	{"io-pattern",			required_argument,	NULL, PERF_IO_PATTERN},
-#define PERF_DISABLE_ZCOPY	'z'
-	{"disable-zcopy",			required_argument,	NULL, PERF_DISABLE_ZCOPY},
+#define PERF_DISABLE_ZCOPY_SEND	'z'
+	{"disable-zcopy-send",			required_argument,	NULL, PERF_DISABLE_ZCOPY_SEND},
 #define PERF_BUFFER_ALIGNMENT	'A'
 	{"buffer-alignment",			required_argument,	NULL, PERF_BUFFER_ALIGNMENT},
 #define PERF_MAX_COMPLETIONS_PER_POLL	'C'
@@ -2347,8 +2440,8 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"num-unused-qpairs", required_argument, NULL, PERF_NUM_UNUSED_IO_QPAIRS},
 #define PERF_ENABLE_VMD	'V'
 	{"enable-vmd", no_argument, NULL, PERF_ENABLE_VMD},
-#define PERF_ENABLE_ZCOPY	'Z'
-	{"enable-zcopy",			required_argument,	NULL, PERF_ENABLE_ZCOPY},
+#define PERF_ENABLE_ZCOPY_SEND	'Z'
+	{"enable-zcopy-send",			required_argument,	NULL, PERF_ENABLE_ZCOPY_SEND},
 #define PERF_TRANSPORT_STATISTICS	257
 	{"transport-stats", no_argument, NULL, PERF_TRANSPORT_STATISTICS},
 #define PERF_IOVA_MODE		258
@@ -2373,6 +2466,10 @@ static const struct option g_perf_cmdline_opts[] = {
 	{"transport-tos", required_argument, NULL, PERF_TRANSPORT_TOS},
 #define PERF_RDMA_SRQ_SIZE	268
 	{"rdma-srq-size", required_argument, NULL, PERF_RDMA_SRQ_SIZE},
+#define PERF_DISABLE_ZCOPY_RECV	269
+	{"disable-zcopy-recv",			required_argument,	NULL, PERF_DISABLE_ZCOPY_RECV},
+#define PERF_ENABLE_ZCOPY_RECV	270
+	{"enable-zcopy-recv",			required_argument,	NULL, PERF_ENABLE_ZCOPY_RECV},
 	/* Should be the last element */
 	{0, 0, 0, 0}
 };
@@ -2598,11 +2695,20 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 			ssl_used = true;
 			perf_set_sock_opts("ssl", "psk_identity", 0, optarg);
 			break;
-		case PERF_DISABLE_ZCOPY:
+		case PERF_DISABLE_ZCOPY_SEND:
 			perf_set_sock_opts(optarg, "enable_zerocopy_send_client", 0, NULL);
 			break;
-		case PERF_ENABLE_ZCOPY:
+		case PERF_ENABLE_ZCOPY_SEND:
 			perf_set_sock_opts(optarg, "enable_zerocopy_send_client", 1, NULL);
+			break;
+		case PERF_DISABLE_ZCOPY_RECV:
+			perf_set_sock_opts(optarg, "enable_zerocopy_recv", 0, NULL);
+			break;
+		case PERF_ENABLE_ZCOPY_RECV:
+			perf_set_sock_opts(optarg, "enable_zerocopy_recv", 1, NULL);
+			break;
+		case PERF_ENABLE_NVME_ZCOPY:
+			g_zcopy = true;
 			break;
 		case PERF_DEFAULT_SOCK_IMPL:
 			sock_impl = optarg;

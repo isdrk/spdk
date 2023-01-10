@@ -36,6 +36,7 @@ enum spdk_dma_device_type {
 	 * Start of the range of vendor-specific DMA device types
 	 */
 	SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START = 1000,
+	SPDK_DMA_DEVICE_TYPE_RDMA_TCP = SPDK_DMA_DEVICE_VENDOR_SPECIFIC_TYPE_START,
 	/**
 	 * End of the range of vendor-specific DMA device types
 	 */

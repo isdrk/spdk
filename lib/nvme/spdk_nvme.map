@@ -171,6 +171,9 @@
 	spdk_nvme_ns_cmd_writev_ext;
 	spdk_nvme_ns_cmd_readv_ext;
 	spdk_nvme_ns_cmd_verify;
+	spdk_nvme_ns_cmd_zcopy_start;
+	spdk_nvme_ns_cmd_zcopy_end;
+	spdk_nvme_zcopy_io_get_iovec;
 
 	spdk_nvme_qpair_get_optimal_poll_group;
 	spdk_nvme_qpair_process_completions;

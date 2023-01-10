@@ -62,6 +62,11 @@ DEFINE_STUB(nvme_ctrlr_get_current_process,
 	    (struct spdk_nvme_ctrlr *ctrlr),
 	    (struct spdk_nvme_ctrlr_process *)(uintptr_t)0x1);
 
+DEFINE_STUB(nvme_transport_qpair_free_request,
+	    int,
+	    (struct spdk_nvme_qpair *qpair, struct nvme_request *req),
+	    0);
+
 int
 spdk_pci_enumerate(struct spdk_pci_driver *driver, spdk_pci_enum_cb enum_cb, void *enum_ctx)
 {

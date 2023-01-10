@@ -29,7 +29,8 @@ def sock_impl_set_options(client,
                           tls_version=None,
                           enable_ktls=None,
                           psk_key=None,
-                          psk_identity=None):
+                          psk_identity=None,
+                          enable_zerocopy_recv=None):
     """Set parameters for the socket layer implementation.
 
     Args:
@@ -46,6 +47,7 @@ def sock_impl_set_options(client,
         enable_ktls: enable or disable Kernel TLS (optional)
         psk_key: set psk_key (optional)
         psk_identity: set psk_identity (optional)
+        enable_zerocopy_recv: enable or disable zerocopy on receive (optional)
     """
     params = {}
 
@@ -74,6 +76,8 @@ def sock_impl_set_options(client,
         params['psk_key'] = psk_key
     if psk_identity is not None:
         params['psk_identity'] = psk_identity
+    if enable_zerocopy_recv is not None:
+        params['enable_zerocopy_recv'] = enable_zerocopy_recv
 
     return client.call('sock_impl_set_options', params)
 

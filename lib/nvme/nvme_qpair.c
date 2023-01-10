@@ -988,6 +988,7 @@ _nvme_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *r
 				req->submit_tick = spdk_get_ticks();
 				req->cpl.status.sct = cmd->status.sct;
 				req->cpl.status.sc = cmd->status.sc;
+				req->queued = true;
 				STAILQ_INSERT_TAIL(&qpair->err_req_head, req, stailq);
 				cmd->err_count--;
 				return 0;
@@ -1039,15 +1040,15 @@ _nvme_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *r
 	}
 
 error:
-	if (req->parent != NULL) {
-		nvme_request_remove_child(req->parent, req);
-	}
-
 	/* The request is from queued_req list we should trigger the callback from caller */
 	if (spdk_unlikely(req->queued)) {
 		nvme_qpair_manual_complete_request(qpair, req, SPDK_NVME_SCT_GENERIC,
 						   SPDK_NVME_SC_INTERNAL_DEVICE_ERROR, true, true);
 		return rc;
+	}
+
+	if (req->parent != NULL) {
+		nvme_request_remove_child(req->parent, req);
 	}
 
 	if (req->user_buffer && req->payload_size) {

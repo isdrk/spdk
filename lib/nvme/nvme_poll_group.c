@@ -229,7 +229,15 @@ spdk_nvme_poll_group_free_stats(struct spdk_nvme_poll_group *group,
 
 	for (i = 0; i < stat->num_transports; i++) {
 		STAILQ_FOREACH(tgroup, &group->tgroups, link) {
-			if (nvme_transport_get_trtype(tgroup->transport) == stat->transport_stat[i]->trtype) {
+			spdk_nvme_transport_type_t trtype = nvme_transport_get_trtype(tgroup->transport);
+			const char *trname = nvme_transport_get_trname(tgroup->transport);
+
+			if ((trtype != SPDK_NVME_TRANSPORT_CUSTOM &&
+			     trtype != SPDK_NVME_TRANSPORT_CUSTOM_FABRICS &&
+			     trtype == stat->transport_stat[i]->trtype) ||
+			    ((trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+			      trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) &&
+			     !strcasecmp(trname, stat->transport_stat[i]->trname))) {
 				nvme_transport_poll_group_free_stats(tgroup, stat->transport_stat[i]);
 				freed_stats++;
 				break;

@@ -2429,7 +2429,7 @@ verify_test_params(struct spdk_app_opts *opts)
 		return 1;
 	}
 
-	if (g_io_size > SPDK_BDEV_LARGE_BUF_MAX_SIZE) {
+	if (false && (g_io_size > SPDK_BDEV_LARGE_BUF_MAX_SIZE)) {
 		printf("I/O size of %d is greater than zero copy threshold (%d).\n",
 		       g_io_size, SPDK_BDEV_LARGE_BUF_MAX_SIZE);
 		printf("Zero copy mechanism will not be used.\n");

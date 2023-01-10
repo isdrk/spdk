@@ -12,6 +12,7 @@
 
 /* Contains hooks definition */
 #include "spdk/nvme.h"
+#include "spdk/dma.h"
 
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
 #define SPDK_RDMA_RXE_VENDOR_ID_OLD 0
@@ -90,6 +91,21 @@ struct spdk_rdma_srq {
 enum spdk_rdma_memory_map_role {
 	SPDK_RDMA_MEMORY_MAP_ROLE_TARGET,
 	SPDK_RDMA_MEMORY_MAP_ROLE_INITIATOR
+};
+
+struct spdk_rdma_memory_domain {
+	TAILQ_ENTRY(spdk_rdma_memory_domain) link;
+	uint32_t ref;
+	struct ibv_pd *pd;
+	struct spdk_memory_domain *domain;
+	struct spdk_memory_domain_rdma_ctx rdma_ctx;
+};
+
+struct spdk_rdma_memory_translation_ctx {
+	void *addr;
+	size_t length;
+	uint32_t lkey;
+	uint32_t rkey;
 };
 
 /**
@@ -287,5 +303,34 @@ spdk_rdma_get_pd(struct ibv_context *context);
  * \param pd Pointer to the Protection Domain
  */
 void spdk_rdma_put_pd(struct ibv_pd *pd);
+
+/**
+ * Get memory domain for the specified protection domain.
+ *
+ * If memory domain does not exist for the specified protection domain, it will be allocated.
+ * If memory domain already exists, reference will be increased.
+ *
+ * \param pd Protection domain of memory domain
+ * \return Pointer to memory domain or NULL;
+ */
+struct spdk_rdma_memory_domain * spdk_rdma_get_memory_domain(struct ibv_pd *pd);
+
+/**
+ * Get TCP memory domain for the specified protection domain.
+ *
+ * If memory domain does not exist for the specified protection domain, it will be allocated.
+ * If memory domain already exists, reference will be increased.
+ *
+ * \param pd Protection domain of memory domain
+ * \return Pointer to memory domain or NULL;
+ */
+struct spdk_rdma_memory_domain * spdk_rdma_get_tcp_memory_domain(struct ibv_pd *pd);
+
+/**
+ * Release a reference to a memory domain, which will be destroyed when reference becomes 0.
+ *
+ * \param domain Pointer to memory domain
+ */
+void spdk_rdma_put_memory_domain(struct spdk_rdma_memory_domain *domain);
 
 #endif /* SPDK_RDMA_H */
