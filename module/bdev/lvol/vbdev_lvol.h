@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
+ *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_VBDEV_LVOL_H
@@ -10,6 +11,8 @@
 #include "spdk/bdev_module.h"
 
 #include "spdk_internal/lvolstore.h"
+
+extern struct spdk_bdev_module g_lvol_if;
 
 struct lvol_store_bdev {
 	struct spdk_lvol_store	*lvs;
@@ -115,5 +118,19 @@ struct spdk_lvol *vbdev_lvol_get_from_bdev(struct spdk_bdev *bdev);
  */
 void vbdev_lvs_grow(struct spdk_lvol_store *lvs,
 		    spdk_lvs_op_complete cb_fn, void *cb_arg);
+
+/**
+ * \brief Callback for creating external snapshot bdevs
+ *
+ * \param bs_ctx Blobstore context: The struct lvol_store for this lvol's lvolstore.
+ * \param blob_ctx Blob context: The struct lvol for this lvol.
+ * \param blob The lvol's blob.
+ * \param _bs_dev On success, a newly allocated blobstore device is returned
+ *
+ * \return 0 on success, else a negative errno.
+ */
+int vbdev_lvol_esnap_dev_create(void *bs_ctx, void *blob_ctx, struct spdk_blob *blob,
+				const void *esnap_id, uint32_t id_len,
+				struct spdk_bs_dev **_bs_dev);
 
 #endif /* SPDK_VBDEV_LVOL_H */
