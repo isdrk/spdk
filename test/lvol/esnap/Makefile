@@ -5,6 +5,7 @@ SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 
 TEST_FILE = esnap.c
 
-SPDK_LIB_LIST = accel bdev blob blob_bdev dma init lvol notify
+SPDK_LIB_LIST = accel bdev bdev_aio blob blob_bdev dma init notify
 
 include $(SPDK_ROOT_DIR)/mk/spdk.unittest.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk

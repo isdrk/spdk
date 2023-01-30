@@ -2,16 +2,20 @@
  *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include "spdk/stdinc.h"
 #include "spdk_cunit.h"
 #include "spdk/string.h"
 #include "spdk/init.h"
+#include "bdev/aio/bdev_aio.h"
 
 #include "common/lib/ut_multithread.c"
 
 #include "bdev/bdev.c"
+#include "lvol/lvol.c"
 #include "bdev/malloc/bdev_malloc.c"
 #include "bdev/lvol/vbdev_lvol.c"
 #include "accel/accel_sw.c"
+#include "bdev/part.c"
 #include "blob/blobstore.h"
 
 #include "unit/lib/json_mock.c"
@@ -22,6 +26,61 @@ DEFINE_STUB(pmem_memcpy_persist, void *, (void *pmemdest, const void *src, size_
 DEFINE_STUB(pmem_is_pmem, int, (const void *addr, size_t len), 0);
 DEFINE_STUB(pmem_memset_persist, void *, (void *pmemdest, int c, size_t len), NULL);
 #endif
+
+/* Half way between CU_ASSERT() and SPDK_CU_ASSERT_FATAL(): jump to the "fail" label on failure. */
+#define CU_ASSERT_OR_FAIL(test) { \
+	bool pass = (test); \
+	CU_ASSERT(pass); \
+	if (!pass) { \
+		CU_FAIL(#test); \
+		goto fail; \
+	} \
+}
+
+char g_testdir[PATH_MAX];
+
+static void
+set_testdir(const char *path)
+{
+	char *tmp;
+
+	tmp = realpath(path, NULL);
+	snprintf(g_testdir, sizeof(g_testdir), "%s", tmp ? dirname(tmp) : ".");
+	free(tmp);
+}
+
+static int
+make_test_file(size_t size, char *path, size_t len, const char *name)
+{
+	int fd;
+	int rc;
+
+	CU_ASSERT(len <= INT32_MAX);
+	if (snprintf(path, len, "%s/%s", g_testdir, name) >= (int)len) {
+		return -ENAMETOOLONG;
+	}
+	fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
+	if (fd < 0) {
+		return -errno;
+	}
+	rc = ftruncate(fd, size);
+	if (rc != 0) {
+		rc = -errno;
+		unlink(path);
+	}
+	close(fd);
+	return rc;
+}
+
+static void
+unregister_cb(void *ctx, int bdeverrno)
+{
+	int *rc = ctx;
+
+	if (rc != NULL) {
+		*rc = bdeverrno;
+	}
+}
 
 struct op_with_handle_data {
 	union {
@@ -280,6 +339,104 @@ esnap_clone_io(void)
 }
 
 static void
+esnap_hotplug(void)
+{
+	const char *uuid_esnap = "22218fb6-6743-483d-88b1-de643dc7c0bc";
+	struct malloc_bdev_opts malloc_opts = { 0 };
+	const uint32_t bs_size_bytes = 10 * 1024 * 1024;
+	const uint32_t bs_block_size = 4096;
+	const uint32_t cluster_size = 32 * 1024;
+	const uint32_t esnap_size_bytes = 2 * cluster_size;
+	struct op_with_handle_data owh_data = { 0 };
+	struct spdk_bdev *malloc_bdev = NULL, *bdev;
+	struct spdk_lvol_store *lvs;
+	struct spdk_lvol *lvol;
+	char aiopath[PATH_MAX];
+	int rc, rc2;
+
+	g_bdev_opts.bdev_auto_examine = true;
+
+	/* Create aio device to hold the lvstore. */
+	rc = make_test_file(bs_size_bytes, aiopath, sizeof(aiopath), "esnap_hotplug.aio");
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	rc = create_aio_bdev("aio1", aiopath, bs_block_size, false);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+
+	rc = vbdev_lvs_create("aio1", "lvs1", cluster_size, 0, 0,
+			      lvs_op_with_handle_cb, &owh_data);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvs != NULL);
+	lvs = owh_data.u.lvs;
+
+	/* Create esnap device */
+	spdk_uuid_parse(&malloc_opts.uuid, uuid_esnap);
+	malloc_opts.name = "esnap_malloc";
+	malloc_opts.num_blocks = esnap_size_bytes / bs_block_size;
+	malloc_opts.block_size = bs_block_size;
+	rc = create_malloc_disk(&malloc_bdev, &malloc_opts);
+	CU_ASSERT_OR_FAIL(rc == 0);
+
+	/* Create esnap clone */
+	vbdev_lvol_create_bdev_clone(uuid_esnap, lvs, "clone1",
+				     lvol_op_with_handle_cb, clear_owh(&owh_data));
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvol != NULL);
+
+	/* Verify that lvol bdev exists */
+	bdev = spdk_bdev_get_by_name("lvs1/clone1");
+	CU_ASSERT_OR_FAIL(bdev != NULL);
+
+	/* Unload the lvstore and verify the bdev is gone. */
+	rc = rc2 = 0xbad;
+	bdev_aio_delete("aio1", unregister_cb, &rc);
+	CU_ASSERT(spdk_bdev_get_by_name(uuid_esnap) != NULL)
+	delete_malloc_disk(malloc_bdev->name, unregister_cb, &rc2);
+	poll_threads();
+	CU_ASSERT_OR_FAIL(rc == 0);
+	CU_ASSERT_OR_FAIL(rc2 == 0);
+	CU_ASSERT_OR_FAIL(spdk_bdev_get_by_name("lvs1/clone1") == NULL)
+	CU_ASSERT_OR_FAIL(spdk_bdev_get_by_name(uuid_esnap) == NULL)
+
+	/* Trigger the reload of the lvstore */
+	rc = create_aio_bdev("aio1", aiopath, bs_block_size, false);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+
+	/* Verify the lvol is loaded without creating a bdev. */
+	lvol = spdk_lvol_get_by_names("lvs1", "clone1");
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/clone1") == NULL)
+	CU_ASSERT_OR_FAIL(lvol != NULL);
+	CU_ASSERT_OR_FAIL(lvol->missing != NULL);
+
+	/* Create the esnap device and verify that the bdev is created. */
+	malloc_bdev = NULL;
+	rc = create_malloc_disk(&malloc_bdev, &malloc_opts);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+	CU_ASSERT(malloc_bdev != NULL);
+	CU_ASSERT(lvol->missing == NULL);
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/clone1") != NULL);
+
+	/* Clean up */
+fail:
+	rc = rc2 = 0xbad;
+	bdev_aio_delete("aio1", unregister_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+	if (malloc_bdev != NULL) {
+		delete_malloc_disk(malloc_bdev->name, unregister_cb, &rc2);
+		poll_threads();
+		CU_ASSERT(rc2 == 0);
+	}
+	rc = unlink(aiopath);
+	CU_ASSERT(rc == 0);
+}
+
+static void
 bdev_init_cb(void *arg, int rc)
 {
 	assert(rc == 0);
@@ -303,12 +460,15 @@ main(int argc, char **argv)
 	unsigned int	num_failures;
 	int rc;
 
+	set_testdir(argv[0]);
+
 	CU_set_error_action(CUEA_ABORT);
 	CU_initialize_registry();
 
 	suite = CU_add_suite("esnap_io", NULL, NULL);
 
 	CU_ADD_TEST(suite, esnap_clone_io);
+	CU_ADD_TEST(suite, esnap_hotplug);
 
 	allocate_threads(2);
 	set_thread(0);

@@ -2937,7 +2937,8 @@ lvol_esnap_hotplug_scenario(struct hotplug_data *hotplug_data, struct missing_da
 
 	/* Perform hotplug */
 	for (mdata = missing_data; mdata->esnap_id != NULL; mdata++) {
-		spdk_lvs_esnap_notify_hotplug(mdata->esnap_id, strlen(mdata->esnap_id) + 1);
+		spdk_lvs_esnap_notify_hotplug(mdata->esnap_id, strlen(mdata->esnap_id) + 1,
+					      lvol_op_with_handle_complete, NULL);
 	}
 
 	/* Verify lvol->missing and back_bs_dev */
