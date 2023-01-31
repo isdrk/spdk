@@ -248,7 +248,7 @@ run_test "unittest_lvol" $valgrind $testdir/lib/lvol/lvol.c/lvol_ut
 if grep -q '#define SPDK_CONFIG_RDMA 1' $rootdir/include/spdk/config.h; then
 	run_test "unittest_nvme_rdma" $valgrind $testdir/lib/nvme/nvme_rdma.c/nvme_rdma_ut
 	run_test "unittest_nvmf_transport" $valgrind $testdir/lib/nvmf/transport.c/transport_ut
-	run_test "unittest_rdma" $valgrind $testdir/lib/rdma/common.c/common_ut
+	run_test "unittest_rdma" $valgrind $testdir/lib/rdma_utils/rdma_utils.c/rdma_utils_ut
 fi
 
 if grep -q '#define SPDK_CONFIG_NVME_CUSE 1' $rootdir/include/spdk/config.h; then

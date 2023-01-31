@@ -29,6 +29,7 @@ struct spdk_accel_crypto_key_create_param {
 	char *hex_key;	/**< Hexlified key */
 	char *hex_key2;	/**< Hexlified key2 */
 	char *key_name;	/**< Key name */
+	uint8_t tweak_offset;	/** 64 bytes tweak offset in 128 bytes IV. Possible values are 0-8 bytes */
 };
 
 enum accel_opcode {
@@ -417,7 +418,7 @@ int spdk_accel_append_encrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			      uint64_t iv, uint32_t block_size, int flags,
-			      spdk_accel_step_cb cb_fn, void *cb_arg);
+			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
 
 /**
  * Append a decrypt operation to a sequence.
@@ -455,7 +456,7 @@ int spdk_accel_append_decrypt(struct spdk_accel_sequence **seq, struct spdk_io_c
 			      struct iovec *src_iovs, uint32_t src_iovcnt,
 			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			      uint64_t iv, uint32_t block_size, int flags,
-			      spdk_accel_step_cb cb_fn, void *cb_arg);
+			      spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey);
 
 /**
  * Finish a sequence and execute all its operations. After the completion callback is executed, the
@@ -590,6 +591,22 @@ int spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_cryp
 int spdk_accel_get_opc_module_name(enum accel_opcode opcode, const char **module_name);
 
 /**
+ * Return the memory domain used by specific opcode.
+ *
+ * The returned memory domain depends on the accel module which implements the \b opcode
+ *
+ * \param opcode Accel Framework Opcode enum value.
+ * \param domains Pointer to an array of memory domains to be filled by this function. The user should allocate big enough
+  * array to keep all memory domains.
+ * \param array_size size of \b domains array
+ * \return the number of entries in \b domains array or negated errno. If returned value is bigger than \b array_size passed by the user
+  * then the user should increase the size of \b domains array and call this function again. There is no guarantees that
+  * the content of \b domains array is valid in that case.
+ */
+int spdk_accel_get_opc_memory_domain(enum accel_opcode opcode, struct spdk_memory_domain **domains,
+				     int array_size);
+
+/**
  * Override the assignment of an opcode to an module.
  *
  * \param opcode Accel Framework Opcode enum value. Valid codes can be retrieved using
@@ -610,6 +627,22 @@ struct spdk_json_write_ctx;
  * \param w JSON write context
  */
 void spdk_accel_write_config_json(struct spdk_json_write_ctx *w);
+
+/**
+ * Select platform driver to execute operation chains.
+ *
+ * \param name Name of the driver.
+ *
+ * \return 0 on success, negetive errno otherwise.
+ */
+int spdk_accel_set_driver(const char *name);
+
+/**
+ * Retrieves accel memory domain.
+ *
+ * \return Accel memory domain.
+ */
+struct spdk_memory_domain *spdk_accel_get_memory_domain(void);
 
 #ifdef __cplusplus
 }

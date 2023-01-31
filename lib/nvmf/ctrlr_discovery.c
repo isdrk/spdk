@@ -43,7 +43,8 @@ static bool
 nvmf_discovery_compare_trtype(const struct spdk_nvme_transport_id *trid1,
 			      const struct spdk_nvme_transport_id *trid2)
 {
-	if (trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM) {
+	if (trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM ||
+	    trid1->trtype == SPDK_NVME_TRANSPORT_CUSTOM_FABRICS) {
 		return strcasecmp(trid1->trstring, trid2->trstring) == 0;
 	} else {
 		return trid1->trtype == trid2->trtype;

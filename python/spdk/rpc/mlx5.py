@@ -5,7 +5,8 @@
 from spdk.rpc.helpers import deprecated_alias
 
 
-def mlx5_scan_accel_module(client, qp_size=None, num_requests=None):
+def mlx5_scan_accel_module(client, qp_size=None, num_requests=None, split_mb_blocks=None, allowed_crypto_devs=None,
+                           siglast=None):
     """Enable mlx5 accel module. Scans all mlx5 devices which can perform needed operations
 
     Args:
@@ -18,4 +19,10 @@ def mlx5_scan_accel_module(client, qp_size=None, num_requests=None):
         params['qp_size'] = qp_size
     if num_requests is not None:
         params['num_requests'] = num_requests
+    if split_mb_blocks is not None:
+        params['split_mb_blocks'] = split_mb_blocks
+    if allowed_crypto_devs is not None:
+        params['allowed_crypto_devs'] = allowed_crypto_devs
+    if siglast is not None:
+        params['siglast'] = siglast
     return client.call('mlx5_scan_accel_module', params)

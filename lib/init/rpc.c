@@ -23,7 +23,8 @@ rpc_subsystem_poll(void *arg)
 }
 
 int
-spdk_rpc_initialize(const char *listen_addr)
+spdk_rpc_initialize(const char *listen_addr, FILE *log_file,
+		    enum spdk_log_level log_level)
 {
 	int rc;
 
@@ -35,6 +36,9 @@ spdk_rpc_initialize(const char *listen_addr)
 	if (!spdk_rpc_verify_methods()) {
 		return -EINVAL;
 	}
+
+	spdk_jsonrpc_set_log_file(log_file);
+	spdk_jsonrpc_set_log_level(log_level);
 
 	/* Listen on the requested address */
 	rc = spdk_rpc_listen(listen_addr);

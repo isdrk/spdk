@@ -34,17 +34,8 @@
 #include "spdk/stdinc.h"
 #include "spdk/env.h"
 
-#if defined(__FreeBSD__)
-#include <sys/event.h>
-#define SPDK_KEVENT
-#else
 #include <sys/epoll.h>
-#define SPDK_EPOLL
-#endif
-
-#if defined(__linux__)
 #include <linux/errqueue.h>
-#endif
 
 #include <dlfcn.h>
 
@@ -57,6 +48,7 @@
 #include "spdk/util.h"
 #include "spdk/string.h"
 #include "spdk_internal/sock.h"
+#include "spdk_internal/event.h"
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
@@ -81,9 +73,8 @@ enum {
 };
 
 struct xlio_sock_packet {
-	struct xlio_recvfrom_zcopy_packet_t *xlio_packet;
+	struct xlio_socketxtreme_packet_desc_t xlio_packet;
 	int refs;
-	void *xlio_packet_id;
 	STAILQ_ENTRY(xlio_sock_packet) link;
 };
 
@@ -98,26 +89,35 @@ struct spdk_xlio_sock {
 	uint32_t		sendmsg_idx;
 	struct ibv_pd *pd;
 	bool			pending_recv;
+	bool			pending_send;
 	bool			zcopy;
 	bool			recv_zcopy;
 	int			so_priority;
 
-	char			xlio_packets_buf[XLIO_PACKETS_BUF_SIZE];
 	struct xlio_sock_packet	*packets;
 	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
 	STAILQ_HEAD(, xlio_sock_packet)	received_packets;
-	size_t			cur_iov_idx;
+	struct xlio_buff_t	*cur_xlio_buf;
 	size_t			cur_offset;
 	struct xlio_sock_buf	*buffers;
 	struct spdk_sock_buf	*free_buffers;
+	uint64_t		batch_start_tsc;
+	int			batch_nr;
+	int			ring_fd;
 
 	TAILQ_ENTRY(spdk_xlio_sock)	link;
+	TAILQ_ENTRY(spdk_xlio_sock)	link_send;
 };
 
 struct spdk_xlio_sock_group_impl {
 	struct spdk_sock_group_impl	base;
-	int				fd;
+	int				ring_fd;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_recv;
+	TAILQ_HEAD(, spdk_xlio_sock)	pending_send;
+	struct xlio_sock_packet	*packets;
+	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
+	struct xlio_sock_buf	*buffers;
+	struct spdk_sock_buf	*free_buffers;
 };
 
 static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
@@ -130,10 +130,16 @@ static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
 	.enable_zerocopy_send_server = true,
 	.enable_zerocopy_send_client = true,
 	.enable_zerocopy_recv = true,
-	.zerocopy_threshold = 4096
+	.zerocopy_threshold = 4096,
+	.enable_tcp_nodelay = false,
+	.buffers_pool_size = 1024,
+	.packets_pool_size = 1024,
+	.enable_early_init = true
 };
 
 static int _sock_flush_ext(struct spdk_sock *sock);
+static int xlio_sock_poll_fd(int fd);
+
 static struct xlio_api_t *g_xlio_api;
 static void *g_xlio_handle;
 
@@ -149,9 +155,6 @@ static struct {
 	ssize_t (*recv)(int sockfd, void *buf, size_t len, int flags);
 	ssize_t (*recvmsg)(int sockfd, struct msghdr *msg, int flags);
 	ssize_t (*sendmsg)(int sockfd, const struct msghdr *msg, int flags);
-	int (*epoll_create1)(int flags);
-	int (*epoll_ctl)(int epfd, int op, int fd, struct epoll_event *event);
-	int (*epoll_wait)(int epfd, struct epoll_event *events, int maxevents, int timeout);
 	int (*fcntl)(int fd, int cmd, ... /* arg */);
 	int (*ioctl)(int fd, unsigned long request, ...);
 	int (*getsockopt)(int sockfd, int level, int optname, void *restrict optval, socklen_t *restrict optlen);
@@ -208,9 +211,6 @@ xlio_load(void)
 	GET_SYM(recv);
 	GET_SYM(recvmsg);
 	GET_SYM(sendmsg);
-	GET_SYM(epoll_create1);
-	GET_SYM(epoll_ctl);
-	GET_SYM(epoll_wait);
 	GET_SYM(fcntl);
 	GET_SYM(ioctl);
 	GET_SYM(getsockopt);
@@ -282,6 +282,7 @@ static int
 xlio_init(void)
 {
 	int rc;
+	uint64_t required_caps;
 #pragma pack(push, 1)
 	struct {
 		uint8_t flags;
@@ -304,7 +305,23 @@ xlio_init(void)
 		SPDK_ERRLOG("Failed to get XLIO API\n");
 		return -1;
 	}
-	SPDK_NOTICELOG("Got XLIO API %p\n", g_xlio_api);
+	printf("Got XLIO API %p\n", g_xlio_api);
+
+	if (g_xlio_api->magic != XLIO_MAGIC_NUMBER) {
+		SPDK_ERRLOG("Unexpected XLIO API magic number: expected %" PRIx64 ", got %" PRIx64 "\n",
+			    (uint64_t)XLIO_MAGIC_NUMBER, g_xlio_api->magic);
+		return -1;
+	}
+
+	required_caps = XLIO_EXTRA_API_GET_SOCKET_RINGS_FDS |
+		XLIO_EXTRA_API_SOCKETXTREME_POLL |
+		XLIO_EXTRA_API_SOCKETXTREME_FREE_PACKETS |
+		XLIO_EXTRA_API_IOCTL;
+	if ((g_xlio_api->cap_mask & required_caps) != required_caps) {
+		SPDK_ERRLOG("Required XLIO caps are missing: required %" PRIx64 ", got %" PRIx64 "\n",
+			    required_caps, g_xlio_api->cap_mask);
+		return -1;
+	}
 
 	cmsg = (struct cmsghdr *)cbuf;
 	cmsg->cmsg_level = SOL_SOCKET;
@@ -504,6 +521,7 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 	}
 
 	sock->fd = fd;
+	sock->ring_fd = -1;
 
 #if defined(SPDK_ZEROCOPY)
 	flag = 1;
@@ -522,7 +540,8 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 	if (type != SPDK_SOCK_CREATE_LISTEN) {
 		sock->pd = xlio_get_pd(fd);
 		if (!sock->pd) {
-			SPDK_WARNLOG("Failed to get pd\n");
+			SPDK_ERRLOG("Failed to get pd\n");
+			goto fail;
 		}
 	}
 
@@ -537,7 +556,7 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 				       sizeof(struct xlio_sock_packet));
 		if (!sock->packets) {
 			SPDK_ERRLOG("Failed to allocated packets pool for socket %d\n", fd);
-			goto err_free_sock;
+			goto fail;
 		}
 
 		STAILQ_INIT(&sock->free_packets);
@@ -551,12 +570,23 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 				       sizeof(struct xlio_sock_buf));
 		if (!sock->buffers) {
 			SPDK_ERRLOG("Failed to allocated buffers pool for socket %d\n", fd);
-			goto err_free_packets;
+			goto fail;
 		}
 
 		sock->free_buffers = &sock->buffers[0].sock_buf;
 		for (i = 1; i < RECV_ZCOPY_BUFFERS_POOL_SIZE; ++i) {
 			sock->buffers[i - 1].sock_buf.next = &sock->buffers[i].sock_buf;
+		}
+
+		if (type != SPDK_SOCK_CREATE_LISTEN) {
+			uint64_t user_data = (uintptr_t)&sock->base;
+			rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_XLIO_USER_DATA,
+						   &user_data, sizeof(user_data));
+			if (rc != 0) {
+				SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
+					    sock->fd, rc, errno);
+				goto fail;
+			}
 		}
 	}
 
@@ -573,9 +603,9 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 
 	return sock;
 
- err_free_packets:
+ fail:
+	free(sock->buffers);
 	free(sock->packets);
- err_free_sock:
 	free(sock);
 	return NULL;
 }
@@ -700,11 +730,14 @@ retry:
 			/* error */
 			continue;
 		}
-		rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
-		if (rc != 0) {
-			g_xlio_ops.close(fd);
-			/* error */
-			continue;
+
+		if (g_spdk_xlio_sock_impl_opts.enable_tcp_nodelay) {
+			rc = g_xlio_ops.setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
+			if (rc != 0) {
+				g_xlio_ops.close(fd);
+				/* error */
+				continue;
+			}
 		}
 
 #if defined(SO_PRIORITY)
@@ -776,6 +809,17 @@ retry:
 
 			enable_zcopy_impl_opts = g_spdk_xlio_sock_impl_opts.enable_zerocopy_send_server;
 		} else if (type == SPDK_SOCK_CREATE_CONNECT) {
+			uint64_t user_data = (uintptr_t)NULL;
+			rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_XLIO_USER_DATA,
+						   &user_data, sizeof(user_data));
+			if (rc != 0) {
+				SPDK_ERRLOG("Failed to set socket user data for sock %d: rc %d, errno %d\n",
+					    fd, rc, errno);
+				g_xlio_ops.close(fd);
+				fd = -1;
+				break;
+			}
+
 			rc = g_xlio_ops.connect(fd, res->ai_addr, res->ai_addrlen);
 			if (rc != 0) {
 				SPDK_ERRLOG("connect() failed, errno = %d\n", errno);
@@ -817,9 +861,8 @@ retry:
 		sock->so_priority = opts->priority;
 	}
 
-	SPDK_NOTICELOG("Created xlio sock: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u\n",
-		       sock->zcopy, sock->recv_zcopy,
-		       sock->pd,
+	SPDK_NOTICELOG("Created xlio sock %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u\n",
+		       fd, sock->zcopy, sock->recv_zcopy, sock->pd,
 		       sock->pd ? sock->pd->context : NULL,
 		       sock->pd ? sock->pd->context->device->name : "unknown",
 		       sock->pd ? sock->pd->handle : 0);
@@ -896,6 +939,8 @@ static int
 xlio_sock_close(struct spdk_sock *_sock)
 {
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
+
+	assert(_sock->group_impl == NULL);
 
 	while (!STAILQ_EMPTY(&sock->received_packets)) {
 		struct xlio_sock_packet *packet = STAILQ_FIRST(&sock->received_packets);
@@ -1037,122 +1082,66 @@ next_packet(struct xlio_recvfrom_zcopy_packet_t *packet)
 
 #ifdef DEBUG
 static void
-dump_packet(struct xlio_sock_packet *packet)
+dump_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet)
 {
 	size_t i;
+	struct xlio_buff_t *xlio_buf;
 
-	for (i = 0; i < packet->xlio_packet->sz_iov; ++i) {
-		SPDK_DEBUGLOG(xlio, "Packet %p: id %p, iov[%lu].len %lu\n",
-			      packet, packet->xlio_packet_id, i,
-			      packet->xlio_packet->iov[i].iov_len);
+	SPDK_DEBUGLOG(xlio, "Sock %d packet %p: num_bufs %lu, total_len %u, first buf %p\n",
+		      sock->fd,
+		      packet, packet->xlio_packet.num_bufs,
+		      packet->xlio_packet.total_len,
+		      packet->xlio_packet.buff_lst);
+
+	for (i = 0, xlio_buf = packet->xlio_packet.buff_lst;
+	     xlio_buf;
+	     ++i, xlio_buf = xlio_buf->next) {
+		SPDK_DEBUGLOG(xlio, "Packet %p[%lu]: payload %p, len %u\n",
+			      packet, i, xlio_buf->payload, xlio_buf->len);
 	}
 }
 #endif
 
-static ssize_t
-xlio_sock_recvfrom_zcopy(struct spdk_xlio_sock *sock)
-{
-	struct xlio_recvfrom_zcopy_packets_t *xlio_packets;
-	struct xlio_recvfrom_zcopy_packet_t *xlio_packet;
-	int flags = 0;
-	int ret;
-	size_t i;
+static struct xlio_sock_packet *
+xlio_sock_get_packet(struct spdk_xlio_sock *sock) {
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
+	struct xlio_sock_packet *packet = NULL;
 
-	ret = g_xlio_api->recvfrom_zcopy(sock->fd, sock->xlio_packets_buf,
-					sizeof(sock->xlio_packets_buf), &flags, NULL, NULL);
-	if (ret <= 0) {
-		if (spdk_unlikely(ret == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))) {
-			SPDK_ERRLOG("recvfrom_zcopy failed, ret %d, errno %d\n", ret, errno);
-		}
-
-		return ret;
-	}
-
-	if (!(flags & MSG_XLIO_ZCOPY)) {
-		SPDK_WARNLOG("Zcopy receive was not performed. Got %d bytes.\n", ret);
-		return -1;
-	}
-
-	xlio_packets = (struct xlio_recvfrom_zcopy_packets_t *)sock->xlio_packets_buf;
-	SPDK_DEBUGLOG(xlio, "Sock %d: got %lu packets, total %d bytes\n",
-		      sock->fd, xlio_packets->n_packet_num, ret);
-
-	/* Wrap all xlio packets and link to received packets list */
-	xlio_packet = &xlio_packets->pkts[0];
-	for (i = 0; i < xlio_packets->n_packet_num; ++i) {
-		struct xlio_sock_packet *packet = STAILQ_FIRST(&sock->free_packets);
-		size_t j, len = 0;
-
-		/* @todo: Filter out zero length packets.
-		 * Check with xlio team why it happens.
-		 */
-		for (j = 0; j < xlio_packet->sz_iov; ++j) {
-			len += xlio_packet->iov[j].iov_len;
-		}
-
-		if (len == 0) {
-			int rc;
-
-			SPDK_DEBUGLOG(xlio, "Dropping zero length packet: id %p\n", xlio_packet->packet_id);
-			rc = g_xlio_api->recvfrom_zcopy_free_packets(sock->fd, xlio_packet, 1);
-			if (rc < 0) {
-				SPDK_ERRLOG("Free XLIO packets failed, ret %d, errno %d\n",
-					    rc, errno);
-			}
-			xlio_packet = next_packet(xlio_packet);
-			continue;
-		}
-
-		/* @todo: handle lack of free packets */
-		assert(packet);
+	if (spdk_likely(group && xlio_group->packets)) {
+		packet = STAILQ_FIRST(&xlio_group->free_packets);
+		STAILQ_REMOVE_HEAD(&xlio_group->free_packets, link);
+	} else {
+		packet = STAILQ_FIRST(&sock->free_packets);
 		STAILQ_REMOVE_HEAD(&sock->free_packets, link);
-		/*
-		 * @todo: XLIO packet pointer is only valid till next
-		 * recvfrom_zcopy. We should be done with iovs by that
-		 * time, but we need packet_id to free the packet
-		 * later. Need to save it somewhere.It is not clear if
-		 * iovs are required to free the packet.
-		 */
-		packet->xlio_packet = xlio_packet;
-		packet->xlio_packet_id = xlio_packet->packet_id;
-		/*
-		 * While the packet is in received list there is data
-		 * to read from it.  To avoid free of packets with
-		 * unread data we intialize reference counter to 1.
-		 */
-		packet->refs = 1;
-		STAILQ_INSERT_TAIL(&sock->received_packets, packet, link);
-#ifdef DEBUG
-		SPDK_DEBUGLOG(xlio, "Sock %d: packet %lu\n", sock->fd, i);
-		dump_packet(packet);
-#endif
-		xlio_packet = next_packet(xlio_packet);
 	}
 
-	sock->cur_iov_idx = 0;
-	sock->cur_offset = 0;
-
-	return ret;
+	/* @todo: handle lack of free packets */
+	assert(packet);
+	return packet;
 }
 
 static void
 xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet) {
 	int ret;
-	struct xlio_recvfrom_zcopy_packet_t xlio_packet;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 
-	SPDK_DEBUGLOG(xlio, "Sock %d: free xlio packet %p\n",
-		      sock->fd, packet->xlio_packet->packet_id);
+	SPDK_DEBUGLOG(xlio, "Sock %d: free xlio packet, first buf %p\n",
+		      sock->fd, packet->xlio_packet.buff_lst);
 	assert(packet->refs == 0);
 	/* @todo: How heavy is free_packets()? Maybe batch packets to free? */
-	xlio_packet.packet_id = packet->xlio_packet_id;
-	xlio_packet.sz_iov = 0;
-	ret = g_xlio_api->recvfrom_zcopy_free_packets(sock->fd, &xlio_packet, 1);
+	ret = g_xlio_api->socketxtreme_free_packets(&packet->xlio_packet, 1);
 	if (ret < 0) {
 		SPDK_ERRLOG("Free xlio packets failed, ret %d, errno %d\n",
 			    ret, errno);
 	}
 
-	STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
+	if (spdk_likely(group && xlio_group->packets)) {
+		STAILQ_INSERT_HEAD(&xlio_group->free_packets, packet, link);
+	} else {
+		STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
+	}
 }
 
 static void
@@ -1163,25 +1152,28 @@ packets_advance(struct spdk_xlio_sock *sock, size_t len)
 		struct xlio_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
 		/* We don't allow to advance by more than we have data in packets */
 		assert(cur_packet != NULL);
-		struct iovec *iov = &cur_packet->xlio_packet->iov[sock->cur_iov_idx];
-		int iov_len = iov->iov_len - sock->cur_offset;
+		struct xlio_buff_t *cur_xlio_buf = sock->cur_xlio_buf;
+		assert(cur_xlio_buf != NULL);
+		size_t remaining_buf_len = cur_xlio_buf->len - sock->cur_offset;
 
-		if ((int)len < iov_len) {
+		if (len < remaining_buf_len) {
 			sock->cur_offset += len;
 			len = 0;
 		} else {
-			len -= iov_len;
+			len -= remaining_buf_len;
 
 			/* Next iov */
 			sock->cur_offset = 0;
-			sock->cur_iov_idx++;
-			if (sock->cur_iov_idx >= cur_packet->xlio_packet->sz_iov) {
+			sock->cur_xlio_buf = cur_xlio_buf->next;
+			if (!sock->cur_xlio_buf) {
 				/* Next packet */
-				sock->cur_iov_idx = 0;
 				STAILQ_REMOVE_HEAD(&sock->received_packets, link);
 				if (--cur_packet->refs == 0) {
 					xlio_sock_free_packet(sock, cur_packet);
 				}
+
+				cur_packet = STAILQ_FIRST(&sock->received_packets);
+				sock->cur_xlio_buf = cur_packet ? cur_packet->xlio_packet.buff_lst : NULL;
 			}
 		}
 	}
@@ -1197,19 +1189,25 @@ packets_next_chunk(struct spdk_xlio_sock *sock,
 {
 	struct xlio_sock_packet *cur_packet = STAILQ_FIRST(&sock->received_packets);
 
+	if (!sock->cur_xlio_buf && cur_packet) {
+		sock->cur_xlio_buf = cur_packet->xlio_packet.buff_lst;
+	}
+
 	while (cur_packet) {
-		struct iovec *iov = &cur_packet->xlio_packet->iov[sock->cur_iov_idx];
-		size_t len = iov->iov_len - sock->cur_offset;
+		struct xlio_buff_t *cur_xlio_buf = sock->cur_xlio_buf;
+		assert(cur_xlio_buf);
+		size_t len = cur_xlio_buf->len - sock->cur_offset;
 
 		if (len == 0) {
 			/* xlio may return zero length iov. Skip to next in this case */
+			SPDK_DEBUGLOG(xlio, "Zero length buffer: len %d, offset %lu\n",
+				      cur_xlio_buf->len, sock->cur_offset);
 			sock->cur_offset = 0;
-			sock->cur_iov_idx++;
-			assert(sock->cur_iov_idx <= cur_packet->xlio_packet->sz_iov);
-			if (sock->cur_iov_idx >= cur_packet->xlio_packet->sz_iov) {
+			sock->cur_xlio_buf = cur_xlio_buf->next;
+			if (!sock->cur_xlio_buf) {
 				/* Next packet */
-				sock->cur_iov_idx = 0;
 				cur_packet = STAILQ_NEXT(cur_packet, link);
+				sock->cur_xlio_buf = cur_packet ? cur_packet->xlio_packet.buff_lst : NULL;
 			}
 			continue;
 		}
@@ -1217,9 +1215,50 @@ packets_next_chunk(struct spdk_xlio_sock *sock,
 		assert(max_len > 0);
 		assert(len > 0);
 		len = spdk_min(len, max_len);
-		*buf = iov->iov_base + sock->cur_offset;
+		*buf = cur_xlio_buf->payload + sock->cur_offset;
 		*packet = cur_packet;
 		return len;
+	}
+
+	return 0;
+}
+
+static int
+poll_no_group_socket(struct spdk_xlio_sock *sock)
+{
+	int ret;
+
+	/* For sockets not bound to group we have to poll here.
+	 * Polling may find events for other sockets but not for this one.
+	 * So, we need to check if new packets were added for this socket.
+	 */
+	if (sock->ring_fd == -1) {
+		int ring_fds[2];
+		int num_rings;
+
+		ret = g_xlio_api->get_socket_rings_fds(sock->fd, ring_fds, 2);
+		if (ret < 0) {
+			SPDK_ERRLOG("Failed to get ring FDs for socket %d: rc %d, errno %d\n",
+				    sock->fd, ret, errno);
+			return ret;
+		}
+
+		num_rings = ret;
+		/* @todo: add support for multiple rings */
+		assert(num_rings == 1);
+		sock->ring_fd = ring_fds[0];
+		SPDK_NOTICELOG("Discovered ring fd %d for socket %d, num_rings %d\n",
+			       sock->ring_fd, sock->fd, num_rings);
+	}
+
+	ret = xlio_sock_poll_fd(sock->ring_fd);
+	if (ret < 0) {
+		return -1;
+	}
+
+	if (STAILQ_EMPTY(&sock->received_packets)) {
+		errno = EAGAIN;
+		return -1;
 	}
 
 	return 0;
@@ -1235,11 +1274,15 @@ readv_wrapper(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 		size_t offset = 0;
 
 		if (STAILQ_EMPTY(&sock->received_packets)) {
-			ret = xlio_sock_recvfrom_zcopy(sock);
-			if (ret <= 0) {
-				SPDK_DEBUGLOG(xlio, "Sock %d: readv_wrapper ret %d, errno %d\n",
-					      sock->fd, ret, errno);
-				return ret;
+			if (spdk_unlikely(!sock->base.group_impl)) {
+				ret = poll_no_group_socket(sock);
+				if (ret < 0) {
+					return ret;
+				}
+			} else {
+				/* @todo: should we try to poll here? */
+				errno = EAGAIN;
+				return -1;
 			}
 		}
 
@@ -1274,6 +1317,7 @@ readv_wrapper(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 		SPDK_DEBUGLOG(xlio, "Sock %d: readv_wrapper ret %d\n", sock->fd, ret);
 	} else {
 		ret = g_xlio_ops.readv(sock->fd, iovs, iovcnt);
+		SPDK_DEBUGLOG(xlio, "Sock %d: readv_wrapper ret %d, errno %d\n", sock->fd, ret, errno);
 	}
 
 	return ret;
@@ -1411,6 +1455,39 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 	return iovcnt;
 }
 
+static bool
+xlio_sock_flush_now(struct spdk_sock *sock, uint32_t qlen_bytes)
+{
+	struct spdk_xlio_sock *vsock = __xlio_sock(sock);
+
+	if (g_spdk_xlio_sock_impl_opts.flush_batch_timeout) {
+		uint64_t now = spdk_get_ticks();
+		if (qlen_bytes >= g_spdk_xlio_sock_impl_opts.flush_batch_bytes_threshold) {
+			/* Flush now */
+		} else if (vsock->batch_start_tsc &&
+			   (now - vsock->batch_start_tsc) * SPDK_SEC_TO_USEC / spdk_get_ticks_hz() >
+			   g_spdk_xlio_sock_impl_opts.flush_batch_timeout) {
+			/* batch timeout */
+			if (sock->queued_iovcnt < vsock->batch_nr) {
+				vsock->batch_nr = spdk_max(vsock->batch_nr >> 1, 1);
+			}
+		} else if (sock->queued_iovcnt >= vsock->batch_nr) {
+			/* Try to flush socket before timeout, so could batch more */
+			vsock->batch_nr = spdk_min(vsock->batch_nr + 1,
+						   g_spdk_xlio_sock_impl_opts.flush_batch_iovcnt_threshold);
+		} else {
+			/* Not flush socket, try to batch more requests */
+			if (!vsock->batch_start_tsc) {
+				vsock->batch_start_tsc = now;
+			}
+			return false;
+		}
+		vsock->batch_start_tsc = 0;
+	}
+
+	return true;
+}
+
 static int
 _sock_flush_ext(struct spdk_sock *sock)
 {
@@ -1447,6 +1524,10 @@ _sock_flush_ext(struct spdk_sock *sock)
 	assert(!(!vsock->zcopy && msg.msg_controllen > 0));
 
 	zerocopy_threshold = g_spdk_xlio_sock_impl_opts.zerocopy_threshold;
+
+	if (!xlio_sock_flush_now(sock, total)) {
+		return 0;
+	}
 
 	/* Allow zcopy if enabled on socket and either the data needs to be sent,
 	 * which is reported by xlio_sock_prep_reqs() with setting msg.msg_controllen
@@ -1545,6 +1626,8 @@ _sock_flush_ext(struct spdk_sock *sock)
 static void
 xlio_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 {
+	struct spdk_xlio_sock *vsock = __xlio_sock(sock);
+	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(sock->group_impl);
 	int rc;
 
 	spdk_sock_request_queue(sock, req);
@@ -1552,9 +1635,17 @@ xlio_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 	/* If there are a sufficient number queued, just flush them out immediately. */
 	if (sock->queued_iovcnt >= IOV_BATCH_SIZE) {
 		rc = _sock_flush_ext(sock);
-		if (rc) {
+		if (spdk_likely(rc == 0)) {
+			if (TAILQ_EMPTY(&sock->queued_reqs) && vsock->pending_send && sock->group_impl) {
+				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+				vsock->pending_send = false;
+			}
+		} else {
 			spdk_sock_abort_requests(sock);
 		}
+	} else if (!vsock->pending_send && sock->group_impl) {
+		TAILQ_INSERT_TAIL(&group->pending_send, vsock, link_send);
+		vsock->pending_send = true;
 	}
 }
 
@@ -1644,28 +1735,53 @@ static struct spdk_sock_group_impl *
 xlio_sock_group_impl_create(void)
 {
 	struct spdk_xlio_sock_group_impl *group_impl;
-	int fd;
-
-#if defined(SPDK_EPOLL)
-	fd = g_xlio_ops.epoll_create1(0);
-#elif defined(SPDK_KEVENT)
-	fd = kqueue();
-#endif
-	if (fd == -1) {
-		return NULL;
-	}
+	uint32_t num_packets = g_spdk_xlio_sock_impl_opts.packets_pool_size;
+	uint32_t num_buffers = g_spdk_xlio_sock_impl_opts.buffers_pool_size;
+	uint32_t i;
 
 	group_impl = calloc(1, sizeof(*group_impl));
 	if (group_impl == NULL) {
 		SPDK_ERRLOG("group_impl allocation failed\n");
-		g_xlio_ops.close(fd);
 		return NULL;
 	}
 
-	group_impl->fd = fd;
+	group_impl->ring_fd = -1;
 	TAILQ_INIT(&group_impl->pending_recv);
+	TAILQ_INIT(&group_impl->pending_send);
+
+	if (num_packets) {
+		group_impl->packets = calloc(num_packets, sizeof(struct xlio_sock_packet));
+		if (!group_impl->packets) {
+			SPDK_ERRLOG("Failed to allocated packets pool for group %p\n", group_impl);
+			goto fail;
+		}
+
+		STAILQ_INIT(&group_impl->free_packets);
+		for (i = 0; i < num_packets; ++i) {
+			STAILQ_INSERT_TAIL(&group_impl->free_packets, &group_impl->packets[i], link);
+		}
+	}
+
+	if (num_buffers) {
+		group_impl->buffers = calloc(num_buffers, sizeof(struct xlio_sock_buf));
+		if (!group_impl->buffers) {
+			SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group_impl);
+			goto fail;
+		}
+
+		group_impl->free_buffers = &group_impl->buffers[0].sock_buf;
+		for (i = 1; i < num_buffers; ++i) {
+			group_impl->buffers[i - 1].sock_buf.next = &group_impl->buffers[i].sock_buf;
+		}
+	}
 
 	return &group_impl->base;
+
+ fail:
+	free(group_impl->buffers);
+	free(group_impl->packets);
+	free(group_impl);
+	return NULL;
 }
 
 static int
@@ -1673,27 +1789,34 @@ xlio_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_s
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
+	int ring_fds[2];
+	int num_rings;
 	int rc;
 
-#if defined(SPDK_EPOLL)
-	struct epoll_event event;
+	rc = g_xlio_api->get_socket_rings_fds(sock->fd, ring_fds, 2);
+	if (rc < 0) {
+		SPDK_ERRLOG("Failed to get ring FDs for socket %d\n", sock->fd);
+		return rc;
+	}
 
-	memset(&event, 0, sizeof(event));
-	/* EPOLLERR is always on even if we don't set it, but be explicit for clarity */
-	event.events = EPOLLIN | EPOLLERR;
-	event.data.ptr = sock;
+	num_rings = rc;
+	/* @todo: add support for multiple rings */
+	assert(num_rings == 1);
+	SPDK_DEBUGLOG(xlio, "Sock %d ring %d\n", sock->fd, ring_fds[0]);
+	/* Ring can be removed when no more sockets on it.
+	 * Update ring fd if it is the first socket in poll group.
+	 */
+	if (group->ring_fd == -1 || TAILQ_EMPTY(&_group->socks)) {
+		group->ring_fd = ring_fds[0];
+		SPDK_NOTICELOG("Discovered ring fd %d, core %u, num_rings %d\n",
+			       group->ring_fd, spdk_env_get_current_core(), num_rings);
+	} else if (group->ring_fd != ring_fds[0]) {
+		SPDK_ERRLOG("Socket ring fd %d differs from group ring fd %d, core %u\n",
+			    ring_fds[0], group->ring_fd, spdk_env_get_current_core());
+		return -1;
+	}
 
-	rc = g_xlio_ops.epoll_ctl(group->fd, EPOLL_CTL_ADD, sock->fd, &event);
-#elif defined(SPDK_KEVENT)
-	struct kevent event;
-	struct timespec ts = {0};
-
-	EV_SET(&event, sock->fd, EVFILT_READ, EV_ADD, 0, 0, sock);
-
-	rc = kevent(group->fd, &event, 1, NULL, 0, &ts);
-#endif
-
-	return rc;
+	return 0;
 }
 
 static int
@@ -1701,84 +1824,48 @@ xlio_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spd
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
-	int rc;
-
-#if defined(SPDK_EPOLL)
-	struct epoll_event event;
-
-	/* Event parameter is ignored but some old kernel version still require it. */
-	rc = g_xlio_ops.epoll_ctl(group->fd, EPOLL_CTL_DEL, sock->fd, &event);
-#elif defined(SPDK_KEVENT)
-	struct kevent event;
-	struct timespec ts = {0};
-
-	EV_SET(&event, sock->fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-
-	rc = kevent(group->fd, &event, 1, NULL, 0, &ts);
-	if (rc == 0 && event.flags & EV_ERROR) {
-		rc = -1;
-		errno = event.data;
-	}
-#endif
 
 	spdk_sock_abort_requests(_sock);
-
-	return rc;
+	if (sock->pending_send) {
+		TAILQ_REMOVE(&group->pending_send, sock, link_send);
+		sock->pending_send = false;
+	}
+	if (sock->pending_recv) {
+		TAILQ_REMOVE(&group->pending_recv, sock, link);
+		sock->pending_recv = false;
+	}
+	return 0;
 }
 
 static int
-xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
-			 struct spdk_sock **socks)
+xlio_sock_poll_fd(int fd)
 {
-	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
-	struct spdk_sock *sock, *tmp;
+	struct spdk_sock *sock;
+	struct spdk_xlio_sock *vsock;
 	int num_events, i, rc;
-	struct spdk_xlio_sock *vsock, *ptmp;
-#if defined(SPDK_EPOLL)
-	struct epoll_event events[MAX_EVENTS_PER_POLL];
-#elif defined(SPDK_KEVENT)
-	struct kevent events[MAX_EVENTS_PER_POLL];
-	struct timespec ts = {0};
-#endif
+	struct xlio_socketxtreme_completion_t comps[MAX_EVENTS_PER_POLL];
 
-	/* This must be a TAILQ_FOREACH_SAFE because while flushing,
-	 * a completion callback could remove the sock from the
-	 * group. */
-	TAILQ_FOREACH_SAFE(sock, &_group->socks, link, tmp) {
-		rc = _sock_flush_ext(sock);
-		if (rc) {
-			spdk_sock_abort_requests(sock);
-		}
-	}
-
-#if defined(SPDK_EPOLL)
-	num_events = g_xlio_ops.epoll_wait(group->fd, events, max_events, 0);
-#elif defined(SPDK_KEVENT)
-	num_events = kevent(group->fd, NULL, 0, events, max_events, &ts);
-#endif
-
-	if (num_events == -1) {
+	num_events = g_xlio_api->socketxtreme_poll(fd, comps, MAX_EVENTS_PER_POLL, SOCKETXTREME_POLL_TX);
+	if (num_events < 0) {
+		SPDK_ERRLOG("Socket extreme poll failed for fd %d: fd, result %d, errno %d\n", fd, num_events, errno);
 		return -1;
-	} else if (num_events == 0 && !TAILQ_EMPTY(&_group->socks)) {
-		uint8_t byte;
-
-		sock = TAILQ_FIRST(&_group->socks);
-		vsock = __xlio_sock(sock);
-		/* a recv is done here to busy poll the queue associated with
-		 * first socket in list and potentially reap incoming data.
-		 */
-		if (vsock->so_priority) {
-			g_xlio_ops.recv(vsock->fd, &byte, 1, MSG_PEEK);
-		}
 	}
 
 	for (i = 0; i < num_events; i++) {
-#if defined(SPDK_EPOLL)
-		sock = events[i].data.ptr;
+		struct xlio_socketxtreme_completion_t *comp = &comps[i];
+		struct xlio_sock_packet *packet;
+
+		sock = (struct spdk_sock *)comp->user_data;
+		if (!sock) {
+			continue;
+		}
+
 		vsock = __xlio_sock(sock);
+		SPDK_DEBUGLOG(xlio, "XLIO completion[%d]: ring fd %d, events %" PRIx64 ", user_data %p, listen_fd %d\n",
+			      i, fd, comp->events, (void *)comp->user_data, comp->listen_fd);
 
 #ifdef SPDK_ZEROCOPY
-		if (events[i].events & EPOLLERR) {
+		if (comp->events & EPOLLERR) {
 			rc = _sock_check_zcopy(sock);
 			/* If the socket was closed or removed from
 			 * the group in response to a send ack, don't
@@ -1788,24 +1875,81 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 			}
 		}
 #endif
-		if ((events[i].events & EPOLLIN) == 0) {
+		if (!(comp->events & XLIO_SOCKETXTREME_PACKET)) {
 			continue;
 		}
 
-#elif defined(SPDK_KEVENT)
-		sock = events[i].udata;
-		vsock = __xlio_sock(sock);
+		packet = xlio_sock_get_packet(vsock);
+		packet->xlio_packet = comp->packet;
+		/*
+		 * While the packet is in received list there is data
+		 * to read from it.  To avoid free of packets with
+		 * unread data we intialize reference counter to 1.
+		 */
+		packet->refs = 1;
+		STAILQ_INSERT_TAIL(&vsock->received_packets, packet, link);
+#ifdef DEBUG
+		dump_packet(vsock, packet);
 #endif
 
 		/* If the socket does not already have recv pending, add it now */
-		if (!vsock->pending_recv) {
+		if (spdk_likely(sock->group_impl) && !vsock->pending_recv) {
+			struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(sock->group_impl);
+
 			vsock->pending_recv = true;
 			TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
 		}
 	}
 
-	num_events = 0;
+	return num_events;
+}
 
+static int
+xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
+			 struct spdk_sock **socks)
+{
+	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
+	int num_events, i, rc;
+	struct spdk_xlio_sock *vsock, *ptmp;
+
+	/*
+	 * Important to use TAILQ_FOREACH_SAFE() here bacause of the following:
+	 * - spdk_sock_abort_requests() can lead to removing from ->pending_send
+	 *   in xlio_sock_group_impl_remove_sock()
+	 * - we remove from ->pending_send if no more ->queued_reqs left.
+	 */
+	TAILQ_FOREACH_SAFE(vsock, &group->pending_send, link_send, ptmp) {
+		assert(vsock->pending_send);
+
+		rc = _sock_flush_ext(&vsock->base);
+		if (spdk_likely(rc == 0)) {
+			/*
+			 * Removing from pendings only in no-error case because
+			 * spdk_sock_abort_requests() can cause removing from group,
+			 * removing from pendign and kill vsock itself underneath.
+			 * In any case we will crash in that case.
+			 */
+			if (TAILQ_EMPTY(&vsock->base.queued_reqs)) {
+				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
+				vsock->pending_send = false;
+			}
+		} else {
+			/*
+			 * Aborting requests leads to removing from group
+			 * and socket close. Removing from group also
+			 * removes @vsock from all group pending lists
+			 * in xlio_sock_group_impl_remove_sock().
+			 */
+			spdk_sock_abort_requests(&vsock->base);
+		}
+	}
+
+	num_events = xlio_sock_poll_fd(group->ring_fd);
+	if (num_events < 0) {
+		return -1;
+	}
+
+	num_events = 0;
 	TAILQ_FOREACH_SAFE(vsock, &group->pending_recv, link, ptmp) {
 		if (num_events == max_events) {
 			break;
@@ -1838,11 +1982,11 @@ static int
 xlio_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
-	int rc;
 
-	rc = g_xlio_ops.close(group->fd);
+	free(group->buffers);
+	free(group->packets);
 	free(group);
-	return rc;
+	return 0;
 }
 
 static int
@@ -1872,6 +2016,13 @@ xlio_sock_impl_get_opts(struct spdk_sock_impl_opts *opts, size_t *len)
 	GET_FIELD(enable_zerocopy_send_client);
 	GET_FIELD(enable_zerocopy_recv);
 	GET_FIELD(zerocopy_threshold);
+	GET_FIELD(enable_tcp_nodelay);
+	GET_FIELD(buffers_pool_size);
+	GET_FIELD(packets_pool_size);
+	GET_FIELD(flush_batch_timeout);
+	GET_FIELD(flush_batch_iovcnt_threshold);
+	GET_FIELD(flush_batch_bytes_threshold);
+	GET_FIELD(enable_early_init);
 
 #undef GET_FIELD
 #undef FIELD_OK
@@ -1906,6 +2057,13 @@ xlio_sock_impl_set_opts(const struct spdk_sock_impl_opts *opts, size_t len)
 	SET_FIELD(enable_zerocopy_send_client);
 	SET_FIELD(enable_zerocopy_recv);
 	SET_FIELD(zerocopy_threshold);
+	SET_FIELD(enable_tcp_nodelay);
+	SET_FIELD(buffers_pool_size);
+	SET_FIELD(packets_pool_size);
+	SET_FIELD(flush_batch_timeout);
+	SET_FIELD(flush_batch_iovcnt_threshold);
+	SET_FIELD(flush_batch_bytes_threshold);
+	SET_FIELD(enable_early_init);
 
 #undef SET_FIELD
 #undef FIELD_OK
@@ -1928,18 +2086,40 @@ xlio_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 static struct xlio_sock_buf *
 xlio_sock_get_buf(struct spdk_xlio_sock *sock)
 {
-	struct spdk_sock_buf *sock_buf = sock->free_buffers;
-	/* @todo: we don't handle lack of buffers yet */
-	assert(sock_buf);
-	sock->free_buffers = sock_buf->next;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
+	struct spdk_sock_buf *sock_buf = NULL;
+
+	if (spdk_likely(group && xlio_group->buffers)) {
+		sock_buf = xlio_group->free_buffers;
+		if (spdk_unlikely(!sock_buf)) {
+			return NULL;
+		}
+		xlio_group->free_buffers = sock_buf->next;
+	} else {
+		sock_buf = sock->free_buffers;
+		if (spdk_unlikely(!sock_buf)) {
+			return NULL;
+		}
+		sock->free_buffers = sock_buf->next;
+	}
+
 	return SPDK_CONTAINEROF(sock_buf, struct xlio_sock_buf, sock_buf);
 }
 
 static void
 xlio_sock_free_buf(struct spdk_xlio_sock *sock, struct xlio_sock_buf *buf)
 {
-	buf->sock_buf.next = sock->free_buffers;
-	sock->free_buffers = &buf->sock_buf;
+	struct spdk_sock_group_impl *group = sock->base.group_impl;
+	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
+
+	if (spdk_likely(group && xlio_group->buffers)) {
+		buf->sock_buf.next = xlio_group->free_buffers;
+		xlio_group->free_buffers = &buf->sock_buf;
+	} else {
+		buf->sock_buf.next = sock->free_buffers;
+		sock->free_buffers = &buf->sock_buf;
+	}
 }
 
 static ssize_t
@@ -1954,11 +2134,14 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 	*sock_buf = NULL;
 
 	if (STAILQ_EMPTY(&sock->received_packets)) {
-		ret = xlio_sock_recvfrom_zcopy(sock);
-		if (ret <= 0) {
-			SPDK_DEBUGLOG(xlio, "Sock %d: recv_zcopy ret %d, errno %d\n",
-				      sock->fd, ret, errno);
-			return ret;
+		if (spdk_unlikely(!_sock->group_impl)) {
+			ret = poll_no_group_socket(sock);
+			if (ret < 0) {
+				return ret;
+			}
+		} else {
+			errno = EAGAIN;
+			return -1;
 		}
 	}
 
@@ -1978,8 +2161,21 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 
 		assert(chunk_len <= len);
 		buf = xlio_sock_get_buf(sock);
-		/* @todo: we don't handle lack of buffers yet */
-		assert(buf);
+		if (spdk_unlikely(!buf)) {
+			SPDK_DEBUGLOG(xlio, "Sock %d: no more buffers, total_len %d\n", sock->fd, ret);
+			if (ret == 0) {
+				if (spdk_unlikely(!_sock->group_impl) && !sock->pending_recv) {
+					struct spdk_xlio_sock_group_impl *group =
+						__xlio_group_impl(sock->base.group_impl);
+					sock->pending_recv = true;
+					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
+				}
+				ret = -1;
+				errno = EAGAIN;
+			}
+			break;
+		}
+
 		buf->sock_buf.iov.iov_base = data;
 		buf->sock_buf.iov.iov_len = chunk_len;
 		buf->sock_buf.next = NULL;
@@ -2032,6 +2228,53 @@ xlio_sock_group_impl_get_optimal(struct spdk_sock *_sock, struct spdk_sock_group
 	return NULL;
 }
 
+
+static void
+create_dummy_socket(void *arg1, void *arg2)
+{
+	char *if_name = arg1;
+	int fd;
+	int rc;
+
+	SPDK_NOTICELOG("Create dummy XLIO socket, core %u\n", spdk_env_get_current_core());
+	fd = g_xlio_ops.socket(AF_INET, SOCK_STREAM, 0);
+	SPDK_NOTICELOG("Create done dummy XLIO socket %d, core %u\n", fd, spdk_env_get_current_core());
+	if (if_name) {
+		rc = g_xlio_ops.setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, if_name, strlen(if_name) + 1);
+		SPDK_NOTICELOG("Bound dummy XLIO socket %d to device %s, rc %d, core %u\n",
+			       fd, if_name, rc, spdk_env_get_current_core());
+	}
+}
+
+static void
+create_dummy_sockets_done(void *arg1, void *arg2)
+{
+	SPDK_NOTICELOG("Create dummy XLIO sockets done, core %u\n", spdk_env_get_current_core());
+}
+
+static int
+xlio_sock_impl_init(void)
+{
+	char *pre_init_if = getenv("SPDK_XLIO_PRE_INIT_INTERFACE");
+
+	if (!g_spdk_xlio_sock_impl_opts.enable_early_init) {
+		return 0;
+	}
+
+	if (pre_init_if) {
+		/* Create dummy socket on each core to initialize XLIO internals and create rings */
+		spdk_for_each_reactor(create_dummy_socket, pre_init_if, NULL, create_dummy_sockets_done);
+	} else {
+		/* If no interface is given, it is enough to create one dummy socket to initialize XLIO.
+		 * Rings are not created in this case.
+		 */
+		create_dummy_socket(NULL, NULL);
+	}
+
+	SPDK_NOTICELOG("Initialized XLIO socket implementation\n");
+	return 0;
+}
+
 static struct spdk_net_impl g_xlio_net_impl = {
 	.name		= "xlio",
 	.getaddr	= xlio_sock_getaddr,
@@ -2060,7 +2303,8 @@ static struct spdk_net_impl g_xlio_net_impl = {
 	.set_opts	= xlio_sock_impl_set_opts,
 	.get_caps	= xlio_sock_get_caps,
 	.recv_zcopy	= xlio_sock_recv_zcopy,
-	.free_bufs	= xlio_sock_free_bufs
+	.free_bufs	= xlio_sock_free_bufs,
+	.init		= xlio_sock_impl_init,
 };
 
 static void __attribute__((constructor))

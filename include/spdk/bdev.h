@@ -13,6 +13,7 @@
 
 #include "spdk/stdinc.h"
 
+#include "spdk/accel.h"
 #include "spdk/scsi_spec.h"
 #include "spdk/nvme_spec.h"
 #include "spdk/json.h"
@@ -120,6 +121,10 @@ enum spdk_bdev_io_type {
 	SPDK_BDEV_IO_TYPE_SEEK_HOLE,
 	SPDK_BDEV_IO_TYPE_SEEK_DATA,
 	SPDK_BDEV_IO_TYPE_COPY,
+	SPDK_BDEV_IO_TYPE_RESERVATION_ACQUIRE,
+	SPDK_BDEV_IO_TYPE_RESERVATION_REGISTER,
+	SPDK_BDEV_IO_TYPE_RESERVATION_RELEASE,
+	SPDK_BDEV_IO_TYPE_RESERVATION_REPORT,
 	SPDK_BDEV_NUM_IO_TYPES /* Keep last */
 };
 
@@ -174,6 +179,8 @@ struct spdk_bdev_io_stat {
 	uint64_t max_copy_latency_ticks;
 	uint64_t min_copy_latency_ticks;
 	uint64_t ticks_rate;
+	uint64_t num_read_split;
+	uint64_t num_write_split;
 
 	/* This data structure is privately defined in the bdev library.
 	 * This data structure is only used by the bdev_get_iostat RPC now.
@@ -208,7 +215,6 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 32, "Incorrect size");
 
 /**
  * Structure with optional IO request parameters
- * The content of this structure must be valid until the IO request is completed
  */
 struct spdk_bdev_ext_io_opts {
 	/** Size of this structure in bytes */
@@ -222,8 +228,13 @@ struct spdk_bdev_ext_io_opts {
 	void *memory_domain_ctx;
 	/** Metadata buffer, optional */
 	void *metadata;
+	/**
+	 * Sequence of accel operations to be executed before/after (depending on the IO type) the
+	 * request is submitted.
+	 */
+	struct spdk_accel_sequence *accel_sequence;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_ext_io_opts) == 32, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_ext_io_opts) == 40, "Incorrect size");
 
 /**
  * Get the options for the bdev module.
@@ -2057,6 +2068,34 @@ void spdk_bdev_for_each_channel_continue(struct spdk_bdev_channel_iter *i, int s
  */
 void spdk_bdev_for_each_channel(struct spdk_bdev *bdev, spdk_bdev_for_each_channel_msg fn,
 				void *ctx, spdk_bdev_for_each_channel_done cpl);
+
+/**
+ * Called when the bdev is ready to process I/O.
+ *
+ * \param cb_arg Callback argument.
+ * \param status 0 on success, or negated errno on failure.
+ * For negated errno, the following values are possible:
+ *   * -ETIMEDOUT: The timeout period elapsed.
+ *   * -EAGAIN: If timeout is set to 0 and the bdev is not ready.
+ */
+typedef void (*spdk_bdev_wait_for_ready_cb)(void *cb_arg, int status);
+
+/**
+ * Return the calback when the bdev is ready to accept I/O submission.
+ * If the timeout_in_msec is positive, the timeout is enabled.
+ * If the timeout_in_msec is zero, the function returns immediately.
+ *
+ * \param bdev Block device descriptor.
+ * \param timeout_in_msec Timeout value in milliseconds.
+ *   * positive: actual timeout value.
+ *   * zero: return immediately.
+ *   * negative: timeout is disabled.
+ * \param cb_fn Callback function.
+ * \param cb_arg Callback argument.
+ * \return 0 if wait started successfully, or suitable errno otherwise.
+ */
+int spdk_bdev_wait_for_ready(struct spdk_bdev_desc *desc, int64_t timeout_in_msec,
+			     spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg);
 
 #ifdef __cplusplus
 }

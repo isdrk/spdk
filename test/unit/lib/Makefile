@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -13,7 +14,7 @@ DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 ifeq ($(OS),Linux)
 DIRS-$(CONFIG_VHOST) += vhost
 DIRS-y += ftl
-DIRS-$(CONFIG_RDMA) += rdma
+DIRS-$(CONFIG_RDMA) += rdma_utils
 endif
 
 .PHONY: all clean $(DIRS-y)

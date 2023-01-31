@@ -107,6 +107,7 @@ struct spdk_net_impl {
 
 	ssize_t (*recv_zcopy)(struct spdk_sock *sock, size_t len, struct spdk_sock_buf **sock_buf);
 	int (*free_bufs)(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+	int (*init)(void);
 };
 
 void spdk_net_impl_register(struct spdk_net_impl *impl, int priority);

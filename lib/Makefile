@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -23,6 +24,7 @@ DIRS-$(CONFIG_VHOST) += vhost
 DIRS-$(CONFIG_VIRTIO) += virtio
 DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_RDMA) += rdma
+DIRS-$(CONFIG_RDMA) += rdma_utils
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
 
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)

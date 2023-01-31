@@ -618,7 +618,7 @@ spdk_subsystem_init_from_json_config(const char *json_config_file, const char *r
 		goto fail;
 	}
 
-	rc = spdk_rpc_initialize(ctx->rpc_socket_path_temp);
+	rc = spdk_rpc_initialize(ctx->rpc_socket_path_temp, NULL, SPDK_LOG_DISABLED);
 	if (rc) {
 		goto fail;
 	}

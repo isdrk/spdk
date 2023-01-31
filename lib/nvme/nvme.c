@@ -296,9 +296,9 @@ spdk_nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 	}
 
 	if (spdk_unlikely(!zcopy->iovs)) {
-		SPDK_WARNLOG("Failed to get %d iov from pool\n", zcopy->iovcnt);
+		SPDK_DEBUGLOG(nvme, "Failed to get %d iov from pool\n", zcopy->iovcnt);
 		zcopy->iovs_from_pool = false;
-		zcopy->iovs = malloc(sizeof(struct iovec));
+		zcopy->iovs = malloc(sizeof(struct iovec) * zcopy->iovcnt);
 		if (!zcopy->iovs) {
 			zcopy->iovcnt = 0;
 			return -ENOMEM;
@@ -313,20 +313,20 @@ spdk_nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 void
 spdk_nvme_request_put_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
 {
-	if (!zcopy->iovs || zcopy->iovcnt == 0) {
+	if (spdk_unlikely(!zcopy->iovs || zcopy->iovcnt == 0)) {
 		return;
 	}
 
-	if (zcopy->iovs_from_malloc) {
-		zcopy->iovs_from_malloc = false;
-		free(zcopy->iovs);
-	} else if (zcopy->iovs_from_pool) {
+	if (spdk_likely(zcopy->iovs_from_pool)) {
 		zcopy->iovs_from_pool = false;
 		if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_small_iov_num) {
 			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_small_pool, zcopy->iovs);
 		} else {
 			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_large_pool, zcopy->iovs);
 		}
+	} else if (zcopy->iovs_from_malloc) {
+		zcopy->iovs_from_malloc = false;
+		free(zcopy->iovs);
 	}
 
 	zcopy->iovs = NULL;
@@ -1200,6 +1200,7 @@ nvme_ctrlr_opts_init(struct spdk_nvme_ctrlr_opts *opts,
 	SET_FIELD(disable_read_ana_log_page);
 	SET_FIELD(disable_read_changed_ns_list_log_page);
 	SET_FIELD_ARRAY(psk);
+	SET_FIELD(disable_io_split);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -1266,6 +1267,7 @@ spdk_nvme_trid_populate_transport(struct spdk_nvme_transport_id *trid,
 		trstring = SPDK_NVME_TRANSPORT_NAME_VFIOUSER;
 		break;
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		trstring = SPDK_NVME_TRANSPORT_NAME_CUSTOM;
 		break;
 	default:
@@ -1343,6 +1345,7 @@ spdk_nvme_transport_id_trtype_str(enum spdk_nvme_transport_type trtype)
 	case SPDK_NVME_TRANSPORT_VFIOUSER:
 		return "VFIOUSER";
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		return "CUSTOM";
 	default:
 		return NULL;

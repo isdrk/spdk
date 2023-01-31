@@ -34,7 +34,7 @@ def accel_assign_opc(client, opname, module):
     return client.call('accel_assign_opc', params)
 
 
-def accel_crypto_key_create(client, cipher, key, key2, name):
+def accel_crypto_key_create(client, cipher, key, key2, name, tweak_offset):
     """Create Data Encryption Key Identifier.
 
     Args:
@@ -50,18 +50,19 @@ def accel_crypto_key_create(client, cipher, key, key2, name):
     }
     if key2 is not None:
         params['key2'] = key2
-
+    if tweak_offset is not None:
+        params['tweak_offset'] = tweak_offset
     return client.call('accel_crypto_key_create', params)
 
 
-def accel_crypto_key_destroy(client, name):
+def accel_crypto_key_destroy(client, key_name):
     """Destroy Data Encryption Key.
 
     Args:
-        name: key name
+        key_name: key name
     """
     params = {
-        'name': name
+        'key_name': key_name
     }
 
     return client.call('accel_crypto_key_destroy', params)
@@ -79,3 +80,12 @@ def accel_crypto_keys_get(client, key_name):
         params['key_name'] = key_name
 
     return client.call('accel_crypto_keys_get', params)
+
+
+def accel_set_driver(client, name):
+    """Select accel platform driver to execute operation chains.
+
+    Args:
+        name: name of the driver
+    """
+    return client.call('accel_set_driver', {'name': name})

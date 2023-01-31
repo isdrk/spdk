@@ -1,0 +1,11 @@
+Key Pair 1 (kp1)
+key1 = "0123456789abcdef"
+key2 = "0123458889abcdef"
+
+Key Pair 2 (kp2)
+key1 = "AES34588aXTS-1-1"
+key2 = "AES34588aXTS-1-2"
+
+Key Pair 3 (kp3)
+key1 = "56789AES-XTS-1-1"
+key2 = "56789AES-XTS-1-2"

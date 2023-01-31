@@ -138,6 +138,21 @@ struct spdk_sock_impl_opts {
 	uint32_t zerocopy_threshold;
 
 	/**
+	 * Wait for microseconds to skip flushing requests.
+	 */
+	uint32_t flush_batch_timeout;
+
+	/**
+	 * Skip flushing requests if queued iovcnt is smaller than this threshold.
+	 */
+	int flush_batch_iovcnt_threshold;
+
+	/**
+	 * Skip flushing requests if queued total Length is smaller than this threshold.
+	 */
+	uint32_t flush_batch_bytes_threshold;
+
+	/**
 	 * TLS protocol version. Used by ssl socket module.
 	 */
 	uint32_t tls_version;
@@ -158,9 +173,29 @@ struct spdk_sock_impl_opts {
 	char *psk_identity;
 
 	/**
-	 * Enable or disable use of zero copy flow on receive. Used by vma socket module.
+	 * Enable or disable use of zero copy flow on receive. Used by xlio socket module.
 	 */
 	bool enable_zerocopy_recv;
+
+	/**
+	 * Enable or disable use of TCP_NODELAY socket option. Used by xlio socket module.
+	 */
+	bool enable_tcp_nodelay;
+
+	/**
+	 * Socket buffers per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t buffers_pool_size;
+
+	/**
+	 * Packets per poll group pool size. Used by xlio socket module.
+	 */
+	uint32_t packets_pool_size;
+
+	/**
+	 * Enable or disable early initialization. Used by xlio socket module.
+	 */
+	bool enable_early_init;
 };
 
 /**
@@ -614,6 +649,14 @@ ssize_t spdk_sock_recv_zcopy(struct spdk_sock *sock, size_t len, struct spdk_soc
  * \return 0 on success, -1 on failure.
  */
 int spdk_sock_free_bufs(struct spdk_sock *sock, struct spdk_sock_buf *sock_buf);
+
+/**
+ * Initialize socket layer.
+ *
+ * This function will initialize generic socket layer and all
+ * registered socket implementations.
+ */
+void spdk_sock_initialize(void);
 
 #ifdef __cplusplus
 }

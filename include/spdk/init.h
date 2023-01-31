@@ -12,6 +12,7 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/queue.h"
+#include "spdk/log.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,10 +25,13 @@ extern "C" {
  * independent of subsystem initialization. The RPC server can be started and stopped at any time.
  *
  * \param listen_addr Path to a unix domain socket to listen on
+ * \param log_file A JSON-RPC log file pointer.
+ * \param log_level JSON-RPC log level
  *
  * \return Negated errno on failure. 0 on success.
  */
-int spdk_rpc_initialize(const char *listen_addr);
+int spdk_rpc_initialize(const char *listen_addr, FILE *log_file,
+			enum spdk_log_level log_level);
 
 /**
  * Shut down the SPDK JSON-RPC target

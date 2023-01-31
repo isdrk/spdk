@@ -17,12 +17,14 @@
 
 #include "spdk/bdev.h"
 #include "spdk/bdev_zone.h"
+#include "spdk/bdev_group.h"
 #include "spdk/queue.h"
 #include "spdk/scsi_spec.h"
 #include "spdk/thread.h"
 #include "spdk/tree.h"
 #include "spdk/util.h"
 #include "spdk/uuid.h"
+#include "spdk/bdev_reservations.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -273,6 +275,15 @@ struct spdk_bdev_fn_table {
 	 * Dump I/O statistics specific for this bdev context.
 	 */
 	void (*dump_device_stat_json)(void *ctx, struct spdk_json_write_ctx *w);
+
+	/** Check if bdev can handle spdk_accel_sequence to handle I/O of specific type. */
+	bool (*accel_sequence_supported)(void *ctx, enum spdk_bdev_io_type type);
+
+	/**
+	 * Check if the bdev is ready to process I/O.
+	 */
+	int (*wait_for_ready)(void *ctx, int64_t timeout_in_msec,
+			      spdk_bdev_wait_for_ready_cb, void *cb_arg);
 };
 
 /** bdev I/O completion status */
@@ -360,6 +371,9 @@ struct spdk_bdev {
 	/** Atomic compare & write unit */
 	uint16_t acwu;
 
+	/* Reservation Capabilities */
+	struct spdk_bdev_reservation_caps reservation_caps;
+
 	/**
 	 * Specifies an alignment requirement for data buffers associated with an spdk_bdev_io.
 	 * 0 = no alignment requirement
@@ -407,6 +421,9 @@ struct spdk_bdev {
 
 	/* Maximum copy size in unit of logical block */
 	uint32_t max_copy;
+
+	/* Maximum Read/Write size in unit of logical block */
+	uint32_t max_rw;
 
 	/**
 	 * UUID for this bdev.
@@ -514,8 +531,13 @@ struct spdk_bdev {
 	 *  must not read or write to these fields.
 	 */
 	struct __bdev_internal_fields {
+		/** Quality of service configuratiion */
+		uint64_t qos_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+
 		/** Quality of service parameters */
 		struct spdk_bdev_qos *qos;
+
+		struct spdk_bdev_group *group;
 
 		/** True if the state of the QoS is being modified */
 		bool qos_mod_in_progress;
@@ -612,6 +634,12 @@ struct spdk_bdev {
 
 		/** Bdev name used for quick lookup */
 		struct spdk_bdev_name bdev_name;
+
+		/** List of all open channels */
+		CIRCLEQ_HEAD(, spdk_bdev_channel) channels;
+
+		/** Open channels lock */
+		struct spdk_spinlock channels_lock;
 	} internal;
 };
 
@@ -682,8 +710,12 @@ struct spdk_bdev_io {
 			/** Starting offset (in blocks) of the bdev for this I/O. */
 			uint64_t offset_blocks;
 
-			/** Pointer to user's ext opts to be used by bdev modules */
-			struct spdk_bdev_ext_io_opts *ext_opts;
+			/** Memory domain and its context to be used by bdev modules */
+			struct spdk_memory_domain *memory_domain;
+			void *memory_domain_ctx;
+
+			/* Sequence of accel operations */
+			struct spdk_accel_sequence *accel_sequence;
 
 			/** stored user callback in case we split the I/O and use a temporary callback */
 			spdk_bdev_io_completion_cb stored_user_cb;
@@ -768,6 +800,59 @@ struct spdk_bdev_io {
 			/* The data buffer */
 			void *buf;
 		} zone_mgmt;
+		struct {
+			/* Flag to check current reservation key */
+			bool ignore_key;
+
+			/* Specifies the reservation acquire action */
+			enum spdk_bdev_reservation_acquire_action action;
+
+			/* Reservation type for the namespace */
+			enum spdk_bdev_reservation_type type;
+
+			/** current reservation key */
+			uint64_t                crkey;
+			/** preempt reservation key */
+
+			uint64_t                prkey;
+			/* Reservation acquire data */
+		} reservation_acquire;
+		struct {
+			/* Flag to check current reservation key */
+			bool ignore_key;
+
+			/* Specifies the registration action */
+			enum spdk_bdev_reservation_register_action action;
+
+			/* Change the Persist Through Power Loss state */
+			enum spdk_bdev_reservation_register_cptpl cptpl;
+
+			/** current reservation key */
+			uint64_t                crkey;
+
+			/** new reservation key */
+			uint64_t                nrkey;
+		} reservation_register;
+		struct {
+			/* Flag to check current reservation key */
+			bool ignore_key;
+
+			/* Specifies the reservation release action */
+			enum spdk_bdev_reservation_release_action action;
+
+			/* Reservation type for the namespace */
+			enum spdk_bdev_reservation_type type;
+
+			/* Current reservation key */
+			uint64_t crkey;
+		} reservation_release;
+		struct {
+			/* Length bytes for reservation status data structure */
+			uint32_t len;
+
+			/* Virtual address pointer for reservation status data */
+			struct spdk_bdev_reservation_status_data *status_data;
+		} reservation_report;
 	} u;
 
 	/** It may be used by modules to put the bdev_io into its own list. */
@@ -832,6 +917,9 @@ struct spdk_bdev_io {
 		/** Status for the IO */
 		int8_t status;
 
+		/** Indicates whether the IO is split */
+		bool split;
+
 		/** bdev allocated memory associated with this request */
 		void *buf;
 
@@ -851,7 +939,14 @@ struct spdk_bdev_io {
 		/** Callback for when buf is allocated */
 		spdk_bdev_io_get_buf_cb get_buf_cb;
 
-		/** Member used for linking child I/Os together. */
+		/**
+		 * Queue entry used in several cases:
+		 *  1. IOs awaiting retry due to NOMEM status,
+		 *  2. IOs awaiting submission due to QoS,
+		 *  3. IOs with an accel sequence being executed,
+		 *  4. IOs awaiting memory domain pull/push,
+		 *  5. queued reset requests.
+		 */
 		TAILQ_ENTRY(spdk_bdev_io) link;
 
 		/** Entry to the list need_buf of struct spdk_bdev. */
@@ -866,11 +961,12 @@ struct spdk_bdev_io {
 		/** Enables queuing parent I/O when no bdev_ios available for split children. */
 		struct spdk_bdev_io_wait_entry waitq_entry;
 
-		/** Pointer to a structure passed by the user in ext API */
-		struct spdk_bdev_ext_io_opts *ext_opts;
+		/** Memory domain and its context passed by the user in ext API */
+		struct spdk_memory_domain *memory_domain;
+		void *memory_domain_ctx;
 
-		/** Copy of user's opts, used when I/O is split */
-		struct spdk_bdev_ext_io_opts ext_opts_copy;
+		/* Sequence of accel operations passed by the user */
+		struct spdk_accel_sequence *accel_sequence;
 
 		/** Data transfer completion callback */
 		void (*data_transfer_cpl)(void *ctx, int rc);
@@ -1512,6 +1608,13 @@ enum spdk_bdev_reset_stat_mode {
  * \param mode The mode to reset I/O statictics.
  */
 void spdk_bdev_reset_io_stat(struct spdk_bdev_io_stat *stat, enum spdk_bdev_reset_stat_mode mode);
+
+/**
+ * Update internal bdev state when bdev module finishes initialization asynchronously
+ *
+ * \param bdev Block device to update
+ */
+void spdk_bdev_update_connected(struct spdk_bdev *bdev);
 
 /*
  *  Macro used to register module for later initialization.

@@ -117,12 +117,15 @@
 	spdk_nvme_ctrlr_set_remove_cb;
 	spdk_nvme_ctrlr_get_memory_domains;
 	spdk_nvme_ctrlr_get_discovery_log_page;
+	spdk_nvme_ctrlr_accel_seq_supported;
+	spdk_nvme_ctrlr_get_max_sges;
 
 	spdk_nvme_poll_group_create;
 	spdk_nvme_poll_group_add;
 	spdk_nvme_poll_group_remove;
 	spdk_nvme_poll_group_destroy;
 	spdk_nvme_poll_group_process_completions;
+	spdk_nvme_poll_group_process_events;
 	spdk_nvme_poll_group_get_ctx;
 
 	spdk_nvme_ns_get_data;
@@ -184,6 +187,8 @@
 	spdk_nvme_qpair_print_completion;
 	spdk_nvme_qpair_get_id;
 	spdk_nvme_qpair_get_num_outstanding_reqs;
+	spdk_nvme_qpair_set_dnr;
+	spdk_nvme_qpair_is_connected;
 
 	spdk_nvme_print_command;
 	spdk_nvme_print_completion;

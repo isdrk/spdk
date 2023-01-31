@@ -163,8 +163,18 @@ struct spdk_app_opts {
 	 * The vf_token is an UUID that shared between SR-IOV PF and VF.
 	 */
 	const char		*vf_token;
+
+	/**
+	 * Log level for JSON RPC.
+	 */
+	enum spdk_log_level rpc_log_level;
+
+	/**
+	 * If non-NULL, a pointer to JSON RPC log file.
+	 */
+	FILE *rpc_log_file;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 216, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 228, "Incorrect size");
 
 /**
  * Initialize the default value of opts

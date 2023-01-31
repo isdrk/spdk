@@ -50,6 +50,8 @@ enum spdk_accel_aux_iov_type {
 	SPDK_ACCEL_AUX_IOV_DST,
 	SPDK_ACCEL_AUX_IOV_SRC2,
 	SPDK_ACCEL_AUX_IOV_DST2,
+	SPDK_ACCEL_AXU_IOV_VIRT_SRC,
+	SPDK_ACCEL_AXU_IOV_VIRT_DST,
 	SPDK_ACCEL_AUX_IOV_MAX,
 };
 
@@ -91,17 +93,19 @@ struct spdk_accel_task {
 		uint32_t		*output_size;
 		uint32_t		block_size; /* for crypto op */
 	};
+	uint32_t                        *cached_lkey;
+	uint64_t			iv; /* Initialization vector (tweak) for crypto op */
+	int8_t				op_code;
+	int16_t				status;
+	int				flags;
+	TAILQ_ENTRY(spdk_accel_task)	link;
+	TAILQ_ENTRY(spdk_accel_task)	seq_link;
+	struct iovec			aux_iovs[SPDK_ACCEL_AUX_IOV_MAX];
 	struct {
 		struct spdk_accel_bounce_buffer s;
 		struct spdk_accel_bounce_buffer d;
 	} bounce;
-	enum accel_opcode		op_code;
-	uint64_t			iv; /* Initialization vector (tweak) for crypto op */
-	int				flags;
-	int				status;
-	struct iovec			aux_iovs[SPDK_ACCEL_AUX_IOV_MAX];
-	TAILQ_ENTRY(spdk_accel_task)	link;
-	TAILQ_ENTRY(spdk_accel_task)	seq_link;
+
 };
 
 struct spdk_accel_module_if {
@@ -168,5 +172,93 @@ static void __attribute__((constructor)) _spdk_accel_module_register_##name(void
  * Called by an accel module when cleanup initiated during .module_fini has completed
  */
 void spdk_accel_module_finish(void);
+
+/**
+ * Platform driver responsible for executing tasks in a sequence.  If no driver is selected, tasks
+ * are submitted to accel modules.  All drivers are required to be aware of memory domains.
+ */
+struct spdk_accel_driver {
+	/** Name of the driver */
+	const char *name;
+	/**
+	 * Executes a sequence of accel operations.  The driver should notify accel about each
+	 * completed task using `spdk_accel_task_complete()`.  Once all tasks are completed or the
+	 * driver cannot proceed with a given task (e.g. because it doesn't handle specific opcode),
+	 * accel should be notified via `spdk_accel_sequence_continue()`.  If there are tasks left
+	 * in a sequence, the first will be submitted to a module, while the rest will be sent back
+	 * to the driver.  `spdk_accel_sequence_continue()` should only be called if this function
+	 * succeeds (i.e. returns 0).
+	 *
+	 * \param Sequence of tasks to execute.
+	 *
+	 * \return 0 on success, negative errno on failure.
+	 */
+	int (*execute_sequence)(struct spdk_accel_sequence *seq);
+
+	TAILQ_ENTRY(spdk_accel_driver)	tailq;
+};
+
+/**
+ * Notifies accel that a driver has finished executing a sequence (or its part) and accel should
+ * continue processing it.
+ *
+ * \param seq Sequence object.
+ */
+void spdk_accel_sequence_continue(struct spdk_accel_sequence *seq);
+
+void spdk_accel_driver_register(struct spdk_accel_driver *driver);
+
+#define SPDK_ACCEL_DRIVER_REGISTER(name, driver) \
+static void __attribute__((constructor)) _spdk_accel_driver_register_##name(void) \
+{ \
+	spdk_accel_driver_register(driver); \
+}
+
+typedef void (*spdk_accel_sequence_get_buf_cb)(struct spdk_accel_sequence *seq, void *cb_arg);
+
+/**
+ * Allocates memory for an accel buffer in a given sequence.  The callback is only executed if the
+ * buffer couldn't be allocated immediately.
+ *
+ * \param seq Sequence object.
+ * \param buf Accel buffer to allocate.
+ * \param domain Accel memory domain.
+ * \param domain_ctx Memory domain context.
+ * \param cb_fn Callback to be executed once the buffer is allocated.
+ * \param cb_ctx Argument to be passed to `cb_fn`.
+ *
+ * \return true if the buffer was immediately allocated, false otherwise.
+ */
+bool spdk_accel_alloc_sequence_buf(struct spdk_accel_sequence *seq, void *buf,
+				   struct spdk_memory_domain *domain, void *domain_ctx,
+				   spdk_accel_sequence_get_buf_cb cb_fn, void *cb_ctx);
+
+/**
+ * Returns the first task remaining to be executed in a given sequence.
+ *
+ * \param seq Sequence object.
+ *
+ * \return the first remaining task or NULL if all tasks are already completed.
+ */
+struct spdk_accel_task *spdk_accel_sequence_first_task(struct spdk_accel_sequence *seq);
+
+/**
+ * Returns the last task remaining to be executed in a given sequence.
+ *
+ * \param seq Sequence object.
+ *
+ * \return the first remaining task or NULL if all tasks are already completed.
+ */
+struct spdk_accel_task *spdk_accel_sequence_last_task(struct spdk_accel_sequence *seq);
+
+/**
+ * Returns the next remaining task that follows a given task in a sequence.
+ *
+ * \param task Accel task.  This task must be still oustanding (i.e. it wasn't completed through
+ *             `spdk_accel_task_complete()`).
+ *
+ * \return the next task or NULL if `task` was the last task in a sequence.
+ */
+struct spdk_accel_task *spdk_accel_sequence_next_task(struct spdk_accel_task *task);
 
 #endif

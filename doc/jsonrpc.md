@@ -1904,6 +1904,42 @@ Example response:
 }
 ~~~
 
+### accel_set_driver {#rpc_accel_set_driver}
+
+Select platform driver to execute operation chains.  Until a driver is selected, all operations are
+executed through accel modules.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------------
+name                    | Required | string      | Name of the platform driver
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "accel_set_driver",
+  "id": 1
+  "params": {
+    "name": "xeon"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### compressdev_scan_accel_module {#rpc_compressdev_scan_accel_module}
 
 Set config and enable compressdev accel module offload.
@@ -3696,6 +3732,7 @@ transport_tos              | Optional | number      | IPv4 Type of Service value
 nvme_error_stat            | Optional | boolean     | Enable collecting NVMe error counts.
 rdma_srq_size              | Optional | number      | Set the size of a shared rdma receive queue. Default: 0 (disabled).
 io_path_stat               | Optional | boolean     | Enable collecting I/O stat of each nvme bdev io path. Default: `false`.
+poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
 
 #### Example
 
@@ -3808,11 +3845,12 @@ hdgst                      | Optional | bool        | Enable TCP header digest
 ddgst                      | Optional | bool        | Enable TCP data digest
 fabrics_connect_timeout_us | Optional | bool        | Timeout for fabrics connect (in microseconds)
 multipath                  | Optional | string      | Multipathing behavior: disable, failover, multipath. Default is failover.
-num_io_queues              | Optional | uint32_t    | The number of IO queues to request during initialization. Range: (0, UINT16_MAX + 1], Default is 1024.
+num_io_queues              | Optional | number      | The number of IO queues to request during initialization. Range: (0, UINT16_MAX + 1], Default is 1024.
 ctrlr_loss_timeout_sec     | Optional | number      | Time to wait until ctrlr is reconnected before deleting ctrlr.  -1 means infinite reconnects. 0 means no reconnect.
 reconnect_delay_sec        | Optional | number      | Time to delay a reconnect trial. 0 means no reconnect.
 fast_io_fail_timeout_sec   | Optional | number      | Time to wait until ctrlr is reconnected before failing I/O to ctrlr. 0 means no such timeout.
 psk                        | Optional | string      | PSK in hexadecimal digits, e.g. 1234567890ABCDEF (Enables SSL socket implementation for TCP)
+max_bdevs                  | Optional | number      | The size of the name array for newly created bdevs. Default is 128.
 
 #### Example
 
@@ -3945,7 +3983,12 @@ Example response:
 
 ### bdev_nvme_reset_controller {#rpc_bdev_nvme_reset_controller}
 
-Reset NVMe controller.
+For non NVMe multipath, reset an NVMe controller whose name is given by the `name` parameter.
+
+For NVMe multipath, an NVMe bdev controller is created and it aggregates multiple NVMe controllers.
+The `name` parameter is an NVMe bdev controller name and the `cntlid` parameter is used to identify
+an NVMe controller in the NVMe bdev controller. Reset only one NVMe-oF controlelr if the `cntlid`
+parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
 
 Returns true if the controller reset was successful, false otherwise.
 
@@ -3953,7 +3996,9 @@ Returns true if the controller reset was successful, false otherwise.
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-name                    | Required | string      | NVMe controller name
+name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
+cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -3964,6 +4009,98 @@ Example request:
   "jsonrpc": "2.0",
   "id": 1,
   "method": "bdev_nvme_reset_controller",
+  "params": {
+    "name": "Nvme0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_nvme_enable_controller {#rpc_bdev_nvme_enable_controller}
+
+For non NVMe multipath, enable an NVMe controller whose name is given by the `name` parameter.
+
+For NVMe multipath, an NVMe bdev controller is created and it aggregates multiple NVMe controllers.
+The `name` parameter is an NVMe bdev controller name and the `cntlid` or `subnqn` parameter is used to identify
+an NVMe controller in the NVMe bdev controller. Enable only one NVMe-oF controller if the `cntlid` or `subnqn`
+parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
+
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
+Returns true if the controller enablement was successful or a controller was already enabled, false otherwise.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
+cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_nvme_enable_controller",
+  "params": {
+    "name": "Nvme0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_nvme_disable_controller {#rpc_bdev_nvme_disable_controller}
+
+For non NVMe multipath, disable an NVMe controller whose name is given by the `name` parameter.
+
+For NVMe multipath, an NVMe bdev controller is created and it aggregates multiple NVMe controllers.
+The `name` parameter is an NVMe bdev controller name and the `cntlid` or `subnqn` parameter is used to identify
+an NVMe controller in the NVMe bdev controller. Disable only one NVMe-oF controller if the `cntlid` or `subnqn`
+parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
+
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
+Returns true if the controller disablement was successful or a controller was already disabled, false otherwise.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
+cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_nvme_disable_controller",
   "params": {
     "name": "Nvme0"
   }
@@ -11200,6 +11337,10 @@ tls_version                 | Optional | number      | TLS protocol version, e.g
 enable_ktls                 | Optional | boolean     | Enable or disable Kernel TLS (only applies when impl_name == ssl)
 psk_key                     | Optional | string      | Default PSK KEY in hexadecimal digits, e.g. 1234567890ABCDEF (only applies when impl_name == ssl)
 psk_identity                | Optional | string      | Default PSK ID, e.g. psk.spdk.io (only applies when impl_name == ssl)
+enable_zerocopy_recv        | Optional | boolean     | Enable or disable zero copy on receive
+enable_tcp_nodelay          | Optional | boolean     | Enable or disable TCP_NODELAY socket option
+buffers_pool_size           | Optional | number      | Set per poll group socket buffers pool size
+packets_pool_size           | Optional | number      | Set per poll group packets pool size
 
 #### Response
 

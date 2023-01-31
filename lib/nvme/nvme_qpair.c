@@ -565,7 +565,7 @@ nvme_qpair_manual_complete_request(struct spdk_nvme_qpair *qpair,
 }
 
 void
-nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
+nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_request		*req;
 	STAILQ_HEAD(, nvme_request)	tmp;
@@ -580,7 +580,7 @@ nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
 			SPDK_ERRLOG("aborting queued i/o\n");
 		}
 		nvme_qpair_manual_complete_request(qpair, req, SPDK_NVME_SCT_GENERIC,
-						   SPDK_NVME_SC_ABORTED_SQ_DELETION, dnr, true);
+						   SPDK_NVME_SC_ABORTED_SQ_DELETION, qpair->dnr, true);
 	}
 }
 
@@ -654,8 +654,8 @@ nvme_qpair_check_enabled(struct spdk_nvme_qpair *qpair)
 		 */
 		if (qpair->ctrlr->trid.trtype == SPDK_NVME_TRANSPORT_PCIE &&
 		    !qpair->is_new_qpair) {
-			nvme_qpair_abort_all_queued_reqs(qpair, 0);
-			nvme_transport_qpair_abort_reqs(qpair, 0);
+			nvme_qpair_abort_all_queued_reqs(qpair);
+			nvme_transport_qpair_abort_reqs(qpair);
 		}
 
 		nvme_qpair_set_state(qpair, NVME_QPAIR_ENABLED);
@@ -760,8 +760,8 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 			  nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING)) {
 		if (qpair->ctrlr->is_removed) {
 			nvme_qpair_set_state(qpair, NVME_QPAIR_DESTROYING);
-			nvme_qpair_abort_all_queued_reqs(qpair, 0);
-			nvme_transport_qpair_abort_reqs(qpair, 0);
+			nvme_qpair_abort_all_queued_reqs(qpair);
+			nvme_transport_qpair_abort_reqs(qpair);
 		}
 		return -ENXIO;
 	}
@@ -783,7 +783,7 @@ spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_
 				STAILQ_REMOVE(&qpair->err_req_head, req, nvme_request, stailq);
 				nvme_qpair_manual_complete_request(qpair, req,
 								   req->cpl.status.sct,
-								   req->cpl.status.sc, 0, true);
+								   req->cpl.status.sc, qpair->dnr, true);
 			}
 		}
 	}
@@ -830,6 +830,21 @@ spdk_nvme_qpair_get_failure_reason(struct spdk_nvme_qpair *qpair)
 	return qpair->transport_failure_reason;
 }
 
+void
+spdk_nvme_qpair_set_dnr(struct spdk_nvme_qpair *qpair, uint8_t dnr)
+{
+	assert(dnr <= 1);
+
+	qpair->dnr = dnr;
+}
+
+bool
+spdk_nvme_qpair_is_connected(struct spdk_nvme_qpair *qpair)
+{
+	return nvme_qpair_get_state(qpair) >= NVME_QPAIR_CONNECTED &&
+	       nvme_qpair_get_state(qpair) <= NVME_QPAIR_ENABLED;
+}
+
 int
 nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 		struct spdk_nvme_ctrlr *ctrlr,
@@ -859,10 +874,11 @@ nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 	TAILQ_INIT(&qpair->err_cmd_head);
 	STAILQ_INIT(&qpair->err_req_head);
 
-	req_size_padded = (sizeof(struct nvme_request) + 63) & ~(size_t)63;
+	if (qpair->qprio != 0) {
+		return 0;
+	}
 
-	/* Add one for the reserved_req */
-	num_requests++;
+	req_size_padded = (sizeof(struct nvme_request) + 63) & ~(size_t)63;
 
 	qpair->req_buf = spdk_zmalloc(req_size_padded * num_requests, 64, NULL,
 				      SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
@@ -872,16 +888,23 @@ nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 		return -ENOMEM;
 	}
 
+	qpair->reserved_req = spdk_zmalloc(req_size_padded, 64, NULL,
+					   SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_SHARE);
+	if (qpair->reserved_req == NULL) {
+		spdk_free(qpair->req_buf);
+		return -ENOMEM;
+	}
+
+	qpair->reserved_req->qpair = qpair;
+
 	for (i = 0; i < num_requests; i++) {
 		struct nvme_request *req = qpair->req_buf + i * req_size_padded;
 
 		req->qpair = qpair;
-		if (i == 0) {
-			qpair->reserved_req = req;
-		} else {
-			STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
-		}
+		STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
 	}
+
+	qpair->active_free_req = &qpair->free_req;
 
 	return 0;
 }
@@ -896,7 +919,7 @@ nvme_qpair_complete_error_reqs(struct spdk_nvme_qpair *qpair)
 		STAILQ_REMOVE_HEAD(&qpair->err_req_head, stailq);
 		nvme_qpair_manual_complete_request(qpair, req,
 						   req->cpl.status.sct,
-						   req->cpl.status.sc, 0, true);
+						   req->cpl.status.sc, qpair->dnr, true);
 	}
 }
 
@@ -905,7 +928,7 @@ nvme_qpair_deinit(struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_error_cmd *cmd, *entry;
 
-	nvme_qpair_abort_queued_reqs(qpair, 0);
+	nvme_qpair_abort_queued_reqs(qpair);
 	_nvme_qpair_complete_abort_queued_reqs(qpair);
 	nvme_qpair_complete_error_reqs(qpair);
 
@@ -915,6 +938,7 @@ nvme_qpair_deinit(struct spdk_nvme_qpair *qpair)
 	}
 
 	spdk_free(qpair->req_buf);
+	spdk_free(qpair->reserved_req);
 }
 
 static inline int
@@ -1112,10 +1136,10 @@ nvme_qpair_resubmit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *
 }
 
 void
-nvme_qpair_abort_all_queued_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
+nvme_qpair_abort_all_queued_reqs(struct spdk_nvme_qpair *qpair)
 {
 	nvme_qpair_complete_error_reqs(qpair);
-	nvme_qpair_abort_queued_reqs(qpair, dnr);
+	nvme_qpair_abort_queued_reqs(qpair);
 	_nvme_qpair_complete_abort_queued_reqs(qpair);
 	if (nvme_qpair_is_admin_queue(qpair)) {
 		nvme_ctrlr_abort_queued_aborts(qpair->ctrlr);

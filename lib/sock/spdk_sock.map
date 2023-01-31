@@ -37,6 +37,7 @@
 	spdk_sock_get_caps;
 	spdk_sock_recv_zcopy;
 	spdk_sock_free_bufs;
+	spdk_sock_initialize;
 
 	# internal function in spdk_internal/sock.h
 	spdk_net_impl_register;

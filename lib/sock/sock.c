@@ -892,6 +892,9 @@ spdk_sock_write_config_json(struct spdk_json_write_ctx *w)
 			spdk_json_write_named_bool(w, "enable_zerocopy_send_server", opts.enable_zerocopy_send_server);
 			spdk_json_write_named_bool(w, "enable_zerocopy_send_client", opts.enable_zerocopy_send_client);
 			spdk_json_write_named_uint32(w, "zerocopy_threshold", opts.zerocopy_threshold);
+			spdk_json_write_named_uint32(w, "flush_batch_timeout", opts.flush_batch_timeout);
+			spdk_json_write_named_int32(w, "flush_batch_iovcnt_threshold", opts.flush_batch_iovcnt_threshold);
+			spdk_json_write_named_uint32(w, "flush_batch_bytes_threshold", opts.flush_batch_bytes_threshold);
 			spdk_json_write_named_uint32(w, "tls_version", opts.tls_version);
 			spdk_json_write_named_bool(w, "enable_ktls", opts.enable_ktls);
 			if (opts.psk_key) {
@@ -901,6 +904,10 @@ spdk_sock_write_config_json(struct spdk_json_write_ctx *w)
 				spdk_json_write_named_string(w, "psk_identity", opts.psk_identity);
 			}
 			spdk_json_write_named_bool(w, "enable_zerocopy_recv", opts.enable_zerocopy_recv);
+			spdk_json_write_named_bool(w, "enable_tcp_nodelay", opts.enable_tcp_nodelay);
+			spdk_json_write_named_uint32(w, "buffers_pool_size", opts.buffers_pool_size);
+			spdk_json_write_named_uint32(w, "packets_pool_size", opts.packets_pool_size);
+			spdk_json_write_named_bool(w, "enable_early_init", opts.enable_early_init);
 			spdk_json_write_object_end(w);
 			spdk_json_write_object_end(w);
 		} else {
@@ -976,6 +983,24 @@ spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 	}
 
 	return -ENOTSUP;
+}
+
+void
+spdk_sock_initialize(void)
+{
+	struct spdk_net_impl *impl;
+	int rc;
+
+	STAILQ_FOREACH(impl, &g_net_impls, link) {
+		if (!impl->init) {
+			continue;
+		}
+
+		rc = impl->init();
+		if (rc) {
+			SPDK_ERRLOG("Failed to initalize sock impl %s, rc %d\n", impl->name, rc);
+		}
+	}
 }
 
 SPDK_LOG_REGISTER_COMPONENT(sock)

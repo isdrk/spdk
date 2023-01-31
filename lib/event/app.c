@@ -39,6 +39,8 @@ struct spdk_app {
 	bool				stopped;
 	const char			*rpc_addr;
 	const char			**rpc_allowlist;
+	FILE				*rpc_log_file;
+	enum spdk_log_level		rpc_log_level;
 	int				shm_id;
 	spdk_app_shutdown_cb		shutdown_cb;
 	int				rc;
@@ -213,6 +215,8 @@ spdk_app_opts_init(struct spdk_app_opts *opts, size_t opts_size)
 	SET_FIELD(disable_signal_handlers, false);
 	SET_FIELD(msg_mempool_size, SPDK_DEFAULT_MSG_MEMPOOL_SIZE);
 	SET_FIELD(rpc_allowlist, NULL);
+	SET_FIELD(rpc_log_file, NULL);
+	SET_FIELD(rpc_log_level, SPDK_LOG_DISABLED);
 #undef SET_FIELD
 }
 
@@ -274,7 +278,8 @@ app_start_rpc(int rc, void *arg1)
 
 	spdk_rpc_set_allowlist(g_spdk_app.rpc_allowlist);
 
-	rc = spdk_rpc_initialize(g_spdk_app.rpc_addr);
+	rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, g_spdk_app.rpc_log_file,
+				 g_spdk_app.rpc_log_level);
 	if (rc) {
 		spdk_app_stop(rc);
 		return;
@@ -473,7 +478,8 @@ bootstrap_fn(void *arg1)
 		} else {
 			spdk_rpc_set_allowlist(g_spdk_app.rpc_allowlist);
 
-			rc = spdk_rpc_initialize(g_spdk_app.rpc_addr);
+			rc = spdk_rpc_initialize(g_spdk_app.rpc_addr, g_spdk_app.rpc_log_file,
+						 g_spdk_app.rpc_log_level);
 			if (rc) {
 				spdk_app_stop(rc);
 				return;
@@ -523,10 +529,12 @@ app_copy_opts(struct spdk_app_opts *opts, struct spdk_app_opts *opts_user, size_
 	SET_FIELD(msg_mempool_size);
 	SET_FIELD(rpc_allowlist);
 	SET_FIELD(vf_token);
+	SET_FIELD(rpc_log_file);
+	SET_FIELD(rpc_log_level);
 
 	/* You should not remove this statement, but need to update the assert statement
 	 * if you add a new field, and also add a corresponding SET_FIELD statement */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 216, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_app_opts) == 228, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -679,6 +687,8 @@ spdk_app_start(struct spdk_app_opts *opts_user, spdk_msg_fn start_fn,
 	g_spdk_app.json_config_ignore_errors = opts->json_config_ignore_errors;
 	g_spdk_app.rpc_addr = opts->rpc_addr;
 	g_spdk_app.rpc_allowlist = opts->rpc_allowlist;
+	g_spdk_app.rpc_log_file = opts->rpc_log_file;
+	g_spdk_app.rpc_log_level = opts->rpc_log_level;
 	g_spdk_app.shm_id = opts->shm_id;
 	g_spdk_app.shutdown_cb = opts->shutdown_cb;
 	g_spdk_app.rc = 0;

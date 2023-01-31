@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019-2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
@@ -20,14 +20,6 @@
 
 #include "spdk/log.h"
 #include "spdk/bdev_module.h"
-
-struct open_descriptors {
-	void *desc;
-	struct  spdk_bdev *bdev;
-	TAILQ_ENTRY(open_descriptors) tqlst;
-	struct spdk_thread *thread;
-};
-typedef TAILQ_HEAD(, open_descriptors) open_descriptors_t;
 
 static int
 rpc_decode_action_on_timeout(const struct spdk_json_val *val, void *out)
@@ -74,6 +66,7 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_options_decoders[] = 
 	{"nvme_error_stat", offsetof(struct spdk_bdev_nvme_opts, nvme_error_stat), spdk_json_decode_bool, true},
 	{"rdma_srq_size", offsetof(struct spdk_bdev_nvme_opts, rdma_srq_size), spdk_json_decode_uint32, true},
 	{"io_path_stat", offsetof(struct spdk_bdev_nvme_opts, io_path_stat), spdk_json_decode_bool, true},
+	{"poll_group_requests", offsetof(struct spdk_bdev_nvme_opts, poll_group_requests), spdk_json_decode_uint32, true},
 };
 
 static void
@@ -458,20 +451,16 @@ rpc_bdev_nvme_attach_controller(struct spdk_jsonrpc_request *request,
 		assert(ctx->req.multipath == BDEV_NVME_MP_MODE_FAILOVER ||
 		       ctx->req.multipath == BDEV_NVME_MP_MODE_MULTIPATH);
 
-		/* The user wants to add this as a failover path or add this to create multipath. */
-		drv_opts = spdk_nvme_ctrlr_get_opts(ctrlr->ctrlr);
-		ctrlr_trid = spdk_nvme_ctrlr_get_transport_id(ctrlr->ctrlr);
-
-		if (strncmp(trid.traddr, ctrlr_trid->traddr, sizeof(trid.traddr)) == 0 &&
-		    strncmp(trid.trsvcid, ctrlr_trid->trsvcid, sizeof(trid.trsvcid)) == 0 &&
-		    strncmp(ctx->req.drv_opts.src_addr, drv_opts->src_addr, sizeof(drv_opts->src_addr)) == 0 &&
-		    strncmp(ctx->req.drv_opts.src_svcid, drv_opts->src_svcid, sizeof(drv_opts->src_svcid)) == 0) {
-			/* Exactly same network path can't be added a second time */
-			spdk_jsonrpc_send_error_response_fmt(request, -EALREADY,
-							     "A controller named %s already exists with the specified network path\n",
+		if (ctx->req.bdev_opts.prchk_flags) {
+			spdk_jsonrpc_send_error_response_fmt(request, -EINVAL,
+							     "A controller named %s already exists. To add a path, do not specify PI options.\n",
 							     ctx->req.name);
 			goto cleanup;
 		}
+
+		/* The user wants to add this as a failover path or add this to create multipath. */
+		drv_opts = spdk_nvme_ctrlr_get_opts(ctrlr->ctrlr);
+		ctrlr_trid = spdk_nvme_ctrlr_get_transport_id(ctrlr->ctrlr);
 
 		if (strncmp(trid.subnqn,
 			    ctrlr_trid->subnqn,
@@ -491,9 +480,13 @@ rpc_bdev_nvme_attach_controller(struct spdk_jsonrpc_request *request,
 			goto cleanup;
 		}
 
-		if (ctx->req.bdev_opts.prchk_flags) {
-			spdk_jsonrpc_send_error_response_fmt(request, -EINVAL,
-							     "A controller named %s already exists. To add a path, do not specify PI options.\n",
+		if (strncmp(trid.traddr, ctrlr_trid->traddr, sizeof(trid.traddr)) == 0 &&
+		    strncmp(trid.trsvcid, ctrlr_trid->trsvcid, sizeof(trid.trsvcid)) == 0 &&
+		    strncmp(ctx->req.drv_opts.src_addr, drv_opts->src_addr, sizeof(drv_opts->src_addr)) == 0 &&
+		    strncmp(ctx->req.drv_opts.src_svcid, drv_opts->src_svcid, sizeof(drv_opts->src_svcid)) == 0) {
+			/* Exactly same network path can't be added a second time */
+			spdk_jsonrpc_send_error_response_fmt(request, -EALREADY,
+							     "A controller named %s already exists with the specified network path\n",
 							     ctx->req.name);
 			goto cleanup;
 		}
@@ -783,68 +776,48 @@ struct firmware_update_info {
 	unsigned int			size_remaining;
 	unsigned int			offset;
 	unsigned int			transfer;
+	bool				success;
 
-	void				*desc;
+	struct spdk_bdev_desc		*desc;
 	struct spdk_io_channel		*ch;
+	struct spdk_thread		*orig_thread;
 	struct spdk_jsonrpc_request	*request;
 	struct spdk_nvme_ctrlr		*ctrlr;
-	open_descriptors_t		desc_head;
-	struct rpc_apply_firmware	*req;
+	struct rpc_apply_firmware	req;
 };
 
 static void
-_apply_firmware_cleanup(void *ctx)
+apply_firmware_cleanup(struct firmware_update_info *firm_ctx)
 {
-	struct spdk_bdev_desc *desc = ctx;
-
-	spdk_bdev_close(desc);
-}
-
-static void
-apply_firmware_cleanup(void *cb_arg)
-{
-	struct open_descriptors			*opt, *tmp;
-	struct firmware_update_info *firm_ctx = cb_arg;
-
-	if (!firm_ctx) {
-		return;
-	}
+	assert(firm_ctx != NULL);
+	assert(firm_ctx->orig_thread == spdk_get_thread());
 
 	if (firm_ctx->fw_image) {
 		spdk_free(firm_ctx->fw_image);
 	}
 
-	if (firm_ctx->req) {
-		free_rpc_apply_firmware(firm_ctx->req);
-		free(firm_ctx->req);
-	}
+	free_rpc_apply_firmware(&firm_ctx->req);
 
 	if (firm_ctx->ch) {
 		spdk_put_io_channel(firm_ctx->ch);
 	}
 
-	TAILQ_FOREACH_SAFE(opt, &firm_ctx->desc_head, tqlst, tmp) {
-		TAILQ_REMOVE(&firm_ctx->desc_head, opt, tqlst);
-		/* Close the underlying bdev on its same opened thread. */
-		if (opt->thread && opt->thread != spdk_get_thread()) {
-			spdk_thread_send_msg(opt->thread, _apply_firmware_cleanup, opt->desc);
-		} else {
-			spdk_bdev_close(opt->desc);
-		}
-		free(opt);
+	if (firm_ctx->desc) {
+		spdk_bdev_close(firm_ctx->desc);
 	}
+
 	free(firm_ctx);
 }
 
 static void
-apply_firmware_complete_reset(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+_apply_firmware_complete_reset(void *ctx)
 {
 	struct spdk_json_write_ctx		*w;
-	struct firmware_update_info *firm_ctx = cb_arg;
+	struct firmware_update_info *firm_ctx = ctx;
 
-	spdk_bdev_free_io(bdev_io);
+	assert(firm_ctx->orig_thread == spdk_get_thread());
 
-	if (!success) {
+	if (!firm_ctx->success) {
 		spdk_jsonrpc_send_error_response(firm_ctx->request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
 						 "firmware commit failed.");
 		apply_firmware_cleanup(firm_ctx);
@@ -865,18 +838,32 @@ apply_firmware_complete_reset(struct spdk_bdev_io *bdev_io, bool success, void *
 }
 
 static void
-apply_firmware_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+apply_firmware_complete_reset(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+	struct firmware_update_info *firm_ctx = cb_arg;
+
+	spdk_bdev_free_io(bdev_io);
+
+	firm_ctx->success = success;
+
+	spdk_thread_exec_msg(firm_ctx->orig_thread, _apply_firmware_complete_reset, firm_ctx);
+}
+
+static void apply_firmware_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg);
+
+static void
+_apply_firmware_complete(void *ctx)
 {
 	struct spdk_nvme_cmd			cmd = {};
 	struct spdk_nvme_fw_commit		fw_commit;
 	int					slot = 0;
 	int					rc;
-	struct firmware_update_info *firm_ctx = cb_arg;
+	struct firmware_update_info *firm_ctx = ctx;
 	enum spdk_nvme_fw_commit_action commit_action = SPDK_NVME_FW_COMMIT_REPLACE_AND_ENABLE_IMG;
 
-	spdk_bdev_free_io(bdev_io);
+	assert(firm_ctx->orig_thread == spdk_get_thread());
 
-	if (!success) {
+	if (!firm_ctx->success) {
 		spdk_jsonrpc_send_error_response(firm_ctx->request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
 						 "firmware download failed .");
 		apply_firmware_cleanup(firm_ctx);
@@ -924,6 +911,18 @@ apply_firmware_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg
 }
 
 static void
+apply_firmware_complete(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg)
+{
+	struct firmware_update_info *firm_ctx = cb_arg;
+
+	spdk_bdev_free_io(bdev_io);
+
+	firm_ctx->success = success;
+
+	spdk_thread_exec_msg(firm_ctx->orig_thread, _apply_firmware_complete, firm_ctx);
+}
+
+static void
 apply_firmware_open_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
 {
 }
@@ -935,12 +934,7 @@ rpc_bdev_nvme_apply_firmware(struct spdk_jsonrpc_request *request,
 	int					rc;
 	int					fd = -1;
 	struct stat				fw_stat;
-	struct spdk_nvme_ctrlr			*ctrlr;
-	char					msg[1024];
 	struct spdk_bdev			*bdev;
-	struct spdk_bdev			*bdev2;
-	struct open_descriptors			*opt;
-	struct spdk_bdev_desc			*desc;
 	struct spdk_nvme_cmd			cmd = {};
 	struct firmware_update_info		*firm_ctx;
 
@@ -951,97 +945,59 @@ rpc_bdev_nvme_apply_firmware(struct spdk_jsonrpc_request *request,
 		return;
 	}
 	firm_ctx->fw_image = NULL;
-	TAILQ_INIT(&firm_ctx->desc_head);
 	firm_ctx->request = request;
-
-	firm_ctx->req = calloc(1, sizeof(struct rpc_apply_firmware));
-	if (!firm_ctx->req) {
-		snprintf(msg, sizeof(msg), "Memory allocation error.");
-		goto err;
-	}
+	firm_ctx->orig_thread = spdk_get_thread();
 
 	if (spdk_json_decode_object(params, rpc_apply_firmware_decoders,
-				    SPDK_COUNTOF(rpc_apply_firmware_decoders), firm_ctx->req)) {
-		snprintf(msg, sizeof(msg), "spdk_json_decode_object failed.");
+				    SPDK_COUNTOF(rpc_apply_firmware_decoders), &firm_ctx->req)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed.");
 		goto err;
 	}
 
-	if ((bdev = spdk_bdev_get_by_name(firm_ctx->req->bdev_name)) == NULL) {
-		snprintf(msg, sizeof(msg), "bdev %s were not found", firm_ctx->req->bdev_name);
+	if (spdk_bdev_open_ext(firm_ctx->req.bdev_name, true, apply_firmware_open_cb, NULL,
+			       &firm_ctx->desc) != 0) {
+		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						     "bdev %s could not be opened",
+						     firm_ctx->req.bdev_name);
 		goto err;
 	}
+	bdev = spdk_bdev_desc_get_bdev(firm_ctx->desc);
 
-	if ((ctrlr = bdev_nvme_get_ctrlr(bdev)) == NULL) {
-		snprintf(msg, sizeof(msg), "Controller information for %s were not found.",
-			 firm_ctx->req->bdev_name);
-		goto err;
-	}
-	firm_ctx->ctrlr = ctrlr;
-
-	for (bdev2 = spdk_bdev_first(); bdev2; bdev2 = spdk_bdev_next(bdev2)) {
-
-		if (bdev_nvme_get_ctrlr(bdev2) != ctrlr) {
-			continue;
-		}
-
-		if (!(opt = malloc(sizeof(struct open_descriptors)))) {
-			snprintf(msg, sizeof(msg), "Memory allocation error.");
-			goto err;
-		}
-
-		if (spdk_bdev_open_ext(spdk_bdev_get_name(bdev2), true, apply_firmware_open_cb, NULL, &desc) != 0) {
-			snprintf(msg, sizeof(msg), "Device %s is in use.", firm_ctx->req->bdev_name);
-			free(opt);
-			goto err;
-		}
-
-		/* Save the thread where the base device is opened */
-		opt->thread = spdk_get_thread();
-
-		opt->desc = desc;
-		opt->bdev = bdev;
-		TAILQ_INSERT_TAIL(&firm_ctx->desc_head, opt, tqlst);
-	}
-
-	/*
-	 * find a descriptor associated with our bdev
-	 */
-	firm_ctx->desc = NULL;
-	TAILQ_FOREACH(opt, &firm_ctx->desc_head, tqlst) {
-		if (opt->bdev == bdev) {
-			firm_ctx->desc = opt->desc;
-			break;
-		}
-	}
-
-	if (!firm_ctx->desc) {
-		snprintf(msg, sizeof(msg), "No descriptor were found.");
+	if ((firm_ctx->ctrlr = bdev_nvme_get_ctrlr(bdev)) == NULL) {
+		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						     "Controller information for %s were not found.",
+						     firm_ctx->req.bdev_name);
 		goto err;
 	}
 
 	firm_ctx->ch = spdk_bdev_get_io_channel(firm_ctx->desc);
 	if (!firm_ctx->ch) {
-		snprintf(msg, sizeof(msg), "No channels were found.");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "No channels were found.");
 		goto err;
 	}
 
-	fd = open(firm_ctx->req->filename, O_RDONLY);
+	fd = open(firm_ctx->req.filename, O_RDONLY);
 	if (fd < 0) {
-		snprintf(msg, sizeof(msg), "open file failed.");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "open file failed.");
 		goto err;
 	}
 
 	rc = fstat(fd, &fw_stat);
 	if (rc < 0) {
 		close(fd);
-		snprintf(msg, sizeof(msg), "fstat failed.");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "fstat failed.");
 		goto err;
 	}
 
 	firm_ctx->size = fw_stat.st_size;
 	if (fw_stat.st_size % 4) {
 		close(fd);
-		snprintf(msg, sizeof(msg), "Firmware image size is not multiple of 4.");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Firmware image size is not multiple of 4.");
 		goto err;
 	}
 
@@ -1049,14 +1005,16 @@ rpc_bdev_nvme_apply_firmware(struct spdk_jsonrpc_request *request,
 					  SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 	if (!firm_ctx->fw_image) {
 		close(fd);
-		snprintf(msg, sizeof(msg), "Memory allocation error.");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Memory allocation error.");
 		goto err;
 	}
 	firm_ctx->p = firm_ctx->fw_image;
 
 	if (read(fd, firm_ctx->p, firm_ctx->size) != ((ssize_t)(firm_ctx->size))) {
 		close(fd);
-		snprintf(msg, sizeof(msg), "Read firmware image failed!");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Read firmware image failed!");
 		goto err;
 	}
 	close(fd);
@@ -1076,9 +1034,9 @@ rpc_bdev_nvme_apply_firmware(struct spdk_jsonrpc_request *request,
 		return;
 	}
 
-	snprintf(msg, sizeof(msg), "Read firmware image failed!");
+	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+					 "Read firmware image failed!");
 err:
-	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, msg);
 	apply_firmware_cleanup(firm_ctx);
 }
 SPDK_RPC_REGISTER("bdev_nvme_apply_firmware", rpc_bdev_nvme_apply_firmware, SPDK_RPC_RUNTIME)
@@ -1141,6 +1099,12 @@ rpc_bdev_nvme_tcp_stats(struct spdk_json_write_ctx *w,
 	spdk_json_write_named_uint64(w, "nvme_completions", stat->tcp.nvme_completions);
 	spdk_json_write_named_uint64(w, "queued_requests", stat->tcp.queued_requests);
 	spdk_json_write_named_uint64(w, "submitted_requests", stat->tcp.submitted_requests);
+	spdk_json_write_named_uint64(w, "outstanding_reqs", stat->tcp.outstanding_reqs);
+	spdk_json_write_named_uint64(w, "received_data_pdus", stat->tcp.received_data_pdus);
+	spdk_json_write_named_uint64(w, "received_data_iovs", stat->tcp.received_data_iovs);
+	spdk_json_write_named_uint64(w, "max_data_iovs_per_pdu", stat->tcp.max_data_iovs_per_pdu);
+	spdk_json_write_named_uint64(w, "recv_ddgsts", stat->tcp.recv_ddgsts);
+	spdk_json_write_named_uint64(w, "send_ddgsts", stat->tcp.send_ddgsts);
 }
 
 static void
@@ -1274,7 +1238,12 @@ _rpc_bdev_nvme_reset_controller_cb(void *_ctx)
 {
 	struct rpc_bdev_nvme_reset_controller_ctx *ctx = _ctx;
 
-	spdk_jsonrpc_send_bool_response(ctx->request, ctx->success);
+	if (ctx->success) {
+		spdk_jsonrpc_send_bool_response(ctx->request, true);
+	} else {
+		spdk_jsonrpc_send_error_response(ctx->request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Controller reset failed");
+	}
 
 	free(ctx);
 }

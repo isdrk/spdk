@@ -11,6 +11,7 @@
 #include "spdk/util.h"
 #include "spdk/event.h"
 #include "spdk/stdinc.h"
+#include "spdk/string.h"
 #include "spdk/env.h"
 #include "spdk/util.h"
 
@@ -183,13 +184,14 @@ static const struct spdk_json_object_decoder rpc_accel_dek_create_decoders[] = {
 	{"key", offsetof(struct rpc_accel_crypto_key_create, param.hex_key),   spdk_json_decode_string},
 	{"key2", offsetof(struct rpc_accel_crypto_key_create, param.hex_key2), spdk_json_decode_string, true},
 	{"name", offsetof(struct rpc_accel_crypto_key_create, param.key_name), spdk_json_decode_string},
+	{"tweak_offset", offsetof(struct rpc_accel_crypto_key_create, param.tweak_offset), spdk_json_decode_uint8, true},
 };
 
 static void
 rpc_accel_crypto_key_create(struct spdk_jsonrpc_request *request,
 			    const struct spdk_json_val *params)
 {
-	struct rpc_accel_crypto_key_create req = {};
+	struct rpc_accel_crypto_key_create req = {.param.tweak_offset = 8};
 	size_t key_size;
 	int rc;
 
@@ -230,7 +232,7 @@ struct rpc_accel_crypto_keys_get_ctx {
 };
 
 static const struct spdk_json_object_decoder rpc_accel_crypto_keys_get_decoders[] = {
-	{"key_name", offsetof(struct rpc_accel_crypto_keys_get_ctx, key_name), spdk_json_decode_string},
+	{"key_name", offsetof(struct rpc_accel_crypto_keys_get_ctx, key_name), spdk_json_decode_string, true},
 };
 
 static void
@@ -274,7 +276,7 @@ rpc_accel_crypto_keys_get(struct spdk_jsonrpc_request *request,
 SPDK_RPC_REGISTER("accel_crypto_keys_get", rpc_accel_crypto_keys_get, SPDK_RPC_RUNTIME)
 
 static const struct spdk_json_object_decoder rpc_accel_crypto_key_destroy_decoders[] = {
-	{"key_name", offsetof(struct rpc_accel_crypto_keys_get_ctx, key_name), spdk_json_decode_string, true},
+	{"key_name", offsetof(struct rpc_accel_crypto_keys_get_ctx, key_name), spdk_json_decode_string},
 };
 
 static void
@@ -285,9 +287,9 @@ rpc_accel_crypto_key_destroy(struct spdk_jsonrpc_request *request,
 	struct spdk_accel_crypto_key *key = NULL;
 	int rc;
 
-	if (params && spdk_json_decode_object(params, rpc_accel_crypto_key_destroy_decoders,
-					      SPDK_COUNTOF(rpc_accel_crypto_key_destroy_decoders),
-					      &req)) {
+	if (spdk_json_decode_object(params, rpc_accel_crypto_key_destroy_decoders,
+				    SPDK_COUNTOF(rpc_accel_crypto_key_destroy_decoders),
+				    &req)) {
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_PARSE_ERROR,
 						 "spdk_json_decode_object failed");
 		free(req.key_name);
@@ -313,3 +315,43 @@ rpc_accel_crypto_key_destroy(struct spdk_jsonrpc_request *request,
 	free(req.key_name);
 }
 SPDK_RPC_REGISTER("accel_crypto_key_destroy", rpc_accel_crypto_key_destroy, SPDK_RPC_RUNTIME)
+
+struct rpc_accel_set_driver {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_accel_set_driver_decoders[] = {
+	{"name", offsetof(struct rpc_accel_set_driver, name), spdk_json_decode_string},
+};
+
+static void
+free_rpc_accel_set_driver(struct rpc_accel_set_driver *r)
+{
+	free(r->name);
+}
+
+static void
+rpc_accel_set_driver(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
+{
+	struct rpc_accel_set_driver req = {};
+	int rc;
+
+	if (spdk_json_decode_object(params, rpc_accel_set_driver_decoders,
+				    SPDK_COUNTOF(rpc_accel_set_driver_decoders), &req)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_PARSE_ERROR,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
+	rc = spdk_accel_set_driver(req.name);
+	if (rc != 0) {
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	SPDK_NOTICELOG("Using accel driver: %s\n", req.name);
+	spdk_jsonrpc_send_bool_response(request, true);
+cleanup:
+	free_rpc_accel_set_driver(&req);
+}
+SPDK_RPC_REGISTER("accel_set_driver", rpc_accel_set_driver, SPDK_RPC_STARTUP)

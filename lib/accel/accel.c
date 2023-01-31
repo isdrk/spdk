@@ -29,8 +29,8 @@
 
 #define ALIGN_4K			0x1000
 #define MAX_TASKS_PER_CHANNEL		0x800
-#define ACCEL_SMALL_CACHE_SIZE		0
-#define ACCEL_LARGE_CACHE_SIZE		0
+#define ACCEL_SMALL_CACHE_SIZE		128
+#define ACCEL_LARGE_CACHE_SIZE		16
 /* Set MSB, so we don't return NULL pointers as buffers */
 #define ACCEL_BUFFER_BASE		((void *)(1ull << 63))
 #define ACCEL_BUFFER_OFFSET_MASK	((uintptr_t)ACCEL_BUFFER_BASE - 1)
@@ -60,6 +60,8 @@ static struct spdk_spinlock g_keyring_spin;
 /* Global array mapping capabilities to modules */
 static struct accel_module g_modules_opc[ACCEL_OPC_LAST] = {};
 static char *g_modules_opc_override[ACCEL_OPC_LAST] = {};
+TAILQ_HEAD(, spdk_accel_driver) g_accel_drivers = TAILQ_HEAD_INITIALIZER(g_accel_drivers);
+static struct spdk_accel_driver *g_accel_driver;
 
 static const char *g_opcode_strings[ACCEL_OPC_LAST] = {
 	"copy", "fill", "dualcast", "compare", "crc32c", "copy_crc32c",
@@ -80,6 +82,9 @@ enum accel_sequence_state {
 	ACCEL_SEQUENCE_STATE_NEXT_TASK,
 	ACCEL_SEQUENCE_STATE_PUSH_DATA,
 	ACCEL_SEQUENCE_STATE_AWAIT_PUSH_DATA,
+	ACCEL_SEQUENCE_STATE_DRIVER_EXEC,
+	ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK,
+	ACCEL_SEQUENCE_STATE_DRIVER_COMPLETE,
 	ACCEL_SEQUENCE_STATE_ERROR,
 	ACCEL_SEQUENCE_STATE_MAX,
 };
@@ -99,6 +104,9 @@ __attribute__((unused)) = {
 	[ACCEL_SEQUENCE_STATE_NEXT_TASK] = "next-task",
 	[ACCEL_SEQUENCE_STATE_PUSH_DATA] = "push-data",
 	[ACCEL_SEQUENCE_STATE_AWAIT_PUSH_DATA] = "await-push-data",
+	[ACCEL_SEQUENCE_STATE_DRIVER_EXEC] = "driver-exec",
+	[ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK] = "driver-await-task",
+	[ACCEL_SEQUENCE_STATE_DRIVER_COMPLETE] = "driver-complete",
 	[ACCEL_SEQUENCE_STATE_ERROR] = "error",
 	[ACCEL_SEQUENCE_STATE_MAX] = "",
 };
@@ -112,6 +120,8 @@ struct accel_buffer {
 	void				*buf;
 	uint64_t			len;
 	struct spdk_iobuf_entry		iobuf;
+	spdk_accel_sequence_get_buf_cb	cb_fn;
+	void				*cb_ctx;
 	TAILQ_ENTRY(accel_buffer)	link;
 };
 
@@ -133,8 +143,8 @@ struct spdk_accel_sequence {
 	struct accel_sequence_tasks		tasks;
 	struct accel_sequence_tasks		completed;
 	TAILQ_HEAD(, accel_buffer)		bounce_bufs;
-	enum accel_sequence_state		state;
 	int					status;
+	int8_t					state;
 	bool					in_process_sequence;
 	spdk_accel_completion_cb		cb_fn;
 	void					*cb_arg;
@@ -146,6 +156,7 @@ accel_sequence_set_state(struct spdk_accel_sequence *seq, enum accel_sequence_st
 {
 	SPDK_DEBUGLOG(accel, "seq=%p, setting state: %s -> %s\n", seq,
 		      ACCEL_SEQUENCE_STATE_STRING(seq->state), ACCEL_SEQUENCE_STATE_STRING(state));
+	assert(seq->state != ACCEL_SEQUENCE_STATE_ERROR || state == ACCEL_SEQUENCE_STATE_ERROR);
 	seq->state = state;
 }
 
@@ -169,6 +180,19 @@ spdk_accel_get_opc_module_name(enum accel_opcode opcode, const char **module_nam
 		*module_name = g_modules_opc[opcode].module->name;
 	} else {
 		return -ENOENT;
+	}
+
+	return 0;
+}
+
+int
+spdk_accel_get_opc_memory_domain(enum accel_opcode opcode, struct spdk_memory_domain **domains,
+				 int array_size)
+{
+	assert(opcode < ACCEL_OPC_LAST);
+
+	if (g_modules_opc[opcode].module->get_memory_domains) {
+		return g_modules_opc[opcode].module->get_memory_domains(domains, array_size);
 	}
 
 	return 0;
@@ -259,11 +283,10 @@ _get_task(struct accel_io_channel *accel_ch, spdk_accel_completion_cb cb_fn, voi
 	accel_task->link.tqe_next = NULL;
 	accel_task->link.tqe_prev = NULL;
 
+	accel_task->cached_lkey = NULL;
 	accel_task->cb_fn = cb_fn;
 	accel_task->cb_arg = cb_arg;
 	accel_task->accel_ch = accel_ch;
-	accel_task->bounce.s.orig_iovs = NULL;
-	accel_task->bounce.d.orig_iovs = NULL;
 
 	return accel_task;
 }
@@ -652,6 +675,9 @@ spdk_accel_submit_encrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_k
 	accel_task->block_size = block_size;
 	accel_task->flags = flags;
 	accel_task->op_code = ACCEL_OPC_ENCRYPT;
+	accel_task->src_domain = NULL;
+	accel_task->dst_domain = NULL;
+	accel_task->step_cb_fn = NULL;
 
 	return module->submit_tasks(module_ch, accel_task);
 }
@@ -686,6 +712,9 @@ spdk_accel_submit_decrypt(struct spdk_io_channel *ch, struct spdk_accel_crypto_k
 	accel_task->block_size = block_size;
 	accel_task->flags = flags;
 	accel_task->op_code = ACCEL_OPC_DECRYPT;
+	accel_task->src_domain = NULL;
+	accel_task->dst_domain = NULL;
+	accel_task->step_cb_fn = NULL;
 
 	return module->submit_tasks(module_ch, accel_task);
 }
@@ -704,6 +733,7 @@ accel_get_buf(struct accel_io_channel *ch, uint64_t len)
 	buf->len = len;
 	buf->buf = NULL;
 	buf->seq = NULL;
+	buf->cb_fn = NULL;
 
 	return buf;
 }
@@ -927,7 +957,7 @@ spdk_accel_append_encrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
 			  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			  uint64_t iv, uint32_t block_size, int flags,
-			  spdk_accel_step_cb cb_fn, void *cb_arg)
+			  spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *task;
@@ -955,6 +985,7 @@ spdk_accel_append_encrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 		return -ENOMEM;
 	}
 
+	task->cached_lkey = cached_lkey;
 	task->crypto_key = key;
 	task->src_domain = src_domain;
 	task->src_domain_ctx = src_domain_ctx;
@@ -983,7 +1014,7 @@ spdk_accel_append_decrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 			  struct iovec *src_iovs, uint32_t src_iovcnt,
 			  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			  uint64_t iv, uint32_t block_size, int flags,
-			  spdk_accel_step_cb cb_fn, void *cb_arg)
+			  spdk_accel_step_cb cb_fn, void *cb_arg, uint32_t *cached_lkey)
 {
 	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_accel_task *task;
@@ -1011,6 +1042,7 @@ spdk_accel_append_decrypt(struct spdk_accel_sequence **pseq, struct spdk_io_chan
 		return -ENOMEM;
 	}
 
+	task->cached_lkey = cached_lkey;
 	task->crypto_key = key;
 	task->src_domain = src_domain;
 	task->src_domain_ctx = src_domain_ctx;
@@ -1110,42 +1142,40 @@ accel_sequence_complete(struct spdk_accel_sequence *seq)
 }
 
 static void
-accel_update_buf(void **buf, struct accel_buffer *accel_buf)
+accel_update_virt_iov(struct iovec *diov, struct iovec *siov, struct accel_buffer *accel_buf)
 {
 	uintptr_t offset;
 
-	offset = (uintptr_t)(*buf) & ACCEL_BUFFER_OFFSET_MASK;
+	offset = (uintptr_t)siov->iov_base & ACCEL_BUFFER_OFFSET_MASK;
 	assert(offset < accel_buf->len);
 
-	*buf = (char *)accel_buf->buf + offset;
-}
-
-static void
-accel_update_iovs(struct iovec *iovs, uint32_t iovcnt, struct accel_buffer *buf)
-{
-	uint32_t i;
-
-	for (i = 0; i < iovcnt; ++i) {
-		accel_update_buf(&iovs[i].iov_base, buf);
-	}
+	diov->iov_base = (char *)accel_buf->buf + offset;
+	diov->iov_len = siov->iov_len;
 }
 
 static void
 accel_sequence_set_virtbuf(struct spdk_accel_sequence *seq, struct accel_buffer *buf)
 {
 	struct spdk_accel_task *task;
+	struct iovec *iov;
 
 	/* Now that we've allocated the actual data buffer for this accel_buffer, update all tasks
 	 * in a sequence that were using it.
 	 */
 	TAILQ_FOREACH(task, &seq->tasks, seq_link) {
 		if (task->src_domain == g_accel_domain && task->src_domain_ctx == buf) {
-			accel_update_iovs(task->s.iovs, task->s.iovcnt, buf);
+			iov = &task->aux_iovs[SPDK_ACCEL_AXU_IOV_VIRT_SRC];
+			assert(task->s.iovcnt == 1);
+			accel_update_virt_iov(iov, &task->s.iovs[0], buf);
 			task->src_domain = NULL;
+			task->s.iovs = iov;
 		}
 		if (task->dst_domain == g_accel_domain && task->dst_domain_ctx == buf) {
-			accel_update_iovs(task->d.iovs, task->d.iovcnt, buf);
+			iov = &task->aux_iovs[SPDK_ACCEL_AXU_IOV_VIRT_DST];
+			assert(task->d.iovcnt == 1);
+			accel_update_virt_iov(iov, &task->d.iovs[0], buf);
 			task->dst_domain = NULL;
+			task->d.iovs = iov;
 		}
 	}
 }
@@ -1211,6 +1241,59 @@ accel_sequence_check_virtbuf(struct spdk_accel_sequence *seq, struct spdk_accel_
 	}
 
 	return true;
+}
+
+static void
+accel_sequence_get_buf_cb(struct spdk_iobuf_entry *entry, void *buf)
+{
+	struct accel_buffer *accel_buf;
+
+	accel_buf = SPDK_CONTAINEROF(entry, struct accel_buffer, iobuf);
+
+	assert(accel_buf->seq != NULL);
+	assert(accel_buf->buf == NULL);
+	accel_buf->buf = buf;
+
+	accel_sequence_set_virtbuf(accel_buf->seq, accel_buf);
+	accel_buf->cb_fn(accel_buf->seq, accel_buf->cb_ctx);
+}
+
+bool
+spdk_accel_alloc_sequence_buf(struct spdk_accel_sequence *seq, void *buf,
+			      struct spdk_memory_domain *domain, void *domain_ctx,
+			      spdk_accel_sequence_get_buf_cb cb_fn, void *cb_ctx)
+{
+	struct accel_buffer *accel_buf = domain_ctx;
+
+	assert(domain == g_accel_domain);
+	accel_buf->cb_fn = cb_fn;
+	accel_buf->cb_ctx = cb_ctx;
+
+	if (!accel_sequence_alloc_buf(seq, accel_buf, accel_sequence_get_buf_cb)) {
+		return false;
+	}
+
+	accel_sequence_set_virtbuf(seq, accel_buf);
+
+	return true;
+}
+
+struct spdk_accel_task *
+spdk_accel_sequence_first_task(struct spdk_accel_sequence *seq)
+{
+	return TAILQ_FIRST(&seq->tasks);
+}
+
+struct spdk_accel_task *
+spdk_accel_sequence_last_task(struct spdk_accel_sequence *seq)
+{
+	return TAILQ_LAST(&seq->tasks, accel_sequence_tasks);
+}
+
+struct spdk_accel_task *
+spdk_accel_sequence_next_task(struct spdk_accel_task *task)
+{
+	return TAILQ_NEXT(task, seq_link);
 }
 
 static inline uint64_t
@@ -1305,6 +1388,8 @@ accel_sequence_check_bouncebuf(struct spdk_accel_sequence *seq, struct spdk_acce
 
 		accel_set_bounce_buffer(&task->bounce.s, &task->s.iovs, &task->s.iovcnt,
 					&task->src_domain, &task->src_domain_ctx, buf);
+	} else {
+		task->bounce.s.orig_iovs = NULL;
 	}
 
 	if (task->dst_domain != NULL) {
@@ -1325,6 +1410,8 @@ accel_sequence_check_bouncebuf(struct spdk_accel_sequence *seq, struct spdk_acce
 
 		accel_set_bounce_buffer(&task->bounce.d, &task->d.iovs, &task->d.iovcnt,
 					&task->dst_domain, &task->dst_domain_ctx, buf);
+	} else {
+		task->bounce.d.orig_iovs = NULL;
 	}
 
 	return 0;
@@ -1411,7 +1498,7 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 	struct spdk_accel_module_if *module;
 	struct spdk_io_channel *module_ch;
 	struct spdk_accel_task *task;
-	enum accel_sequence_state state;
+	int8_t state;
 	int rc;
 
 	/* Prevent recursive calls to this function */
@@ -1427,6 +1514,11 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 		state = seq->state;
 		switch (state) {
 		case ACCEL_SEQUENCE_STATE_INIT:
+			if (g_accel_driver != NULL) {
+				accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_DRIVER_EXEC);
+				break;
+			}
+		/* Fall through */
 		case ACCEL_SEQUENCE_STATE_CHECK_VIRTBUF:
 			accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_AWAIT_VIRTBUF);
 			if (!accel_sequence_check_virtbuf(seq, task)) {
@@ -1452,7 +1544,8 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 				accel_sequence_set_fail(seq, rc);
 				break;
 			}
-			if (task->bounce.s.orig_iovs != NULL) {
+			if (task->src_domain != NULL) {
+				assert(task->bounce.s.orig_iovs);
 				accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_PULL_DATA);
 				break;
 			}
@@ -1478,7 +1571,8 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 			accel_task_pull_data(seq, task);
 			break;
 		case ACCEL_SEQUENCE_STATE_COMPLETE_TASK:
-			if (task->bounce.d.orig_iovs != NULL) {
+			if (!g_modules_opc[task->op_code].supports_memory_domains && task->dst_domain) {
+				assert(task->bounce.d.orig_iovs);
 				accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_PUSH_DATA);
 				break;
 			}
@@ -1501,6 +1595,29 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 			}
 			accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_INIT);
 			break;
+		case ACCEL_SEQUENCE_STATE_DRIVER_EXEC:
+			assert(!TAILQ_EMPTY(&seq->tasks));
+
+			accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK);
+			rc = g_accel_driver->execute_sequence(seq);
+			if (spdk_unlikely(rc != 0)) {
+				SPDK_ERRLOG("Failed to execute sequence: %p using driver: %s\n",
+					    seq, g_accel_driver->name);
+				accel_sequence_set_fail(seq, rc);
+			}
+			break;
+		case ACCEL_SEQUENCE_STATE_DRIVER_COMPLETE:
+			task = TAILQ_FIRST(&seq->tasks);
+			if (task == NULL) {
+				/* Immediately return here to make sure we don't touch the sequence
+				 * after it's completed */
+				accel_sequence_complete(seq);
+				return;
+			}
+			/* We don't want to execute the next task through the driver, so we
+			 * explicitly omit the INIT state here */
+			accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_CHECK_VIRTBUF);
+			break;
 		case ACCEL_SEQUENCE_STATE_ERROR:
 			/* Immediately return here to make sure we don't touch the sequence
 			 * after it's completed */
@@ -1512,6 +1629,7 @@ accel_process_sequence(struct spdk_accel_sequence *seq)
 		case ACCEL_SEQUENCE_STATE_AWAIT_PULL_DATA:
 		case ACCEL_SEQUENCE_STATE_AWAIT_TASK:
 		case ACCEL_SEQUENCE_STATE_AWAIT_PUSH_DATA:
+		case ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK:
 			break;
 		default:
 			assert(0 && "bad state");
@@ -1536,13 +1654,49 @@ accel_sequence_task_cb(void *cb_arg, int status)
 	assert(task != NULL);
 	TAILQ_REMOVE(&accel_ch->task_pool, task, link);
 
-	assert(seq->state == ACCEL_SEQUENCE_STATE_AWAIT_TASK);
-	accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_COMPLETE_TASK);
+	switch (seq->state) {
+	case ACCEL_SEQUENCE_STATE_AWAIT_TASK:
+		accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_COMPLETE_TASK);
+		if (spdk_unlikely(status != 0)) {
+			SPDK_ERRLOG("Failed to execute %s operation, sequence: %p\n",
+				    g_opcode_strings[task->op_code], seq);
+			accel_sequence_set_fail(seq, status);
+		}
 
-	if (spdk_unlikely(status != 0)) {
-		SPDK_ERRLOG("Failed to execute %s operation, sequence: %p\n",
-			    g_opcode_strings[task->op_code], seq);
-		accel_sequence_set_fail(seq, status);
+		accel_process_sequence(seq);
+		break;
+	case ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK:
+		assert(g_accel_driver != NULL);
+		/* Immediately remove the task from the outstanding list to make sure the next call
+		 * to spdk_accel_sequence_first_task() doesn't return it */
+		TAILQ_REMOVE(&seq->tasks, task, seq_link);
+		TAILQ_INSERT_TAIL(&seq->completed, task, seq_link);
+
+		if (spdk_unlikely(status != 0)) {
+			SPDK_ERRLOG("Failed to execute %s operation, sequence: %p through "
+				    "driver: %s\n", g_opcode_strings[task->op_code], seq,
+				    g_accel_driver->name);
+			/* Update status without using accel_sequence_set_fail() to avoid changing
+			 * seq's state to ERROR until driver calls spdk_accel_sequence_continue() */
+			seq->status = status;
+		}
+		break;
+	default:
+		assert(0 && "bad state");
+		break;
+	}
+}
+
+void
+spdk_accel_sequence_continue(struct spdk_accel_sequence *seq)
+{
+	assert(g_accel_driver != NULL);
+	assert(seq->state == ACCEL_SEQUENCE_STATE_DRIVER_AWAIT_TASK);
+
+	if (spdk_likely(seq->status == 0)) {
+		accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_DRIVER_COMPLETE);
+	} else {
+		accel_sequence_set_state(seq, ACCEL_SEQUENCE_STATE_ERROR);
 	}
 
 	accel_process_sequence(seq);
@@ -1670,6 +1824,12 @@ spdk_accel_sequence_abort(struct spdk_accel_sequence *seq)
 	accel_sequence_put(seq);
 }
 
+struct spdk_memory_domain *
+spdk_accel_get_memory_domain(void)
+{
+	return g_accel_domain;
+}
+
 static struct spdk_accel_module_if *
 _module_find_by_name(const char *name)
 {
@@ -1764,6 +1924,10 @@ spdk_accel_crypto_key_create(const struct spdk_accel_crypto_key_create_param *pa
 	if (!param || !param->hex_key || !param->cipher || !param->key_name) {
 		return -EINVAL;
 	}
+	if (param->tweak_offset != 0 && param->tweak_offset != 8) {
+		SPDK_ERRLOG("Incorrect tweak offset %u, should be 0 or 8\n", param->tweak_offset);
+		return -EINVAL;
+	}
 
 	if (g_modules_opc[ACCEL_OPC_ENCRYPT].module != g_modules_opc[ACCEL_OPC_DECRYPT].module) {
 		/* hardly ever possible, but let's check and warn the user */
@@ -1808,6 +1972,7 @@ spdk_accel_crypto_key_create(const struct spdk_accel_crypto_key_create_param *pa
 		rc = -ENOMEM;
 		goto error;
 	}
+	key->param.tweak_offset = param->tweak_offset;
 
 	key->key_size = hex_key_size / 2;
 	key->key = spdk_unhexlify(key->param.hex_key);
@@ -1935,10 +2100,11 @@ accel_create_channel(void *io_device, void *ctx_buf)
 	struct spdk_accel_sequence *seq;
 	struct accel_buffer *buf;
 	uint8_t *task_mem;
+	size_t task_size = SPDK_ALIGN_CEIL(g_max_accel_module_size, 64);
 	int i = 0, j, rc;
 
-	accel_ch->task_pool_base = calloc(MAX_TASKS_PER_CHANNEL, g_max_accel_module_size);
-	if (accel_ch->task_pool_base == NULL) {
+	rc = posix_memalign(&accel_ch->task_pool_base, 64, task_size * MAX_TASKS_PER_CHANNEL);
+	if (rc) {
 		return -ENOMEM;
 	}
 
@@ -1963,7 +2129,7 @@ accel_create_channel(void *io_device, void *ctx_buf)
 		TAILQ_INSERT_TAIL(&accel_ch->task_pool, accel_task, link);
 		TAILQ_INSERT_TAIL(&accel_ch->seq_pool, seq, link);
 		TAILQ_INSERT_TAIL(&accel_ch->buf_pool, buf, link);
-		task_mem += g_max_accel_module_size;
+		task_mem += task_size;
 	}
 
 	/* Assign modules and get IO channels for each */
@@ -2022,10 +2188,15 @@ spdk_accel_get_io_channel(void)
 static void
 accel_module_initialize(void)
 {
-	struct spdk_accel_module_if *accel_module;
+	struct spdk_accel_module_if *accel_module, *tmp;
+	int rc;
 
-	TAILQ_FOREACH(accel_module, &spdk_accel_module_list, tailq) {
-		accel_module->module_init();
+	TAILQ_FOREACH_SAFE(accel_module, &spdk_accel_module_list, tailq, tmp) {
+		rc = accel_module->module_init();
+		if (rc) {
+			SPDK_ERRLOG("Failed to init accel module %s, ignoring it\n", accel_module->name);
+			TAILQ_REMOVE(&spdk_accel_module_list, accel_module, tailq);
+		}
 	}
 }
 
@@ -2277,6 +2448,48 @@ spdk_accel_finish(spdk_accel_fini_cb cb_fn, void *cb_arg)
 
 	spdk_io_device_unregister(&spdk_accel_module_list, NULL);
 	spdk_accel_module_finish();
+}
+
+static struct spdk_accel_driver *
+accel_find_driver(const char *name)
+{
+	struct spdk_accel_driver *driver;
+
+	TAILQ_FOREACH(driver, &g_accel_drivers, tailq) {
+		if (strcmp(driver->name, name) == 0) {
+			return driver;
+		}
+	}
+
+	return NULL;
+}
+
+int
+spdk_accel_set_driver(const char *name)
+{
+	struct spdk_accel_driver *driver;
+
+	driver = accel_find_driver(name);
+	if (driver == NULL) {
+		SPDK_ERRLOG("Couldn't find driver named '%s'\n", name);
+		return -ENODEV;
+	}
+
+	g_accel_driver = driver;
+
+	return 0;
+}
+
+void
+spdk_accel_driver_register(struct spdk_accel_driver *driver)
+{
+	if (accel_find_driver(driver->name)) {
+		SPDK_ERRLOG("Driver named '%s' has already been registered\n", driver->name);
+		assert(0);
+		return;
+	}
+
+	TAILQ_INSERT_TAIL(&g_accel_drivers, driver, tailq);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(accel)

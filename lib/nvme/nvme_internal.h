@@ -163,10 +163,10 @@ extern struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts;
  */
 #define DEFAULT_MAX_IO_QUEUES		(1024)
 #define DEFAULT_ADMIN_QUEUE_SIZE	(32)
-#define DEFAULT_IO_QUEUE_SIZE		(256)
+#define DEFAULT_IO_QUEUE_SIZE		(257)
 #define DEFAULT_IO_QUEUE_SIZE_FOR_QUIRK	(1024) /* Matches Linux kernel driver */
 
-#define DEFAULT_IO_QUEUE_REQUESTS	(512)
+#define DEFAULT_IO_QUEUE_REQUESTS	(256)
 
 #define SPDK_NVME_DEFAULT_RETRY_COUNT	(4)
 
@@ -456,6 +456,8 @@ struct nvme_request {
 	void				*user_buffer;
 };
 
+typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
+
 struct nvme_completion_poll_status {
 	struct spdk_nvme_cpl	cpl;
 	uint64_t		timeout_tsc;
@@ -518,6 +520,8 @@ struct spdk_nvme_qpair {
 	uint8_t					transport_failure_reason: 2;
 	uint8_t					last_transport_failure_reason: 2;
 
+	uint8_t					dnr: 1;
+
 	enum spdk_nvme_transport_type		trtype;
 
 	uint32_t				num_outstanding_reqs;
@@ -525,8 +529,9 @@ struct spdk_nvme_qpair {
 	/* request object used only for this qpair's FABRICS/CONNECT command (if needed) */
 	struct nvme_request			*reserved_req;
 
-	STAILQ_HEAD(, nvme_request)		free_req;
-	STAILQ_HEAD(, nvme_request)		queued_req;
+	nvme_request_stailq_t			*active_free_req;
+	nvme_request_stailq_t			free_req;
+	nvme_request_stailq_t			queued_req;
 
 	/* List entry for spdk_nvme_transport_poll_group::qpairs */
 	STAILQ_ENTRY(spdk_nvme_qpair)		poll_group_stailq;
@@ -534,7 +539,7 @@ struct spdk_nvme_qpair {
 	/** Commands opcode in this list will return error */
 	TAILQ_HEAD(, nvme_error_cmd)		err_cmd_head;
 	/** Requests in this list will return error */
-	STAILQ_HEAD(, nvme_request)		err_req_head;
+	nvme_request_stailq_t			err_req_head;
 
 	struct spdk_nvme_ctrlr_process		*active_proc;
 
@@ -557,7 +562,7 @@ struct spdk_nvme_qpair {
 	/* List entry for spdk_nvme_ctrlr_process::allocated_io_qpairs */
 	TAILQ_ENTRY(spdk_nvme_qpair)		per_process_tailq;
 
-	STAILQ_HEAD(, nvme_request)		aborting_queued_req;
+	nvme_request_stailq_t			aborting_queued_req;
 
 	void					*req_buf;
 };
@@ -571,9 +576,12 @@ struct spdk_nvme_poll_group {
 struct spdk_nvme_transport_poll_group {
 	struct spdk_nvme_poll_group			*group;
 	const struct spdk_nvme_transport		*transport;
+	void						*req_buf;
+	nvme_request_stailq_t				free_req;
 	STAILQ_HEAD(, spdk_nvme_qpair)			connected_qpairs;
 	STAILQ_HEAD(, spdk_nvme_qpair)			disconnected_qpairs;
 	STAILQ_ENTRY(spdk_nvme_transport_poll_group)	link;
+	uint32_t					num_connected_qpairs;
 };
 
 struct spdk_nvme_ns {
@@ -904,7 +912,7 @@ struct spdk_nvme_ctrlr_process {
 	pid_t						pid;
 
 	/** Active admin requests to be completed */
-	STAILQ_HEAD(, nvme_request)			active_reqs;
+	nvme_request_stailq_t				active_reqs;
 
 	TAILQ_ENTRY(spdk_nvme_ctrlr_process)		tailq;
 
@@ -1049,7 +1057,7 @@ struct spdk_nvme_ctrlr {
 	TAILQ_HEAD(, spdk_nvme_ctrlr_process)	active_procs;
 
 
-	STAILQ_HEAD(, nvme_request)	queued_aborts;
+	nvme_request_stailq_t		queued_aborts;
 	uint32_t			outstanding_aborts;
 
 	/* CB to notify the user when the ctrlr is removed/failed. */
@@ -1071,6 +1079,8 @@ struct spdk_nvme_ctrlr {
 
 	/* maximum zone append size in bytes */
 	uint32_t			max_zone_append_size;
+
+	bool				accel_seq_supported;
 
 	/* PMR size in bytes */
 	uint64_t			pmr_size;
@@ -1299,9 +1309,9 @@ void	nvme_qpair_deinit(struct spdk_nvme_qpair *qpair);
 void	nvme_qpair_complete_error_reqs(struct spdk_nvme_qpair *qpair);
 int	nvme_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 				  struct nvme_request *req);
-void	nvme_qpair_abort_all_queued_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
+void	nvme_qpair_abort_all_queued_reqs(struct spdk_nvme_qpair *qpair);
 uint32_t nvme_qpair_abort_queued_reqs_with_cbarg(struct spdk_nvme_qpair *qpair, void *cmd_cb_arg);
-void	nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
+void	nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair);
 void	nvme_qpair_resubmit_requests(struct spdk_nvme_qpair *qpair, uint32_t num_requests);
 int	nvme_ctrlr_identify_active_ns(struct spdk_nvme_ctrlr *ctrlr);
 void	nvme_ns_set_identify_data(struct spdk_nvme_ns *ns);
@@ -1378,12 +1388,15 @@ nvme_allocate_request(struct spdk_nvme_qpair *qpair,
 {
 	struct nvme_request *req;
 
-	req = STAILQ_FIRST(&qpair->free_req);
+	assert(qpair->active_free_req != NULL);
+
+	req = STAILQ_FIRST(qpair->active_free_req);
 	if (req == NULL) {
 		return req;
 	}
 
-	STAILQ_REMOVE_HEAD(&qpair->free_req, stailq);
+	STAILQ_REMOVE_HEAD(qpair->active_free_req, stailq);
+
 	qpair->num_outstanding_reqs++;
 
 	/*
@@ -1398,6 +1411,7 @@ nvme_allocate_request(struct spdk_nvme_qpair *qpair,
 	 *  if the request is split.
 	 */
 	memset(req, 0, offsetof(struct nvme_request, payload_size));
+	req->qpair = qpair;
 
 	NVME_INIT_REQUEST(req, cb_fn, cb_arg, *payload, payload_size, md_size);
 
@@ -1538,7 +1552,8 @@ nvme_free_request(struct nvme_request *req)
 	 * saved only for use with a FABRICS/CONNECT command.
 	 */
 	if (spdk_likely(req->qpair->reserved_req != req)) {
-		STAILQ_INSERT_HEAD(&req->qpair->free_req, req, stailq);
+		assert(req->qpair->active_free_req != NULL);
+		STAILQ_INSERT_HEAD(req->qpair->active_free_req, req, stailq);
 
 		assert(req->qpair->num_outstanding_reqs > 0);
 		req->qpair->num_outstanding_reqs--;
@@ -1565,7 +1580,7 @@ nvme_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
 	assert(req != NULL);
 	assert(req->num_children == 0);
 
-	STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
+	STAILQ_INSERT_HEAD(qpair->active_free_req, req, stailq);
 
 	assert(req->qpair->num_outstanding_reqs > 0);
 	req->qpair->num_outstanding_reqs--;
@@ -1888,7 +1903,7 @@ void nvme_transport_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr,
 void nvme_transport_ctrlr_disconnect_qpair_done(struct spdk_nvme_qpair *qpair);
 int nvme_transport_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 		struct spdk_memory_domain **domains, int array_size);
-void nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
+void nvme_transport_qpair_abort_reqs(struct spdk_nvme_qpair *qpair);
 int nvme_transport_qpair_reset(struct spdk_nvme_qpair *qpair);
 int nvme_transport_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 int32_t nvme_transport_qpair_process_completions(struct spdk_nvme_qpair *qpair,
@@ -1911,11 +1926,15 @@ int nvme_transport_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair);
 int nvme_transport_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair);
 int64_t nvme_transport_poll_group_process_completions(struct spdk_nvme_transport_poll_group *tgroup,
 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb);
+void nvme_transport_poll_group_process_events(struct spdk_nvme_transport_poll_group *tgroup);
 int nvme_transport_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup);
 int nvme_transport_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
 					struct spdk_nvme_transport_poll_group_stat **stats);
 void nvme_transport_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 		struct spdk_nvme_transport_poll_group_stat *stats);
+int nvme_transport_poll_group_init(struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests);
+void nvme_transport_poll_group_deinit(struct spdk_nvme_transport_poll_group *tgroup);
 enum spdk_nvme_transport_type nvme_transport_get_trtype(const struct spdk_nvme_transport
 		*transport);
 const char *nvme_transport_get_trname(const struct spdk_nvme_transport *transport);

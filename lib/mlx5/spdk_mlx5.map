@@ -1,11 +1,25 @@
 {
 	global:
 
+    spdk_mlx5_crypto_devs_allow;
     spdk_mlx5_crypto_devs_get;
     spdk_mlx5_crypto_devs_release;
     spdk_mlx5_crypto_keytag_create;
     spdk_mlx5_crypto_keytag_destroy;
+    spdk_mlx5_crypto_get_dek_obj_id;
     spdk_mlx5_crypto_set_attr;
+    spdk_mlx5_dma_qp_create;
+    spdk_mlx5_dma_qp_destroy;
+    spdk_mlx5_dma_qp_rdma_write;
+    spdk_mlx5_dma_qp_rdma_read;
+    spdk_mlx5_dma_qp_poll_completions;
+    spdk_mlx5_query_crypto_caps;
+    spdk_mlx5_query_relaxed_ordering_caps;
+    spdk_mlx5_create_indirect_mkey;
+    spdk_mlx5_destroy_indirect_mkey;
+    spdk_mlx5_umr_configure_crypto;
+    spdk_mlx5_umr_configure;
+    spdk_mlx5_dma_qp_prefetch_sq;
 
 	local: *;
 };

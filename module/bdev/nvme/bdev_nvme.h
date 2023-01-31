@@ -115,6 +115,7 @@ struct nvme_ctrlr {
 	uint32_t				destruct : 1;
 	uint32_t				ana_log_page_updating : 1;
 	uint32_t				io_path_cache_clearing : 1;
+	uint32_t				dont_retry : 1;
 
 	struct nvme_ctrlr_opts			opts;
 
@@ -285,6 +286,7 @@ struct spdk_bdev_nvme_opts {
 	bool nvme_error_stat;
 	uint32_t rdma_srq_size;
 	bool io_path_stat;
+	uint32_t poll_group_requests;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);

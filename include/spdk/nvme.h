@@ -282,8 +282,15 @@ struct spdk_nvme_ctrlr_opts {
 	 * Set the IP protocol type of service value for RDMA transport. Default is 0, which means that the TOS will not be set.
 	 */
 	uint8_t transport_tos;
+
+	/**
+	 * Disable I/O splitting. The upper layer should split large I/Os instead if set to true.
+	 *
+	 * Default is `false` (Enable I/O splitting).
+	 */
+	bool disable_io_split;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 818, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 819, "Incorrect size");
 
 /**
  * NVMe acceleration operation callback.
@@ -293,6 +300,8 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 818, "Incorrect size")
  * \param status 0 if it completed successfully, or negative errno if it failed.
  */
 typedef void (*spdk_nvme_accel_completion_cb)(void *cb_arg, int status);
+
+typedef void (*spdk_nvme_iobuf_cb)(void *cb_arg, void *buf);
 
 /**
  * Function table for the NVMe accelerator device.
@@ -313,6 +322,9 @@ struct spdk_nvme_accel_fn_table {
 	/** The accelerated crc32c function. */
 	void (*submit_accel_crc32c)(void *ctx, uint32_t *dst, struct iovec *iov,
 				    uint32_t iov_cnt, uint32_t seed, spdk_nvme_accel_completion_cb cb_fn, void *cb_arg);
+	struct spdk_io_channel *(*get_accel_channel)(void *ctx);
+
+	struct spdk_iobuf_channel *(*get_iobuf_channel)(void *io_ctx);
 };
 
 /**
@@ -536,7 +548,13 @@ struct spdk_nvme_tcp_stat {
 	uint64_t socket_completions;
 	uint64_t nvme_completions;
 	uint64_t submitted_requests;
+	uint64_t outstanding_reqs;
 	uint64_t queued_requests;
+	uint64_t received_data_pdus;
+	uint64_t received_data_iovs;
+	uint64_t max_data_iovs_per_pdu;
+	uint64_t recv_ddgsts;
+	uint64_t send_ddgsts;
 };
 
 struct spdk_nvme_transport_poll_group_stat {
@@ -574,6 +592,8 @@ enum spdk_nvme_ctrlr_flags {
 	SPDK_NVME_CTRLR_ZCOPY_SUPPORTED		= 1 << 7, /**< Zero copy API is supported */
 };
 
+struct spdk_accel_sequence;
+
 /**
  * Structure with optional IO request parameters
  */
@@ -595,10 +615,13 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	uint16_t apptag_mask;
 	/** Application tag to use end-to-end protection information. */
 	uint16_t apptag;
-	/* Hole at bytes 44-47. */
-	uint8_t reserved44[4];
+	struct spdk_accel_sequence *accel_seq;
+	/** A scatter gather list of buffers. */
+	struct iovec *iov;
+	/** The number of elements in iov. */
+	int iovcnt;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 48, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 64, "Incorrect size");
 
 /**
  * Parse the string representation of a transport ID.
@@ -1898,6 +1921,24 @@ int32_t spdk_nvme_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 spdk_nvme_qp_failure_reason spdk_nvme_qpair_get_failure_reason(struct spdk_nvme_qpair *qpair);
 
 /**
+ * Control if DNR is set or not when aborting I/O commands.
+ * The default value of DNR is 0.
+ *
+ * \param qpair The qpair to set.
+ * \param dnr The new value of DNR.
+ */
+void spdk_nvme_qpair_set_dnr(struct spdk_nvme_qpair *qpair, uint8_t dnr);
+
+/**
+ * Return the connection status of a given qpair.
+ *
+ * \param qpair The qpair to check.
+ *
+ * \return true if the qpair is connected, or false otherwise.
+ */
+bool spdk_nvme_qpair_is_connected(struct spdk_nvme_qpair *qpair);
+
+/**
  * Send the given admin command to the NVMe controller.
  *
  * This is a low level interface for submitting admin commands directly. Prefer
@@ -2707,6 +2748,13 @@ int spdk_nvme_poll_group_destroy(struct spdk_nvme_poll_group *group);
  */
 int64_t spdk_nvme_poll_group_process_completions(struct spdk_nvme_poll_group *group,
 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb);
+
+/**
+ * Poll for management events on all qpairs in this poll group.
+ *
+ * \param group The group on which to poll for events.
+ */
+void spdk_nvme_poll_group_process_events(struct spdk_nvme_poll_group *group);
 
 /**
  * Retrieve the user context for this specific poll group.
@@ -4031,6 +4079,16 @@ int spdk_nvme_cuse_unregister(struct spdk_nvme_ctrlr *ctrlr);
 int spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				       struct spdk_memory_domain **domains, int array_size);
 
+bool spdk_nvme_ctrlr_accel_seq_supported(const struct spdk_nvme_ctrlr *ctrlr);
+
+/**
+ * Return the maximum number of SGEs of the given nvme controller.
+ *
+ * \param ctrlr Opaque handle to the NVMe controller.
+ * \return The maximum number of SGEs.
+ */
+uint16_t spdk_nvme_ctrlr_get_max_sges(struct spdk_nvme_ctrlr *ctrlr);
+
 /**
  * Opaque handle for a transport poll group. Used by the transport function table.
  */
@@ -4149,6 +4207,8 @@ struct spdk_nvme_transport_ops {
 	int64_t (*poll_group_process_completions)(struct spdk_nvme_transport_poll_group *tgroup,
 			uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb);
 
+	void (*poll_group_process_events)(struct spdk_nvme_transport_poll_group *tgroup);
+
 	int (*poll_group_destroy)(struct spdk_nvme_transport_poll_group *tgroup);
 
 	int (*poll_group_get_stats)(struct spdk_nvme_transport_poll_group *tgroup,
@@ -4196,13 +4256,23 @@ struct spdk_nvme_transport_opts {
 	uint32_t rdma_srq_size;
 
 	/**
+	 * The number of requests to allocate for each poll group.
+	 */
+	uint32_t poll_group_requests;
+
+	/**
+	 * Use spdk_nvme_poll_group_process_events()
+	 */
+	bool use_poll_group_process_events;
+
+	/**
 	 * The size of spdk_nvme_transport_opts according to the caller of this library is used for ABI
 	 * compatibility.  The library uses this field to know how many fields in this
 	 * structure are valid. And the library will populate any remaining fields with default values.
 	 */
 	size_t opts_size;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 12, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 17, "Incorrect size");
 
 /**
  * Get the current NVMe transport options.

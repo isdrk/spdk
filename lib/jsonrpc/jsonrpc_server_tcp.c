@@ -7,6 +7,9 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 
+static void
+jsonrpc_server_conn_remove(struct spdk_jsonrpc_server_conn *conn);
+
 struct spdk_jsonrpc_server *
 spdk_jsonrpc_server_listen(int domain, int protocol,
 			   struct sockaddr *listen_addr, socklen_t addrlen,
@@ -83,8 +86,10 @@ jsonrpc_server_free_conn_request(struct spdk_jsonrpc_server_conn *conn)
 {
 	struct spdk_jsonrpc_request *request;
 
-	jsonrpc_free_request(conn->send_request);
-	conn->send_request = NULL ;
+	if (conn->send_request) {
+		jsonrpc_free_request(conn->send_request);
+		conn->send_request = NULL;
+	}
 	while ((request = jsonrpc_server_dequeue_request(conn)) != NULL) {
 		jsonrpc_free_request(request);
 	}
@@ -93,7 +98,14 @@ jsonrpc_server_free_conn_request(struct spdk_jsonrpc_server_conn *conn)
 static void
 jsonrpc_server_conn_close(struct spdk_jsonrpc_server_conn *conn)
 {
+	/**
+	 * In principle bool is atomic but let's protect
+	 * it here for consistency with protected check
+	 * in jsonrpc_server_send_response()
+	 */
+	pthread_spin_lock(&conn->queue_lock);
 	conn->closed = true;
+	pthread_spin_unlock(&conn->queue_lock);
 
 	if (conn->sockfd >= 0) {
 		jsonrpc_server_free_conn_request(conn);
@@ -110,11 +122,13 @@ void
 spdk_jsonrpc_server_shutdown(struct spdk_jsonrpc_server *server)
 {
 	struct spdk_jsonrpc_server_conn *conn;
+	struct spdk_jsonrpc_server_conn *conn_tmp;
 
 	close(server->sockfd);
 
-	TAILQ_FOREACH(conn, &server->conns, link) {
+	TAILQ_FOREACH_SAFE(conn, &server->conns, link, conn_tmp) {
 		jsonrpc_server_conn_close(conn);
+		jsonrpc_server_conn_remove(conn);
 	}
 
 	free(server);
@@ -310,8 +324,13 @@ jsonrpc_server_send_response(struct spdk_jsonrpc_request *request)
 
 	/* Queue the response to be sent */
 	pthread_spin_lock(&conn->queue_lock);
-	STAILQ_INSERT_TAIL(&conn->send_queue, request, link);
-	pthread_spin_unlock(&conn->queue_lock);
+	if (!conn->closed) {
+		STAILQ_INSERT_TAIL(&conn->send_queue, request, link);
+		pthread_spin_unlock(&conn->queue_lock);
+	} else {
+		pthread_spin_unlock(&conn->queue_lock);
+		SPDK_ERRLOG("attempt to send response on closed connection\n");
+	}
 }
 
 
@@ -336,6 +355,10 @@ more:
 		return 0;
 	}
 
+	if (request->send_offset == 0) {
+		request->send_buf[request->send_len] = '\0';
+	}
+
 	if (request->send_len > 0) {
 		rc = send(conn->sockfd, request->send_buf + request->send_offset,
 			  request->send_len, 0);
@@ -358,7 +381,7 @@ more:
 		 * Free it and set send_request to NULL to move on to the next queued response.
 		 */
 		conn->send_request = NULL;
-		jsonrpc_free_request(request);
+		jsonrpc_complete_request(request);
 		goto more;
 	}
 

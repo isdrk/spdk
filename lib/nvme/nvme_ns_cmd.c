@@ -404,6 +404,10 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 	req->payload_offset = payload_offset;
 	req->md_offset = md_offset;
 
+	if (ns->ctrlr->opts.disable_io_split) {
+		goto end;
+	}
+
 	/* Zone append commands cannot be split. */
 	if (opc == SPDK_NVME_OPC_ZONE_APPEND) {
 		assert(ns->csi == SPDK_NVME_CSI_ZNS);
@@ -444,6 +448,7 @@ _nvme_ns_cmd_rw(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		}
 	}
 
+end:
 	_nvme_ns_cmd_setup_request(ns, req, opc, lba, lba_count, io_flags, apptag_mask, apptag);
 	return req;
 }
@@ -1447,6 +1452,12 @@ spdk_nvme_ns_cmd_reservation_report(struct spdk_nvme_ns *ns,
 	cmd->nsid = ns->id;
 
 	cmd->cdw10 = num_dwords;
+
+	if (spdk_nvme_ctrlr_get_data(ns->ctrlr)->ctratt.host_id_exhid_supported) {
+		/* Extended Data Strcutre bit should be set to true if 128
+		 * bit format is supported */
+		cmd->cdw11_bits.resv_report.eds = true;
+	}
 
 	return nvme_qpair_submit_request(qpair, req);
 }

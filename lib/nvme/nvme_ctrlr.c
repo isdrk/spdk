@@ -238,6 +238,8 @@ spdk_nvme_ctrlr_get_default_ctrlr_opts(struct spdk_nvme_ctrlr_opts *opts, size_t
 		memset(opts->psk, 0, sizeof(opts->psk));
 	}
 
+	SET_FIELD(disable_io_split, false);
+
 #undef FIELD_OK
 #undef SET_FIELD
 }
@@ -446,14 +448,16 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 			       size_t opts_size)
 {
 
-	struct spdk_nvme_qpair		*qpair;
+	struct spdk_nvme_qpair		*qpair = NULL;
 	struct spdk_nvme_io_qpair_opts	opts;
 	int				rc;
+
+	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 
 	if (spdk_unlikely(ctrlr->state != NVME_CTRLR_STATE_READY)) {
 		/* When controller is resetting or initializing, free_io_qids is deleted or not created yet.
 		 * We can't create IO qpair in that case */
-		return NULL;
+		goto unlock;;
 	}
 
 	/*
@@ -472,14 +476,14 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 			if (opts.sq.buffer_size < (opts.io_queue_size * sizeof(struct spdk_nvme_cmd))) {
 				NVME_CTRLR_ERRLOG(ctrlr, "sq buffer size %" PRIx64 " is too small for sq size %zx\n",
 						  opts.sq.buffer_size, (opts.io_queue_size * sizeof(struct spdk_nvme_cmd)));
-				return NULL;
+				goto unlock;
 			}
 		}
 		if (opts.cq.vaddr) {
 			if (opts.cq.buffer_size < (opts.io_queue_size * sizeof(struct spdk_nvme_cpl))) {
 				NVME_CTRLR_ERRLOG(ctrlr, "cq buffer size %" PRIx64 " is too small for cq size %zx\n",
 						  opts.cq.buffer_size, (opts.io_queue_size * sizeof(struct spdk_nvme_cpl)));
-				return NULL;
+				goto unlock;
 			}
 		}
 	}
@@ -487,7 +491,7 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 	qpair = nvme_ctrlr_create_io_qpair(ctrlr, &opts);
 
 	if (qpair == NULL || opts.create_only == true) {
-		return qpair;
+		goto unlock;
 	}
 
 	rc = spdk_nvme_ctrlr_connect_io_qpair(ctrlr, qpair);
@@ -499,8 +503,12 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 		spdk_bit_array_set(ctrlr->free_io_qids, qpair->id);
 		nvme_transport_ctrlr_delete_io_qpair(ctrlr, qpair);
 		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
-		return NULL;
+		qpair = NULL;
+		goto unlock;
 	}
+
+unlock:
+	nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 
 	return qpair;
 }
@@ -611,7 +619,7 @@ spdk_nvme_ctrlr_free_io_qpair(struct spdk_nvme_qpair *qpair)
 	 * with that qpair, since the callbacks will also be foreign to this process.
 	 */
 	if (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr)) {
-		nvme_qpair_abort_all_queued_reqs(qpair, 0);
+		nvme_qpair_abort_all_queued_reqs(qpair);
 	}
 
 	nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
@@ -1105,6 +1113,13 @@ nvme_ctrlr_shutdown_async(struct spdk_nvme_ctrlr *ctrlr,
 	int rc;
 
 	if (ctrlr->is_removed) {
+		ctx->shutdown_complete = true;
+		return;
+	}
+
+	if (ctrlr->adminq == NULL ||
+	    ctrlr->adminq->transport_failure_reason != SPDK_NVME_QPAIR_FAILURE_NONE) {
+		NVME_CTRLR_INFOLOG(ctrlr, "Adminq is not connected.\n");
 		ctx->shutdown_complete = true;
 		return;
 	}
@@ -1643,6 +1658,9 @@ nvme_ctrlr_disconnect_done(struct spdk_nvme_ctrlr *ctrlr)
 	nvme_ctrlr_free_iocs_specific_data(ctrlr);
 
 	spdk_bit_array_free(&ctrlr->free_io_qids);
+
+	/* Set the state back to INIT to cause a full hardware reset. */
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_INIT, NVME_TIMEOUT_INFINITE);
 }
 
 int
@@ -3812,7 +3830,7 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 			 * resubmitted while the controller is resetting and subsequent commands
 			 * would get queued too.
 			 */
-			nvme_qpair_abort_queued_reqs(ctrlr->adminq, 0);
+			nvme_qpair_abort_queued_reqs(ctrlr->adminq);
 			break;
 		case NVME_QPAIR_DISCONNECTING:
 			assert(ctrlr->adminq->async == true);
@@ -5285,4 +5303,16 @@ spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 				   struct spdk_memory_domain **domains, int array_size)
 {
 	return nvme_transport_ctrlr_get_memory_domains(ctrlr, domains, array_size);
+}
+
+bool
+spdk_nvme_ctrlr_accel_seq_supported(const struct spdk_nvme_ctrlr *ctrlr)
+{
+	return ctrlr->accel_seq_supported;
+}
+
+uint16_t
+spdk_nvme_ctrlr_get_max_sges(struct spdk_nvme_ctrlr *ctrlr)
+{
+	return ctrlr->max_sges;
 }

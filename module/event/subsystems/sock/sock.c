@@ -10,6 +10,7 @@
 static void
 sock_subsystem_init(void)
 {
+	spdk_sock_initialize();
 	spdk_subsystem_init_next(0);
 }
 

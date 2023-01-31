@@ -11,6 +11,9 @@
 static const struct spdk_json_object_decoder rpc_mlx5_module_decoder[] = {
 	{"qp_size", offsetof(struct accel_mlx5_attr, qp_size), spdk_json_decode_uint16, true},
 	{"num_requests", offsetof(struct accel_mlx5_attr, num_requests), spdk_json_decode_uint32, true},
+	{"split_mb_blocks", offsetof(struct accel_mlx5_attr, split_mb_blocks), spdk_json_decode_uint32, true},
+	{"allowed_crypto_devs", offsetof(struct accel_mlx5_attr, allowed_crypto_devs), spdk_json_decode_string, true},
+	{"siglast", offsetof(struct accel_mlx5_attr, siglast), spdk_json_decode_bool, true},
 };
 
 static void
@@ -29,15 +32,17 @@ rpc_mlx5_scan_accel_module(struct spdk_jsonrpc_request *request,
 			SPDK_ERRLOG("spdk_json_decode_object() failed\n");
 			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_PARSE_ERROR,
 							 "spdk_json_decode_object failed");
+			free(attr.allowed_crypto_devs);
 			return;
 		}
 	}
 
 	rc = accel_mlx5_enable(&attr);
 	if (rc) {
-		spdk_jsonrpc_send_error_response_fmt(request, rc, "mlx5 scan failed with %d\n", rc);
+		spdk_jsonrpc_send_error_response_fmt(request, rc, "accel_mlx5_enable failed with %d", rc);
 	} else {
 		spdk_jsonrpc_send_bool_response(request, true);
 	}
+	free(attr.allowed_crypto_devs);
 }
 SPDK_RPC_REGISTER("mlx5_scan_accel_module", rpc_mlx5_scan_accel_module, SPDK_RPC_STARTUP)

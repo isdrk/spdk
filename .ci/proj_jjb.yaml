@@ -29,7 +29,7 @@
             description: "Release packages"
         - string:
             name: "release_dir"
-            default: "/auto/mtrswgwork/swx_devops/{jjb_proj}"
+            default: "/auto/sw/work/swx_devops/{jjb_proj}"
             description: "Location to release rpm to"
         - string:
             name: "script"
@@ -41,7 +41,7 @@
             description: "Repository manager URL"
         - string:
             name: "GPG_KEY_PATH"
-            default: "/auto/mtrswgwork/swx_devops/swx-debs-keyring/mellanox-debs-keyring.key"
+            default: "/auto/sw/work/swx_devops/swx-debs-keyring/mellanox-debs-keyring.key"
             description: "GPG key file location"
         - string:
             name: "DEBUG"
@@ -61,9 +61,9 @@
     jjb_email: 'andiih@nvidia.com'
     jjb_proj: 'spdk'
     git_branch:
-      - v23.01.nvda:
+      - v23.01.4.nvda:
           conf_file: '.ci/job_matrix.yaml'
-    jjb_git: 'git@github.com:Mellanox/spdk.git'
+    jjb_git: 'git@github.com:Mellanox-lab/spdk.git'
     jjb_owner: 'andriih@nvidia.com'
     jjb_jenkinsfile: '.ci/Jenkinsfile.shlib'
     jobs:

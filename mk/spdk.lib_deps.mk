@@ -1,6 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
-#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES
+#  Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -35,16 +35,17 @@ endif
 
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
+DEPDIRS-rdma_utils := log util
 DEPDIRS-rdma := log util dma
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 
-DEPDIRS-nvme := log sock util trace
+DEPDIRS-nvme := log sock util trace accel
 ifeq ($(OS),Linux)
 DEPDIRS-nvme += vfio_user
 endif
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvme += rdma
+DEPDIRS-nvme += rdma rdma_utils
 endif
 
 DEPDIRS-blob := log util thread dma
@@ -59,7 +60,7 @@ DEPDIRS-net := log util $(JSON_LIBS)
 DEPDIRS-notify := log util $(JSON_LIBS)
 DEPDIRS-trace := log util $(JSON_LIBS)
 
-DEPDIRS-bdev := log util thread $(JSON_LIBS) notify trace dma
+DEPDIRS-bdev := accel log util thread $(JSON_LIBS) notify trace dma
 DEPDIRS-blobfs := log thread blob trace util
 DEPDIRS-event := log util thread $(JSON_LIBS) trace init
 DEPDIRS-init := jsonrpc json log rpc thread util
@@ -71,7 +72,7 @@ DEPDIRS-ublk := log util thread $(JSON_LIBS) bdev
 endif
 DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvmf += rdma
+DEPDIRS-nvmf += rdma rdma_utils
 endif
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 DEPDIRS-mlx5 = log rdma util
@@ -107,7 +108,7 @@ DEPDIRS-accel_dpdk_cryptodev := log thread $(JSON_LIBS) accel
 DEPDIRS-accel_dpdk_compressdev := log thread $(JSON_LIBS) accel util
 
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma util
+DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma_utils util
 endif
 
 # module/env_dpdk
@@ -116,7 +117,7 @@ DEPDIRS-env_dpdk_rpc := log $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util
 DEPDIRS-sock_uring := log sock util
-DEPDIRS-sock_xlio := log sock util rdma env_dpdk
+DEPDIRS-sock_xlio := log sock util rdma env_dpdk event
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util json

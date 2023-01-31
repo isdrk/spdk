@@ -1019,6 +1019,7 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		       const struct spdk_json_val *params)
 {
 	struct rpc_bdev_set_qos_limit req = {NULL, {UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX}};
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	struct spdk_bdev_desc *desc;
 	int i, rc;
 
@@ -1038,11 +1039,14 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
+	/* Check if at least one new rate limit specified */
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (req.limits[i] != UINT64_MAX) {
 			break;
 		}
 	}
+
+	/* Report error if no new rate limits specified */
 	if (i == SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES) {
 		SPDK_ERRLOG("no rate limits specified\n");
 		spdk_bdev_close(desc);
@@ -1050,7 +1054,17 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), req.limits,
+	/* Get the old limits */
+	spdk_bdev_get_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits);
+
+	/* Merge the new rate limits, so only the diff appears in the limits array */
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		if (req.limits[i] != UINT64_MAX) {
+			limits[i] = req.limits[i];
+		}
+	}
+
+	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits,
 				      rpc_bdev_set_qos_limit_complete, request);
 
 	spdk_bdev_close(desc);

@@ -14,6 +14,7 @@
 #include "spdk/stdinc.h"
 
 #include "spdk/json.h"
+#include "spdk/log.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -324,6 +325,19 @@ struct spdk_jsonrpc_client_response *spdk_jsonrpc_client_get_response(struct spd
  */
 void spdk_jsonrpc_client_free_response(struct spdk_jsonrpc_client_response *resp);
 
+/**
+ * Set the log level used to log RPC request and response objects.
+ *
+ * \param level Log level used to log RPC objects.
+ */
+void spdk_jsonrpc_set_log_level(enum spdk_log_level level);
+
+/**
+ * Set the log file used to log RPC request and response objects.
+ *
+ * \param file Log file pointer used to log RPC objects.
+ */
+void spdk_jsonrpc_set_log_file(FILE *file);
 
 #ifdef __cplusplus
 }
