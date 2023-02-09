@@ -337,4 +337,12 @@ int spdk_mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 struct spdk_mlx5_indirect_mkey *spdk_mlx5_create_indirect_mkey(struct ibv_pd *pd,
 		struct mlx5_devx_mkey_attr *attr);
 int spdk_mlx5_destroy_indirect_mkey(struct spdk_mlx5_indirect_mkey *mkey);
+
+struct spdk_mlx5_psv {
+	struct mlx5dv_devx_obj *devx_obj;
+	uint32_t index;
+};
+
+struct spdk_mlx5_psv *spdk_mlx5_create_psv(struct ibv_pd *pd);
+int spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv);
 #endif /* SPDK_MLX5_H */

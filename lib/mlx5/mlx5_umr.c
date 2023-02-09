@@ -641,3 +641,66 @@ spdk_mlx5_destroy_indirect_mkey(struct spdk_mlx5_indirect_mkey *mkey)
 
 	return ret;
 }
+
+static struct mlx5dv_devx_obj *
+mlx5_cmd_create_psv(struct ibv_context *context, uint32_t pdn, uint32_t *psv_index)
+{
+	uint32_t out[DEVX_ST_SZ_DW(create_psv_out)] = {};
+	uint32_t in[DEVX_ST_SZ_DW(create_psv_in)] = {};
+	struct mlx5dv_devx_obj *obj;
+
+	assert(context);
+	assert(psv_index);
+
+	DEVX_SET(create_psv_in, in, opcode, MLX5_CMD_OP_CREATE_PSV);
+	DEVX_SET(create_psv_in, in, pd, pdn);
+	DEVX_SET(create_psv_in, in, num_psv, 1);
+
+	obj = mlx5dv_devx_obj_create(context, in, sizeof(in), out, sizeof(out));
+	if (obj) {
+		*psv_index = DEVX_GET(create_psv_out, out, psv0_index);
+	}
+
+	return obj;
+}
+
+struct spdk_mlx5_psv *
+spdk_mlx5_create_psv(struct ibv_pd *pd)
+{
+	uint32_t pdn;
+	struct spdk_mlx5_psv *psv;
+	int err;
+
+	assert(pd);
+
+	err = mlx5_get_pd_id(pd, &pdn);
+	if (err) {
+		return NULL;
+	}
+
+	psv = calloc(1, sizeof(*psv));
+	if (!psv) {
+		return NULL;
+	}
+
+	psv->devx_obj = mlx5_cmd_create_psv(pd->context, pdn, &psv->index);
+	if (!psv->devx_obj) {
+		free(psv);
+		return NULL;
+	}
+
+	return psv;
+}
+
+int
+spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv)
+{
+	int ret;
+
+	ret = mlx5dv_devx_obj_destroy(psv->devx_obj);
+	if (!ret) {
+		free(psv);
+	}
+
+	return ret;
+}
