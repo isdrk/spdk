@@ -16,6 +16,8 @@ struct accel_mlx5_attr {
 	uint32_t split_mb_blocks;
 	/* Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB */
 	bool siglast;
+	/* Enable CRC32C and COPY_CRC32C operations */
+	bool enable_crc;
 };
 
 void accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr);
