@@ -1106,6 +1106,73 @@ spdk_accel_append_crc32c(struct spdk_accel_sequence **pseq, struct spdk_io_chann
 }
 
 int
+spdk_accel_append_copy_crc32c(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
+			      uint32_t *crc_dst, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+			      struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+			      struct iovec *src_iovs, uint32_t src_iovcnt,
+			      struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+			      uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_accel_task *task;
+	struct spdk_accel_sequence *seq = *pseq;
+
+	if (seq == NULL) {
+		seq = accel_sequence_get(accel_ch);
+		if (spdk_unlikely(seq == NULL)) {
+			return -ENOMEM;
+		}
+	}
+
+	if (spdk_unlikely(dst_iovs == NULL)) {
+		SPDK_ERRLOG("dst_iovs should not be NULL");
+		return -EINVAL;
+	}
+
+	if (spdk_unlikely(!dst_iovcnt)) {
+		SPDK_ERRLOG("dst_iovcnt should not be zero value\n");
+		return -EINVAL;
+	}
+
+	if (spdk_unlikely(src_iovs == NULL)) {
+		SPDK_ERRLOG("src_iovs should not be NULL");
+		return -EINVAL;
+	}
+
+	if (spdk_unlikely(!src_iovcnt)) {
+		SPDK_ERRLOG("src_iovcnt should not be zero value\n");
+		return -EINVAL;
+	}
+
+	assert(seq->ch == accel_ch);
+	task = accel_sequence_get_task(accel_ch, seq, cb_fn, cb_arg);
+	if (spdk_unlikely(task == NULL)) {
+		if (*pseq == NULL) {
+			accel_sequence_put(seq);
+		}
+
+		return -ENOMEM;
+	}
+
+	task->dst_domain = dst_domain;
+	task->src_domain_ctx = dst_domain_ctx;
+	task->d.iovs = dst_iovs;
+	task->d.iovcnt = dst_iovcnt;
+	task->src_domain = src_domain;
+	task->src_domain_ctx = src_domain_ctx;
+	task->s.iovs = src_iovs;
+	task->s.iovcnt = src_iovcnt;
+	task->crc_dst = crc_dst;
+	task->seed = seed;
+	task->op_code = ACCEL_OPC_COPY_CRC32C;
+
+	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
+	*pseq = seq;
+
+	return 0;
+}
+
+int
 spdk_accel_get_buf(struct spdk_io_channel *ch, uint64_t len, void **buf,
 		   struct spdk_memory_domain **domain, void **domain_ctx)
 {

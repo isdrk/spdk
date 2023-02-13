@@ -480,6 +480,33 @@ int spdk_accel_append_crc32c(struct spdk_accel_sequence **seq, struct spdk_io_ch
 			     uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
+ * Append a copy + crc32c operation to a sequence.
+ *
+ * \param seq Sequence object.  If NULL, a new sequence object will be created.
+ * \param ch I/O channel.
+ * \param dst_crc Destination to write the calculated value.
+ * \param dst_iovs The io vector array to write the data to.
+ * \param dst_iovcnt The size of the destination io vectors.
+ * \param src_domain Memory domain to which the destination buffers belong.
+ * \param src_domain_ctx Destination buffer domain context.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param src_iovcnt The size of the source io vectors.
+ * \param src_domain Memory domain to which the source buffers belong.
+ * \param src_domain_ctx Source buffer domain context.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_append_copy_crc32c(struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
+				  uint32_t *dst_crc, struct iovec *dst_iovs, uint32_t dst_iovcnt,
+				  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				  struct iovec *src_iovs, uint32_t src_iovcnt,
+				  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				  uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
+
+/**
  * Finish a sequence and execute all its operations. After the completion callback is executed, the
  * sequence object is automatically freed.
  *
