@@ -637,13 +637,15 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	uint16_t apptag_mask;
 	/** Application tag to use end-to-end protection information. */
 	uint16_t apptag;
+	/** Command dword 13 specific field. */
+	uint32_t cdw13;
 	struct spdk_accel_sequence *accel_seq;
 	/** A scatter gather list of buffers. */
 	struct iovec *iov;
 	/** The number of elements in iov. */
 	int iovcnt;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 64, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 68, "Incorrect size");
 
 /**
  * Parse the string representation of a transport ID.
