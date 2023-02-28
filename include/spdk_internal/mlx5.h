@@ -273,6 +273,23 @@ int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_
 int spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
 				uint64_t wr_id, uint32_t flags);
 
+enum spdk_mlx5_umr_sig_domain {
+	SPDK_MLX5_UMR_SIG_DOMAIN_MEMORY,
+	SPDK_MLX5_UMR_SIG_DOMAIN_WIRE
+};
+
+struct spdk_mlx5_umr_sig_attr {
+	uint32_t seed;
+	uint32_t psv_index;
+	enum spdk_mlx5_umr_sig_domain domain;
+	bool init;
+	bool check_gen;
+};
+
+int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp,
+				struct spdk_mlx5_umr_attr *umr_attr,
+				struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags);
+
 struct mlx5_devx_mkey_attr {
 	uint64_t addr;
 	uint64_t size;

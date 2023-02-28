@@ -28,6 +28,54 @@ struct mlx5_crypto_bsf_seg {
 	uint8_t		rsvd3[16];
 };
 
+#define MLX5_SIG_BSF_SIZE_32B (0x1)
+/* Transaction Format Selector */
+#define MLX5_SIG_BSF_TFS_CRC32C (64)
+#define MLX5_SIG_BSF_TFS_SHIFT (24)
+/* Transaction Init/Check_gen bits */
+#define MLX5_SIG_BSF_EXT_M_T_CHECK_GEN (1u << 24)
+#define MLX5_SIG_BSF_EXT_M_T_INIT (1u << 25)
+#define MLX5_SIG_BSF_EXT_W_T_CHECK_GEN (1u << 28)
+#define MLX5_SIG_BSF_EXT_W_T_INIT (1u << 29)
+
+struct mlx5_sig_bsf_inl {
+	__be16 vld_refresh;
+	__be16 dif_apptag;
+	__be32 dif_reftag;
+	uint8_t sig_type;
+	uint8_t rp_inv_seed;
+	uint8_t rsvd[3];
+	uint8_t dif_inc_ref_guard_check;
+	__be16 dif_app_bitmask_check;
+};
+
+struct mlx5_sig_bsf_seg {
+	struct mlx5_sig_bsf_basic {
+		uint8_t bsf_size_sbs;
+		uint8_t check_byte_mask;
+		union {
+			uint8_t copy_byte_mask;
+			uint8_t bs_selector;
+			uint8_t rsvd_wflags;
+		} wire;
+		union {
+			uint8_t bs_selector;
+			uint8_t rsvd_mflags;
+		} mem;
+		__be32 raw_data_size;
+		__be32 w_bfs_psv;
+		__be32 m_bfs_psv;
+	} basic;
+	struct mlx5_sig_bsf_ext {
+		__be32 t_init_gen_pro_size;
+		__be32 rsvd_epi_size;
+		__be32 w_tfs_psv;
+		__be32 m_tfs_psv;
+	} ext;
+	struct mlx5_sig_bsf_inl w_inl;
+	struct mlx5_sig_bsf_inl m_inl;
+};
+
 static inline void *
 mlx5_qp_get_wqe_bb(struct spdk_mlx5_hw_qp *hw_qp)
 {
