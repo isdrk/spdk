@@ -2620,7 +2620,7 @@ bs_allocate_and_copy_cluster(struct spdk_blob *blob,
 	cpl.u.blob_basic.cb_fn = blob_allocate_and_copy_cluster_cpl;
 	cpl.u.blob_basic.cb_arg = ctx;
 
-	ctx->seq = bs_sequence_start(_ch, &cpl);
+	ctx->seq = bs_sequence_start_blob(_ch, &cpl, blob);
 	if (!ctx->seq) {
 		spdk_spin_lock(&blob->bs->used_lock);
 		bs_release_cluster(blob->bs, ctx->new_cluster);
@@ -2807,7 +2807,7 @@ blob_request_submit_op_split(struct spdk_io_channel *ch, struct spdk_blob *blob,
 	cpl.u.blob_basic.cb_fn = cb_fn;
 	cpl.u.blob_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(ch, &cpl);
+	seq = bs_sequence_start_blob(ch, &cpl, blob);
 	if (!seq) {
 		free(ctx);
 		cb_fn(cb_arg, -ENOMEM);
@@ -3135,7 +3135,7 @@ blob_request_submit_rw_iov(struct spdk_blob *blob, struct spdk_io_channel *_chan
 		if (read) {
 			spdk_bs_sequence_t *seq;
 
-			seq = bs_sequence_start(_channel, &cpl);
+			seq = bs_sequence_start_blob(_channel, &cpl, blob);
 			if (!seq) {
 				cb_fn(cb_arg, -ENOMEM);
 				return;
@@ -3153,7 +3153,7 @@ blob_request_submit_rw_iov(struct spdk_blob *blob, struct spdk_io_channel *_chan
 			if (is_allocated) {
 				spdk_bs_sequence_t *seq;
 
-				seq = bs_sequence_start(_channel, &cpl);
+				seq = bs_sequence_start_blob(_channel, &cpl, blob);
 				if (!seq) {
 					cb_fn(cb_arg, -ENOMEM);
 					return;
@@ -4744,7 +4744,7 @@ spdk_bs_load(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 	cpl.u.bs_handle.cb_arg = cb_arg;
 	cpl.u.bs_handle.bs = bs;
 
-	ctx->seq = bs_sequence_start(bs->md_channel, &cpl);
+	ctx->seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!ctx->seq) {
 		spdk_free(ctx->super);
 		free(ctx);
@@ -5124,7 +5124,7 @@ spdk_bs_dump(struct spdk_bs_dev *dev, FILE *fp, spdk_bs_dump_print_xattr print_x
 	cpl.u.bs_basic.cb_fn = cb_fn;
 	cpl.u.bs_basic.cb_arg = cb_arg;
 
-	ctx->seq = bs_sequence_start(bs->md_channel, &cpl);
+	ctx->seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!ctx->seq) {
 		spdk_free(ctx->super);
 		free(ctx);
@@ -5341,7 +5341,7 @@ spdk_bs_init(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 	cpl.u.bs_handle.cb_arg = cb_arg;
 	cpl.u.bs_handle.bs = bs;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		spdk_free(ctx->super);
 		free(ctx);
@@ -5426,7 +5426,7 @@ spdk_bs_destroy(struct spdk_blob_store *bs, spdk_bs_op_complete cb_fn,
 
 	ctx->bs = bs;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		free(ctx);
 		cb_fn(cb_arg, -ENOMEM);
@@ -5569,7 +5569,7 @@ spdk_bs_unload(struct spdk_blob_store *bs, spdk_bs_op_complete cb_fn, void *cb_a
 	cpl.u.bs_basic.cb_fn = cb_fn;
 	cpl.u.bs_basic.cb_arg = cb_arg;
 
-	ctx->seq = bs_sequence_start(bs->md_channel, &cpl);
+	ctx->seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!ctx->seq) {
 		spdk_free(ctx->super);
 		free(ctx);
@@ -5654,7 +5654,7 @@ spdk_bs_set_super(struct spdk_blob_store *bs, spdk_blob_id blobid,
 	cpl.u.bs_basic.cb_fn = cb_fn;
 	cpl.u.bs_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		spdk_free(ctx->super);
 		free(ctx);
@@ -5964,7 +5964,7 @@ bs_create_blob(struct spdk_blob_store *bs,
 	cpl.u.blobid.cb_arg = cb_arg;
 	cpl.u.blobid.blobid = blob->id;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		rc = -ENOMEM;
 		goto error;
@@ -7369,7 +7369,7 @@ spdk_bs_delete_blob(struct spdk_blob_store *bs, spdk_blob_id blobid,
 	cpl.u.blob_basic.cb_fn = cb_fn;
 	cpl.u.blob_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		cb_fn(cb_arg, -ENOMEM);
 		return;
@@ -7485,7 +7485,7 @@ bs_open_blob(struct spdk_blob_store *bs,
 	cpl.u.blob_handle.blob = blob;
 	cpl.u.blob_handle.esnap_ctx = opts_local.esnap_ctx;
 
-	seq = bs_sequence_start(bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!seq) {
 		blob_free(blob);
 		cb_fn(cb_arg, NULL, -ENOMEM);
@@ -7549,7 +7549,7 @@ blob_sync_md(struct spdk_blob *blob, spdk_blob_op_complete cb_fn, void *cb_arg)
 	cpl.u.blob_basic.cb_fn = cb_fn;
 	cpl.u.blob_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(blob->bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(blob->bs->md_channel, &cpl);
 	if (!seq) {
 		cb_fn(cb_arg, -ENOMEM);
 		return;
@@ -7669,7 +7669,7 @@ blob_write_extent_page(struct spdk_blob *blob, uint32_t extent, uint64_t cluster
 	cpl.u.blob_basic.cb_fn = cb_fn;
 	cpl.u.blob_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(blob->bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(blob->bs->md_channel, &cpl);
 	if (!seq) {
 		free(ctx);
 		cb_fn(cb_arg, -ENOMEM);
@@ -7806,7 +7806,7 @@ spdk_blob_close(struct spdk_blob *blob, spdk_blob_op_complete cb_fn, void *cb_ar
 	cpl.u.blob_basic.cb_fn = cb_fn;
 	cpl.u.blob_basic.cb_arg = cb_arg;
 
-	seq = bs_sequence_start(blob->bs->md_channel, &cpl);
+	seq = bs_sequence_start_bs(blob->bs->md_channel, &cpl);
 	if (!seq) {
 		cb_fn(cb_arg, -ENOMEM);
 		return;
@@ -8542,7 +8542,7 @@ spdk_bs_grow(struct spdk_bs_dev *dev, struct spdk_bs_opts *o,
 	cpl.u.bs_handle.cb_arg = cb_arg;
 	cpl.u.bs_handle.bs = bs;
 
-	ctx->seq = bs_sequence_start(bs->md_channel, &cpl);
+	ctx->seq = bs_sequence_start_bs(bs->md_channel, &cpl);
 	if (!ctx->seq) {
 		spdk_free(ctx->super);
 		free(ctx);
