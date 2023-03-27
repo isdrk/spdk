@@ -502,6 +502,15 @@ spdk_bdev_part_construct(struct spdk_bdev_part *part, struct spdk_bdev_part_base
 			 char *name, uint64_t offset_blocks, uint64_t num_blocks,
 			 char *product_name)
 {
+	return spdk_bdev_part_construct_uuid(part, base, name, offset_blocks, num_blocks,
+					     product_name, NULL);
+}
+
+int
+spdk_bdev_part_construct_uuid(struct spdk_bdev_part *part, struct spdk_bdev_part_base *base,
+			      char *name, uint64_t offset_blocks, uint64_t num_blocks,
+			      char *product_name, const struct spdk_uuid *uuid)
+{
 	int rc;
 	bool first_claimed = false;
 
@@ -533,6 +542,10 @@ spdk_bdev_part_construct(struct spdk_bdev_part *part, struct spdk_bdev_part_base
 		SPDK_ERRLOG("Failed to allocate product name for new part of bdev %s\n",
 			    spdk_bdev_get_name(base->bdev));
 		return -1;
+	}
+
+	if (uuid != NULL) {
+		spdk_uuid_copy(&part->internal.bdev.uuid, uuid);
 	}
 
 	base->ref++;

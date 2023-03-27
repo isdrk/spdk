@@ -1445,6 +1445,24 @@ int spdk_bdev_part_construct(struct spdk_bdev_part *part, struct spdk_bdev_part_
 			     char *product_name);
 
 /**
+ * Create a logical spdk_bdev_part on top of a base with a non-NULL bdev UUID
+ *
+ * \param part The part object allocated by the user.
+ * \param base The base from which to create the part.
+ * \param name The name of the new spdk_bdev_part.
+ * \param offset_blocks The offset into the base bdev at which this part begins.
+ * \param num_blocks The number of blocks that this part will span.
+ * \param product_name Unique name for this type of block device.
+ * \param uuid The bdev UUID.
+ *
+ * \return 0 on success.
+ * \return -1 if the bases underlying bdev cannot be claimed by the current module.
+ */
+int spdk_bdev_part_construct_uuid(struct spdk_bdev_part *part, struct spdk_bdev_part_base *base,
+				  char *name, uint64_t offset_blocks, uint64_t num_blocks,
+				  char *product_name, const struct spdk_uuid *uuid);
+
+/**
  * Forwards I/O from an spdk_bdev_part to the underlying base bdev.
  *
  * This function will apply the offset_blocks the user provided to

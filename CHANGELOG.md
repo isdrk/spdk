@@ -1,5 +1,12 @@
 # Changelog
 
+## v23.01.nvda
+
+### gpt
+
+GPT bdevs now use the GPT Unique Partition ID as the bdev's UUID. Do not rely on the newly
+introduced spdk_bdev_part_construct_uuid(). A more flexible replacement will come later.
+
 ## v23.01: accel chained ops, accel crypto, ublk target
 
 ### accel

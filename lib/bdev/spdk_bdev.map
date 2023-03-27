@@ -151,6 +151,7 @@
 	spdk_bdev_part_base_hotremove;
 	spdk_bdev_part_base_construct_ext;
 	spdk_bdev_part_construct;
+	spdk_bdev_part_construct_uuid;
 	spdk_bdev_part_submit_request;
 	spdk_bdev_part_submit_request_ext;
 	spdk_bdev_part_get_bdev;

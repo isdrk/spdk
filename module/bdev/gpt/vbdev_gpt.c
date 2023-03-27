@@ -315,6 +315,7 @@ vbdev_gpt_create_bdevs(struct gpt_base *gpt_base)
 		uint64_t lba_start = from_le64(&p->starting_lba);
 		uint64_t lba_end = from_le64(&p->ending_lba);
 		uint64_t partition_size = lba_end - lba_start + 1;
+		struct spdk_uuid *uuid;
 
 		if (lba_start == 0) {
 			continue;
@@ -353,8 +354,9 @@ vbdev_gpt_create_bdevs(struct gpt_base *gpt_base)
 			return -1;
 		}
 
-		rc = spdk_bdev_part_construct(&d->part, gpt_base->part_base, name,
-					      lba_start, partition_size, "GPT Disk");
+		uuid = (struct spdk_uuid *)&gpt->partitions[i].unique_partition_guid;
+		rc = spdk_bdev_part_construct_uuid(&d->part, gpt_base->part_base, name,
+						   lba_start, partition_size, "GPT Disk", uuid);
 		free(name);
 		if (rc) {
 			SPDK_ERRLOG("could not construct bdev part\n");
