@@ -298,6 +298,11 @@ int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp,
 				struct spdk_mlx5_umr_attr *umr_attr,
 				struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags);
 
+int spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+				       struct spdk_mlx5_umr_sig_attr *sig_attr,
+				       struct spdk_mlx5_umr_crypto_attr *crypto_attr,
+				       uint64_t wr_id, uint32_t flags);
+
 struct mlx5_devx_mkey_attr {
 	uint64_t addr;
 	uint64_t size;

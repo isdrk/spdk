@@ -11,6 +11,7 @@
 
 #define MLX5_WQE_UMR_CTRL_MKEY_MASK_BSF_OCTOWORD_SIZE (0x1 << 5)
 #define MLX5_CRYPTO_BSF_SIZE_64B (0x2)
+#define MLX5_CRYPTO_BSF_SIZE_WITH_SIG (0x3)
 #define MLX5_CRYPTO_BSF_P_TYPE_CRYPTO (0x1)
 
 struct mlx5_crypto_bsf_seg {
@@ -29,6 +30,7 @@ struct mlx5_crypto_bsf_seg {
 };
 
 #define MLX5_SIG_BSF_SIZE_32B (0x1)
+#define MLX5_SIG_BSF_SIZE_WITH_CRYPTO (0x3)
 /* Transaction Format Selector */
 #define MLX5_SIG_BSF_TFS_CRC32C (64)
 #define MLX5_SIG_BSF_TFS_SHIFT (24)
