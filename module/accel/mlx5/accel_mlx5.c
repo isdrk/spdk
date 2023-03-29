@@ -13,10 +13,10 @@
 #include "spdk/util.h"
 #include "spdk/dma.h"
 #include "spdk/tree.h"
+#include "spdk/accel_module.h"
 
 #include "spdk_internal/mlx5.h"
 #include "spdk_internal/rdma_utils.h"
-#include "spdk_internal/accel_module.h"
 #include "spdk_internal/assert.h"
 #include "spdk_internal/sgl.h"
 #include "accel_mlx5.h"

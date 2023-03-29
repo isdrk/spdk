@@ -29,7 +29,7 @@
 #include "spdk_internal/trace_defs.h"
 #include "spdk_internal/rdma.h"
 #include "spdk_internal/rdma_utils.h"
-#include "spdk_internal/accel_module.h"
+#include "spdk/accel_module.h"
 
 #define NVME_TCP_RW_BUFFER_SIZE 131072
 #define NVME_TCP_TIME_OUT_IN_SECONDS 2
