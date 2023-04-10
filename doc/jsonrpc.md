@@ -10123,6 +10123,58 @@ Example response:
 }
 ~~~
 
+### bdev_lvol_get_lvols {#rpc_bdev_lvol_get_lvols}
+
+Get a list of logical volumes. This list can be limited by lvol store and will display volumes regardless
+of their health. Unhealthy lvols do not have an associated bdev, thus this RPC call may return lvols
+not returned by `bdev_get_bdevs`.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+lvs_uuid                | Optional | string      | Only show volumes in the logical volume store with this UUID
+lvs_name                | Optional | string      | Only show volumes in the logical volume store with this name
+
+Either lvs_uuid or lvs_name may be specified, but not both.
+If both lvs_uuid and lvs_name are omitted, information about lvols in all logical volume stores is returned.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_lvol_get_lvols",
+  "id": 1,
+  "params": {
+    "lvs_name": "lvs_test"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+[
+  {
+    "alias": "lvs_test/lvol1",
+    "uuid": "b335c368-851d-4099-81e0-018cc494fdf6",
+    "name": "lvol1",
+    "is_thin_provisioned": false,
+    "is_snapshot": false,
+    "is_clone": false,
+    "is_esnap_clone": false,
+    "is_healthy": true,
+    "lvs": {
+      "name": "lvs_test",
+      "uuid": "a1c8d950-5715-4558-936d-ab9e6eca0794"
+    }
+  }
+]
+~~~
+
 ## RAID
 
 ### bdev_raid_get_bdevs {#rpc_bdev_raid_get_bdevs}
