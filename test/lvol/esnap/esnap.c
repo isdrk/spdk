@@ -118,6 +118,14 @@ lvol_op_with_handle_cb(void *cb_arg, struct spdk_lvol *lvol, int lvserrno)
 }
 
 static void
+lvol_op_complete_cb(void *cb_arg, int lvolerrno)
+{
+	int *err = cb_arg;
+
+	*err = lvolerrno;
+}
+
+static void
 ut_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void *event_ctx)
 {
 }
@@ -437,6 +445,218 @@ fail:
 }
 
 static void
+esnap_remove_unhealthy(void)
+{
+	const char *uuid_esnap = "33358eb9-3dcf-4275-b089-0becc126fc3d";
+	struct malloc_bdev_opts malloc_opts = { 0 };
+	const uint32_t bs_size_bytes = 10 * 1024 * 1024;
+	const uint32_t bs_block_size = 4096;
+	const uint32_t cluster_size = 32 * 1024;
+	const uint32_t esnap_size_bytes = 2 * cluster_size;
+	struct op_with_handle_data owh_data = { 0 };
+	struct spdk_lvol_store *lvs;
+	struct spdk_bdev *malloc_bdev;
+	struct spdk_lvol *vol1, *vol2, *vol3;
+	char aiopath[PATH_MAX];
+	int rc, rc2;
+
+	g_bdev_opts.bdev_auto_examine = true;
+
+	/* Create aio device to hold the lvstore. */
+	rc = make_test_file(bs_size_bytes, aiopath, sizeof(aiopath), "remove_unhealthy.aio");
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	rc = create_aio_bdev("aio1", aiopath, bs_block_size, false);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+
+	rc = vbdev_lvs_create("aio1", "lvs1", cluster_size, 0, 0,
+			      lvs_op_with_handle_cb, &owh_data);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvs != NULL);
+	lvs = owh_data.u.lvs;
+
+	/* Create esnap device */
+	spdk_uuid_parse(&malloc_opts.uuid, uuid_esnap);
+	malloc_opts.name = "esnap";
+	malloc_opts.num_blocks = esnap_size_bytes / bs_block_size;
+	malloc_opts.block_size = bs_block_size;
+	rc = create_malloc_disk(&malloc_bdev, &malloc_opts);
+	CU_ASSERT_OR_FAIL(rc == 0);
+
+	/* Create a snapshot of vol1.
+	 * State:
+	 *   esnap <-- vol1
+	 */
+	vbdev_lvol_create_bdev_clone(uuid_esnap, lvs, "vol1",
+				     lvol_op_with_handle_cb, clear_owh(&owh_data));
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvol != NULL);
+	vol1 = owh_data.u.lvol;
+
+	/* Create a snapshot of vol1.
+	 * State:
+	 *   esnap <-- vol2 <-- vol1
+	 */
+	vbdev_lvol_create_snapshot(vol1, "vol2", lvol_op_with_handle_cb, clear_owh(&owh_data));
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvol != NULL);
+	vol2 = owh_data.u.lvol;
+
+	/* Create a clone of vol2.
+	 * State:
+	 *   esnap <-- vol2 <-- vol1
+	 *                `---- vol3
+	 */
+	vbdev_lvol_create_clone(vol2, "vol3", lvol_op_with_handle_cb, clear_owh(&owh_data));
+	poll_threads();
+	CU_ASSERT_OR_FAIL(owh_data.lvserrno == 0);
+	CU_ASSERT_OR_FAIL(owh_data.u.lvol != NULL);
+	vol3 = owh_data.u.lvol;
+
+	/* Unload the lvstore and delete esnap */
+	rc = rc2 = 0xbad;
+	bdev_aio_delete("aio1", unregister_cb, &rc);
+	CU_ASSERT(spdk_bdev_get_by_name(uuid_esnap) != NULL)
+	delete_malloc_disk(malloc_bdev->name, unregister_cb, &rc2);
+	malloc_bdev = NULL;
+	poll_threads();
+	CU_ASSERT_OR_FAIL(rc == 0);
+	CU_ASSERT_OR_FAIL(rc2 == 0);
+
+	/* Trigger the reload of the lvstore.
+	 * State:
+	 *   (missing) <-- vol2 <-- vol1
+	 *                    `---- vol3
+	 */
+	rc = create_aio_bdev("aio1", aiopath, bs_block_size, false);
+	CU_ASSERT_OR_FAIL(rc == 0);
+	poll_threads();
+
+	/* Verify vol1 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol1") == NULL);
+	vol1 = spdk_lvol_get_by_names("lvs1", "vol1");
+	CU_ASSERT_OR_FAIL(vol1 != NULL);
+	lvs = vol1->lvol_store;
+	CU_ASSERT(spdk_blob_is_clone(vol1->blob));
+	CU_ASSERT(!spdk_blob_is_esnap_clone(vol1->blob));
+	CU_ASSERT(!spdk_blob_is_snapshot(vol1->blob));
+	CU_ASSERT(vol1->missing == NULL);
+
+	/* Verify vol2 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol2") == NULL);
+	vol2 = spdk_lvol_get_by_names("lvs1", "vol2");
+	CU_ASSERT_OR_FAIL(vol2 != NULL);
+	CU_ASSERT(!spdk_blob_is_clone(vol2->blob));
+	CU_ASSERT(spdk_blob_is_esnap_clone(vol2->blob));
+	CU_ASSERT(spdk_blob_is_snapshot(vol2->blob));
+	CU_ASSERT(RB_MIN(missing_esnap_tree, &lvs->missing_esnaps) == vol2->missing);
+	CU_ASSERT(TAILQ_FIRST(&vol2->missing->lvols) == vol2);
+
+	/* Verify vol3 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol3") == NULL);
+	vol3 = spdk_lvol_get_by_names("lvs1", "vol3");
+	CU_ASSERT_OR_FAIL(vol3 != NULL);
+	CU_ASSERT(spdk_blob_is_clone(vol3->blob));
+	CU_ASSERT(!spdk_blob_is_esnap_clone(vol3->blob));
+	CU_ASSERT(!spdk_blob_is_snapshot(vol3->blob));
+	CU_ASSERT(vol3->missing == NULL);
+
+	/* Try to delete vol2. Should fail because it has multiple clones. */
+	vbdev_lvol_destroy(vol2, lvol_op_complete_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == -EPERM);
+
+	/* Delete vol1
+	 * New state:
+	 *   (missing) <-- vol2 <-- vol3
+	 */
+	vbdev_lvol_destroy(vol1, lvol_op_complete_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+
+	/* Verify vol1 is gone */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol1") == NULL);
+	vol1 = spdk_lvol_get_by_names("lvs1", "vol1");
+	CU_ASSERT(vol1 == NULL);
+
+	/* Verify vol2 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol2") == NULL);
+	vol2 = spdk_lvol_get_by_names("lvs1", "vol2");
+	CU_ASSERT_OR_FAIL(vol2 != NULL);
+	CU_ASSERT(!spdk_blob_is_clone(vol2->blob));
+	CU_ASSERT(spdk_blob_is_esnap_clone(vol2->blob));
+	CU_ASSERT(spdk_blob_is_snapshot(vol2->blob));
+	CU_ASSERT(RB_MIN(missing_esnap_tree, &lvs->missing_esnaps) == vol2->missing);
+	CU_ASSERT(TAILQ_FIRST(&vol2->missing->lvols) == vol2);
+
+	/* Verify vol3 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol3") == NULL);
+	vol3 = spdk_lvol_get_by_names("lvs1", "vol3");
+	CU_ASSERT_OR_FAIL(vol3 != NULL);
+	CU_ASSERT(spdk_blob_is_clone(vol3->blob));
+	CU_ASSERT(!spdk_blob_is_esnap_clone(vol3->blob));
+	CU_ASSERT(!spdk_blob_is_snapshot(vol3->blob));
+	CU_ASSERT(vol3->missing == NULL);
+
+	/* Delete vol2
+	 * New state:
+	 *   (missing) <-- vol3
+	 */
+	vbdev_lvol_destroy(vol2, lvol_op_complete_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+
+	/* Verify vol2 is gone */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol2") == NULL);
+	vol2 = spdk_lvol_get_by_names("lvs1", "vol2");
+	CU_ASSERT_OR_FAIL(vol2 == NULL);
+
+	/* Verify vol3 is as described in diagram above */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol3") == NULL);
+	vol3 = spdk_lvol_get_by_names("lvs1", "vol3");
+	CU_ASSERT_OR_FAIL(vol3 != NULL);
+	CU_ASSERT(!spdk_blob_is_clone(vol3->blob));
+	CU_ASSERT(spdk_blob_is_esnap_clone(vol3->blob));
+	CU_ASSERT(!spdk_blob_is_snapshot(vol3->blob));
+	CU_ASSERT(RB_MIN(missing_esnap_tree, &lvs->missing_esnaps) == vol3->missing);
+	CU_ASSERT(TAILQ_FIRST(&vol3->missing->lvols) == vol3);
+
+	/* Delete vol3
+	 * New state:
+	 *   (nothing)
+	 */
+	vbdev_lvol_destroy(vol3, lvol_op_complete_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+
+	/* Verify vol3 is gone */
+	CU_ASSERT(spdk_bdev_get_by_name("lvs1/vol3") == NULL);
+	vol3 = spdk_lvol_get_by_names("lvs1", "vol3");
+	CU_ASSERT_OR_FAIL(vol3 == NULL);
+
+	/* Nothing depends on the missing bdev, so it is no longer missing. */
+	CU_ASSERT(RB_EMPTY(&lvs->missing_esnaps));
+
+	/* Clean up */
+fail:
+	rc = rc2 = 0xbad;
+	bdev_aio_delete("aio1", unregister_cb, &rc);
+	poll_threads();
+	CU_ASSERT(rc == 0);
+	if (malloc_bdev != NULL) {
+		delete_malloc_disk(malloc_bdev->name, unregister_cb, &rc2);
+		poll_threads();
+		CU_ASSERT(rc2 == 0);
+	}
+	rc = unlink(aiopath);
+	CU_ASSERT(rc == 0);
+}
+
+static void
 bdev_init_cb(void *arg, int rc)
 {
 	assert(rc == 0);
@@ -469,6 +689,7 @@ main(int argc, char **argv)
 
 	CU_ADD_TEST(suite, esnap_clone_io);
 	CU_ADD_TEST(suite, esnap_hotplug);
+	CU_ADD_TEST(suite, esnap_remove_unhealthy);
 
 	allocate_threads(2);
 	set_thread(0);
