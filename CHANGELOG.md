@@ -14,6 +14,10 @@ multiple readers.
 GPT bdevs now use the GPT Unique Partition ID as the bdev's UUID. Do not rely on the newly
 introduced spdk_bdev_part_construct_uuid(). A more flexible replacement will come later.
 
+### lvol
+
+New API `spdk_lvol_iter_immediate_clones` was added to iterate the clones of an lvol.
+
 ## v23.01
 
 ### accel
