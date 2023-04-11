@@ -18,6 +18,9 @@ introduced spdk_bdev_part_construct_uuid(). A more flexible replacement will com
 
 New API `spdk_lvol_iter_immediate_clones` was added to iterate the clones of an lvol.
 
+New APIs `spdk_lvol_get_by_uuid` and `spdk_lvol_get_by_names` to get lvols by the lvol's UUID or
+lvstore and lvol names.
+
 ## v23.01
 
 ### accel
