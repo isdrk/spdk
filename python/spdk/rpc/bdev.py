@@ -533,7 +533,7 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
                           transport_ack_timeout=None, ctrlr_loss_timeout_sec=None, reconnect_delay_sec=None,
                           fast_io_fail_timeout_sec=None, disable_auto_failback=None, generate_uuids=None,
                           transport_tos=None, nvme_error_stat=None, rdma_srq_size=None, io_path_stat=None,
-                          poll_group_requests=None):
+                          poll_group_requests=None, small_cache_size=None, large_cache_size=None):
     """Set options for the bdev nvme. This is startup command.
 
     Args:
@@ -579,6 +579,8 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         rdma_srq_size: Set the size of a shared rdma receive queue. Default: 0 (disabled) (optional)
         io_path_stat: Enable collection I/O path stat of each io path. (optional)
         poll_group_requests: The number of requests allocated for each poll group. Default: 0 (optional)
+        small_cache_size: The number of small iobuf elements in cache. Default: 128
+        large_cache_size: The number of large iobuf elements in cache. Default: 128
 
     """
     params = {}
@@ -661,6 +663,12 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
 
     if poll_group_requests is not None:
         params['poll_group_requests'] = poll_group_requests
+
+    if small_cache_size is not None:
+        params['small_cache_size'] = small_cache_size
+
+    if large_cache_size is not None:
+        params['large_cache_size'] = large_cache_size
 
     return client.call('bdev_nvme_set_options', params)
 

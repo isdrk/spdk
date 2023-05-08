@@ -226,6 +226,7 @@ struct nvme_poll_group {
 	struct spdk_nvme_poll_group		*group;
 	struct spdk_io_channel			*accel_channel;
 	struct spdk_poller			*poller;
+	struct spdk_iobuf_channel		iobuf;
 	bool					collect_spin_stat;
 	uint64_t				spin_ticks;
 	uint64_t				start_ticks;
@@ -287,6 +288,8 @@ struct spdk_bdev_nvme_opts {
 	uint32_t rdma_srq_size;
 	bool io_path_stat;
 	uint32_t poll_group_requests;
+	uint32_t small_cache_size;
+	uint32_t large_cache_size;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);

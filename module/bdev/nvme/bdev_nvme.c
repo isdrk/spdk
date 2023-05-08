@@ -32,6 +32,8 @@
 
 #define SPDK_BDEV_NVME_DEFAULT_DELAY_CMD_SUBMIT true
 #define SPDK_BDEV_NVME_DEFAULT_KEEP_ALIVE_TIMEOUT_IN_MS	(10000)
+#define BDEV_NVME_IOBUF_SMALL_CACHE_SIZE		128
+#define BDEV_NVME_IOBUF_LARGE_CACHE_SIZE		128
 
 #define NSID_STR_LEN 10
 
@@ -72,6 +74,8 @@ struct nvme_bdev_io {
 
 	/** Extended IO opts passed by the user to bdev layer and mapped to NVME format */
 	struct spdk_nvme_ns_cmd_ext_io_opts ext_opts;
+
+	struct spdk_iobuf_entry iobuf_entry;
 
 	/** Keeps track if first of fused commands was submitted */
 	bool first_fused_submitted;
@@ -130,6 +134,9 @@ static struct spdk_bdev_nvme_opts g_opts = {
 	.transport_tos = 0,
 	.nvme_error_stat = false,
 	.io_path_stat = false,
+	.poll_group_requests = 0,
+	.small_cache_size = BDEV_NVME_IOBUF_SMALL_CACHE_SIZE,
+	.large_cache_size = BDEV_NVME_IOBUF_LARGE_CACHE_SIZE,
 };
 
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
@@ -2836,16 +2843,26 @@ bdev_nvme_get_accel_channel(void *ctx)
 	return group->accel_channel;
 }
 
+static struct spdk_iobuf_channel *
+bdev_nvme_get_iobuf_ch(void *ctx)
+{
+	struct nvme_poll_group *group = ctx;
+
+	return &group->iobuf;
+}
+
 static struct spdk_nvme_accel_fn_table g_bdev_nvme_accel_fn_table = {
 	.table_size		= sizeof(struct spdk_nvme_accel_fn_table),
 	.submit_accel_crc32c	= bdev_nvme_submit_accel_crc32c,
 	.get_accel_channel	= bdev_nvme_get_accel_channel,
+	.get_iobuf_channel	= bdev_nvme_get_iobuf_ch,
 };
 
 static int
 bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 {
 	struct nvme_poll_group *group = ctx_buf;
+	int rc;
 
 	TAILQ_INIT(&group->qpair_list);
 
@@ -2854,9 +2871,17 @@ bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 		return -1;
 	}
 
+	rc = spdk_iobuf_channel_init(&group->iobuf, "nvme", g_opts.small_cache_size, g_opts.large_cache_size);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init iobuf\n");
+		spdk_nvme_poll_group_destroy(group->group);
+		return -1;
+	}
+
 	group->accel_channel = spdk_accel_get_io_channel();
 	if (!group->accel_channel) {
 		spdk_nvme_poll_group_destroy(group->group);
+		spdk_iobuf_channel_fini(&group->iobuf);
 		SPDK_ERRLOG("Cannot get the accel_channel for bdev nvme polling group=%p\n",
 			    group);
 		return -1;
@@ -2866,6 +2891,7 @@ bdev_nvme_create_poll_group_cb(void *io_device, void *ctx_buf)
 
 	if (group->poller == NULL) {
 		spdk_put_io_channel(group->accel_channel);
+		spdk_iobuf_channel_fini(&group->iobuf);
 		spdk_nvme_poll_group_destroy(group->group);
 		return -1;
 	}
@@ -2883,6 +2909,8 @@ bdev_nvme_destroy_poll_group_cb(void *io_device, void *ctx_buf)
 	if (group->accel_channel) {
 		spdk_put_io_channel(group->accel_channel);
 	}
+
+	spdk_iobuf_channel_fini(&group->iobuf);
 
 	spdk_poller_unregister(&group->poller);
 	if (spdk_nvme_poll_group_destroy(group->group)) {
@@ -6257,6 +6285,7 @@ bdev_nvme_library_init(void)
 {
 	g_bdev_nvme_init_thread = spdk_get_thread();
 
+	spdk_iobuf_register_module("nvme");
 	spdk_io_device_register(&g_nvme_bdev_ctrlrs, bdev_nvme_create_poll_group_cb,
 				bdev_nvme_destroy_poll_group_cb,
 				sizeof(struct nvme_poll_group),  "nvme_poll_groups");

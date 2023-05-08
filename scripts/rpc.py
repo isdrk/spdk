@@ -560,7 +560,9 @@ if __name__ == "__main__":
                                        nvme_error_stat=args.nvme_error_stat,
                                        rdma_srq_size=args.rdma_srq_size,
                                        io_path_stat=args.io_path_stat,
-                                       poll_group_requests=args.poll_group_requests)
+                                       poll_group_requests=args.poll_group_requests,
+                                       small_cache_size=args.small_cache_size,
+                                       large_cache_size=args.large_cache_size)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -640,6 +642,8 @@ if __name__ == "__main__":
                    action='store_true')
     p.add_argument('--poll-group-requests',
                    help='The number of requests allocated for each NVMe poll group. Default: 0', type=int)
+    p.add_argument('--small-cache-size', help='The number of small iobuf elements in cache. Default: 128', type=int)
+    p.add_argument('--large-cache-size', help='The number of large iobuf elements in cache. Default: 128', type=int)
 
     p.set_defaults(func=bdev_nvme_set_options)
 

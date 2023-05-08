@@ -67,6 +67,8 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_options_decoders[] = 
 	{"rdma_srq_size", offsetof(struct spdk_bdev_nvme_opts, rdma_srq_size), spdk_json_decode_uint32, true},
 	{"io_path_stat", offsetof(struct spdk_bdev_nvme_opts, io_path_stat), spdk_json_decode_bool, true},
 	{"poll_group_requests", offsetof(struct spdk_bdev_nvme_opts, poll_group_requests), spdk_json_decode_uint32, true},
+	{"small_cache_size", offsetof(struct spdk_bdev_nvme_opts, small_cache_size), spdk_json_decode_uint32, true},
+	{"large_cache_size", offsetof(struct spdk_bdev_nvme_opts, large_cache_size), spdk_json_decode_uint32, true},
 };
 
 static void
