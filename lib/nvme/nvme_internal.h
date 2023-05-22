@@ -454,6 +454,9 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		user_cb_fn;
 	void				*user_cb_arg;
 	void				*user_buffer;
+
+	/** Sequence of accel operations associated with this request */
+	void				*accel_sequence;
 };
 
 typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
@@ -1156,6 +1159,10 @@ struct nvme_driver {
 	uint32_t			zcopy_pool_ref_count;
 };
 
+#define nvme_ns_cmd_get_ext_io_opt(opts, field, defval) \
+       ((opts) != NULL && offsetof(struct spdk_nvme_ns_cmd_ext_io_opts, field) + \
+        sizeof((opts)->field) <= (opts)->size ? (opts)->field : (defval))
+
 extern struct nvme_driver *g_spdk_nvme_driver;
 
 struct spdk_zcopy_pool_opts {
@@ -1379,6 +1386,7 @@ void spdk_nvme_request_put_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy);
 		req->md_size = _md_size;		\
 		req->pid = g_spdk_nvme_pid;		\
 		req->submit_tick = 0;			\
+		req->accel_sequence = NULL;		\
 	} while (0);
 
 static inline struct nvme_request *
@@ -1446,6 +1454,16 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 {
 	struct spdk_nvme_cpl            err_cpl;
 	struct nvme_error_cmd           *cmd;
+
+	if (spdk_unlikely(req->accel_sequence != NULL)) {
+		struct spdk_nvme_poll_group *pg = qpair->poll_group->group;
+
+		/* Transports are required to execuete the sequence and clear req->accel_sequence.
+		 * If it's left non-NULL it must mean the request is failed. */
+		assert(spdk_nvme_cpl_is_error(cpl));
+		pg->accel_fn_table.abort_sequence(req->accel_sequence);
+		req->accel_sequence = NULL;
+	}
 
 	/* error injection at completion path,
 	 * only inject for successful completed commands
