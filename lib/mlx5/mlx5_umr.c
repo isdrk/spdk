@@ -932,6 +932,52 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_at
 }
 
 int
+spdk_mlx5_set_psv(struct spdk_mlx5_dma_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id, uint32_t flags)
+{
+	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
+	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
+	uint32_t pi, wqe_size, wqe_n_bb;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_ctrl_seg *gen_ctrl;
+	struct mlx5_wqe_set_psv_seg *psv;
+	uint8_t fm_ce_se;
+	uint64_t transient_signature = (uint64_t)crc_seed << 32;
+
+	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_set_psv_seg);
+	/* The size of SET_PSV WQE is constant and smaller than WQE BB. */
+	assert(wqe_size < MLX5_SEND_WQE_BB);
+	wqe_n_bb = 1;
+	if (spdk_unlikely(wqe_n_bb > dv_qp->tx_available)) {
+		return -ENOMEM;
+	}
+
+	fm_ce_se = flags | dv_qp->tx_flags;
+	fm_ce_se &= dv_qp->tx_revert_flags;
+
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
+	gen_ctrl = ctrl;
+	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_SET_PSV, 0,
+			  hw->qp_num, fm_ce_se,
+			  SPDK_CEIL_DIV(wqe_size, 16), 0, 0);
+
+	/* build umr PSV segment */
+	psv = (struct mlx5_wqe_set_psv_seg *)(gen_ctrl + 1);
+	/* Zeroing the set_psv segment and WQE padding. */
+	memset(psv, 0, MLX5_SEND_WQE_BB - sizeof(struct mlx5_wqe_ctrl_seg));
+	psv->psv_index = htobe32(psv_index);
+	psv->transient_signature = htobe64(transient_signature);
+
+	mlx5_qp_wqe_submit(dv_qp, ctrl, wqe_n_bb, pi);
+	mlx5_qp_set_comp(dv_qp, pi, wr_id, fm_ce_se, wqe_n_bb);
+	assert(dv_qp->tx_available >= wqe_n_bb);
+	dv_qp->tx_available -= wqe_n_bb;
+
+	return 0;
+}
+
+int
 spdk_mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 				      struct spdk_mlx5_relaxed_ordering_caps *caps)
 {

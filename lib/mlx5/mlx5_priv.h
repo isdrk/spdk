@@ -78,6 +78,13 @@ struct mlx5_sig_bsf_seg {
 	struct mlx5_sig_bsf_inl m_inl;
 };
 
+struct mlx5_wqe_set_psv_seg {
+	__be32 psv_index;
+	__be16 syndrome;
+	uint8_t reserved[2];
+	__be64 transient_signature;
+};
+
 static inline void *
 mlx5_qp_get_wqe_bb(struct spdk_mlx5_hw_qp *hw_qp)
 {

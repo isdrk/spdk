@@ -391,5 +391,7 @@ struct spdk_mlx5_psv {
 
 struct spdk_mlx5_psv *spdk_mlx5_create_psv(struct ibv_pd *pd);
 int spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv);
+int spdk_mlx5_set_psv(struct spdk_mlx5_dma_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id,
+		      uint32_t flags);
 
 #endif /* SPDK_MLX5_H */
