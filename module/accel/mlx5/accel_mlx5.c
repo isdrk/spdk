@@ -55,6 +55,10 @@ struct accel_mlx5_cryptodev_memory_domain {
 struct accel_mlx5_crypto_dev_ctx {
 	struct spdk_mempool *mkey_pool;
 	struct spdk_mlx5_indirect_mkey **mkeys;
+	struct spdk_mempool *sig_mkey_pool;
+	struct spdk_mlx5_indirect_mkey **sig_mkeys;
+	struct spdk_mempool *psv_pool;
+	struct spdk_mlx5_psv **psvs;
 	struct ibv_context *context;
 	struct ibv_pd *pd;
 	struct accel_mlx5_cryptodev_memory_domain domain;
@@ -74,6 +78,7 @@ struct accel_mlx5_module {
 	size_t allowed_crypto_devs_count;
 	bool enabled;
 	bool crypto_supported;
+	bool enable_crc;
 };
 
 enum accel_mlx5_wrid_type {
@@ -94,6 +99,10 @@ struct accel_mlx5_klm {
 
 struct accel_mlx5_key_wrapper {
 	uint32_t mkey;
+};
+
+struct accel_mlx5_psv_wrapper {
+	uint32_t psv_index;
 };
 
 struct accel_mlx5_task {
@@ -1426,6 +1435,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.num_requests = attr->num_requests;
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
+		g_accel_mlx5.enable_crc = false;
 
 		if (attr->allowed_crypto_devs) {
 			int rc;
@@ -1449,32 +1459,73 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 }
 
 static void
-accel_mlx5_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_mkeys_release(struct spdk_mempool *mkey_pool, struct spdk_mlx5_indirect_mkey **mkeys, uint32_t num_mkeys)
 {
-	uint32_t i, num_mkeys;
+	uint32_t i, num_mkeys_in_pool;
 
-	if (!dev_ctx->mkeys) {
+	if (!mkeys) {
 		return;
 	}
 
-	for (i = 0; i < dev_ctx->num_mkeys; i++) {
-		if (dev_ctx->mkeys[i]) {
-			spdk_mlx5_destroy_indirect_mkey(dev_ctx->mkeys[i]);
-			dev_ctx->mkeys[i] = NULL;
+	for (i = 0; i < num_mkeys; i++) {
+		if (mkeys[i]) {
+			spdk_mlx5_destroy_indirect_mkey(mkeys[i]);
+			mkeys[i] = NULL;
 		}
 	}
 
-	free(dev_ctx->mkeys);
+	free(mkeys);
 
-	if (!dev_ctx->mkey_pool) {
+	if (!mkey_pool) {
 		return;
 	}
 
-	num_mkeys = spdk_mempool_count(dev_ctx->mkey_pool);
-	if (num_mkeys != dev_ctx->num_mkeys) {
-		SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n", dev_ctx->num_mkeys, num_mkeys);
+	num_mkeys_in_pool = spdk_mempool_count(mkey_pool);
+	if (num_mkeys_in_pool != num_mkeys) {
+		SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n", num_mkeys, num_mkeys_in_pool);
 	}
-	spdk_mempool_free(dev_ctx->mkey_pool);
+	spdk_mempool_free(mkey_pool);
+}
+
+static void
+accel_mlx5_crypto_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+{
+	accel_mlx5_mkeys_release(dev_ctx->mkey_pool, dev_ctx->mkeys, dev_ctx->num_mkeys);
+}
+
+static void
+accel_mlx5_sig_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+{
+	accel_mlx5_mkeys_release(dev_ctx->sig_mkey_pool, dev_ctx->sig_mkeys, dev_ctx->num_mkeys);
+}
+
+static void
+accel_mlx5_psvs_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+{
+	uint32_t i, num_psvs, num_psvs_in_pool;
+
+	if (!dev_ctx->psvs) {
+		return;
+	}
+
+	num_psvs = dev_ctx->num_mkeys;
+
+	for (i = 0; i < num_psvs; i++) {
+		if (dev_ctx->psvs[i]) {
+			spdk_mlx5_destroy_psv(dev_ctx->psvs[i]);
+			dev_ctx->psvs[i] = NULL;
+		}
+	}
+
+	if (!dev_ctx->psv_pool) {
+		return;
+	}
+
+	num_psvs_in_pool = spdk_mempool_count(dev_ctx->psv_pool);
+	if (num_psvs_in_pool != num_psvs) {
+		SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n", num_psvs, num_psvs_in_pool);
+	}
+	spdk_mempool_free(dev_ctx->psv_pool);
 }
 
 static void
@@ -1483,7 +1534,9 @@ accel_mlx5_free_resources(void)
 	uint32_t i;
 
 	for (i = 0; i < g_accel_mlx5.num_crypto_ctxs; i++) {
-		accel_mlx5_mkeys_release(&g_accel_mlx5.crypto_ctxs[i]);
+		accel_mlx5_crypto_mkeys_release(&g_accel_mlx5.crypto_ctxs[i]);
+		accel_mlx5_sig_mkeys_release(&g_accel_mlx5.crypto_ctxs[i]);
+		accel_mlx5_psvs_release(&g_accel_mlx5.crypto_ctxs[i]);
 		spdk_memory_domain_destroy(g_accel_mlx5.crypto_ctxs[i].domain.domain);
 		spdk_rdma_utils_put_pd(g_accel_mlx5.crypto_ctxs[i].pd);
 	}
@@ -1514,7 +1567,7 @@ accel_mlx5_deinit(void *ctx)
 }
 
 static void
-accel_mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
+accel_mlx5_set_crypto_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
 {
 	struct accel_mlx5_key_wrapper *wrapper = _mkey;
 	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
@@ -1525,7 +1578,7 @@ accel_mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, 
 }
 
 static int
-accel_mlx5_configure_crypto_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct ibv_pd *pd)
+accel_mlx5_configure_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct ibv_pd *pd, bool crypto, bool signature)
 {
 	struct spdk_mlx5_indirect_mkey *mkey;
 	struct mlx5_devx_mkey_attr mkey_attr = {};
@@ -1546,8 +1599,11 @@ accel_mlx5_configure_crypto_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct 
 	mkey_attr.relaxed_ordering_read = caps.relaxed_ordering_read;
 	mkey_attr.sg_count = 0;
 	mkey_attr.sg = NULL;
-	if (g_accel_mlx5.crypto_supported) {
+	if (crypto) {
 		mkey_attr.crypto_en = true;
+		bsf_size += 64;
+	}
+	if (signature) {
 		bsf_size += 64;
 	}
 	mkey_attr.bsf_octowords = bsf_size / 16;
@@ -1563,10 +1619,24 @@ accel_mlx5_configure_crypto_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct 
 }
 
 static int
+accel_mlx5_fill_pool_name(struct accel_mlx5_crypto_dev_ctx *dev_ctx, char *suffix, char *pool_name,
+			  size_t pool_name_size)
+{
+	/* Compiler may produce a warning like
+	 * warning: ‘%s’ directive output may be truncated writing up to 63 bytes into a region of size 21
+	 * [-Wformat-truncation=]
+	 * That is expected and that is due to ibv device name is 64 bytes while DPDK mempool API allows
+	 * name to be max 32 bytes.
+	 * To suppress this warning check the value returned by snprintf */
+	return snprintf(pool_name, pool_name_size, "accel_mlx5_%s_%s", suffix, dev_ctx->context->device->name);
+}
+
+static int
 accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 {
 	char pool_name[32];
 	uint32_t i;
+	bool enable_signature = false;
 	int rc;
 
 	dev_ctx->mkeys = calloc(dev_ctx->num_mkeys, (sizeof(struct spdk_mlx5_indirect_mkey *)));
@@ -1575,19 +1645,14 @@ accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 		return -ENOMEM;
 	}
 	for (i = 0; i < dev_ctx->num_mkeys; i++) {
-		rc = accel_mlx5_configure_crypto_mkey(&dev_ctx->mkeys[i], dev_ctx->pd);
+		rc = accel_mlx5_configure_mkey(&dev_ctx->mkeys[i], dev_ctx->pd, g_accel_mlx5.crypto_supported,
+					       enable_signature);
 		if (rc) {
 			return rc;
 		}
 	}
 
-	/* Compiler may produce a warning like
-	 * warning: ‘%s’ directive output may be truncated writing up to 63 bytes into a region of size 21
-	 * [-Wformat-truncation=]
-	 * That is expected and that is due to ibv device name is 64 bytes while DPDK mempool API allows
-	 * name to be max 32 bytes.
-	 * To suppress this warning check the value returned by snprintf */
-	rc = snprintf(pool_name, 32, "accel_mlx5_%s", dev_ctx->context->device->name);
+	rc = accel_mlx5_fill_pool_name(dev_ctx, "crypto", pool_name, sizeof(pool_name));
 	if (rc < 0) {
 		assert(0);
 		return -EINVAL;
@@ -1597,8 +1662,109 @@ accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 	dev_ctx->mkey_pool = spdk_mempool_create_ctor(pool_name, dev_ctx->num_mkeys,
 						      sizeof(struct accel_mlx5_key_wrapper),
 						      cache_size, SPDK_ENV_SOCKET_ID_ANY,
-						      accel_mlx5_set_mkey_in_pool, dev_ctx);
+						      accel_mlx5_set_crypto_mkey_in_pool, dev_ctx);
 	if (!dev_ctx->mkey_pool) {
+		SPDK_ERRLOG("Failed to create memory pool\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void
+accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
+{
+	struct accel_mlx5_key_wrapper *wrapper = _mkey;
+	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+
+	assert(obj_idx < dev_ctx->num_mkeys);
+	assert(dev_ctx->sig_mkeys[obj_idx] != NULL);
+	wrapper->mkey = dev_ctx->sig_mkeys[obj_idx]->mkey;
+}
+
+static int
+accel_mlx5_sig_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+{
+	char pool_name[32];
+	uint32_t i;
+	bool enable_crypto = false, enable_signature = true;
+	int rc;
+
+	dev_ctx->sig_mkeys = calloc(dev_ctx->num_mkeys, (sizeof(struct spdk_mlx5_indirect_mkey *)));
+	if (!dev_ctx->sig_mkeys) {
+		SPDK_ERRLOG("Failed to alloc mkeys array\n");
+		return -ENOMEM;
+	}
+	for (i = 0; i < dev_ctx->num_mkeys; i++) {
+		rc = accel_mlx5_configure_mkey(&dev_ctx->sig_mkeys[i], dev_ctx->pd, enable_crypto, enable_signature);
+		if (rc) {
+			return rc;
+		}
+	}
+
+	rc = accel_mlx5_fill_pool_name(dev_ctx, "sig", pool_name, sizeof(pool_name));
+	if (rc < 0) {
+		assert(0);
+		return -EINVAL;
+	}
+	uint32_t cache_size = dev_ctx->num_mkeys / 4 * 3 / spdk_env_get_core_count();
+	SPDK_NOTICELOG("Total sig MKey pool size %u, cache size %u\n", dev_ctx->num_mkeys, cache_size);
+	dev_ctx->sig_mkey_pool = spdk_mempool_create_ctor(pool_name, dev_ctx->num_mkeys,
+							  sizeof(struct accel_mlx5_key_wrapper),
+							  cache_size, SPDK_ENV_SOCKET_ID_ANY,
+							  accel_mlx5_set_sig_mkey_in_pool, dev_ctx);
+	if (!dev_ctx->sig_mkey_pool) {
+		SPDK_ERRLOG("Failed to create memory pool\n");
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void
+accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, unsigned obj_idx)
+{
+	struct accel_mlx5_psv_wrapper *wrapper = _psv;
+	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+
+	assert(obj_idx < dev_ctx->num_mkeys);
+	assert(dev_ctx->psvs[obj_idx] != NULL);
+	wrapper->psv_index = dev_ctx->psvs[obj_idx]->index;
+}
+
+static int
+accel_mlx5_psvs_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+{
+	char pool_name[32];
+	uint32_t i;
+	uint32_t num_psvs = dev_ctx->num_mkeys;
+	int rc;
+
+	dev_ctx->psvs = calloc(num_psvs, (sizeof(struct spdk_mlx5_psv *)));
+	if (!dev_ctx->psvs) {
+		SPDK_ERRLOG("Failed to alloc PSVs array\n");
+		return -ENOMEM;
+	}
+	for (i = 0; i < num_psvs; i++) {
+		dev_ctx->psvs[i] = spdk_mlx5_create_psv(dev_ctx->pd);
+		if (!dev_ctx->psvs[i]) {
+			SPDK_ERRLOG("Failed to create PSV on dev %s\n", dev_ctx->context->device->name);
+			return -EINVAL;
+		}
+	}
+
+	rc = accel_mlx5_fill_pool_name(dev_ctx, "psv", pool_name, sizeof(pool_name));
+	if (rc < 0) {
+		assert(0);
+		return -EINVAL;
+	}
+	uint32_t cache_size = dev_ctx->num_mkeys / 4 * 3 / spdk_env_get_core_count();
+	SPDK_NOTICELOG("Total PSV pool size %u, cache size %u\n", num_psvs, cache_size);
+	dev_ctx->psv_pool = spdk_mempool_create_ctor(pool_name, num_psvs,
+						     sizeof(struct accel_mlx5_psv_wrapper),
+						     cache_size, SPDK_ENV_SOCKET_ID_ANY,
+						     accel_mlx5_set_psv_in_pool, dev_ctx);
+	if (!dev_ctx->psv_pool) {
 		SPDK_ERRLOG("Failed to create memory pool\n");
 		return -ENOMEM;
 	}
@@ -1760,6 +1926,17 @@ accel_mlx5_init(void)
 		rc = accel_mlx5_crypto_ctx_mkeys_create(crypto_dev_ctx);
 		if (rc) {
 			goto cleanup;
+		}
+
+		if (g_accel_mlx5.enable_crc) {
+			rc = accel_mlx5_sig_ctx_mkeys_create(crypto_dev_ctx);
+			if (rc) {
+				goto cleanup;
+			}
+			rc = accel_mlx5_psvs_create(crypto_dev_ctx);
+			if (rc) {
+				goto cleanup;
+			}
 		}
 
 		domain = &g_accel_mlx5.crypto_ctxs[i].domain;
