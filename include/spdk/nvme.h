@@ -17,6 +17,7 @@
 extern "C" {
 #endif
 
+#include "spdk/dma.h"
 #include "spdk/env.h"
 #include "spdk/nvme_spec.h"
 #include "spdk/nvmf_spec.h"
@@ -304,6 +305,13 @@ typedef void (*spdk_nvme_accel_completion_cb)(void *cb_arg, int status);
 typedef void (*spdk_nvme_iobuf_cb)(void *cb_arg, void *buf);
 
 /**
+ * Completion callback for a single operation in a sequence.
+ *
+ * \param cb_arg Argument provided by the user when appending an operation to a sequence.
+ */
+typedef void (*spdk_nvme_accel_step_cb)(void *cb_arg);
+
+/**
  * Function table for the NVMe accelerator device.
  *
  * This table provides a set of APIs to allow user to leverage
@@ -325,6 +333,20 @@ struct spdk_nvme_accel_fn_table {
 	struct spdk_io_channel *(*get_accel_channel)(void *ctx);
 
 	struct spdk_iobuf_channel *(*get_iobuf_channel)(void *io_ctx);
+
+	/** Finish an accel sequence */
+	void (*finish_sequence)(void *seq, spdk_nvme_accel_completion_cb cb_fn, void *cb_arg);
+
+	/** Reverse an accel sequence */
+	void (*reverse_sequence)(void *seq);
+
+	/** Abort an accel sequence */
+	void (*abort_sequence)(void *seq);
+
+	/** Append a crc32c operation to a sequence */
+	int (*append_crc32c)(void *ctx, void **seq, uint32_t *dst, struct iovec *iovs, uint32_t iovcnt,
+			     struct spdk_memory_domain *memory_domain, void *domain_ctx,
+			     uint32_t seed, spdk_nvme_accel_step_cb cb_fn, void *cb_arg);
 };
 
 /**
