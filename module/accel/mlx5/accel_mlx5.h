@@ -18,6 +18,8 @@ struct accel_mlx5_attr {
 	bool siglast;
 	/* Enable CRC32C and COPY_CRC32C operations */
 	bool enable_crc;
+	/* Merge tasks in the sequence when possible. */
+	bool merge;
 };
 
 void accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr);

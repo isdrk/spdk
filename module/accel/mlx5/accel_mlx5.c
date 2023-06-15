@@ -2015,6 +2015,7 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->split_mb_blocks = 0;
 	attr->siglast = false;
 	attr->enable_crc = false;
+	attr->merge = false;
 }
 
 static void
@@ -2089,7 +2090,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
 		g_accel_mlx5.enable_crc = attr->enable_crc;
-		g_accel_mlx5.merge = false;
+		g_accel_mlx5.merge = attr->merge;
 
 		if (attr->allowed_crypto_devs) {
 			int rc;
@@ -2644,6 +2645,7 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
 		spdk_json_write_named_bool(w, "enable_crc", g_accel_mlx5.enable_crc);
+		spdk_json_write_named_bool(w, "merge", g_accel_mlx5.merge);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);
 	}
