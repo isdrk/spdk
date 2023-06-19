@@ -894,7 +894,12 @@ enum nvme_ctrlr_state {
 	/**
 	 * Controller initialization has an error.
 	 */
-	NVME_CTRLR_STATE_ERROR
+	NVME_CTRLR_STATE_ERROR,
+
+	/**
+	 * Admin qpair was disconnected, controller needs to be re-initialized
+	 */
+	NVME_CTRLR_STATE_DISCONNECTED,
 };
 
 #define NVME_TIMEOUT_INFINITE		0

@@ -457,7 +457,7 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 	if (spdk_unlikely(ctrlr->state != NVME_CTRLR_STATE_READY)) {
 		/* When controller is resetting or initializing, free_io_qids is deleted or not created yet.
 		 * We can't create IO qpair in that case */
-		goto unlock;;
+		goto unlock;
 	}
 
 	/*
@@ -497,12 +497,10 @@ spdk_nvme_ctrlr_alloc_io_qpair(struct spdk_nvme_ctrlr *ctrlr,
 	rc = spdk_nvme_ctrlr_connect_io_qpair(ctrlr, qpair);
 	if (rc != 0) {
 		NVME_CTRLR_ERRLOG(ctrlr, "nvme_transport_ctrlr_connect_io_qpair() failed\n");
-		nvme_robust_mutex_lock(&ctrlr->ctrlr_lock);
 		nvme_ctrlr_proc_remove_io_qpair(qpair);
 		TAILQ_REMOVE(&ctrlr->active_io_qpairs, qpair, tailq);
 		spdk_bit_array_set(ctrlr->free_io_qids, qpair->id);
 		nvme_transport_ctrlr_delete_io_qpair(ctrlr, qpair);
-		nvme_robust_mutex_unlock(&ctrlr->ctrlr_lock);
 		qpair = NULL;
 		goto unlock;
 	}
@@ -1423,6 +1421,8 @@ nvme_ctrlr_state_string(enum nvme_ctrlr_state state)
 		return "ready";
 	case NVME_CTRLR_STATE_ERROR:
 		return "error";
+	case NVME_CTRLR_STATE_DISCONNECTED:
+		return "disconnected";
 	}
 	return "unknown";
 };
@@ -1661,8 +1661,8 @@ nvme_ctrlr_disconnect_done(struct spdk_nvme_ctrlr *ctrlr)
 
 	spdk_bit_array_free(&ctrlr->free_io_qids);
 
-	/* Set the state back to INIT to cause a full hardware reset. */
-	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_INIT, NVME_TIMEOUT_INFINITE);
+	/* Set the state back to DISCONNECTED to cause a full hardware reset. */
+	nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_DISCONNECTED, NVME_TIMEOUT_INFINITE);
 }
 
 int
@@ -3805,7 +3805,11 @@ nvme_ctrlr_process_init(struct spdk_nvme_ctrlr *ctrlr)
 		}
 		break;
 
-	case NVME_CTRLR_STATE_CONNECT_ADMINQ: /* synonymous with NVME_CTRLR_STATE_INIT */
+	case NVME_CTRLR_STATE_DISCONNECTED:
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_INIT, NVME_TIMEOUT_INFINITE);
+		break;
+
+	case NVME_CTRLR_STATE_CONNECT_ADMINQ: /* synonymous with NVME_CTRLR_STATE_INIT and NVME_CTRLR_STATE_DISCONNECTED */
 		rc = nvme_transport_ctrlr_connect_qpair(ctrlr, ctrlr->adminq);
 		if (rc == 0) {
 			nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_WAIT_FOR_CONNECT_ADMINQ,
