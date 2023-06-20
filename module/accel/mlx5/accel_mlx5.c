@@ -442,7 +442,8 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 		mlx5_task->num_submitted_reqs++;
 	}
 
-	rc = accel_mlx5_copy_task_process_one(mlx5_task, dev, (uint64_t)&mlx5_task->write_wrid, MLX5_WQE_CTRL_CQ_UPDATE);
+	rc = accel_mlx5_copy_task_process_one(mlx5_task, dev, (uint64_t)&mlx5_task->write_wrid,
+					      SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
@@ -539,7 +540,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_ops = spdk_min(mlx5_task->num_reqs - mlx5_task->num_completed_reqs, mlx5_task->num_ops);
 	uint32_t req_len;
 	/* First RDMA after UMR must have a SMALL_FENCE */
-	uint32_t first_rdma_fence = MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
+	uint32_t first_rdma_fence = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
 	uint32_t blocks_processed;
 	size_t ops_len = mlx5_task->blocks_per_req * num_ops;
 	int rc;
@@ -642,12 +643,12 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].src_klm, klms[i].src_klm_count,
 						0, mlx5_task->mkeys[i]->mkey,
 						(uint64_t) &mlx5_task->write_wrid,
-						first_rdma_fence | MLX5_WQE_CTRL_CQ_UPDATE);
+						first_rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	} else {
 		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].dst_klm, klms[i].dst_klm_count,
 						0, mlx5_task->mkeys[i]->mkey,
 						(uint64_t) &mlx5_task->write_wrid,
-						first_rdma_fence | MLX5_WQE_CTRL_CQ_UPDATE);
+						first_rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	}
 
 	if (spdk_unlikely(rc)) {

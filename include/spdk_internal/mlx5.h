@@ -247,6 +247,13 @@ static inline void spdk_mlx5_dma_qp_prefetch_sq(struct spdk_mlx5_dma_qp *dma_qp,
 	}
 }
 
+enum {
+	SPDK_MLX5_WQE_CTRL_CQ_UPDATE			= MLX5_WQE_CTRL_CQ_UPDATE,
+	SPDK_MLX5_WQE_CTRL_SOLICITED			= MLX5_WQE_CTRL_SOLICITED,
+	SPDK_MLX5_WQE_CTRL_FENCE			= MLX5_WQE_CTRL_FENCE,
+	SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE	= MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE,
+};
+
 /**
  *
  * @param qp

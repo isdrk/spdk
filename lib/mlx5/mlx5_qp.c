@@ -190,11 +190,11 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 		return rc;
 	}
 	if (attr->sigall) {
-		qp->tx_flags |= MLX5_WQE_CTRL_CQ_UPDATE;
+		qp->tx_flags |= SPDK_MLX5_WQE_CTRL_CQ_UPDATE;
 	}
 	qp->tx_revert_flags = (uint16_t)-1;
 	if (attr->siglast) {
-		qp->tx_revert_flags &= ~MLX5_WQE_CTRL_CQ_UPDATE;
+		qp->tx_revert_flags &= ~SPDK_MLX5_WQE_CTRL_CQ_UPDATE;
 	}
 
 	rc = mlx5_qp_connect(qp);

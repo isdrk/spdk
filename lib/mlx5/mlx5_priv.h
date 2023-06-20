@@ -99,7 +99,7 @@ mlx5_qp_set_comp(struct spdk_mlx5_qp *dv_qp, uint16_t pi,
 		 uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
 {
 	dv_qp->completions[pi].wr_id = wr_id;
-	if ((fm_ce_se & MLX5_WQE_CTRL_CQ_UPDATE) != MLX5_WQE_CTRL_CQ_UPDATE) {
+	if ((fm_ce_se & SPDK_MLX5_WQE_CTRL_CQ_UPDATE) != SPDK_MLX5_WQE_CTRL_CQ_UPDATE) {
 		/* non-signaled WQE, accumulate it in outstanding */
 		dv_qp->nonsignaled_outstanding += n_bb;
 		dv_qp->completions[pi].completions = 0;
