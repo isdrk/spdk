@@ -871,7 +871,7 @@ nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 }
 
 static void
-_nvme_tcp_accel_finished_h2c(void *cb_arg, int status)
+_nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 {
 	struct nvme_tcp_req *tcp_req = cb_arg;
 	struct nvme_tcp_qpair *tqpair = tcp_req->tqpair;
@@ -928,7 +928,7 @@ fail_req:
 }
 
 static inline int
-nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
+nvme_tcp_apply_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 {
 	struct nvme_request *req = &tcp_req->req;
 	struct spdk_nvme_poll_group *group = tcp_req->tqpair->qpair.poll_group->group;
@@ -984,7 +984,7 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 		}
 	}
 
-	rc = spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_h2c, tcp_req);
+	rc = spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_in_capsule, tcp_req);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n",
 			    tcp_req, req->payload.opts->accel_seq);
@@ -1008,7 +1008,7 @@ nvme_tcp_iobuf_get_cb(struct spdk_iobuf_entry *entry, void *buf)
 	int rc;
 
 	tcp_req->iobuf_iov.iov_base = buf;
-	rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
+	rc = nvme_tcp_apply_accel_sequence_in_capsule(tcp_req);
 
 	if (spdk_unlikely(rc != -EINPROGRESS)) {
 		struct spdk_nvme_cpl cpl;
@@ -1303,7 +1303,8 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 	}
 
 	xfer = spdk_nvmf_cmd_get_data_transfer(&req->cmd);
-	if (xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER && nvme_tcp_req_with_memory_domain(tcp_req)) {
+	if (xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER && nvme_tcp_req_with_memory_domain(tcp_req) &&
+	    (tcp_req->in_capsule_data || !tcp_req->tqpair->flags.host_ddgst_enable)) {
 		struct spdk_iobuf_channel *iobuf_ch;
 		struct spdk_nvme_poll_group *group;
 
@@ -1324,7 +1325,7 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 			SPDK_WARNLOG("no buffer, in progress\n");
 			return 0;
 		}
-		rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
+		rc = nvme_tcp_apply_accel_sequence_in_capsule(tcp_req);
 		return (rc == -EINPROGRESS) ? 0 : rc;
 	}
 
@@ -2227,13 +2228,181 @@ nvme_tcp_qpair_h2c_data_send_complete(void *cb_arg)
 }
 
 static void
+nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
+{
+	struct nvme_tcp_req *tcp_req = cb_arg;
+	struct nvme_tcp_qpair *tqpair = tcp_req->tqpair;
+	struct nvme_tcp_pdu *rsp_pdu;
+	struct spdk_nvme_tcp_h2c_data_hdr *h2c_data;
+	bool has_memory_domain;
+	enum spdk_nvme_generic_command_status_code sc;
+	struct spdk_nvme_cpl cpl;
+
+	SPDK_DEBUGLOG(nvme, "accel cpl, req %p, status %d\n", tcp_req, status);
+	assert(tcp_req->ordering.bits.in_progress_accel);
+	tcp_req->ordering.bits.in_progress_accel = 0;
+
+	if (spdk_unlikely(status)) {
+		SPDK_ERRLOG("tqair %p, req %p, accel sequence status %d\n", tqpair, tcp_req, status);
+		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		goto fail_req;
+	}
+	if (spdk_unlikely(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_QUIESCING ||
+			  !spdk_nvme_qpair_is_connected(&tqpair->qpair))) {
+		SPDK_DEBUGLOG(nvme, "tqpair %p, req %p accel cpl in disconnecting, outstanding %u\n",
+			      tqpair, tcp_req, tqpair->qpair.num_outstanding_reqs);
+		sc = SPDK_NVME_SC_ABORTED_SQ_DELETION;
+		goto fail_req;
+	}
+
+	/* Once copy task is finished, we use a single staging buffer.
+	 * To reuse existing functions to build a capsule, remove reset_sgl_fn since
+	 * it is not needed any more and overwrite contig_or_cb_arg with address of the
+	 * staging buffer
+	 */
+	tcp_req->req.payload.reset_sgl_fn = NULL;
+	tcp_req->req.payload.contig_or_cb_arg = tcp_req->iobuf_iov.iov_base;
+	tcp_req->req.payload_offset = 0;
+	/* Buffer is in local memory, clear memory domain pointer */
+	tcp_req->req.payload.opts->memory_domain = NULL;
+
+	/* At this point tcp_req->iovs point to outdated values */
+	nvme_tcp_build_contig_request(tcp_req->tqpair, tcp_req);
+	rsp_pdu = &tcp_req->pdu;
+	h2c_data = &rsp_pdu->hdr.h2c_data;
+	nvme_tcp_pdu_set_data_buf(rsp_pdu, tcp_req->iov, tcp_req->iovcnt, h2c_data->datao, h2c_data->datal);
+
+	nvme_tcp_qpair_prepare_pdu(tqpair, rsp_pdu, nvme_tcp_qpair_h2c_data_send_complete, tcp_req);
+	if (nvme_tcp_fill_mkeys(tqpair, tcp_req, rsp_pdu) != 0) {
+		SPDK_ERRLOG("Failed to fill mkeys\n");
+		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		goto fail_req;
+	}
+
+	/* Always has domain data if memory domains active. */
+	has_memory_domain = tcp_req->req.payload.opts && tcp_req->req.payload.opts->memory_domain;
+	rsp_pdu->sock_req.has_memory_domain_data = has_memory_domain;
+	tqpair->stats->submitted_requests++;
+	spdk_sock_writev_async(tqpair->sock, &rsp_pdu->sock_req);
+
+	return;
+
+fail_req:
+	memset(&cpl, 0, sizeof(cpl));
+	cpl.status.sc = sc;
+	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+	cpl.status.dnr = 0;
+	nvme_tcp_req_complete(tcp_req, tqpair, &cpl, true);
+}
+
+static inline int
+nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
+{
+	struct nvme_request *req = &tcp_req->req;
+	struct spdk_nvme_poll_group *group = tcp_req->tqpair->qpair.poll_group->group;
+	struct spdk_accel_sequence *accel_seq;
+	struct spdk_io_channel *accel_ch;
+	struct spdk_accel_task *task;
+	bool skip_copy = false;
+	int rc;
+
+	SPDK_DEBUGLOG(nvme, "Write request with accel sequence h2c: tcp_req %p\n", tcp_req);
+
+	assert(req->payload.opts);
+	accel_seq = req->payload.opts->accel_seq;
+	accel_ch = group->accel_fn_table.get_accel_channel(group->ctx);
+	assert(accel_ch);
+
+	if (accel_seq) {
+		task = spdk_accel_sequence_first_task(accel_seq);
+		if (task->op_code == ACCEL_OPC_ENCRYPT && spdk_accel_sequence_next_task(task) == NULL) {
+			task->dst_domain = NULL;
+			task->dst_domain_ctx = NULL;
+			task->d.iovs = &tcp_req->iobuf_iov;
+			task->d.iovcnt = 1;
+			skip_copy = true;
+		}
+	}
+
+	/*
+	 * Ddigest offload is not supported when the data are split into two and more PDUs. The SW will
+	 * handle ddigest later.
+	 */
+	if (tcp_req->tqpair->flags.host_ddgst_enable && !tcp_req->r2tl_remain) {
+		if (!skip_copy) {
+			rc = spdk_accel_append_copy_crc32c(&accel_seq, accel_ch,
+							   (uint32_t *)tcp_req->pdu.data_digest,
+							   &tcp_req->iobuf_iov, 1, NULL, NULL,
+							   tcp_req->iov, tcp_req->iovcnt,
+							   req->payload.opts->memory_domain,
+							   req->payload.opts->memory_domain_ctx,
+							   SPDK_CRC32C_XOR, NULL, NULL);
+			skip_copy = true;
+		} else {
+			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch,
+						      (uint32_t *)tcp_req->pdu.data_digest, &tcp_req->iobuf_iov, 1,
+						      NULL, NULL, SPDK_CRC32C_XOR, NULL, NULL);
+		}
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
+			return rc;
+		}
+		tcp_req->ordering.bits.digest_offloaded = 1;
+	}
+
+	if (!skip_copy) {
+		rc = spdk_accel_append_copy(&accel_seq, accel_ch, &tcp_req->iobuf_iov, 1, NULL, NULL,
+					    tcp_req->iov, tcp_req->iovcnt, req->payload.opts->memory_domain,
+					    req->payload.opts->memory_domain_ctx, 0, NULL, NULL);
+		if (spdk_unlikely(rc)) {
+			return rc;
+		}
+	}
+
+	rc = spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
+	if (spdk_unlikely(rc)) {
+		SPDK_ERRLOG("Failed to apply accel sequence:tcp_req %p, seq %p\n", tcp_req, accel_seq);
+		if (!req->payload.opts->accel_seq) {
+			spdk_accel_sequence_abort(accel_seq);
+		}
+	}
+	tcp_req->ordering.bits.in_progress_accel = 1;
+
+	return rc;
+}
+
+static void
+nvme_tcp_h2c_iobuf_get_cb(struct spdk_iobuf_entry *entry, void *buf)
+{
+	struct nvme_tcp_req *tcp_req = SPDK_CONTAINEROF(entry, struct nvme_tcp_req, iobuf_entry);
+	int rc;
+
+	tcp_req->iobuf_iov.iov_base = buf;
+
+	rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
+	if (spdk_unlikely(rc != -EINPROGRESS)) {
+		struct spdk_nvme_cpl cpl;
+
+		SPDK_ERRLOG("failed to apply sequence, rc %d\n", rc);
+		assert(rc != 0);
+
+		cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+		cpl.status.dnr = 1;
+		nvme_tcp_req_complete(tcp_req, tcp_req->tqpair, &cpl, true);
+	}
+}
+
+static void
 nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(tcp_req->req.qpair);
 	struct nvme_tcp_pdu *rsp_pdu;
 	struct spdk_nvme_tcp_h2c_data_hdr *h2c_data;
 	uint32_t plen, pdo, alignment;
+	struct nvme_request *req;
 	bool has_memory_domain;
+	struct spdk_nvme_cpl cpl;
 
 	/* Reinit the send_ack and h2c_send_waiting_ack bits */
 	tcp_req->ordering.bits.send_ack = 0;
@@ -2272,13 +2441,6 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	h2c_data->common.pdo = pdo;
 	plen += h2c_data->datal;
 	if (tqpair->flags.host_ddgst_enable) {
-		if (nvme_tcp_req_with_memory_domain(tcp_req)) {
-			SPDK_ERRLOG("data digest is not supported with memory key payload\n");
-			nvme_tcp_req_put(tqpair, tcp_req);
-			/* @todo: how to notify failure? */
-			return;
-		}
-
 		h2c_data->common.flags |= SPDK_NVME_TCP_CH_FLAGS_DDGSTF;
 		plen += SPDK_NVME_TCP_DIGEST_LEN;
 	}
@@ -2292,11 +2454,43 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	SPDK_DEBUGLOG(nvme, "h2c_data info: datao=%u, datal=%u, pdu_len=%u for tqpair=%p\n",
 		      h2c_data->datao, h2c_data->datal, h2c_data->common.plen, tqpair);
 
+	req = &tcp_req->req;
+
+	/* Allocate an IO buffer and copy data to it if this H2CData PDU is the first. */
+	if (tqpair->flags.host_ddgst_enable && h2c_data->datao == 0 && tcp_req->r2tl_remain == 0 &&
+	    nvme_tcp_req_with_memory_domain(tcp_req)) {
+		struct spdk_nvme_poll_group *group;
+		struct spdk_iobuf_channel *iobuf_ch;
+		int rc;
+
+		group = tqpair->qpair.poll_group->group;
+		if (spdk_unlikely(!group)) {
+			SPDK_ERRLOG("accel_seq is only supported with poll groups\n");
+			goto fail_req;
+		}
+
+		iobuf_ch = group->accel_fn_table.get_iobuf_channel(group->ctx);
+		assert(iobuf_ch);
+		tcp_req->iobuf_iov.iov_len = req->payload_size;
+		tcp_req->iobuf_iov.iov_base = spdk_iobuf_get(iobuf_ch, tcp_req->iobuf_iov.iov_len,
+							     &tcp_req->iobuf_entry, nvme_tcp_h2c_iobuf_get_cb);
+		if (spdk_unlikely(!tcp_req->iobuf_iov.iov_base)) {
+			/* Finish accel sequence once buffer is allocated */
+			SPDK_WARNLOG("no buffer, in progress\n");
+			return;
+		}
+		rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Failed to apply sequence\n");
+			goto fail_req;
+		}
+		return;
+	}
+
 	nvme_tcp_qpair_prepare_pdu(tqpair, rsp_pdu, nvme_tcp_qpair_h2c_data_send_complete, tcp_req);
 	if (nvme_tcp_fill_mkeys(tqpair, tcp_req, rsp_pdu) != 0) {
 		SPDK_ERRLOG("Failed to fill mkeys\n");
-		/* @todo: how to notify failure? */
-		return;
+		goto fail_req;
 	}
 
 	/* Always has domain data if memory domains active. */
@@ -2304,6 +2498,13 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 	rsp_pdu->sock_req.has_memory_domain_data = has_memory_domain;
 	tqpair->stats->submitted_requests++;
 	spdk_sock_writev_async(tqpair->sock, &rsp_pdu->sock_req);
+
+	return;
+fail_req:
+	cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+	cpl.status.dnr = 1;
+	nvme_tcp_req_complete(tcp_req, tcp_req->tqpair, &cpl, true);
 }
 
 static void
