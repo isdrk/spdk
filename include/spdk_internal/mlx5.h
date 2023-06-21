@@ -7,6 +7,7 @@
 #define SPDK_MLX5_H
 
 #include "spdk/likely.h"
+#include "spdk/tree.h"
 
 #include <infiniband/mlx5dv.h>
 
@@ -447,5 +448,95 @@ struct spdk_mlx5_psv *spdk_mlx5_create_psv(struct ibv_pd *pd);
 int spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv);
 int spdk_mlx5_set_psv(struct spdk_mlx5_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id,
 		      uint32_t flags);
+
+enum spdk_mlx5_mkey_pool_flags {
+	SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO = 1 << 0,
+	SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE = 1 << 1,
+};
+
+struct spdk_mlx5_mkey_pool_param {
+	uint32_t mkey_count;
+	uint32_t cache_per_thread;
+	/* enum spdk_mlx5_mkey_pool_flags */
+	uint32_t flags;
+};
+
+/**
+ * Creates a pool of memory keys for each given \b PD. If crypto_en is set then a device associated with PD must support
+ * crypto operations. Refer to \ref spdk_mlx5_query_crypto_caps.
+ *
+ * Can be called several times for different PDs. Has no effect if a pool for \b PD already with the same \b flags
+ * already exists
+ *
+ * \param params Parameter of the memory pool, common for every PD-specific pool
+ * \param pds Array of PDs. If NULL then all devices in the system will be used and PD will be obtained with \ref spdk_rdma_utils_get_pd
+ * \param num_pds Size of the PDs array
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_mkey_pools_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd **pds, uint32_t num_pds);
+
+/**
+ * Destroy mkey pools with the given \b flags and \b pds which were created by \ref spdk_mlx5_mkey_pools_init.
+ * All pool channels must be released
+ *
+ * \param pds Array of PDs. If NULL then all devices in the system will be used and PD will be obtained with \ref spdk_rdma_utils_get_pd
+ * \param num_pds Size of the PDs array
+ * \param flags Specifies type of the pool to delete. Has effect only when \b pds are not NULL
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_mkey_pools_destroy(struct ibv_pd **pds, uint32_t num_pds, uint32_t flags);
+
+/**
+ * Get a channel to access mkey pool specified by PD
+ *
+ * \param pd PD to get a mkey pool channel for
+ * \param flags Required mkey pool flags, see \ref enum spdk_mlx5_mkey_pool_flags
+ * \return Opaque pointer to a channel on success or NULL on error
+ */
+void *spdk_mlx5_mkey_pool_get_channel(struct ibv_pd *pd, uint32_t flags);
+
+/**
+ * Release mkey channel
+ * \param ch
+ */
+void spdk_mlx5_mkey_pool_put_channel(void *ch);
+
+struct spdk_mlx5_mkey_pool_obj {
+	uint32_t mkey;
+	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
+	struct {
+		uint32_t sigerr_count;
+		bool sigerr;
+	} sig;
+};
+
+/**
+ * Get several mekys from the pool
+ * \param ch mkey pool channel
+ * \param mkeys array of mkey pointers to be filled by this function
+ * \param mkeys_count number of mkeys to get from the pool
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_mkey_pool_get_bulk(void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys,
+				 uint32_t mkeys_count);
+
+/**
+ * Return mkeys to the pool
+ *
+ * \param ch mkey pool channel
+ * \param mkeys array of mkey pointers to be returned to the pool
+ * \param mkeys_count number of mkeys to get from the pool
+ */
+void spdk_mlx5_mkey_pool_put_bulk(void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys,
+				  uint32_t mkeys_count);
+
+/**
+ * Find mkey object by mkey ID
+ *
+ * \param ch mkey pool channel
+ * \param mkey_id mkey ID
+ * \return Pointer to mkey object or NULL
+ */
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey_id);
 
 #endif /* SPDK_MLX5_H */

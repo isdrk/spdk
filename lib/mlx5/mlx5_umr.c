@@ -8,10 +8,39 @@
 #include "spdk/log.h"
 #include "spdk/util.h"
 #include "spdk/likely.h"
+#include "spdk/thread.h"
+#include "spdk/tree.h"
 
 #include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/mlx5.h"
 #include "mlx5_priv.h"
+
+#define MLX5_UMR_POOL_VALID_FLAGS_MASK (~(SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE))
+
+RB_HEAD(mlx5_mkeys_tree, spdk_mlx5_mkey_pool_obj);
+
+struct mlx5_mkey_pool {
+	struct ibv_pd *pd;
+	struct spdk_mempool *mpool;
+	struct mlx5_mkeys_tree tree;
+	struct spdk_mlx5_indirect_mkey **mkeys;
+	uint32_t num_mkeys;
+	uint32_t refcnt;
+	uint32_t flags;
+	TAILQ_ENTRY(mlx5_mkey_pool) link;
+};
+
+static int
+mlx5_key_obj_compare(struct spdk_mlx5_mkey_pool_obj *key1, struct spdk_mlx5_mkey_pool_obj *key2)
+{
+	return key1->mkey < key2->mkey ? -1 : key1->mkey > key2->mkey;
+}
+
+RB_GENERATE_STATIC(mlx5_mkeys_tree, spdk_mlx5_mkey_pool_obj, node, mlx5_key_obj_compare);
+
+static TAILQ_HEAD(mlx5_mkey_pool_head,
+		  mlx5_mkey_pool) g_mkey_pools = TAILQ_HEAD_INITIALIZER(g_mkey_pools);
+static pthread_mutex_t g_mkey_pool_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static inline void
 _set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords, uint64_t mkey_mask)
@@ -1173,4 +1202,411 @@ spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv)
 	}
 
 	return ret;
+}
+
+static bool
+mlx5_mkey_pool_check_created(struct ibv_pd **pds, uint32_t num_pds, uint32_t flags)
+{
+	struct mlx5_mkey_pool *pool;
+	uint32_t i;
+	bool match = false;
+
+	pthread_mutex_lock(&g_mkey_pool_lock);
+
+	if (TAILQ_EMPTY(&g_mkey_pools)) {
+		pthread_mutex_unlock(&g_mkey_pool_lock);
+		return false;
+	}
+
+	for (i = 0; i < num_pds && match == false; i++) {
+		TAILQ_FOREACH(pool, &g_mkey_pools, link) {
+			if (pool->pd == pds[i] && pool->flags == flags) {
+				match = true;
+				break;
+			}
+		}
+	}
+
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+
+	return match;
+}
+
+static void
+mlx5_mkey_pool_release_local_pds(struct ibv_pd **pds, int pds_count)
+{
+	int i;
+
+	for (i = 0; i < pds_count; i++) {
+		if (pds[i]) {
+			spdk_rdma_utils_put_pd(pds[i]);
+		}
+	}
+
+	free(pds);
+}
+
+static void
+mlx5_mkey_pool_destroy(struct mlx5_mkey_pool *pool)
+{
+	uint32_t i;
+
+	if (pool->mpool) {
+		spdk_mempool_free(pool->mpool);
+	}
+	if (pool->mkeys) {
+		for (i = 0; i < pool->num_mkeys; i++) {
+			if (pool->mkeys[i]) {
+				spdk_mlx5_destroy_indirect_mkey(pool->mkeys[i]);
+				pool->mkeys[i] = NULL;
+			}
+		}
+		free(pool->mkeys);
+	}
+	TAILQ_REMOVE(&g_mkey_pools, pool, link);
+	free(pool);
+}
+
+static int
+mlx5_mkey_pool_create_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct ibv_pd *pd,
+			   struct spdk_mlx5_relaxed_ordering_caps *caps, uint32_t flags)
+{
+	struct spdk_mlx5_indirect_mkey *mkey;
+	struct mlx5_devx_mkey_attr mkey_attr = {};
+	uint32_t bsf_size = 0;
+
+	mkey_attr.addr = 0;
+	mkey_attr.size = 0;
+	mkey_attr.log_entity_size = 0;
+	mkey_attr.relaxed_ordering_write = caps->relaxed_ordering_write;
+	mkey_attr.relaxed_ordering_read = caps->relaxed_ordering_read;
+	mkey_attr.sg_count = 0;
+	mkey_attr.sg = NULL;
+	if (flags & SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO) {
+		mkey_attr.crypto_en = true;
+		bsf_size += 64;
+	}
+	if (flags & SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE) {
+		bsf_size += 64;
+	}
+	mkey_attr.bsf_octowords = bsf_size / 16;
+
+	mkey = spdk_mlx5_create_indirect_mkey(pd, &mkey_attr);
+	if (!mkey) {
+		SPDK_ERRLOG("Failed to create mkey on dev %s\n", pd->context->device->name);
+		return -EINVAL;
+	}
+	*_mkey = mkey;
+
+	return 0;
+}
+
+static void
+mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
+{
+	struct spdk_mlx5_mkey_pool_obj *mkey = _mkey;
+	struct mlx5_mkey_pool *pool = cb_arg;
+
+	assert(obj_idx < pool->num_mkeys);
+	assert(pool->mkeys[obj_idx] != NULL);
+	mkey->mkey = pool->mkeys[obj_idx]->mkey;
+	mkey->sig.sigerr_count = 1;
+	mkey->sig.sigerr = false;
+
+	RB_INSERT(mlx5_mkeys_tree, &pool->tree, mkey);
+}
+
+static const char *g_mkey_pool_names[] = {
+	[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "crypto",
+	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = "sig",
+	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE | SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "sig_crypto",
+};
+
+static int
+mlx5_mkey_pools_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd **pds,
+		     uint32_t num_pds)
+{
+	struct mlx5_mkey_pool *new_pool, *last, *tmp;
+	struct spdk_mlx5_indirect_mkey **mkeys;
+	struct spdk_mlx5_relaxed_ordering_caps caps;
+	uint32_t i, j, pdn;
+	int rc;
+	char pool_name[32];
+
+	pthread_mutex_lock(&g_mkey_pool_lock);
+
+	last = TAILQ_LAST(&g_mkey_pools, mlx5_mkey_pool_head);
+
+	for (i = 0; i < num_pds; i++) {
+		new_pool = calloc(1, sizeof(*new_pool));
+		if (!new_pool) {
+			rc = -ENOMEM;
+			goto revert;
+		}
+		TAILQ_INSERT_TAIL(&g_mkey_pools, new_pool, link);
+		assert(pds[i]);
+		rc = spdk_mlx5_query_relaxed_ordering_caps(pds[i]->context, &caps);
+		if (rc) {
+			SPDK_ERRLOG("Failed to get relaxed ordering capabilities, dev %s\n",
+				    pds[i]->context->device->dev_name);
+			goto revert;
+		}
+		mkeys = calloc(params->mkey_count, sizeof(struct spdk_mlx5_indirect_mkey *));
+		if (!mkeys) {
+			rc = -ENOMEM;
+			goto revert;
+		}
+		new_pool->mkeys = mkeys;
+		new_pool->num_mkeys = params->mkey_count;
+		new_pool->pd = pds[i];
+		new_pool->flags = params->flags;
+		for (j = 0; j < params->mkey_count; j++) {
+			rc = mlx5_mkey_pool_create_mkey(&mkeys[j], pds[i], &caps, params->flags);
+			if (rc) {
+				goto revert;
+			}
+		}
+		rc = mlx5_get_pd_id(pds[i], &pdn);
+		if (rc) {
+			SPDK_ERRLOG("Failed to get pdn, pd %p\n", pds[i]);
+			goto revert;
+		}
+		rc = snprintf(pool_name, 32, "%s_%s_%04u", pds[i]->context->device->name,
+			      g_mkey_pool_names[new_pool->flags], pdn);
+		if (rc < 0) {
+			goto revert;
+		}
+		RB_INIT(&new_pool->tree);
+		new_pool->mpool = spdk_mempool_create_ctor(pool_name, params->mkey_count,
+				  sizeof(struct spdk_mlx5_mkey_pool_obj),
+				  params->cache_per_thread, SPDK_ENV_SOCKET_ID_ANY,
+				  mlx5_set_mkey_in_pool, new_pool);
+		if (!new_pool->mpool) {
+			SPDK_ERRLOG("Failed to create mempool\n");
+			rc = -ENOMEM;
+			goto revert;
+		}
+	}
+
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+
+	return 0;
+
+revert:
+	if (last) {
+		last = TAILQ_NEXT(last, link);
+	}
+	TAILQ_FOREACH_FROM_SAFE(last, &g_mkey_pools, link, tmp) {
+		mlx5_mkey_pool_destroy(last);
+	}
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+
+	return rc;
+}
+
+int
+spdk_mlx5_mkey_pools_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd **pds,
+			  uint32_t num_pds)
+{
+	struct ibv_context **rdma_devs;
+	struct ibv_pd **local_pds;
+	int num_devs, i, rc;
+	uint32_t num_local_pds = 0;
+
+	if (pds && !num_pds) {
+		return -EINVAL;
+	}
+
+	if (!params || !params->mkey_count) {
+		return -EINVAL;
+	}
+	if ((params->flags & MLX5_UMR_POOL_VALID_FLAGS_MASK) != 0) {
+		SPDK_ERRLOG("Invalid flags %x\n", params->flags);
+		return -EINVAL;
+	}
+	if (params->cache_per_thread > params->mkey_count || !params->cache_per_thread) {
+		params->cache_per_thread = params->mkey_count * 3 / 4 / spdk_env_get_core_count();
+	}
+
+	if (!pds || !num_pds) {
+		/* Use all devices */
+		if (params->flags & SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO) {
+			rdma_devs = spdk_mlx5_crypto_devs_get(&num_devs);
+		} else {
+			rdma_devs = rdma_get_devices(&num_devs);
+		}
+		if (!rdma_devs || !num_devs) {
+			SPDK_ERRLOG("no devs found\n");
+			return -ENODEV;
+		}
+
+		local_pds = calloc(num_devs, sizeof(struct ibv_pd *));
+		if (!local_pds) {
+			rc = -ENOMEM;
+			goto out;
+		}
+
+		for (i = 0; i < num_devs; i++) {
+			local_pds[num_local_pds] = spdk_rdma_utils_get_pd(rdma_devs[i]);
+			if (!local_pds[num_local_pds]) {
+				mlx5_mkey_pool_release_local_pds(local_pds, num_devs);
+				rc = -ENODEV;
+				goto out;
+			}
+			if (mlx5_mkey_pool_check_created(&local_pds[num_local_pds], 1, params->flags)) {
+				spdk_rdma_utils_put_pd(local_pds[num_local_pds]);
+				local_pds[num_local_pds] = NULL;
+				continue;
+			}
+			num_local_pds++;
+		}
+
+		rc = mlx5_mkey_pools_init(params, local_pds, num_local_pds);
+		mlx5_mkey_pool_release_local_pds(local_pds, (int)num_local_pds);
+		if (params->flags & SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO) {
+			spdk_mlx5_crypto_devs_release(rdma_devs);
+		} else {
+			rdma_free_devices(rdma_devs);
+		}
+
+		return rc;
+	}
+
+	if (mlx5_mkey_pool_check_created(pds, num_pds, params->flags)) {
+		return -EEXIST;
+	}
+
+	return mlx5_mkey_pools_init(params, pds, num_pds);
+
+out:
+	if (params->flags & SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO) {
+		spdk_mlx5_crypto_devs_release(rdma_devs);
+	} else {
+		rdma_free_devices(rdma_devs);
+	}
+
+	return rc;
+}
+
+int
+spdk_mlx5_mkey_pools_destroy(struct ibv_pd **pds, uint32_t num_pds, uint32_t flags)
+{
+	struct mlx5_mkey_pool *pool, *tmp;
+	int rc = 0;
+	uint32_t i, num_destroyed = 0;
+	bool match;
+
+	if (pds && !num_pds) {
+		return -EINVAL;
+	}
+
+	if ((flags & MLX5_UMR_POOL_VALID_FLAGS_MASK) != 0) {
+		SPDK_ERRLOG("Invalid flags %x\n", flags);
+		return -EINVAL;
+	}
+
+	pthread_mutex_lock(&g_mkey_pool_lock);
+
+	TAILQ_FOREACH_SAFE(pool, &g_mkey_pools, link, tmp) {
+		if (pds) {
+			match = false;
+			for (i = 0; i < num_pds; i++) {
+				if (pool->pd == pds[i] && pool->flags == flags) {
+					match = true;
+					break;
+				}
+			}
+			if (!match) {
+				continue;
+			}
+		}
+
+		if (pool->refcnt) {
+			SPDK_WARNLOG("Can't delete pool pd %p, dev %s\n", pool->pd, pool->pd->context->device->dev_name);
+			if (!rc) {
+				rc = -EAGAIN;
+			}
+			continue;
+		}
+		mlx5_mkey_pool_destroy(pool);
+		num_destroyed++;
+	}
+
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+
+	if (num_pds && num_pds != num_destroyed) {
+		SPDK_ERRLOG("Passed %u PDs but only %u pools were destroyed\n", num_pds, num_destroyed);
+		if (!rc) {
+			rc = -ENODEV;
+		}
+	}
+
+	return rc;
+}
+
+void *
+spdk_mlx5_mkey_pool_get_channel(struct ibv_pd *pd, uint32_t flags)
+{
+	struct mlx5_mkey_pool *pool = NULL;
+
+	if ((flags & MLX5_UMR_POOL_VALID_FLAGS_MASK) != 0) {
+		SPDK_ERRLOG("Invalid flags %x\n", flags);
+		return NULL;
+	}
+
+	pthread_mutex_lock(&g_mkey_pool_lock);
+
+	TAILQ_FOREACH(pool, &g_mkey_pools, link) {
+		if (pool->pd == pd && pool->flags == flags) {
+			pool->refcnt++;
+			break;
+		}
+	}
+
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+
+	return pool;
+}
+
+void
+spdk_mlx5_mkey_pool_put_channel(void *ch)
+{
+	struct mlx5_mkey_pool *pool = ch;
+
+	pthread_mutex_lock(&g_mkey_pool_lock);
+
+	pool->refcnt--;
+
+	pthread_mutex_unlock(&g_mkey_pool_lock);
+}
+
+int
+spdk_mlx5_mkey_pool_get_bulk(void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count)
+{
+	struct mlx5_mkey_pool *pool = ch;
+
+	assert(pool->mpool);
+
+	return spdk_mempool_get_bulk(pool->mpool, (void **)mkeys, mkeys_count);
+}
+
+void
+spdk_mlx5_mkey_pool_put_bulk(void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count)
+{
+	struct mlx5_mkey_pool *pool = ch;
+
+	assert(pool->mpool);
+
+	spdk_mempool_put_bulk(pool->mpool, (void **)mkeys, mkeys_count);
+}
+
+struct spdk_mlx5_mkey_pool_obj *
+spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey)
+{
+	struct mlx5_mkey_pool *pool = ch;
+	struct spdk_mlx5_mkey_pool_obj find;
+
+	find.mkey = mkey;
+
+	return RB_FIND(mlx5_mkeys_tree, &pool->tree, &find);
 }

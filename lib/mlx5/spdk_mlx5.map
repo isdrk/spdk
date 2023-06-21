@@ -29,6 +29,13 @@
     spdk_mlx5_destroy_psv;
     spdk_mlx5_set_psv;
     spdk_mlx5_qp_prefetch_sq;
+    spdk_mlx5_mkey_pools_init;
+    spdk_mlx5_mkey_pools_destroy;
+    spdk_mlx5_mkey_pool_get_channel;
+    spdk_mlx5_mkey_pool_put_channel;
+    spdk_mlx5_mkey_pool_get_bulk;
+    spdk_mlx5_mkey_pool_put_bulk;
+    spdk_mlx5_mkey_pool_find_mkey_by_id;
 
 	local: *;
 };
