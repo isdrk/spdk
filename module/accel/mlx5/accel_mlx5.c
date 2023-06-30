@@ -139,8 +139,9 @@ struct accel_mlx5_task {
 	/* Add padding to have dev pointer first element in new cache line.
 	 * Last 2 cache lines in base structure are occupied by bounce buffer structure
 	 * which are only used when the module doesn't support memory domains - that is not
-	 * our case */
+	 * our case
 	uint8_t padding[8];
+	*/
 	struct accel_mlx5_dev *dev;
 	uint16_t num_reqs;
 	uint16_t num_completed_reqs;
