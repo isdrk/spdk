@@ -31,6 +31,22 @@ struct _mlx5_err_cqe {
 	uint8_t		op_own;
 };
 
+struct mlx5_sigerr_cqe {
+	uint8_t rsvd0[16];
+	uint32_t expected_trans_sig;
+	uint32_t actual_trans_sig;
+	uint32_t expected_ref_tag;
+	uint32_t actual_ref_tag;
+	uint16_t syndrome;
+	uint8_t sig_type;
+	uint8_t domain;
+	uint32_t mkey;
+	uint64_t sig_err_offset;
+	uint8_t rsvd30[14];
+	uint8_t signature;
+	uint8_t op_own;
+};
+
 static const char *
 mlx5_cqe_err_opcode(struct _mlx5_err_cqe *ecqe)
 {
@@ -374,12 +390,24 @@ mlx5_qp_get_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
 	return qp->completions[comp_idx].wr_id;
 }
 
+static void
+mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp)
+{
+	comp->status = MLX5_CQE_SYNDROME_SIGERR;
+	comp->mkey = be32toh(cqe->mkey);
+
+	SPDK_DEBUGLOG(mlx5, "got SIGERR CQE, syndrome 0x%x, mkey 0x%x, expected_sig 0x%x, actual_trans_sig 0x%x\n",
+		      be16toh(cqe->syndrome), comp->mkey, be32toh(cqe->expected_trans_sig),
+		      be32toh(cqe->actual_trans_sig));
+}
+
 int
 spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
 				  struct spdk_mlx5_cq_completion *comp, int max_completions)
 {
 	struct spdk_mlx5_cq *cq = &dma_qp->cq;
 	struct mlx5_cqe64 *cqe;
+	uint8_t opcode;
 	int n = 0;
 
 	do {
@@ -388,11 +416,15 @@ spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
 			break;
 		}
 
-		comp[n].wr_id = mlx5_qp_get_comp_wr_id(&dma_qp->qp, cqe);
-		if (spdk_unlikely(mlx5dv_get_cqe_opcode(cqe) != MLX5_CQE_REQ)) {
-			comp[n].status = mlx5_cqe_err(cqe);
-		} else {
+		opcode = mlx5dv_get_cqe_opcode(cqe);
+		if (spdk_likely(opcode == MLX5_CQE_REQ)) {
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(&dma_qp->qp, cqe);
 			comp[n].status = IBV_WC_SUCCESS;
+		} else if (opcode == MLX5_CQE_SIG_ERR) {
+			mlx5_cqe_sigerr_comp((struct mlx5_sigerr_cqe *)cqe, &comp[n]);
+		} else {
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(&dma_qp->qp, cqe);
+			comp[n].status = mlx5_cqe_err(cqe);
 		}
 
 		n++;

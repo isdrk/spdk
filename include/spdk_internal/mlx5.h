@@ -169,8 +169,22 @@ struct spdk_mlx5_dma_qp {
 	struct spdk_mlx5_qp qp;
 };
 
+/*
+ * MLX5_CQE_SYNDROME_SIGERR is a fake syndrome that corresponds to opcode
+ * MLX5_CQE_SIG_ERR. It is added to avoid growing spdk_mlx5_cq_completion.
+ *
+ * The size of the syndrome field in the HW CQE is 8 bits. So, the new syndrome
+ * cannot overlap with the HW syndromes.
+ */
+enum {
+	MLX5_CQE_SYNDROME_SIGERR = 1 << 8,
+};
+
 struct spdk_mlx5_cq_completion {
-	uint64_t wr_id;
+	union {
+		uint64_t wr_id;
+		uint32_t mkey; /* applicable if status == MLX5_CQE_SYNDROME_SIGERR */
+	};
 	int status;
 };
 
