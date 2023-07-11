@@ -290,6 +290,7 @@ struct spdk_mlx5_umr_sig_attr {
 	uint32_t seed;
 	uint32_t psv_index;
 	enum spdk_mlx5_umr_sig_domain domain;
+	unsigned sigerr_count;
 	bool init;
 	bool check_gen;
 };

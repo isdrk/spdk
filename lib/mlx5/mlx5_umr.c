@@ -14,10 +14,8 @@
 #include "mlx5_priv.h"
 
 static inline void
-set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
+_set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords, uint64_t mkey_mask)
 {
-	uint64_t mkey_mask;
-
 	ctrl->flags |= MLX5_WQE_UMR_CTRL_FLAG_INLINE;
 	ctrl->klm_octowords = htobe16(klms_octowords);
 	/*
@@ -25,9 +23,21 @@ set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords
 	 *  1. 'free' field: change this mkey from in free to in use
 	 *  2. 'len' field: to include the total bytes in iovec
 	 **/
-	mkey_mask = MLX5_WQE_UMR_CTRL_MKEY_MASK_FREE | MLX5_WQE_UMR_CTRL_MKEY_MASK_LEN;
+	mkey_mask |= MLX5_WQE_UMR_CTRL_MKEY_MASK_FREE | MLX5_WQE_UMR_CTRL_MKEY_MASK_LEN;
 
 	ctrl->mkey_mask |= htobe64(mkey_mask);
+}
+
+static inline void
+set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
+{
+	_set_umr_ctrl_seg_mtt(ctrl, klms_octowords, 0);
+}
+
+static inline void
+set_umr_ctrl_seg_mtt_sig(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
+{
+	_set_umr_ctrl_seg_mtt(ctrl, klms_octowords, MLX5_WQE_UMR_CTRL_MKEY_MASK_SIG_ERR);
 }
 
 static inline void
@@ -57,6 +67,13 @@ mlx5_set_umr_mkey_seg(struct mlx5_wqe_mkey_context_seg *mkey,
 {
 	memset(mkey, 0, 64);
 	set_umr_mkey_seg_mtt(mkey, umr_attr);
+}
+
+static void
+set_umr_mkey_seg_sig(struct mlx5_wqe_mkey_context_seg *mkey,
+		     struct spdk_mlx5_umr_sig_attr *sig_attr)
+{
+	mkey->flags_pd = htobe32((sig_attr->sigerr_count & 1) << 26);
 }
 
 static inline void
@@ -176,6 +193,7 @@ _set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 	memset(bsf, 0, sizeof(*bsf));
 	bsf->basic.bsf_size_sbs = (bsf_size << 6);
 	bsf->basic.raw_data_size = htobe32(umr_len);
+	bsf->basic.check_byte_mask = 0xff;
 
 	tfs_psv = get_crc32c_tfs(attr->seed);
 	tfs_psv = tfs_psv << MLX5_SIG_BSF_TFS_SHIFT;
@@ -309,13 +327,14 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	/* build umr ctrl segment */
 	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
 	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	set_umr_ctrl_seg_mtt(umr_ctrl, mtt_size);
+	set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
 	set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(struct mlx5_sig_bsf_seg));
 
 	/* build mkey context segment */
 	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
 	memset(mkey, 0, sizeof (*mkey));
 	set_umr_mkey_seg_mtt(mkey, umr_attr);
+	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
 	for (i = 0; i < umr_attr->klm_count; i++) {
@@ -373,13 +392,14 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_
 	/* build umr ctrl segment */
 	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
 	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	set_umr_ctrl_seg_mtt(umr_ctrl, mtt_size);
+	set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
 	set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(*sig_bsf) + sizeof(*crypto_bsf));
 
 	/* build mkey context segment */
 	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
 	memset(mkey, 0, sizeof (*mkey));
 	set_umr_mkey_seg_mtt(mkey, umr_attr);
+	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	klm = (union mlx5_wqe_umr_inline_seg *)(mkey + 1);
 	for (i = 0; i < umr_attr->klm_count; i++) {
@@ -563,12 +583,13 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 	/* build umr ctrl segment */
 	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
 	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	set_umr_ctrl_seg_mtt(umr_ctrl, mtt_size);
+	set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
 	set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(struct mlx5_sig_bsf_seg));
 
 	/* build mkey context segment */
 	mkey = mlx5_qp_get_next_wqbb(hw, &to_end, ctrl);
 	mlx5_set_umr_mkey_seg(mkey, umr_attr);
+	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	klm = mlx5_qp_get_next_wqbb(hw, &to_end, mkey);
 	bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
@@ -622,12 +643,13 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp, struc
 	/* build umr ctrl segment */
 	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
 	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	set_umr_ctrl_seg_mtt(umr_ctrl, mtt_size);
+	set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
 	set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(*sig_bsf) + sizeof(*crypto_bsf));
 
 	/* build mkey context segment */
 	mkey = mlx5_qp_get_next_wqbb(hw, &to_end, ctrl);
 	mlx5_set_umr_mkey_seg(mkey, umr_attr);
+	set_umr_mkey_seg_sig(mkey, sig_attr);
 
 	/* build KLM */
 	klm = mlx5_qp_get_next_wqbb(hw, &to_end, mkey);
