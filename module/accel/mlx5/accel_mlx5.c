@@ -12,6 +12,7 @@
 #include "spdk/json.h"
 #include "spdk/util.h"
 #include "spdk/dma.h"
+#include "spdk/tree.h"
 
 #include "spdk_internal/mlx5.h"
 #include "spdk_internal/rdma_utils.h"
@@ -64,6 +65,7 @@ struct accel_mlx5_crypto_dev_ctx {
 	struct accel_mlx5_cryptodev_memory_domain domain;
 	uint32_t num_mkeys;
 	bool crypto_multi_block;
+	RB_HEAD(mkeys_tree, accel_mlx5_sig_key_wrapper) sig_mkey_tree;
 };
 
 struct accel_mlx5_module {
@@ -104,7 +106,16 @@ struct accel_mlx5_crypto_key_wrapper {
 
 struct accel_mlx5_sig_key_wrapper {
 	uint32_t mkey;
+	RB_ENTRY(accel_mlx5_sig_key_wrapper) node;
 };
+
+static int
+accel_mlx5_sig_key_wrapper_compare(struct accel_mlx5_sig_key_wrapper *key1, struct accel_mlx5_sig_key_wrapper *key2)
+{
+	return key1->mkey < key2->mkey ? -1 : key1->mkey > key2->mkey;
+}
+
+RB_GENERATE_STATIC(mkeys_tree, accel_mlx5_sig_key_wrapper, node, accel_mlx5_sig_key_wrapper_compare);
 
 struct accel_mlx5_psv_wrapper {
 	uint32_t psv_index;
@@ -208,6 +219,7 @@ struct accel_mlx5_dev {
 	STAILQ_HEAD(, accel_mlx5_task) recover;
 	struct spdk_poller *recover_poller;
 	STAILQ_HEAD(, accel_mlx5_task) merged;
+	struct mkeys_tree *sig_mkey_tree_ref;
 };
 
 struct accel_mlx5_io_channel {
@@ -1979,6 +1991,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		dev->pd_ref = dev_ctx->pd;
 		dev->domain_ref = dev_ctx->domain.domain;
 		dev->crypto_multi_block = dev_ctx->crypto_multi_block;
+		dev->sig_mkey_tree_ref = &dev_ctx->sig_mkey_tree;
 		ch->num_devs++;
 
 		struct spdk_mlx5_cq_attr mlx5_cq_attr = {};
@@ -2136,10 +2149,6 @@ accel_mlx5_mkeys_release(struct spdk_mempool *mkey_pool, struct spdk_mlx5_indire
 {
 	uint32_t i, num_mkeys_in_pool;
 
-	if (!mkeys) {
-		return;
-	}
-
 	for (i = 0; i < num_mkeys; i++) {
 		if (mkeys[i]) {
 			spdk_mlx5_destroy_indirect_mkey(mkeys[i]);
@@ -2163,13 +2172,27 @@ accel_mlx5_mkeys_release(struct spdk_mempool *mkey_pool, struct spdk_mlx5_indire
 static void
 accel_mlx5_crypto_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 {
-	accel_mlx5_mkeys_release(dev_ctx->mkey_pool, dev_ctx->mkeys, dev_ctx->num_mkeys);
+	if (dev_ctx->mkeys) {
+		accel_mlx5_mkeys_release(dev_ctx->mkey_pool, dev_ctx->mkeys, dev_ctx->num_mkeys);
+	}
+}
+
+static void
+accel_mlx5_sig_mkey_remove_from_tree(struct spdk_mempool *mp, void *cb_arg, void *obj, unsigned obj_idx)
+{
+	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_sig_key_wrapper *wrapper = obj;
+
+	RB_REMOVE(mkeys_tree, &dev_ctx->sig_mkey_tree, wrapper);
 }
 
 static void
 accel_mlx5_sig_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 {
-	accel_mlx5_mkeys_release(dev_ctx->sig_mkey_pool, dev_ctx->sig_mkeys, dev_ctx->num_mkeys);
+	if (dev_ctx->sig_mkeys) {
+		spdk_mempool_obj_iter(dev_ctx->sig_mkey_pool, accel_mlx5_sig_mkey_remove_from_tree, dev_ctx);
+		accel_mlx5_mkeys_release(dev_ctx->sig_mkey_pool, dev_ctx->sig_mkeys, dev_ctx->num_mkeys);
+	}
 }
 
 static void
@@ -2353,6 +2376,8 @@ accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mk
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->sig_mkeys[obj_idx] != NULL);
 	wrapper->mkey = dev_ctx->sig_mkeys[obj_idx]->mkey;
+
+	RB_INSERT(mkeys_tree, &dev_ctx->sig_mkey_tree, wrapper);
 }
 
 static int
@@ -2596,6 +2621,7 @@ accel_mlx5_init(void)
 		}
 		crypto_dev_ctx->context = dev;
 		crypto_dev_ctx->pd = pd;
+		RB_INIT(&crypto_dev_ctx->sig_mkey_tree);
 		crypto_dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
 		rc = accel_mlx5_crypto_ctx_mkeys_create(crypto_dev_ctx);
 		if (rc) {
