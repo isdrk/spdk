@@ -106,6 +106,8 @@ struct accel_mlx5_crypto_key_wrapper {
 
 struct accel_mlx5_sig_key_wrapper {
 	uint32_t mkey;
+	uint32_t sigerr_count;
+	bool sigerr;
 	RB_ENTRY(accel_mlx5_sig_key_wrapper) node;
 };
 
@@ -261,6 +263,43 @@ accel_mlx5_iov_sgl_advance(struct accel_mlx5_iov_sgl *s, uint32_t step)
 	}
 }
 
+static inline int
+accel_mlx5_task_check_sigerr(struct accel_mlx5_task *task)
+{
+	unsigned i;
+	int rc;
+
+	if (task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
+		return 0;
+	}
+
+	rc = 0;
+	for (i = 0; i < task->num_ops; i++) {
+		if (task->sig_mkeys[i]->sigerr) {
+			task->sig_mkeys[i]->sigerr = false;
+			rc = -EIO;
+		}
+	}
+
+	if (spdk_likely(!rc)) {
+		return 0;
+	}
+
+	task->psv->bits.error = 1;
+
+	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
+		struct spdk_accel_task *task_next = TAILQ_NEXT(&task->base, seq_link);
+		struct accel_mlx5_task *mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
+
+		/* The accel will not submit the next task because the current one is failed.
+		 * That's why the merged flag is reset here.
+		 */
+		mlx5_task_next->flags.bits.merged = 0;
+	}
+
+	return rc;
+}
+
 static inline void
 accel_mlx5_task_release_mkeys(struct accel_mlx5_task *mlx5_task)
 {
@@ -283,6 +322,7 @@ accel_mlx5_task_complete(struct accel_mlx5_task *task, int rc)
 {
 	assert(task->num_reqs == task->num_completed_reqs || rc);
 	SPDK_DEBUGLOG(accel_mlx5, "Complete task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
+	int sigerr;
 
 	if (task->flags.bits.merged) {
 		task->flags.bits.merged = 0;
@@ -290,6 +330,8 @@ accel_mlx5_task_complete(struct accel_mlx5_task *task, int rc)
 		return;
 	}
 
+	sigerr = accel_mlx5_task_check_sigerr(task);
+	rc = rc ? rc : sigerr;
 	accel_mlx5_task_release_mkeys(task);
 	spdk_accel_task_complete(&task->base, rc);
 }
@@ -746,8 +788,8 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 
 static inline int
 accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev,
-					struct accel_mlx5_klm *klm, uint32_t dv_mkey, uint32_t src_lkey,
-					uint32_t dst_lkey, enum spdk_mlx5_umr_sig_domain sig_domain,
+					struct accel_mlx5_klm *klm, struct accel_mlx5_sig_key_wrapper *mkey,
+					uint32_t src_lkey, uint32_t dst_lkey, enum spdk_mlx5_umr_sig_domain sig_domain,
 					uint32_t psv_index, uint32_t crc_seed, uint64_t iv, uint32_t req_len,
 					bool init_signature, bool gen_signature)
 {
@@ -812,13 +854,13 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	sattr.seed = crc_seed;
 	sattr.psv_index = psv_index;
 	sattr.domain = sig_domain;
-	sattr.sigerr_count = 0;
+	sattr.sigerr_count = mkey->sigerr_count;
 	/* raw_data_size is a size of data without signature. */
 	sattr.raw_data_size = req_len;
 	sattr.init = init_signature;
 	sattr.check_gen = gen_signature;
 
-	umr_attr.dv_mkey = dv_mkey;
+	umr_attr.dv_mkey = mkey->mkey;
 	/*
 	 * umr_len is the size of data addressed by MKey in memory and includes
 	 * the size of the signature if it exists in memory.
@@ -931,7 +973,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		 *      BSF.enc_order is encrypted_raw_memory.
 		 */
 		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, dev, &klms[i],
-							     mlx5_task->sig_mkeys[i]->mkey,
+							     mlx5_task->sig_mkeys[i],
 							     src_lkey, dst_lkey,
 							     SPDK_MLX5_UMR_SIG_DOMAIN_WIRE,
 							     mlx5_task->psv->psv_index,
@@ -1032,8 +1074,8 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_configure_sig_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev,
-			     struct accel_mlx5_klm *klm, uint32_t dv_mkey, enum spdk_mlx5_umr_sig_domain sig_domain,
+accel_mlx5_configure_sig_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev, struct accel_mlx5_klm *klm,
+			     struct accel_mlx5_sig_key_wrapper *mkey, enum spdk_mlx5_umr_sig_domain sig_domain,
 			     uint32_t psv_index, uint32_t req_len)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
@@ -1079,12 +1121,12 @@ accel_mlx5_configure_sig_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	sattr.seed = task->seed;
 	sattr.psv_index = psv_index;
 	sattr.domain = sig_domain;
-	sattr.sigerr_count = 0;
+	sattr.sigerr_count = mkey->sigerr_count;
 	sattr.raw_data_size = req_len;
 	sattr.init = true;
 	sattr.check_gen = true;
 
-	umr_attr.dv_mkey = dv_mkey;
+	umr_attr.dv_mkey = mkey->mkey;
 	umr_attr.umr_len = req_len;
 	umr_attr.klm_count = klm->src_klm_count;
 	umr_attr.klm = klm->src_klm;
@@ -1115,7 +1157,7 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	SPDK_DEBUGLOG(accel_mlx5, "begin, crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
 	/* At this moment we have as many requests as can be submitted to a qp */
-	rc = accel_mlx5_configure_sig_umr(mlx5_task, dev, &klms, mlx5_task->sig_mkeys[0]->mkey,
+	rc = accel_mlx5_configure_sig_umr(mlx5_task, dev, &klms, mlx5_task->sig_mkeys[0],
 					  SPDK_MLX5_UMR_SIG_DOMAIN_WIRE, mlx5_task->psv->psv_index,
 					  mlx5_task->nbytes);
 	if (spdk_unlikely(rc)) {
@@ -1717,6 +1759,17 @@ accel_mlx5_recover_dev(struct accel_mlx5_dev *dev)
 	return;
 }
 
+static struct accel_mlx5_sig_key_wrapper *
+get_mkey_from_sigerr_wc(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc)
+{
+	struct accel_mlx5_sig_key_wrapper find;
+
+	assert(wc->status == MLX5_CQE_SYNDROME_SIGERR);
+	find.mkey = wc->mkey;
+
+	return RB_FIND(mkeys_tree, dev->sig_mkey_tree_ref, &find);
+}
+
 static inline void
 accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc, int reaped)
 {
@@ -1727,6 +1780,16 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
+		if (spdk_unlikely(wc[i].status == MLX5_CQE_SYNDROME_SIGERR)) {
+			struct accel_mlx5_sig_key_wrapper *mkey;
+
+			mkey = get_mkey_from_sigerr_wc(dev, &wc[i]);
+
+			mkey->sigerr_count++;
+			mkey->sigerr = true;
+			continue;
+		}
+
 		wr = (struct accel_mlx5_wrid *)wc[i].wr_id;
 
 		if (spdk_unlikely(!wr)) {
@@ -1823,6 +1886,16 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
+		if (spdk_unlikely(wc[i].status == MLX5_CQE_SYNDROME_SIGERR)) {
+			struct accel_mlx5_sig_key_wrapper *mkey;
+
+			mkey = get_mkey_from_sigerr_wc(dev, &wc[i]);
+
+			mkey->sigerr_count++;
+			mkey->sigerr = true;
+			continue;
+		}
+
 		wr = (struct accel_mlx5_wrid *)wc[i].wr_id;
 
 		if (spdk_unlikely(!wr)) {
@@ -1868,6 +1941,12 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 					SPDK_DEBUGLOG(accel_mlx5, "RDMA: qp %p, task %p, WC status %d, core %u\n",
 						      dev->dma_qp, task, wc[i].status, spdk_env_get_current_core());
 				}
+
+				/*
+				 * Check if SIGERR CQE happened before the WQE error or flush.
+				 * It is needed to recover the affected MKey and PSV properly.
+				 */
+				accel_mlx5_task_check_sigerr(task);
 
 				dev->recovering = true;
 				STAILQ_INSERT_TAIL(&dev->recover, task, link);
@@ -2445,7 +2524,10 @@ accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mk
 
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->sig_mkeys[obj_idx] != NULL);
+
 	wrapper->mkey = dev_ctx->sig_mkeys[obj_idx]->mkey;
+	wrapper->sigerr_count = 1;
+	wrapper->sigerr = false;
 
 	RB_INSERT(mkeys_tree, &dev_ctx->sig_mkey_tree, wrapper);
 }
