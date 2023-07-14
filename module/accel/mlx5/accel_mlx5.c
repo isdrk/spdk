@@ -98,7 +98,11 @@ struct accel_mlx5_klm {
 	struct mlx5_wqe_data_seg dst_klm[ACCEL_MLX5_MAX_SGE];
 };
 
-struct accel_mlx5_key_wrapper {
+struct accel_mlx5_crypto_key_wrapper {
+	uint32_t mkey;
+};
+
+struct accel_mlx5_sig_key_wrapper {
 	uint32_t mkey;
 };
 
@@ -160,7 +164,10 @@ struct accel_mlx5_task {
 	STAILQ_ENTRY(accel_mlx5_task) link;
 	/* Keep this array last since not all elements might be accessed, this reduces amount of data to be
 	 * cached */
-	struct accel_mlx5_key_wrapper *mkeys[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	union {
+		struct accel_mlx5_crypto_key_wrapper *crypto_mkeys[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+		struct accel_mlx5_sig_key_wrapper *sig_mkeys[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	};
 };
 
 SPDK_STATIC_ASSERT(offsetof(struct accel_mlx5_task, dev) % 64 == 0, "dev pointer is not cache line aligned");
@@ -243,12 +250,12 @@ accel_mlx5_task_release_mkeys(struct accel_mlx5_task *mlx5_task)
 {
 	if (mlx5_task->num_ops) {
 		if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
-			spdk_mempool_put_bulk(mlx5_task->dev->mkey_pool_ref, (void **) mlx5_task->mkeys,
+			spdk_mempool_put_bulk(mlx5_task->dev->mkey_pool_ref, (void **) mlx5_task->crypto_mkeys,
 					      mlx5_task->num_ops);
 		}
 		if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C ||
 		    mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
-			spdk_mempool_put_bulk(mlx5_task->dev->sig_mkey_pool_ref, (void **) mlx5_task->mkeys,
+			spdk_mempool_put_bulk(mlx5_task->dev->sig_mkey_pool_ref, (void **) mlx5_task->sig_mkeys,
 					      mlx5_task->num_ops);
 			spdk_mempool_put(mlx5_task->dev->psv_pool_ref, mlx5_task->psv);
 		}
@@ -388,7 +395,9 @@ accel_mlx5_task_alloc_mkeys(struct accel_mlx5_task *task, struct spdk_mempool *m
 		return -ENOMEM;
 	}
 	num_mkeys = num_ops / 2;
-	rc = spdk_mempool_get_bulk(mkey_pool, (void **)task->mkeys, num_mkeys);
+	/* It does not matter if we use crypto_mkeys or sig_mkeys here because both are in the union and
+	 * have identical addresses */
+	rc = spdk_mempool_get_bulk(mkey_pool, (void **)task->crypto_mkeys, num_mkeys);
 	if (spdk_unlikely(rc)) {
 		task->num_ops = 0;
 		return -ENOMEM;
@@ -650,7 +659,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		} else {
 			req_len = mlx5_task->blocks_per_req * task->block_size;
 		}
-		rc = accel_mlx5_configure_crypto_umr(mlx5_task, dev, &klms[i], mlx5_task->mkeys[i]->mkey,
+		rc = accel_mlx5_configure_crypto_umr(mlx5_task, dev, &klms[i], mlx5_task->crypto_mkeys[i]->mkey,
 						     src_lkey, dst_lkey, iv, req_len);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("UMR configure failed with %d\n", rc);
@@ -670,12 +679,12 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		if (mlx5_task->flags.bits.inplace) {
 			rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].src_klm,
 							klms[i].src_klm_count,
-							0, mlx5_task->mkeys[i]->mkey, 0,
+							0, mlx5_task->crypto_mkeys[i]->mkey, 0,
 							first_rdma_fence);
 		} else {
 			rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].dst_klm,
 							klms[i].dst_klm_count,
-							0, mlx5_task->mkeys[i]->mkey, 0,
+							0, mlx5_task->crypto_mkeys[i]->mkey, 0,
 							first_rdma_fence);
 		}
 		if (spdk_unlikely(rc)) {
@@ -692,12 +701,12 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 
 	if (mlx5_task->flags.bits.inplace) {
 		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].src_klm, klms[i].src_klm_count,
-						0, mlx5_task->mkeys[i]->mkey,
+						0, mlx5_task->crypto_mkeys[i]->mkey,
 						(uint64_t) &mlx5_task->write_wrid,
 						first_rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	} else {
 		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].dst_klm, klms[i].dst_klm_count,
-						0, mlx5_task->mkeys[i]->mkey,
+						0, mlx5_task->crypto_mkeys[i]->mkey,
 						(uint64_t) &mlx5_task->write_wrid,
 						first_rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	}
@@ -906,7 +915,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		 *      BSF.enc_order is encrypted_raw_memory.
 		 */
 		rc = accel_mlx5_configure_crypto_and_sig_umr(mlx5_task, dev, &klms[i],
-							     mlx5_task->mkeys[i]->mkey,
+							     mlx5_task->sig_mkeys[i]->mkey,
 							     src_lkey, dst_lkey,
 							     SPDK_MLX5_UMR_SIG_DOMAIN_WIRE,
 							     mlx5_task->psv->psv_index,
@@ -933,7 +942,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			klm = klms[i].dst_klm;
 			klm_count = klms[i].dst_klm_count;
 		}
-		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->sig_mkeys[i]->mkey,
 						0, rdma_fence);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("RDMA WRITE failed with %d\n", rc);
@@ -979,7 +988,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			return rc;
 		}
 	}
-	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->mkeys[i]->mkey,
+	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->sig_mkeys[i]->mkey,
 					(uint64_t)&mlx5_task->write_wrid, rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("RDMA WRITE failed with %d\n", rc);
@@ -1081,7 +1090,7 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	SPDK_DEBUGLOG(accel_mlx5, "begin, crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
 	/* At this moment we have as many requests as can be submitted to a qp */
-	rc = accel_mlx5_configure_sig_umr(mlx5_task, dev, &klms, mlx5_task->mkeys[0]->mkey,
+	rc = accel_mlx5_configure_sig_umr(mlx5_task, dev, &klms, mlx5_task->sig_mkeys[0]->mkey,
 					  SPDK_MLX5_UMR_SIG_DOMAIN_WIRE, mlx5_task->psv->psv_index,
 					  mlx5_task->nbytes);
 	if (spdk_unlikely(rc)) {
@@ -1124,7 +1133,7 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		return rc;
 	}
 
-	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
+	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->sig_mkeys[0]->mkey,
 					(uint64_t) &mlx5_task->write_wrid,
 					rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
@@ -1154,7 +1163,7 @@ accel_mlx5_task_alloc_crc_ctx(struct accel_mlx5_task *task)
 	task->psv = spdk_mempool_get(task->dev->psv_pool_ref);
 	if (spdk_unlikely(!task->psv)) {
 		SPDK_DEBUGLOG(accel_mlx5, "no reqs in psv pool, dev %s\n", task->dev->pd_ref->context->device->name);
-		spdk_mempool_put_bulk(task->dev->sig_mkey_pool_ref, (void **)task->mkeys, task->num_ops);
+		spdk_mempool_put_bulk(task->dev->sig_mkey_pool_ref, (void **)task->sig_mkeys, task->num_ops);
 		task->num_ops = 0;
 		return -ENOMEM;
 	}
@@ -2233,7 +2242,7 @@ accel_mlx5_deinit(void *ctx)
 static void
 accel_mlx5_set_crypto_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
 {
-	struct accel_mlx5_key_wrapper *wrapper = _mkey;
+	struct accel_mlx5_crypto_key_wrapper *wrapper = _mkey;
 	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
 
 	assert(obj_idx < dev_ctx->num_mkeys);
@@ -2324,7 +2333,7 @@ accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 	uint32_t cache_size = dev_ctx->num_mkeys / 4 * 3 / spdk_env_get_core_count();
 	SPDK_NOTICELOG("Total pool size %u, cache size %u\n", dev_ctx->num_mkeys, cache_size);
 	dev_ctx->mkey_pool = spdk_mempool_create_ctor(pool_name, dev_ctx->num_mkeys,
-						      sizeof(struct accel_mlx5_key_wrapper),
+						      sizeof(struct accel_mlx5_crypto_key_wrapper),
 						      cache_size, SPDK_ENV_SOCKET_ID_ANY,
 						      accel_mlx5_set_crypto_mkey_in_pool, dev_ctx);
 	if (!dev_ctx->mkey_pool) {
@@ -2338,7 +2347,7 @@ accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 static void
 accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
 {
-	struct accel_mlx5_key_wrapper *wrapper = _mkey;
+	struct accel_mlx5_sig_key_wrapper *wrapper = _mkey;
 	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
 
 	assert(obj_idx < dev_ctx->num_mkeys);
@@ -2375,7 +2384,7 @@ accel_mlx5_sig_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 	uint32_t cache_size = dev_ctx->num_mkeys / 4 * 3 / spdk_env_get_core_count();
 	SPDK_NOTICELOG("Total sig MKey pool size %u, cache size %u\n", dev_ctx->num_mkeys, cache_size);
 	dev_ctx->sig_mkey_pool = spdk_mempool_create_ctor(pool_name, dev_ctx->num_mkeys,
-							  sizeof(struct accel_mlx5_key_wrapper),
+							  sizeof(struct accel_mlx5_sig_key_wrapper),
 							  cache_size, SPDK_ENV_SOCKET_ID_ANY,
 							  accel_mlx5_set_sig_mkey_in_pool, dev_ctx);
 	if (!dev_ctx->sig_mkey_pool) {
