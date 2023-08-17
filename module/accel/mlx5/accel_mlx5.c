@@ -105,6 +105,11 @@ struct accel_mlx5_psv_wrapper {
 	uint32_t psv_index;
 };
 
+enum accel_mlx5_opcode {
+	ACCEL_MLX5_OPC_COPY,
+	ACCEL_MLX5_OPC_CRYPTO,
+};
+
 struct accel_mlx5_task {
 	struct spdk_accel_task base;
 	/* Add padding to have dev pointer first element in new cache line.
@@ -123,7 +128,7 @@ struct accel_mlx5_task {
 	uint8_t enc_order;
 	struct accel_mlx5_wrid write_wrid;
 	bool inplace;
-	bool crypto_op;
+	uint8_t mlx5_opcode;
 	/* Number of data blocks per crypto operation */
 	uint16_t blocks_per_req;
 	/* total num_blocks in this task */
@@ -215,7 +220,7 @@ accel_mlx5_task_complete(struct accel_mlx5_task *task, int rc)
 	assert(task->num_reqs == task->num_completed_reqs || rc);
 	SPDK_DEBUGLOG(accel_mlx5, "Complete task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
 
-	if (task->num_ops && task->crypto_op) {
+	if (task->num_ops && task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 		spdk_mempool_put_bulk(task->dev->mkey_pool_ref, (void **) task->mkeys,
 				      task->num_ops);
 	}
@@ -329,7 +334,7 @@ accel_mlx5_task_alloc_mkeys(struct accel_mlx5_task *task)
 	int rc;
 
 	assert(task->num_reqs >= task->num_completed_reqs);
-	assert(task->crypto_op);
+	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO);
 	num_ops = spdk_min(num_ops, qp_slot);
 	num_ops = spdk_min(num_ops, ACCEL_MLX5_MAX_MKEYS_IN_TASK * 2);
 	if (num_ops < 2) {
@@ -678,7 +683,7 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 		return 0;
 	}
 
-	if (task->crypto_op) {
+	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 		if (task->num_ops == 0) {
 			rc = accel_mlx5_task_alloc_mkeys(task);
 			if (spdk_unlikely(rc != 0)) {
@@ -774,7 +779,8 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		src_nbytes += task->s.iovs[i].iov_len;
 	}
 
-	if (spdk_unlikely(mlx5_task->crypto_op && (src_nbytes % mlx5_task->base.block_size != 0))) {
+	if (spdk_unlikely(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO &&
+			  (src_nbytes % mlx5_task->base.block_size != 0))) {
 		return -EINVAL;
 	}
 
@@ -782,7 +788,7 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
 	mlx5_task->write_wrid.wrid = ACCEL_MLX5_WRID_WRITE;
-	if (mlx5_task->crypto_op) {
+	if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 		accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
 		num_blocks = src_nbytes / mlx5_task->base.block_size;
 		mlx5_task->num_blocks = num_blocks;
@@ -855,19 +861,19 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 
 	switch (task->op_code) {
 	case ACCEL_OPC_COPY:
-		mlx5_task->crypto_op = false;
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_COPY;
 		break;
 	case ACCEL_OPC_ENCRYPT:
 		assert(g_accel_mlx5.crypto_supported);
 		mlx5_task->enc_order = MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
-		mlx5_task->crypto_op = true;
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO;
 		crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
 						    task->crypto_key->priv);
 		break;
 	case ACCEL_OPC_DECRYPT:
 		assert(g_accel_mlx5.crypto_supported);
 		mlx5_task->enc_order = MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
-		mlx5_task->crypto_op = true;
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO;
 		crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
 						    task->crypto_key->priv);
 		break;
@@ -876,7 +882,8 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return -ENOTSUP;
 	}
 
-	if (spdk_unlikely(!g_accel_mlx5.enabled || (mlx5_task->crypto_op && !crypto_key_ok))) {
+	if (spdk_unlikely(!g_accel_mlx5.enabled ||
+			  (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO && !crypto_key_ok))) {
 		return -EINVAL;
 	}
 
@@ -902,7 +909,7 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return 0;
 	}
 
-	if (mlx5_task->crypto_op) {
+	if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 		return accel_mlx5_crypto_task_process(mlx5_task);
 	} else {
 		return accel_mlx5_copy_task_process(mlx5_task);
@@ -943,7 +950,7 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 		}
 
 		/* Restart the task from the beginning */
-		if (task->num_ops && task->crypto_op) {
+		if (task->num_ops && task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 			spdk_mempool_put_bulk(task->dev->mkey_pool_ref, (void **) task->mkeys,
 					      task->num_ops);
 		}
@@ -954,7 +961,7 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 		}
 		rc = accel_mlx5_task_init(task, dev);
 		if (spdk_likely(!rc)) {
-			if (task->crypto_op) {
+			if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 				rc = accel_mlx5_crypto_task_process(task);
 			} else {
 				rc = accel_mlx5_copy_task_process(task);
@@ -1049,8 +1056,8 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				completed = task->num_submitted_reqs - task->num_completed_reqs;
 				/* Crypto op consumes 2 ops, copy 1 op. To avoid branches and additional mlx5_task fields,
 				 * re-use bool var to correctly reduce num of submitted requests */
-				assert(dev->reqs_submitted >= completed * (((uint8_t) task->crypto_op) + 1));
-				dev->reqs_submitted -= completed * (((uint8_t) task->crypto_op) + 1);
+				assert(dev->reqs_submitted >= completed * (((uint8_t) (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO)) + 1));
+				dev->reqs_submitted -= completed * (((uint8_t) (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO)) + 1);
 				if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
 					/* We may have X unsignaled tasks queued in in_hw, if an error happens,
 					 * then HW generates completions for every unsignaled WQE.
@@ -1126,8 +1133,8 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
 			/* Crypto op consumes 2 ops, copy 1 op. To avoid branches and additional mlx5_task fields,
 			 * re-use bool var to correctly reduce num of submitted requests */
-			assert(dev->reqs_submitted >= completed * (((uint8_t) task->crypto_op) + 1));
-			dev->reqs_submitted -= completed * (((uint8_t) task->crypto_op) + 1);
+			assert(dev->reqs_submitted >= completed * (((uint8_t) (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO)) + 1));
+			dev->reqs_submitted -= completed * (((uint8_t) (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO)) + 1);
 
 			if (spdk_unlikely(wc[i].status)) {
 				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
