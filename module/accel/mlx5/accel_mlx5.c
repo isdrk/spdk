@@ -127,7 +127,13 @@ struct accel_mlx5_task {
 	 be encrypted during RX. */
 	uint8_t enc_order;
 	struct accel_mlx5_wrid write_wrid;
-	bool inplace;
+	union {
+		uint8_t raw;
+		struct {
+			uint8_t inplace : 1;
+			uint8_t reserved : 7;
+		} bits;
+	} flags;
 	uint8_t mlx5_opcode;
 	/* Number of data blocks per crypto operation */
 	uint16_t blocks_per_req;
@@ -511,7 +517,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	umr_attr.klm_count = klm->src_klm_count;
 	umr_attr.klm = klm->src_klm;
 
-	if (!mlx5_task->inplace) {
+	if (!mlx5_task->flags.bits.inplace) {
 		rc = accel_mlx5_fill_block_sge(dev, klm->dst_klm, &mlx5_task->dst, task->dst_domain,
 					       task->dst_domain_ctx, dst_lkey, req_len, &remaining);
 		if (spdk_unlikely(rc <= 0)) {
@@ -573,7 +579,8 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 			//SPDK_ERRLOG("src using cached task->cached_lkey %lu\n", src_lkey);
 		}
 	}
-	if (!mlx5_task->inplace && (ops_len <= mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset || task->d.iovcnt == 1)) {
+	if (!mlx5_task->flags.bits.inplace &&
+	    (ops_len <= mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset || task->d.iovcnt == 1)) {
 		if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !task->dst_domain) {
 			rc = accel_mlx5_translate_addr(task->d.iovs[0].iov_base, task->d.iovs[0].iov_len, task->dst_domain,
 						       task->dst_domain_ctx, dev, klms[0].dst_klm);
@@ -621,7 +628,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	for (i = 0; i < num_ops - 1; i++) {
 		/* UMR is used as a destination for RDMA_READ - from UMR to klms
 		 * XTS is applied on DPS */
-		if (mlx5_task->inplace) {
+		if (mlx5_task->flags.bits.inplace) {
 			rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].src_klm,
 							klms[i].src_klm_count,
 							0, mlx5_task->mkeys[i]->mkey, 0,
@@ -644,7 +651,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		dev->reqs_submitted++;
 	}
 
-	if (mlx5_task->inplace) {
+	if (mlx5_task->flags.bits.inplace) {
 		rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klms[i].src_klm, klms[i].src_klm_count,
 						0, mlx5_task->mkeys[i]->mkey,
 						(uint64_t) &mlx5_task->write_wrid,
@@ -794,9 +801,9 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		mlx5_task->num_blocks = num_blocks;
 		if (task->d.iovcnt == 0 || (task->d.iovcnt == task->s.iovcnt &&
 					    accel_mlx5_compare_iovs(task->d.iovs, task->s.iovs, task->s.iovcnt))) {
-			mlx5_task->inplace = true;
+			mlx5_task->flags.bits.inplace = 1;
 		} else {
-			mlx5_task->inplace = false;
+			mlx5_task->flags.bits.inplace = 0;
 			accel_mlx5_iov_sgl_init(&mlx5_task->dst, task->d.iovs, task->d.iovcnt);
 		}
 		if (mlx5_task->dev->crypto_multi_block) {
@@ -834,7 +841,7 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		} else {
 			mlx5_task->num_reqs = task->d.iovcnt;
 		}
-		mlx5_task->inplace = false;
+		mlx5_task->flags.bits.inplace = 0;
 		accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
 		accel_mlx5_iov_sgl_init(&mlx5_task->dst, task->d.iovs, task->d.iovcnt);
 		mlx5_task->num_ops = spdk_min(qp_slot, mlx5_task->num_reqs);
@@ -844,7 +851,7 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		SPDK_DEBUGLOG(accel_mlx5, "copy task num_reqs %u, num_ops %u\n", mlx5_task->num_reqs, mlx5_task->num_ops);
 	}
 
-	SPDK_DEBUGLOG(accel_mlx5, "task %p, inplace %d, num_reqs %d\n", mlx5_task, mlx5_task->inplace,
+	SPDK_DEBUGLOG(accel_mlx5, "task %p, inplace %u, num_reqs %d\n", mlx5_task, mlx5_task->flags.bits.inplace,
 		      mlx5_task->num_reqs);
 
 	return 0;
@@ -941,7 +948,7 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 			      "Resubmit task %p: num_ops %u, num_reqs %u, submitted_reqs %u, completed_reqs %u\n",
 			      task, task->num_ops, task->num_reqs, task->num_submitted_reqs, task->num_completed_reqs);
 
-		if (task->inplace) {
+		if (task->flags.bits.inplace) {
 			/* @todo: We can't restart inplace task from the beggining without data corruption.
 			 * For now we fail such tasks. Better solution should be implemented later.
 			 */
