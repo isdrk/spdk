@@ -43,7 +43,8 @@ enum accel_opcode {
 	ACCEL_OPC_DECOMPRESS		= 7,
 	ACCEL_OPC_ENCRYPT		= 8,
 	ACCEL_OPC_DECRYPT		= 9,
-	ACCEL_OPC_LAST			= 10,
+	ACCEL_OPC_CHECK_CRC32C		= 10,
+	ACCEL_OPC_LAST			= 11,
 };
 
 /**
@@ -252,6 +253,45 @@ int spdk_accel_submit_copy_crc32c(struct spdk_io_channel *ch, void *dst, void *s
 int spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst, struct iovec *src_iovs,
 				   uint32_t iovcnt, uint32_t *crc_dst, uint32_t seed,
 				   int flags, spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a CRC-32C checking request.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param src The source address for the data.
+ * \param seed Four byte seed value.
+ * \param nbytes Length in bytes.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_check_crc32c(struct spdk_io_channel *ch, uint32_t *crc, void *src,
+				   uint32_t seed,
+				   uint64_t nbytes, spdk_accel_completion_cb cb_fn, void *cb_arg);
+
+/**
+ * Submit a chained CRC-32C checking request.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param iovs The io vector array which stores the src data and len.
+ * \param iovcnt The size of the iov.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc, struct iovec *iovs,
+				    uint32_t iovcnt, uint32_t seed, spdk_accel_completion_cb cb_fn, void *cb_arg);
 
 /**
  * Build and submit a memory compress request.
@@ -505,6 +545,33 @@ int spdk_accel_append_copy_crc32c(struct spdk_accel_sequence **seq, struct spdk_
 				  struct iovec *src_iovs, uint32_t src_iovcnt,
 				  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 				  uint32_t seed, spdk_accel_step_cb cb_fn, void *cb_arg);
+
+/**
+ * Append a check crc32c operation to a sequence.
+ *
+ * This operation will calculate the 4 byte CRC32-C for the given data and check if the result
+ * matches the given CRC32-C.
+ *
+ * \param seq Sequence object. If NULL, a new sequence object will be created.
+ * \param ch I/O channel associated with this call.
+ * \param crc Reference CRC-32C to compare the calculated CRC-32C with.
+ * \param src_iovs The io vector array which stores the src data and len.
+ * \param src_iovcnt The size of the iov.
+ * \param src_domain Memory domain to which the source buffers belong.
+ * \param src_domain_ctx Source buffer domain context.
+ * \param seed Four byte seed value.
+ * \param cb_fn Called when this CRC-32C operation completes.
+ * \param cb_arg Callback argument.
+ *
+ * \return 0 on success, negative errno on failure.
+ */
+int spdk_accel_append_check_crc32c(struct spdk_accel_sequence **seq,
+				   struct spdk_io_channel *ch,
+				   uint32_t *crc,
+				   struct iovec *src_iovs, uint32_t src_iovcnt,
+				   struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				   uint32_t seed,
+				   spdk_accel_step_cb cb_fn, void *cb_arg);
 
 /**
  * Finish a sequence and execute all its operations. After the completion callback is executed, the

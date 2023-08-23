@@ -90,6 +90,7 @@ struct spdk_accel_task {
 	};
 	union {
 		uint32_t		*crc_dst;
+		uint32_t		*crc;
 		uint32_t		*output_size;
 		uint32_t		block_size; /* for crypto op */
 	};

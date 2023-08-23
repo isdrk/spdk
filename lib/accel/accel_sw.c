@@ -98,6 +98,7 @@ sw_accel_supports_opcode(enum accel_opcode opc)
 	case ACCEL_OPC_DECOMPRESS:
 	case ACCEL_OPC_ENCRYPT:
 	case ACCEL_OPC_DECRYPT:
+	case ACCEL_OPC_CHECK_CRC32C:
 		return true;
 	default:
 		return false;
@@ -234,6 +235,14 @@ static void
 _sw_accel_crc32cv(uint32_t *crc_dst, struct iovec *iov, uint32_t iovcnt, uint32_t seed)
 {
 	*crc_dst = spdk_crc32c_iov_update(iov, iovcnt, ~seed);
+}
+
+static int
+_sw_accel_check_crc32cv(uint32_t *expected_crc, struct iovec *iov, uint32_t iovcnt, uint32_t seed)
+{
+	uint32_t actual_crc = spdk_crc32c_iov_update(iov, iovcnt, ~seed);
+
+	return actual_crc == *expected_crc ? 0 : -EINVAL;
 }
 
 static int
@@ -571,6 +580,10 @@ sw_accel_submit_tasks(struct spdk_io_channel *ch, struct spdk_accel_task *accel_
 			break;
 		case ACCEL_OPC_DECRYPT:
 			rc = _sw_accel_decrypt(sw_ch, accel_task);
+			break;
+		case ACCEL_OPC_CHECK_CRC32C:
+			rc = _sw_accel_check_crc32cv(accel_task->crc, accel_task->s.iovs, accel_task->s.iovcnt,
+						     accel_task->seed);
 			break;
 		default:
 			assert(false);

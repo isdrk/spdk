@@ -65,7 +65,7 @@ static struct spdk_accel_driver *g_accel_driver;
 
 static const char *g_opcode_strings[ACCEL_OPC_LAST] = {
 	"copy", "fill", "dualcast", "compare", "crc32c", "copy_crc32c",
-	"compress", "decompress", "encrypt", "decrypt"
+	"compress", "decompress", "encrypt", "decrypt", "check_crc32c"
 };
 
 enum accel_sequence_state {
@@ -577,6 +577,76 @@ spdk_accel_submit_copy_crc32cv(struct spdk_io_channel *ch, void *dst,
 	accel_task->seed = seed;
 	accel_task->flags = flags;
 	accel_task->op_code = ACCEL_OPC_COPY_CRC32C;
+	accel_task->src_domain = NULL;
+	accel_task->dst_domain = NULL;
+	accel_task->step_cb_fn = NULL;
+
+	return module->submit_tasks(module_ch, accel_task);
+}
+
+/* Accel framework public API for CRC-32C check function */
+int
+spdk_accel_submit_check_crc32c(struct spdk_io_channel *ch, uint32_t *crc,
+			       void *src, uint32_t seed, uint64_t nbytes, spdk_accel_completion_cb cb_fn,
+			       void *cb_arg)
+{
+	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_accel_task *accel_task;
+	struct spdk_accel_module_if *module = g_modules_opc[ACCEL_OPC_CHECK_CRC32C].module;
+	struct spdk_io_channel *module_ch = accel_ch->module_ch[ACCEL_OPC_CHECK_CRC32C];
+
+	accel_task = _get_task(accel_ch, cb_fn, cb_arg);
+	if (accel_task == NULL) {
+		return -ENOMEM;
+	}
+
+	accel_task->s.iovs = &accel_task->aux_iovs[SPDK_ACCEL_AUX_IOV_SRC];
+	accel_task->s.iovs[0].iov_base = src;
+	accel_task->s.iovs[0].iov_len = nbytes;
+	accel_task->s.iovcnt = 1;
+	accel_task->crc = crc;
+	accel_task->seed = seed;
+	accel_task->op_code = ACCEL_OPC_CHECK_CRC32C;
+	accel_task->src_domain = NULL;
+	accel_task->dst_domain = NULL;
+	accel_task->step_cb_fn = NULL;
+
+	return module->submit_tasks(module_ch, accel_task);
+}
+
+/* Accel framework public API for chained CRC-32C check function */
+int
+spdk_accel_submit_check_crc32cv(struct spdk_io_channel *ch, uint32_t *crc,
+				struct iovec *iov, uint32_t iov_cnt, uint32_t seed,
+				spdk_accel_completion_cb cb_fn, void *cb_arg)
+{
+	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_accel_task *accel_task;
+	struct spdk_accel_module_if *module = g_modules_opc[ACCEL_OPC_CHECK_CRC32C].module;
+	struct spdk_io_channel *module_ch = accel_ch->module_ch[ACCEL_OPC_CHECK_CRC32C];
+
+	if (iov == NULL) {
+		SPDK_ERRLOG("iov should not be NULL");
+		return -EINVAL;
+	}
+
+	if (!iov_cnt) {
+		SPDK_ERRLOG("iovcnt should not be zero value\n");
+		return -EINVAL;
+	}
+
+	accel_task = _get_task(accel_ch, cb_fn, cb_arg);
+	if (accel_task == NULL) {
+		SPDK_ERRLOG("no memory\n");
+		assert(0);
+		return -ENOMEM;
+	}
+
+	accel_task->s.iovs = iov;
+	accel_task->s.iovcnt = iov_cnt;
+	accel_task->crc = crc;
+	accel_task->seed = seed;
+	accel_task->op_code = ACCEL_OPC_CHECK_CRC32C;
 	accel_task->src_domain = NULL;
 	accel_task->dst_domain = NULL;
 	accel_task->step_cb_fn = NULL;
@@ -1172,6 +1242,60 @@ spdk_accel_append_copy_crc32c(struct spdk_accel_sequence **pseq, struct spdk_io_
 	return 0;
 }
 
+int
+spdk_accel_append_check_crc32c(struct spdk_accel_sequence **pseq,
+			       struct spdk_io_channel *ch,
+			       uint32_t *crc,
+			       struct iovec *src_iovs, uint32_t src_iovcnt,
+			       struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+			       uint32_t seed,
+			       spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct accel_io_channel *accel_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_accel_task *task;
+	struct spdk_accel_sequence *seq = *pseq;
+
+	if (seq == NULL) {
+		seq = accel_sequence_get(accel_ch);
+		if (spdk_unlikely(seq == NULL)) {
+			return -ENOMEM;
+		}
+	}
+
+	if (spdk_unlikely(src_iovs == NULL)) {
+		SPDK_ERRLOG("iov should not be NULL");
+		return -EINVAL;
+	}
+
+	if (spdk_unlikely(!src_iovcnt)) {
+		SPDK_ERRLOG("iovcnt should not be zero value\n");
+		return -EINVAL;
+	}
+
+	assert(seq->ch == accel_ch);
+	task = accel_sequence_get_task(accel_ch, seq, cb_fn, cb_arg);
+	if (spdk_unlikely(task == NULL)) {
+		if (*pseq == NULL) {
+			accel_sequence_put(seq);
+		}
+
+		return -ENOMEM;
+	}
+
+	task->src_domain = src_domain;
+	task->src_domain_ctx = src_domain_ctx;
+	task->dst_domain = NULL;
+	task->s.iovs = src_iovs;
+	task->s.iovcnt = src_iovcnt;
+	task->crc = crc;
+	task->seed = seed;
+	task->op_code = ACCEL_OPC_CHECK_CRC32C;
+
+	TAILQ_INSERT_TAIL(&seq->tasks, task, seq_link);
+	*pseq = seq;
+
+	return 0;
+}
 int
 spdk_accel_get_buf(struct spdk_io_channel *ch, uint64_t len, void **buf,
 		   struct spdk_memory_domain **domain, void **domain_ctx)
@@ -1912,6 +2036,7 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 	case ACCEL_OPC_ENCRYPT:
 	case ACCEL_OPC_DECRYPT:
 	case ACCEL_OPC_CRC32C:
+	case ACCEL_OPC_CHECK_CRC32C:
 		/* We can only merge tasks when one of them is a copy */
 		if (next->op_code != ACCEL_OPC_COPY) {
 			break;
