@@ -54,7 +54,6 @@
 #define PORTNUMLEN 32
 #define XLIO_PACKETS_BUF_SIZE 128
 /* @todo: make pool sizes configurable */
-#define RECV_ZCOPY_PACKETS_POOL_SIZE 1024
 #define RECV_ZCOPY_BUFFERS_POOL_SIZE 4096
 #define DEFAULT_XLIO_PATH "libxlio.so"
 
@@ -94,8 +93,7 @@ struct spdk_xlio_sock {
 	bool			recv_zcopy;
 	int			so_priority;
 
-	struct xlio_sock_packet	*packets;
-	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
+	struct xlio_packets_pool	*xlio_packets_pool;
 	STAILQ_HEAD(, xlio_sock_packet)	received_packets;
 	struct xlio_buff_t	*cur_xlio_buf;
 	size_t			cur_offset;
@@ -114,8 +112,7 @@ struct spdk_xlio_sock_group_impl {
 	int				ring_fd;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_recv;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_send;
-	struct xlio_sock_packet	*packets;
-	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
+	struct xlio_packets_pool	*xlio_packets_pool;
 	struct xlio_sock_buf	*buffers;
 	struct spdk_sock_buf	*free_buffers;
 };
@@ -137,8 +134,21 @@ static struct spdk_sock_impl_opts g_spdk_xlio_sock_impl_opts = {
 	.enable_early_init = true
 };
 
+/* xlio packets pool for each core */
+struct xlio_packets_pool {
+	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
+	struct xlio_sock_packet	*packets;
+	uint32_t		num_free_packets;
+	uint32_t		core_id;
+	STAILQ_ENTRY(xlio_packets_pool)	link;
+};
+
+static pthread_mutex_t g_xlio_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static STAILQ_HEAD(, xlio_packets_pool) g_xlio_packets_pools = STAILQ_HEAD_INITIALIZER(
+			g_xlio_packets_pools);
+
 static int _sock_flush_ext(struct spdk_sock *sock);
-static int xlio_sock_poll_fd(int fd);
+static int xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll);
 
 static struct xlio_api_t *g_xlio_api;
 static void *g_xlio_handle;
@@ -226,6 +236,17 @@ xlio_load(void)
 }
 
 static void
+xlio_sock_free_pools(void)
+{
+	struct xlio_packets_pool *pool, *tmp;
+	STAILQ_FOREACH_SAFE(pool, &g_xlio_packets_pools, link, tmp) {
+		STAILQ_REMOVE_HEAD(&g_xlio_packets_pools, link);
+		free(pool->packets);
+		free(pool);
+	}
+}
+
+static void
 xlio_unload(void)
 {
 	int rc;
@@ -241,6 +262,8 @@ xlio_unload(void)
 		SPDK_NOTICELOG("Unloaded libxlio\n");
 		g_xlio_handle = NULL;
 	}
+
+	xlio_sock_free_pools();
 }
 
 static void *
@@ -505,6 +528,53 @@ static inline struct ibv_pd *xlio_get_pd(int fd)
 	return pd_attr_ptr.ib_pd;
 }
 
+static struct xlio_packets_pool *
+xlio_sock_get_packets_pool(uint32_t packets_pool_size)
+{
+	struct xlio_packets_pool *pool;
+	uint32_t i, current_core = spdk_env_get_current_core();
+
+	pthread_mutex_lock(&g_xlio_pool_mutex);
+	STAILQ_FOREACH(pool, &g_xlio_packets_pools, link) {
+		if (pool->core_id == current_core) {
+			pthread_mutex_unlock(&g_xlio_pool_mutex);
+			return pool;
+		}
+	}
+
+	pool = calloc(1, sizeof(*pool));
+	if (!pool) {
+		SPDK_ERRLOG("Failed to allocate pool\n");
+		goto fail;
+	}
+
+	pool->packets = calloc(packets_pool_size,
+			       sizeof(struct xlio_sock_packet));
+	if (!pool->packets) {
+		SPDK_ERRLOG("Failed to allocate packets\n");
+		free(pool);
+		goto fail;
+	}
+
+	STAILQ_INIT(&pool->free_packets);
+	for (i = 0; i < packets_pool_size; ++i) {
+		STAILQ_INSERT_TAIL(&pool->free_packets, &pool->packets[i], link);
+	}
+
+	STAILQ_INSERT_HEAD(&g_xlio_packets_pools, pool, link);
+	pool->num_free_packets = packets_pool_size;
+	pool->core_id = current_core;
+	pthread_mutex_unlock(&g_xlio_pool_mutex);
+	SPDK_NOTICELOG("Create xlio pool, packets_pool_size %u on core %u\n",
+		       packets_pool_size, current_core);
+
+	return pool;
+
+fail:
+	pthread_mutex_unlock(&g_xlio_pool_mutex);
+	return NULL;
+}
+
 static struct spdk_xlio_sock *
 xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 {
@@ -546,23 +616,16 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 	}
 
 #endif
+	sock->xlio_packets_pool = xlio_sock_get_packets_pool(g_spdk_xlio_sock_impl_opts.packets_pool_size);
+	if (!sock->xlio_packets_pool) {
+		SPDK_ERRLOG("Failed to allocated packets pool for socket %d\n", fd);
+		goto fail;
+	}
 
 	if (g_spdk_xlio_sock_impl_opts.enable_zerocopy_recv) {
 		int i;
 
 		sock->recv_zcopy = true;
-
-		sock->packets = calloc(RECV_ZCOPY_PACKETS_POOL_SIZE,
-				       sizeof(struct xlio_sock_packet));
-		if (!sock->packets) {
-			SPDK_ERRLOG("Failed to allocated packets pool for socket %d\n", fd);
-			goto fail;
-		}
-
-		STAILQ_INIT(&sock->free_packets);
-		for (i = 0; i < RECV_ZCOPY_PACKETS_POOL_SIZE; ++i) {
-			STAILQ_INSERT_TAIL(&sock->free_packets, &sock->packets[i], link);
-		}
 
 		STAILQ_INIT(&sock->received_packets);
 
@@ -603,9 +666,8 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 
 	return sock;
 
- fail:
+fail:
 	free(sock->buffers);
-	free(sock->packets);
 	free(sock);
 	return NULL;
 }
@@ -961,7 +1023,6 @@ xlio_sock_close(struct spdk_sock *_sock)
 	 * memory. */
 	g_xlio_ops.close(sock->fd);
 
-	free(sock->packets);
 	free(sock->buffers);
 	free(sock);
 
@@ -1103,29 +1164,22 @@ dump_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet)
 #endif
 
 static struct xlio_sock_packet *
-xlio_sock_get_packet(struct spdk_xlio_sock *sock) {
-	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
-	struct xlio_sock_packet *packet = NULL;
+xlio_sock_get_packet(struct spdk_xlio_sock *sock)
+{
+	struct xlio_sock_packet *packet = STAILQ_FIRST(&sock->xlio_packets_pool->free_packets);
 
-	if (spdk_likely(group && xlio_group->packets)) {
-		packet = STAILQ_FIRST(&xlio_group->free_packets);
-		STAILQ_REMOVE_HEAD(&xlio_group->free_packets, link);
-	} else {
-		packet = STAILQ_FIRST(&sock->free_packets);
-		STAILQ_REMOVE_HEAD(&sock->free_packets, link);
-	}
-
-	/* @todo: handle lack of free packets */
 	assert(packet);
+	STAILQ_REMOVE_HEAD(&sock->xlio_packets_pool->free_packets, link);
+	assert(sock->xlio_packets_pool->num_free_packets > 0);
+	sock->xlio_packets_pool->num_free_packets--;
+
 	return packet;
 }
 
 static void
-xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet) {
+xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet)
+{
 	int ret;
-	struct spdk_sock_group_impl *group = sock->base.group_impl;
-	struct spdk_xlio_sock_group_impl *xlio_group = __xlio_group_impl(group);
 
 	SPDK_DEBUGLOG(xlio, "Sock %d: free xlio packet, first buf %p\n",
 		      sock->fd, packet->xlio_packet.buff_lst);
@@ -1137,11 +1191,8 @@ xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *pack
 			    ret, errno);
 	}
 
-	if (spdk_likely(group && xlio_group->packets)) {
-		STAILQ_INSERT_HEAD(&xlio_group->free_packets, packet, link);
-	} else {
-		STAILQ_INSERT_HEAD(&sock->free_packets, packet, link);
-	}
+	STAILQ_INSERT_HEAD(&sock->xlio_packets_pool->free_packets, packet, link);
+	sock->xlio_packets_pool->num_free_packets++;
 }
 
 static void
@@ -1227,6 +1278,7 @@ static int
 poll_no_group_socket(struct spdk_xlio_sock *sock)
 {
 	int ret;
+	uint32_t max_events_per_poll;
 
 	/* For sockets not bound to group we have to poll here.
 	 * Polling may find events for other sockets but not for this one.
@@ -1251,9 +1303,15 @@ poll_no_group_socket(struct spdk_xlio_sock *sock)
 			       sock->ring_fd, sock->fd, num_rings);
 	}
 
-	ret = xlio_sock_poll_fd(sock->ring_fd);
-	if (ret < 0) {
-		return -1;
+	if (sock->xlio_packets_pool->num_free_packets) {
+		max_events_per_poll = spdk_min(sock->xlio_packets_pool->num_free_packets, MAX_EVENTS_PER_POLL);
+
+		ret = xlio_sock_poll_fd(sock->ring_fd, max_events_per_poll);
+		if (ret < 0) {
+			return -1;
+		}
+	} else {
+		SPDK_DEBUGLOG(xlio, "no free packets\n");
 	}
 
 	if (STAILQ_EMPTY(&sock->received_packets)) {
@@ -1750,15 +1808,9 @@ xlio_sock_group_impl_create(void)
 	TAILQ_INIT(&group_impl->pending_send);
 
 	if (num_packets) {
-		group_impl->packets = calloc(num_packets, sizeof(struct xlio_sock_packet));
-		if (!group_impl->packets) {
-			SPDK_ERRLOG("Failed to allocated packets pool for group %p\n", group_impl);
+		group_impl->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
+		if (!group_impl->xlio_packets_pool) {
 			goto fail;
-		}
-
-		STAILQ_INIT(&group_impl->free_packets);
-		for (i = 0; i < num_packets; ++i) {
-			STAILQ_INSERT_TAIL(&group_impl->free_packets, &group_impl->packets[i], link);
 		}
 	}
 
@@ -1777,9 +1829,8 @@ xlio_sock_group_impl_create(void)
 
 	return &group_impl->base;
 
- fail:
+fail:
 	free(group_impl->buffers);
-	free(group_impl->packets);
 	free(group_impl);
 	return NULL;
 }
@@ -1838,14 +1889,14 @@ xlio_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spd
 }
 
 static int
-xlio_sock_poll_fd(int fd)
+xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 {
 	struct spdk_sock *sock;
 	struct spdk_xlio_sock *vsock;
 	int num_events, i, rc;
 	struct xlio_socketxtreme_completion_t comps[MAX_EVENTS_PER_POLL];
 
-	num_events = g_xlio_api->socketxtreme_poll(fd, comps, MAX_EVENTS_PER_POLL, SOCKETXTREME_POLL_TX);
+	num_events = g_xlio_api->socketxtreme_poll(fd, comps, max_events_per_poll, SOCKETXTREME_POLL_TX);
 	if (num_events < 0) {
 		SPDK_ERRLOG("Socket extreme poll failed for fd %d: fd, result %d, errno %d\n", fd, num_events, errno);
 		return -1;
@@ -1911,6 +1962,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	int num_events, i, rc;
 	struct spdk_xlio_sock *vsock, *ptmp;
+	uint32_t max_events_per_poll;
 
 	/*
 	 * Important to use TAILQ_FOREACH_SAFE() here bacause of the following:
@@ -1944,9 +1996,15 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		}
 	}
 
-	num_events = xlio_sock_poll_fd(group->ring_fd);
-	if (num_events < 0) {
-		return -1;
+	if (group->xlio_packets_pool->num_free_packets) {
+		max_events_per_poll = spdk_min(group->xlio_packets_pool->num_free_packets, MAX_EVENTS_PER_POLL);
+		num_events = xlio_sock_poll_fd(group->ring_fd, max_events_per_poll);
+		if (num_events < 0) {
+			return -1;
+		}
+	} else {
+		SPDK_DEBUGLOG(xlio, "no free packets\n");
+		return 0;
 	}
 
 	num_events = 0;
@@ -1984,7 +2042,6 @@ xlio_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 
 	free(group->buffers);
-	free(group->packets);
 	free(group);
 	return 0;
 }
