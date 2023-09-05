@@ -716,11 +716,10 @@ mlx5_umr_configure_with_wrap_around(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5
 }
 
 int
-spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 			       struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags)
 {
-	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
-	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
+	struct spdk_mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
@@ -748,29 +747,28 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5
 	wqe_size += sizeof(struct mlx5_crypto_bsf_seg);
 
 	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
-	if (spdk_unlikely(umr_wqe_n_bb > dv_qp->tx_available)) {
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > dv_qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_crypto(dv_qp, umr_attr, crypto_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
+		mlx5_umr_configure_with_wrap_around_crypto(qp, umr_attr, crypto_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
 							   mtt_size);
 	} else {
-		mlx5_umr_configure_full_crypto(dv_qp, umr_attr, crypto_attr, wr_id, flags, wqe_size, umr_wqe_n_bb, mtt_size);
+		mlx5_umr_configure_full_crypto(qp, umr_attr, crypto_attr, wr_id, flags, wqe_size, umr_wqe_n_bb, mtt_size);
 	}
 
 	return 0;
 }
 
 int
-spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 			    struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags)
 {
-	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
-	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
+	struct spdk_mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
@@ -799,18 +797,18 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_um
 	wqe_size += sizeof(struct mlx5_sig_bsf_seg);
 
 	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
-	if (spdk_unlikely(umr_wqe_n_bb > dv_qp->tx_available)) {
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > dv_qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_sig(dv_qp, umr_attr, sig_attr, wr_id, flags, wqe_size,
+		mlx5_umr_configure_with_wrap_around_sig(qp, umr_attr, sig_attr, wr_id, flags, wqe_size,
 							umr_wqe_n_bb, mtt_size);
 	} else {
-		mlx5_umr_configure_full_sig(dv_qp, umr_attr, sig_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
+		mlx5_umr_configure_full_sig(qp, umr_attr, sig_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
 					    mtt_size);
 	}
 
@@ -818,13 +816,12 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_um
 }
 
 int
-spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				   struct spdk_mlx5_umr_sig_attr *sig_attr,
 				   struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 				   uint64_t wr_id, uint32_t flags)
 {
-	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
-	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
+	struct spdk_mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
@@ -853,18 +850,18 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_
 	wqe_size += sizeof(struct mlx5_crypto_bsf_seg);
 
 	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
-	if (spdk_unlikely(umr_wqe_n_bb > dv_qp->tx_available)) {
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > dv_qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_sig_crypto(dv_qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
+		mlx5_umr_configure_with_wrap_around_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
 							       wqe_size, umr_wqe_n_bb, mtt_size);
 	} else {
-		mlx5_umr_configure_full_sig_crypto(dv_qp, umr_attr, sig_attr, crypto_attr, wr_id, flags, wqe_size,
+		mlx5_umr_configure_full_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags, wqe_size,
 						   umr_wqe_n_bb, mtt_size);
 	}
 
@@ -872,11 +869,10 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_
 }
 
 int
-spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
-			uint64_t wr_id, uint32_t flags)
+spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+                           uint64_t wr_id, uint32_t flags)
 {
-	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
-	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
+	struct spdk_mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
@@ -903,27 +899,26 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_at
 	wqe_size += inline_klm_size;
 
 	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
-	if (spdk_unlikely(umr_wqe_n_bb > dv_qp->tx_available)) {
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
 		return -ENOMEM;
 	}
-	if (spdk_unlikely(umr_attr->klm_count > dv_qp->max_sge)) {
+	if (spdk_unlikely(umr_attr->klm_count > qp->max_sge)) {
 		return -E2BIG;
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around(dv_qp, umr_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
+		mlx5_umr_configure_with_wrap_around(qp, umr_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
 							   mtt_size);
 	} else {
-		mlx5_umr_configure_full(dv_qp, umr_attr, wr_id, flags, wqe_size, umr_wqe_n_bb, mtt_size);
+		mlx5_umr_configure_full(qp, umr_attr, wr_id, flags, wqe_size, umr_wqe_n_bb, mtt_size);
 	}
 
 	return 0;
 }
 
 int
-spdk_mlx5_set_psv(struct spdk_mlx5_dma_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id, uint32_t flags)
+spdk_mlx5_set_psv(struct spdk_mlx5_qp *dv_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id, uint32_t flags)
 {
-	struct spdk_mlx5_qp *dv_qp = &dma_qp->qp;
 	struct spdk_mlx5_hw_qp *hw = &dv_qp->hw;
 	uint32_t pi, wqe_size, wqe_n_bb;
 	struct mlx5_wqe_ctrl_seg *ctrl;

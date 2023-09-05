@@ -51,7 +51,7 @@ mlx5_cq_deinit(struct spdk_mlx5_cq *cq)
 }
 
 static int
-mlx5_cq_init(struct ibv_pd* pd, const struct spdk_mlx5_cq_attr *attr, struct spdk_mlx5_dma_qp *dma_qp)
+mlx5_cq_init(struct ibv_pd* pd, const struct spdk_mlx5_cq_attr *attr, struct spdk_mlx5_cq *cq)
 {
 	struct ibv_cq_init_attr_ex cq_attr = {
 		.cqe = attr->cqe_cnt,
@@ -69,11 +69,10 @@ mlx5_cq_init(struct ibv_pd* pd, const struct spdk_mlx5_cq_attr *attr, struct spd
 	struct mlx5dv_obj dv_obj;
 	struct mlx5dv_cq mlx5_cq;
 	struct ibv_cq_ex *cq_ex;
-	struct spdk_mlx5_cq *cq = &dma_qp->cq;
 	int rc;
 
 	if (!cq) {
-		return -ENOMEM;
+		return -EINVAL;
 	}
 
 	cq_ex = mlx5dv_create_cq(pd->context, &cq_attr, &cq_ex_attr);
@@ -159,6 +158,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 
 	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_QP);
 	if (rc) {
+                ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to init DV QP, rc %d\n", rc);
 		return rc;
 	}
@@ -187,6 +187,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
 	rc = posix_memalign((void **)&qp->completions, 4096, qp->hw.sq_wqe_cnt * sizeof(*qp->completions));
 	if (rc) {
+                ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to alloc completions\n");
 		return rc;
 	}
@@ -200,6 +201,8 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 
 	rc = mlx5_qp_connect(qp);
 	if (rc) {
+                ibv_destroy_qp(qp->verbs_qp);
+                free(qp->completions);
 		return rc;
 	}
 
@@ -564,37 +567,81 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 	return mlx5_qp_loopback_conn(qp, &conn_caps);
 }
 
-void
-spdk_mlx5_dma_qp_destroy(struct spdk_mlx5_dma_qp *dma_qp)
+static void
+mlx5_cq_disconnect_qp(struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp *qp)
 {
-	mlx5_qp_destroy(&dma_qp->qp);
-	mlx5_cq_deinit(&dma_qp->cq);
-	free(dma_qp);
+	assert(cq->qp == qp);
+	assert(qp->cq->qp == qp);
+
+	cq->qp = NULL;
 }
 
 int
-spdk_mlx5_dma_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
-			struct spdk_mlx5_qp_attr *qp_attr, void *context, struct spdk_mlx5_dma_qp **dma_qp_out)
+spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr, struct spdk_mlx5_cq **cq_out)
 {
-	int rc;
-	struct spdk_mlx5_dma_qp *dma_qp = calloc(1, sizeof(*dma_qp));
+        struct spdk_mlx5_cq *cq;
+        int rc;
 
-	if (!dma_qp) {
-		return -ENOMEM;
+        cq = calloc(1, sizeof(*cq));
+       	if (!cq) {
+       		return -ENOMEM;
+       	}
+
+       	rc = mlx5_cq_init(pd, cq_attr, cq);
+       	if (rc) {
+       		free(cq);
+       		return rc;
+       	}
+        *cq_out = cq;
+
+        return 0;
+}
+
+int
+spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
+{
+	if (cq->qp) {
+		SPDK_ERRLOG("CQ has a bound QP\n");
+		return -EBUSY;
 	}
 
-	rc = mlx5_cq_init(pd, cq_attr, dma_qp);
-	if (rc) {
-		spdk_mlx5_dma_qp_destroy(dma_qp);
-		return rc;
-	}
-	rc = mlx5_qp_init(pd, qp_attr, dma_qp->cq.verbs_cq, &dma_qp->qp);
-	if (rc) {
-		spdk_mlx5_dma_qp_destroy(dma_qp);
-		return rc;
-	}
-
-	*dma_qp_out = dma_qp;
+        mlx5_cq_deinit(cq);
+        free(cq);
 
 	return 0;
+}
+
+int
+spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out)
+{
+        int rc;
+       	struct spdk_mlx5_qp *qp;
+
+	if (cq->qp) {
+		return -EINVAL;
+	}
+
+        qp = calloc(1, sizeof(*qp));
+        if (!qp) {
+       		return -ENOMEM;
+       	}
+
+        rc = mlx5_qp_init(pd, qp_attr, cq->verbs_cq, qp);
+       	if (rc) {
+                free(qp);
+       		return rc;
+       	}
+	qp->cq = cq;
+	cq->qp = qp;
+        *qp_out = qp;
+
+       	return 0;
+}
+
+void
+spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
+{
+	mlx5_cq_disconnect_qp(qp->cq, qp);
+        mlx5_qp_destroy(qp);
+        free(qp);
 }

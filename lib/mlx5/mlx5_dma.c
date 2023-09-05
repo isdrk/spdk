@@ -246,10 +246,9 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm
 }
 
 int
-spdk_mlx5_dma_qp_rdma_write(struct spdk_mlx5_dma_qp *dma_qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-			    uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
+spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
+                        uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
-	struct spdk_mlx5_qp *qp = &dma_qp->qp;
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
 
@@ -277,10 +276,9 @@ spdk_mlx5_dma_qp_rdma_write(struct spdk_mlx5_dma_qp *dma_qp, struct mlx5_wqe_dat
 }
 
 int
-spdk_mlx5_dma_qp_rdma_read(struct spdk_mlx5_dma_qp *dma_qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-			    uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
+spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
+                       uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
-	struct spdk_mlx5_qp *qp = &dma_qp->qp;
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
 
@@ -402,10 +400,8 @@ mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion
 }
 
 int
-spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
-				  struct spdk_mlx5_cq_completion *comp, int max_completions)
+spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_completion *comp, int max_completions)
 {
-	struct spdk_mlx5_cq *cq = &dma_qp->cq;
 	struct mlx5_cqe64 *cqe;
 	uint8_t opcode;
 	int n = 0;
@@ -418,12 +414,12 @@ spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
 
 		opcode = mlx5dv_get_cqe_opcode(cqe);
 		if (spdk_likely(opcode == MLX5_CQE_REQ)) {
-			comp[n].wr_id = mlx5_qp_get_comp_wr_id(&dma_qp->qp, cqe);
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(cq->qp, cqe);
 			comp[n].status = IBV_WC_SUCCESS;
 		} else if (opcode == MLX5_CQE_SIG_ERR) {
 			mlx5_cqe_sigerr_comp((struct mlx5_sigerr_cqe *)cqe, &comp[n]);
 		} else {
-			comp[n].wr_id = mlx5_qp_get_comp_wr_id(&dma_qp->qp, cqe);
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(cq->qp, cqe);
 			comp[n].status = mlx5_cqe_err(cqe);
 		}
 
@@ -431,7 +427,7 @@ spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
 
 	} while (n < max_completions);
 
-	mlx5_qp_tx_complete(&dma_qp->qp);
+	mlx5_qp_tx_complete(cq->qp);
 
 	return n;
 }

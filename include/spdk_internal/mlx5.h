@@ -113,6 +113,8 @@ struct spdk_mlx5_hw_cq {
 struct spdk_mlx5_cq {
 	struct spdk_mlx5_hw_cq hw;
 	struct ibv_cq *verbs_cq;
+        /* Temporal solution, now we have 1:1 relation between CQ and QP, later we'll add shared CQ */
+        struct spdk_mlx5_qp *qp;
 };
 
 struct spdk_mlx5_cq_attr {
@@ -160,12 +162,8 @@ struct spdk_mlx5_qp {
 	uint16_t last_pi;
 	bool tx_need_ring_db;
 	bool aes_xts_inc_64;
-};
-
-/* QP + CQ */
-struct spdk_mlx5_dma_qp {
-	struct spdk_mlx5_cq cq;
-	struct spdk_mlx5_qp qp;
+	/* Used in control path */
+	struct spdk_mlx5_cq *cq;
 };
 
 /*
@@ -219,22 +217,64 @@ struct spdk_mlx5_umr_attr {
 	uint16_t klm_count;
 };
 
-int spdk_mlx5_dma_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
-			    struct spdk_mlx5_qp_attr *qp_attr, void *context, struct spdk_mlx5_dma_qp **qp_out);
-void spdk_mlx5_dma_qp_destroy(struct spdk_mlx5_dma_qp *dma_qp);
-int spdk_mlx5_dma_qp_poll_completions(struct spdk_mlx5_dma_qp *dma_qp,
-				      struct spdk_mlx5_cq_completion *comp, int max_completions);
+/**
+ * Create Completion Queue
+ *
+ * \note: CQ size must be enough to hold completions of all connected qpairs
+ *
+ * \param pd Protection Domain
+ * \param cq_attr Attributes to be used to create CQ
+ * \param cq_out Pointer created CQ
+ * \return 0 on success, negated errno on failure. \b cq_out is set only on success result
+ */
+int spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr, struct spdk_mlx5_cq **cq_out);
+
+/**
+ * Destroy Completion Queue
+ *
+ * \param cq CQ created with \ref spdk_mlx5_cq_create
+ */
+int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
+
+/**
+ * Create loopback qpair suitable for RDMA operations
+ *
+ * \param pd Protection Domain
+ * \param cq Completion Queue to bind QP to
+ * \param qp_attr Attributes to be used to create QP
+ * \param qp_out Pointer created QP
+ * \return 0 on success, negated errno on failure. \b qp_out is set only on success result
+ */
+int spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out);
+
+/**
+ * Destroy qpair
+ *
+ * \param cq QP created with \ref spdk_mlx5_qp_create
+ */
+void spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp);
+
+/**
+ * Poll Completion Queue, save up to \b max_completions into \b comp array
+ *
+ * \param cq Completion Queue
+ * \param comp Array of completions to be filled by this function
+ * \param max_completions
+ * \return
+ */
+int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
+				  struct spdk_mlx5_cq_completion *comp, int max_completions);
 
 /**
  * Prefetch \b wqe_count building blocks into cache
  *
- * @param dma_qp
+ * @param qp
  * @param wqe_count
  */
 //TODO: use more "intelligent" interface like - num_umrs, num_writes, etc
-static inline void spdk_mlx5_dma_qp_prefetch_sq(struct spdk_mlx5_dma_qp *dma_qp, uint32_t wqe_count)
+static inline void spdk_mlx5_qp_prefetch_sq(struct spdk_mlx5_qp *qp, uint32_t wqe_count)
 {
-	struct spdk_mlx5_hw_qp *hw = &dma_qp->qp.hw;
+	struct spdk_mlx5_hw_qp *hw = &qp->hw;
 	uint32_t to_end, pi, i;
 	char *sq;
 
@@ -280,20 +320,19 @@ enum {
  * param flags MLX5_WQE_CTRL_CQ_UPDATE to have a signaled completion or 0
  * @return
  */
-int spdk_mlx5_dma_qp_rdma_write(struct spdk_mlx5_dma_qp *qp, struct mlx5_wqe_data_seg *klm,
-				uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
-				uint64_t wrid, uint32_t flags);
+int spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
+                            uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
+                            uint64_t wrid, uint32_t flags);
 
-int spdk_mlx5_dma_qp_rdma_read(struct spdk_mlx5_dma_qp *qp, struct mlx5_wqe_data_seg *klm,
-				uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
-				uint64_t wrid, uint32_t flags);
+int spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
+                           uint32_t klm_count, uint64_t dstaddr, uint32_t rkey,
+                           uint64_t wrid, uint32_t flags);
 
-
-int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+int spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags);
 
-int spdk_mlx5_umr_configure(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
-				uint64_t wr_id, uint32_t flags);
+int spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+                               uint64_t wr_id, uint32_t flags);
 
 enum spdk_mlx5_umr_sig_domain {
 	SPDK_MLX5_UMR_SIG_DOMAIN_MEMORY,
@@ -310,11 +349,11 @@ struct spdk_mlx5_umr_sig_attr {
 	bool check_gen;
 };
 
-int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_dma_qp *dma_qp,
+int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp,
 				struct spdk_mlx5_umr_attr *umr_attr,
 				struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags);
 
-int spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_dma_qp *dma_qp, struct spdk_mlx5_umr_attr *umr_attr,
+int spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				       struct spdk_mlx5_umr_sig_attr *sig_attr,
 				       struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 				       uint64_t wr_id, uint32_t flags);
@@ -393,7 +432,7 @@ struct spdk_mlx5_psv {
 
 struct spdk_mlx5_psv *spdk_mlx5_create_psv(struct ibv_pd *pd);
 int spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv);
-int spdk_mlx5_set_psv(struct spdk_mlx5_dma_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id,
+int spdk_mlx5_set_psv(struct spdk_mlx5_qp *dma_qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id,
 		      uint32_t flags);
 
 #endif /* SPDK_MLX5_H */
