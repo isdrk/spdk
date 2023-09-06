@@ -210,6 +210,13 @@ struct accel_mlx5_qp {
 	struct accel_mlx5_dev *dev;
 	uint16_t wrs_submitted;
 	uint16_t max_wrs;
+	bool recovering;
+	/* tasks submitted to HW. We can't complete a task even in error case until we reap completions for all
+	 * submitted requests */
+	STAILQ_HEAD(, accel_mlx5_task) in_hw;
+	/* tasks waiting for device recovery */
+	STAILQ_HEAD(, accel_mlx5_task) recover;
+	struct spdk_poller *recover_poller;
 };
 
 struct accel_mlx5_dev {
@@ -226,19 +233,12 @@ struct accel_mlx5_dev {
 	struct ibv_pd *pd_ref;
 	/* Points to a memory domain owned by dev_ctx */
 	struct spdk_memory_domain *domain_ref;
-	bool crypto_multi_block;
-	bool recovering;
-	struct accel_mlx5_dev_stats stats;
+	struct mkeys_tree *sig_mkey_tree_ref;
 	/* Pending tasks waiting for requests resources */
 	STAILQ_HEAD(, accel_mlx5_task) nomem;
-	/* tasks submitted to HW. We can't complete a task even in error case until we reap completions for all
-	 * submitted requests */
-	STAILQ_HEAD(, accel_mlx5_task) in_hw;
-	/* tasks waiting for device recovery */
-	STAILQ_HEAD(, accel_mlx5_task) recover;
-	struct spdk_poller *recover_poller;
 	STAILQ_HEAD(, accel_mlx5_task) merged;
-	struct mkeys_tree *sig_mkey_tree_ref;
+	bool crypto_multi_block;
+	struct accel_mlx5_dev_stats stats;
 };
 
 struct accel_mlx5_io_channel {
@@ -586,7 +586,7 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 	qp->wrs_submitted++;
 	mlx5_task->num_wrs++;
 	mlx5_task->num_submitted_reqs++;
-	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
+	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, copy task, %p\n", mlx5_task);
 
@@ -799,7 +799,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	assert(qp->wrs_submitted < qp->max_wrs);
 	qp->wrs_submitted++;
 	mlx5_task->num_wrs++;
-	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
+	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
 		      mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
@@ -1123,7 +1123,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	qp->wrs_submitted++;
 	mlx5_task->num_wrs++;
-	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
+	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, crypto and crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
@@ -1565,7 +1565,7 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (rc == 0) {
-		STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
+		STAILQ_INSERT_TAIL(&mlx5_task->qp->in_hw, mlx5_task, link);
 		SPDK_DEBUGLOG(accel_mlx5, "end, crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 			      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs,
 			      mlx5_task->num_completed_reqs);
@@ -1614,7 +1614,7 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 	struct accel_mlx5_dev *dev = qp->dev;
 	int rc;
 
-	if (spdk_unlikely(dev->recovering)) {
+	if (spdk_unlikely(qp->recovering)) {
 		STAILQ_INSERT_TAIL(&dev->nomem, task, link);
 		return 0;
 	}
@@ -2166,7 +2166,7 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return rc;
 	}
 
-	if (spdk_unlikely(dev->recovering)) {
+	if (spdk_unlikely(mlx5_task->qp->recovering)) {
 		STAILQ_INSERT_TAIL(&dev->nomem, mlx5_task, link);
 		return 0;
 	}
@@ -2175,10 +2175,13 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 }
 
 static inline void
-accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task)
+accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5_qp *qp)
 {
 	struct spdk_accel_task *next_task;
 
+	if (task->qp != qp) {
+		return;
+	}
 	if (task->base.cached_lkey) {
 		*task->base.cached_lkey = 0;
 	}
@@ -2193,12 +2196,13 @@ accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task)
 
 
 static inline void
-accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
+accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_qp *qp)
 {
+	struct accel_mlx5_dev *dev = qp->dev;
 	struct accel_mlx5_task *task, *tmp;
 	int rc;
 
-	assert(dev->recovering == false);
+	assert(qp->recovering == false);
 	/* There is a good chance that WR failure was caused by invalidated cached mkey.
 	 * Clear the cache to avoid new failures. We clear cache for all tasks here,
 	 * including ones queued in nomem queue. This may clear mkeys that are still
@@ -2206,11 +2210,11 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 	 * refilled quickly.
 	 */
 	STAILQ_FOREACH(task, &dev->nomem, link) {
-		accel_mlx5_task_clear_mkey_cache(task);
+		accel_mlx5_task_clear_mkey_cache(task, qp);
 	}
 
-	STAILQ_FOREACH_SAFE(task, &dev->recover, link, tmp) {
-		STAILQ_REMOVE_HEAD(&dev->recover, link);
+	STAILQ_FOREACH_SAFE(task, &qp->recover, link, tmp) {
+		STAILQ_REMOVE_HEAD(&qp->recover, link);
 		SPDK_DEBUGLOG(accel_mlx5,
 			      "Resubmit task %p: num_ops %u, num_reqs %u, submitted_reqs %u, completed_reqs %u\n",
 			      task, task->num_ops, task->num_reqs, task->num_submitted_reqs, task->num_completed_reqs);
@@ -2228,7 +2232,7 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 		accel_mlx5_task_release_mkeys(task);
 
 		/* Clear mkey cache */
-		accel_mlx5_task_clear_mkey_cache(task);
+		accel_mlx5_task_clear_mkey_cache(task, qp);
 
 		rc = accel_mlx5_task_init(task, dev);
 		if (spdk_likely(!rc)) {
@@ -2248,28 +2252,29 @@ accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_dev *dev)
 	}
 }
 
-static void accel_mlx5_recover_dev(struct accel_mlx5_dev *dev);
+static void accel_mlx5_recover_qp(struct accel_mlx5_qp *qp);
 
 static int
-accel_mlx5_recover_dev_poller(void *arg) {
-	struct accel_mlx5_dev *dev = arg;
+accel_mlx5_recover_qp_poller(void *arg)
+{
+	struct accel_mlx5_qp *qp = arg;
 
-	spdk_poller_unregister(&dev->recover_poller);
-	accel_mlx5_recover_dev(dev);
+	spdk_poller_unregister(&qp->recover_poller);
+	accel_mlx5_recover_qp(qp);
 	return SPDK_POLLER_BUSY;
 }
 
 static void
-accel_mlx5_recover_dev(struct accel_mlx5_dev *dev)
+accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 {
+	struct accel_mlx5_dev *dev = qp->dev;
 	struct spdk_mlx5_qp_attr mlx5_qp_attr = {};
 	int rc;
 
-	SPDK_NOTICELOG("Recovering device %p, qp %p, core %u\n",
-		       dev, dev->mlx5_qp.qp, spdk_env_get_current_core());
-	if (dev->mlx5_qp.qp) {
-		spdk_mlx5_qp_destroy(dev->mlx5_qp.qp);
-		dev->mlx5_qp.qp = NULL;
+	SPDK_NOTICELOG("Recovering qp %p, core %u\n", qp, spdk_env_get_current_core());
+	if (qp->qp) {
+		spdk_mlx5_qp_destroy(qp->qp);
+		qp->qp = NULL;
 	}
 
 	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
@@ -2278,18 +2283,17 @@ accel_mlx5_recover_dev(struct accel_mlx5_dev *dev)
 	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
 	mlx5_qp_attr.siglast = g_accel_mlx5.siglast;
 
-	rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &dev->mlx5_qp.qp);
+	rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &qp->qp);
 	if (rc) {
 		SPDK_ERRLOG("Failed to create mlx5 dma QP, rc %d. Retry in %d usec\n",
 			    rc, ACCEL_MLX5_RECOVER_POLLER_PERIOD_US);
-		dev->recover_poller = SPDK_POLLER_REGISTER(accel_mlx5_recover_dev_poller, dev,
-							   ACCEL_MLX5_RECOVER_POLLER_PERIOD_US);
-		/* @todo: It may be worth resubmitting tasks to another device if we have one */
+		qp->recover_poller = SPDK_POLLER_REGISTER(accel_mlx5_recover_qp_poller, qp,
+							  ACCEL_MLX5_RECOVER_POLLER_PERIOD_US);
 		return;
 	}
 
-	dev->recovering = false;
-	accel_mlx5_resubmit_recover_tasks(dev);
+	qp->recovering = false;
+	accel_mlx5_resubmit_recover_tasks(qp);
 }
 
 static struct accel_mlx5_sig_key_wrapper *
@@ -2333,9 +2337,9 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 		switch (wr->wrid) {
 		case ACCEL_MLX5_WRID_WRITE:
 			signaled_task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
-			STAILQ_FOREACH_SAFE(task, &dev->in_hw, link, task_tmp) {
-				qp = signaled_task->qp;
-				STAILQ_REMOVE_HEAD(&dev->in_hw, link);
+			qp = signaled_task->qp;
+			STAILQ_FOREACH_SAFE(task, &qp->in_hw, link, task_tmp) {
+				STAILQ_REMOVE_HEAD(&qp->in_hw, link);
 				assert(task->num_submitted_reqs > task->num_completed_reqs);
 				completed = task->num_submitted_reqs - task->num_completed_reqs;
 				assert(qp->wrs_submitted >= task->num_wrs);
@@ -2347,20 +2351,18 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 					 * previous tasks as usual */
 					if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
 						SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-							     dev->mlx5_qp.qp, task, wc[i].status,
-							     spdk_env_get_current_core());
+							     qp, task, wc[i].status, spdk_env_get_current_core());
 					} else {
 						SPDK_DEBUGLOG(accel_mlx5,
 							      "RDMA: qp %p, task %p, WC status %d, core %u\n",
-							      dev->mlx5_qp.qp, task, wc[i].status,
-							      spdk_env_get_current_core());
+							      qp, task, wc[i].status, spdk_env_get_current_core());
 					}
 
-					dev->recovering = true;
-					STAILQ_INSERT_TAIL(&dev->recover, task, link);
+					qp->recovering = true;
+					STAILQ_INSERT_TAIL(&qp->recover, task, link);
 					if (qp->wrs_submitted == 0) {
-						assert(STAILQ_EMPTY(&dev->in_hw));
-						accel_mlx5_recover_dev(dev);
+						assert(STAILQ_EMPTY(&qp->in_hw));
+						accel_mlx5_recover_qp(qp);
 					}
 
 					break;
@@ -2430,8 +2432,8 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 		case ACCEL_MLX5_WRID_WRITE:
 			task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
 			qp = task->qp;
-			assert(task == STAILQ_FIRST(&dev->in_hw) && "submission mismatch");
-			STAILQ_REMOVE_HEAD(&dev->in_hw, link);
+			assert(task == STAILQ_FIRST(&qp->in_hw) && "submission mismatch");
+			STAILQ_REMOVE_HEAD(&qp->in_hw, link);
 			assert(task->num_submitted_reqs > task->num_completed_reqs);
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
 			assert(qp->wrs_submitted >= task->num_wrs);
@@ -2440,10 +2442,10 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			if (spdk_unlikely(wc[i].status)) {
 				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
 					SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-						     dev->mlx5_qp.qp, task, wc[i].status, spdk_env_get_current_core());
+						     qp, task, wc[i].status, spdk_env_get_current_core());
 				} else {
 					SPDK_DEBUGLOG(accel_mlx5, "RDMA: qp %p, task %p, WC status %d, core %u\n",
-						      dev->mlx5_qp.qp, task, wc[i].status, spdk_env_get_current_core());
+						      qp, task, wc[i].status, spdk_env_get_current_core());
 				}
 
 				/*
@@ -2452,11 +2454,11 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 				 */
 				accel_mlx5_task_check_sigerr(task);
 
-				dev->recovering = true;
-				STAILQ_INSERT_TAIL(&dev->recover, task, link);
+				qp->recovering = true;
+				STAILQ_INSERT_TAIL(&qp->recover, task, link);
 				if (qp->wrs_submitted == 0) {
-					assert(STAILQ_EMPTY(&dev->in_hw));
-					accel_mlx5_recover_dev(dev);
+					assert(STAILQ_EMPTY(&qp->in_hw));
+					accel_mlx5_recover_qp(qp);
 				}
 
 				continue;
@@ -2529,13 +2531,10 @@ accel_mlx5_complete_merged_tasks(struct accel_mlx5_dev *dev)
 static inline void
 accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 {
-	struct accel_mlx5_task *task, *tmp;
+	struct accel_mlx5_task *task, *tmp, *last;
 	int rc;
 
-	if (spdk_unlikely(dev->recovering)) {
-		return;
-	}
-
+	last = STAILQ_LAST(&dev->nomem, accel_mlx5_task, link);
 	STAILQ_FOREACH_SAFE(task, &dev->nomem, link, tmp) {
 		STAILQ_REMOVE_HEAD(&dev->nomem, link);
 		rc = accel_mlx5_task_continue(task);
@@ -2545,6 +2544,11 @@ accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 			} else {
 				accel_mlx5_task_complete(task, rc);
 			}
+		}
+		/* If qpair is recovering, task is added back to the nomem list and 0 is returned. In that case we
+		 * need a special condition to iterate the list once and stop this FOREACH loop */
+		if (task == last) {
+			break;
 		}
 	}
 }
@@ -2620,7 +2624,7 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 		if (dev->mlx5_qp.qp) {
 			spdk_mlx5_cq_destroy(dev->cq);
 		}
-		spdk_poller_unregister(&dev->recover_poller);
+		spdk_poller_unregister(&dev->mlx5_qp.recover_poller);
 		spdk_rdma_utils_free_mem_map(&dev->mmap);
 		SPDK_NOTICELOG("Accel mlx5 device %p channel %p stats: tasks %lu, umrs %lu, "
 			       "rdma_writes %lu, polls %lu, idle_polls %lu, completions %lu\n",
@@ -2718,9 +2722,9 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		}
 
 		STAILQ_INIT(&dev->nomem);
-		STAILQ_INIT(&dev->in_hw);
-		STAILQ_INIT(&dev->recover);
 		STAILQ_INIT(&dev->merged);
+		STAILQ_INIT(&dev->mlx5_qp.in_hw);
+		STAILQ_INIT(&dev->mlx5_qp.recover);
 		dev->mlx5_qp.dev = dev;
 		dev->mlx5_qp.max_wrs = g_accel_mlx5.qp_size;
 		dev->mmap = spdk_rdma_utils_create_mem_map(dev->pd_ref, NULL,
