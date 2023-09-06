@@ -1849,6 +1849,12 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 	return num_ops;
 }
 
+static inline struct accel_mlx5_qp *
+accel_mlx5_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
+{
+	return &dev->mlx5_qp;
+}
+
 static inline int
 accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
 {
@@ -1866,7 +1872,8 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		return -EINVAL;
 	}
 
-	mlx5_task->qp = &dev->mlx5_qp;
+	mlx5_task->qp = accel_mlx5_assign_qp(mlx5_task, dev);
+	assert(mlx5_task->qp);
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
 	mlx5_task->write_wrid.wrid = ACCEL_MLX5_WRID_WRITE;
@@ -2670,6 +2677,31 @@ accel_mlx5_translate_crc_addr(struct accel_mlx5_dev *dev)
 }
 
 static int
+accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
+{
+	struct spdk_mlx5_qp_attr mlx5_qp_attr = {};
+	int rc;
+
+	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
+	mlx5_qp_attr.cap.max_recv_wr = 0;
+	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
+	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
+	mlx5_qp_attr.siglast = g_accel_mlx5.siglast;
+
+	rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &qp->qp);
+	if (rc) {
+		return rc;
+	}
+
+	STAILQ_INIT(&qp->in_hw);
+	STAILQ_INIT(&qp->recover);
+	qp->dev = dev;
+	qp->max_wrs = g_accel_mlx5.qp_size;
+
+	return 0;
+}
+
+static int
 accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 {
 	struct accel_mlx5_io_channel *ch = ctx_buf;
@@ -2686,7 +2718,6 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 
 	for (i = 0; i < g_accel_mlx5.num_crypto_ctxs; i++) {
 		struct spdk_mlx5_cq_attr mlx5_cq_attr = {};
-		struct spdk_mlx5_qp_attr mlx5_qp_attr = {};
 
 		dev_ctx = &g_accel_mlx5.crypto_ctxs[i];
 		dev = &ch->devs[i];
@@ -2709,13 +2740,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			goto err_out;
 		}
 
-		mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
-		mlx5_qp_attr.cap.max_recv_wr = 0;
-		mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
-		mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
-		mlx5_qp_attr.siglast = g_accel_mlx5.siglast;
-
-		rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &dev->mlx5_qp.qp);
+		rc = accel_mlx5_create_qp(dev, &dev->mlx5_qp);
 		if (rc) {
 			SPDK_ERRLOG("Failed to create mlx5 QP, rc %d\n", rc);
 			goto err_out;
@@ -2723,10 +2748,6 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 
 		STAILQ_INIT(&dev->nomem);
 		STAILQ_INIT(&dev->merged);
-		STAILQ_INIT(&dev->mlx5_qp.in_hw);
-		STAILQ_INIT(&dev->mlx5_qp.recover);
-		dev->mlx5_qp.dev = dev;
-		dev->mlx5_qp.max_wrs = g_accel_mlx5.qp_size;
 		dev->mmap = spdk_rdma_utils_create_mem_map(dev->pd_ref, NULL,
 			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 		if (!dev->mmap) {
