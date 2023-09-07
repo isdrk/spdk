@@ -9,6 +9,7 @@
 #include "spdk/util.h"
 #include "spdk/likely.h"
 
+#include "spdk_internal/assert.h"
 #include "spdk_internal/rdma_utils.h"
 
 #define MLX5_QP_RQ_PSN              0x4242
@@ -70,10 +71,6 @@ mlx5_cq_init(struct ibv_pd* pd, const struct spdk_mlx5_cq_attr *attr, struct spd
 	struct mlx5dv_cq mlx5_cq;
 	struct ibv_cq_ex *cq_ex;
 	int rc;
-
-	if (!cq) {
-		return -EINVAL;
-	}
 
 	cq_ex = mlx5dv_create_cq(pd->context, &cq_attr, &cq_ex_attr);
 	if (!cq_ex) {
@@ -568,12 +565,45 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 }
 
 static void
-mlx5_cq_disconnect_qp(struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp *qp)
+mlx5_cq_remove_qp(struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp *qp)
 {
-	assert(cq->qp == qp);
-	assert(qp->cq->qp == qp);
+	uint32_t qpn_upper = qp->hw.qp_num >> SPDK_MLX5_QP_NUM_UPPER_SHIFT;
+	uint32_t qpn_mask = qp->hw.qp_num & SPDK_MLX5_QP_NUM_LOWER_MASK;
 
-	cq->qp = NULL;
+	if (cq->qps[qpn_upper].count) {
+		cq->qps[qpn_upper].table[qpn_mask] = NULL;
+		cq->qps[qpn_upper].count--;
+		cq->qps_count--;
+		if (!cq->qps[qpn_upper].count) {
+			free(cq->qps[qpn_upper].table);
+		}
+	} else {
+		SPDK_ERRLOG("incorrect count, cq %p, qp %p, qpn %u\n", cq, qp, qp->hw.qp_num);
+		SPDK_UNREACHABLE();
+	}
+}
+
+static int
+mlx5_cq_add_qp(struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp *qp)
+{
+	uint32_t qpn_upper = qp->hw.qp_num >> SPDK_MLX5_QP_NUM_UPPER_SHIFT;
+	uint32_t qpn_mask = qp->hw.qp_num & SPDK_MLX5_QP_NUM_LOWER_MASK;
+
+	if (!cq->qps[qpn_upper].count) {
+		cq->qps[qpn_upper].table = calloc(SPDK_MLX5_QP_NUM_LUT_SIZE, sizeof(*cq->qps[qpn_upper].table));
+		if (!cq->qps[qpn_upper].table) {
+			return -ENOMEM;
+		}
+	}
+	if (cq->qps[qpn_upper].table[qpn_mask]) {
+		SPDK_ERRLOG("incorrect entry, cq %p, qp %p, qpn %u\n", cq, qp, qp->hw.qp_num);
+		SPDK_UNREACHABLE();
+	}
+	cq->qps[qpn_upper].count++;
+	cq->qps_count++;
+	cq->qps[qpn_upper].table[qpn_mask] = qp;
+
+	return 0;
 }
 
 int
@@ -592,6 +622,7 @@ spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr, struct
        		free(cq);
        		return rc;
        	}
+	STAILQ_INIT(&cq->ring_db_qps);
         *cq_out = cq;
 
         return 0;
@@ -600,8 +631,8 @@ spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr, struct
 int
 spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
 {
-	if (cq->qp) {
-		SPDK_ERRLOG("CQ has a bound QP\n");
+	if (cq->qps_count) {
+		SPDK_ERRLOG("CQ has %u bound QPs\n", cq->qps_count);
 		return -EBUSY;
 	}
 
@@ -617,10 +648,6 @@ spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5
         int rc;
        	struct spdk_mlx5_qp *qp;
 
-	if (cq->qp) {
-		return -EINVAL;
-	}
-
         qp = calloc(1, sizeof(*qp));
         if (!qp) {
        		return -ENOMEM;
@@ -632,7 +659,10 @@ spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5
        		return rc;
        	}
 	qp->cq = cq;
-	cq->qp = qp;
+	rc = mlx5_cq_add_qp(cq, qp);
+	if (rc) {
+		return rc;
+	}
         *qp_out = qp;
 
        	return 0;
@@ -641,7 +671,7 @@ spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5
 void
 spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 {
-	mlx5_cq_disconnect_qp(qp->cq, qp);
+	mlx5_cq_remove_qp(qp->cq, qp);
         mlx5_qp_destroy(qp);
         free(qp);
 }

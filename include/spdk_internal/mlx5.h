@@ -110,11 +110,21 @@ struct spdk_mlx5_hw_cq {
 	uint32_t cq_num;
 };
 
+/* qp_num is 24 bits. 2D lookup table uses upper and lower 12 bits to find a qp by qp_num */
+#define SPDK_MLX5_QP_NUM_UPPER_SHIFT (12)
+#define SPDK_MLX5_QP_NUM_LOWER_MASK ((1 << SPDK_MLX5_QP_NUM_UPPER_SHIFT) - 1)
+#define SPDK_MLX5_QP_NUM_LUT_SIZE (1 << 12)
+
 struct spdk_mlx5_cq {
 	struct spdk_mlx5_hw_cq hw;
+	STAILQ_HEAD(,spdk_mlx5_qp) ring_db_qps;
+	/* TODO: its better to store this table in a global object per core */
+	struct {
+		struct spdk_mlx5_qp **table;
+		uint32_t count;
+	} qps [SPDK_MLX5_QP_NUM_LUT_SIZE];
 	struct ibv_cq *verbs_cq;
-        /* Temporal solution, now we have 1:1 relation between CQ and QP, later we'll add shared CQ */
-        struct spdk_mlx5_qp *qp;
+	uint32_t qps_count;
 };
 
 struct spdk_mlx5_cq_attr {
@@ -153,7 +163,9 @@ struct spdk_mlx5_qp {
 	struct spdk_mlx5_hw_qp hw;
 	struct mlx5_qp_completion *completions;
 	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct spdk_mlx5_cq *cq;
 	struct ibv_qp *verbs_qp;
+	STAILQ_ENTRY(spdk_mlx5_qp) db_link;
 	uint16_t nonsignaled_outstanding;
 	uint16_t max_sge;
 	uint16_t tx_available;
@@ -162,8 +174,6 @@ struct spdk_mlx5_qp {
 	uint16_t last_pi;
 	bool tx_need_ring_db;
 	bool aes_xts_inc_64;
-	/* Used in control path */
-	struct spdk_mlx5_cq *cq;
 };
 
 /*
@@ -220,6 +230,7 @@ struct spdk_mlx5_umr_attr {
 /**
  * Create Completion Queue
  *
+ * \note: CQ and all associated qpairs must be accessed in scope of a single thread
  * \note: CQ size must be enough to hold completions of all connected qpairs
  *
  * \param pd Protection Domain

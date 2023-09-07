@@ -317,14 +317,12 @@ mlx5_qp_update_comp(struct spdk_mlx5_qp *qp)
 static inline void
 mlx5_qp_tx_complete(struct spdk_mlx5_qp *qp)
 {
-	if (qp->tx_need_ring_db) {
-		qp->tx_need_ring_db = false;
-		qp->ctrl->fm_ce_se |= ~qp->tx_revert_flags;
-		if (qp->tx_revert_flags != (uint16_t)-1) {
-			mlx5_qp_update_comp(qp);
-		}
-		mlx5_ring_tx_db(qp, qp->ctrl);
+	qp->tx_need_ring_db = false;
+	qp->ctrl->fm_ce_se |= ~qp->tx_revert_flags;
+	if (qp->tx_revert_flags != (uint16_t)-1) {
+		mlx5_qp_update_comp(qp);
 	}
+	mlx5_ring_tx_db(qp, qp->ctrl);
 }
 
 static inline struct mlx5_cqe64 *
@@ -402,6 +400,7 @@ mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion
 int
 spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_completion *comp, int max_completions)
 {
+	struct spdk_mlx5_qp *qp, *tqp;
 	struct mlx5_cqe64 *cqe;
 	uint8_t opcode;
 	int n = 0;
@@ -412,22 +411,28 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 			break;
 		}
 
+		qp = mlx5_cq_find_qp(cq, be32toh(cqe->sop_drop_qpn) & 0xffffff);
+		if (spdk_unlikely(!qp)) {
+			return -ENODEV;
+		}
+
 		opcode = mlx5dv_get_cqe_opcode(cqe);
 		if (spdk_likely(opcode == MLX5_CQE_REQ)) {
-			comp[n].wr_id = mlx5_qp_get_comp_wr_id(cq->qp, cqe);
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(qp, cqe);
 			comp[n].status = IBV_WC_SUCCESS;
 		} else if (opcode == MLX5_CQE_SIG_ERR) {
 			mlx5_cqe_sigerr_comp((struct mlx5_sigerr_cqe *)cqe, &comp[n]);
 		} else {
-			comp[n].wr_id = mlx5_qp_get_comp_wr_id(cq->qp, cqe);
+			comp[n].wr_id = mlx5_qp_get_comp_wr_id(qp, cqe);
 			comp[n].status = mlx5_cqe_err(cqe);
 		}
-
 		n++;
-
 	} while (n < max_completions);
 
-	mlx5_qp_tx_complete(cq->qp);
+	STAILQ_FOREACH_SAFE(qp, &cq->ring_db_qps, db_link, tqp) {
+		STAILQ_REMOVE_HEAD(&cq->ring_db_qps, db_link);
+		mlx5_qp_tx_complete(qp);
+	}
 
 	return n;
 }

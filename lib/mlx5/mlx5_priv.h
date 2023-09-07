@@ -190,9 +190,12 @@ mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint
 
 	/* Delay ringing the doorbell */
 	qp->hw.sq_pi += n_wqe_bb;
-	qp->tx_need_ring_db = true;
 	qp->last_pi = ctrlr_pi;
 	qp->ctrl = ctrl;
+	if (!qp->tx_need_ring_db) {
+		qp->tx_need_ring_db = true;
+		STAILQ_INSERT_TAIL(&qp->cq->ring_db_qps, qp, db_link);
+	}
 }
 
 static inline void
@@ -225,4 +228,16 @@ mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
 	*pd_id = pd_info.pdn;
 
 	return 0;
+}
+
+static inline struct spdk_mlx5_qp *
+mlx5_cq_find_qp(struct spdk_mlx5_cq *cq, uint32_t qp_num)
+{
+	uint32_t qpn_upper = qp_num >> SPDK_MLX5_QP_NUM_UPPER_SHIFT;
+	uint32_t qpn_mask = qp_num & SPDK_MLX5_QP_NUM_LOWER_MASK;
+
+	if (spdk_unlikely(!cq->qps[qpn_upper].count)) {
+		return NULL;
+	}
+	return cq->qps[qpn_upper].table[qpn_mask];
 }
