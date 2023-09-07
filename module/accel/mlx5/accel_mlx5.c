@@ -25,6 +25,7 @@
 #include <rdma/rdma_cma.h>
 
 #define ACCEL_MLX5_QP_SIZE (256u)
+#define ACCEL_MLX5_CQ_SIZE (256u)
 #define ACCEL_MLX5_NUM_MKEYS (2048u)
 
 #define ACCEL_MLX5_MAX_SGE (16u)
@@ -74,9 +75,12 @@ struct accel_mlx5_module {
 	struct accel_mlx5_crypto_dev_ctx *crypto_ctxs;
 	uint32_t num_crypto_ctxs;
 	uint16_t qp_size;
+	uint16_t cq_size;
 	uint32_t num_requests;
 	uint32_t split_mb_blocks;
 	bool siglast;
+	/* copy of user input to make dump config easier */
+	char *allowed_crypto_devs_str;
 	char **allowed_crypto_devs;
 	size_t allowed_crypto_devs_count;
 	bool enabled;
@@ -2731,7 +2735,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		dev->sig_mkey_tree_ref = &dev_ctx->sig_mkey_tree;
 		ch->num_devs++;
 
-		mlx5_cq_attr.cqe_cnt = g_accel_mlx5.qp_size;
+		mlx5_cq_attr.cqe_cnt = g_accel_mlx5.cq_size;
 		mlx5_cq_attr.cqe_size = 64;
 		mlx5_cq_attr.cq_context = dev;
 
@@ -2779,6 +2783,7 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	memset(attr, 0, sizeof(*attr));
 
 	attr->qp_size = ACCEL_MLX5_QP_SIZE;
+	attr->cq_size = ACCEL_MLX5_CQ_SIZE;
 	attr->num_requests = ACCEL_MLX5_NUM_MKEYS;
 	attr->split_mb_blocks = 0;
 	attr->siglast = false;
@@ -2798,6 +2803,7 @@ accel_mlx5_allowed_crypto_devs_free(void)
 		free(g_accel_mlx5.allowed_crypto_devs[i]);
 	}
 	free(g_accel_mlx5.allowed_crypto_devs);
+	free(g_accel_mlx5.allowed_crypto_devs_str);
 	g_accel_mlx5.allowed_crypto_devs = NULL;
 	g_accel_mlx5.allowed_crypto_devs_count = 0;
 }
@@ -2853,6 +2859,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 	if (attr) {
 		/* Copy attributes */
 		g_accel_mlx5.qp_size = attr->qp_size;
+		g_accel_mlx5.cq_size = attr->cq_size;
 		g_accel_mlx5.num_requests = attr->num_requests;
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
@@ -2861,6 +2868,10 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		if (attr->allowed_crypto_devs) {
 			int rc;
 
+			g_accel_mlx5.allowed_crypto_devs_str = strdup(attr->allowed_crypto_devs);
+			if (!g_accel_mlx5.allowed_crypto_devs_str) {
+				return -ENOMEM;
+			}
 			rc = accel_mlx5_allowed_crypto_devs_parse(attr->allowed_crypto_devs);
 			if (rc) {
 				return rc;
@@ -3463,8 +3474,14 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_string(w, "method", "mlx5_scan_accel_module");
 		spdk_json_write_named_object_begin(w, "params");
 		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
+		spdk_json_write_named_uint16(w, "cq_size", g_accel_mlx5.cq_size);
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
 		spdk_json_write_named_bool(w, "merge", g_accel_mlx5.merge);
+		spdk_json_write_named_uint32(w, "split_mb_blocks", g_accel_mlx5.split_mb_blocks);
+		if (g_accel_mlx5.allowed_crypto_devs_str) {
+			spdk_json_write_named_string(w, "allowed_crypto_devs", g_accel_mlx5.allowed_crypto_devs_str);
+		}
+		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.siglast);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);
 	}
@@ -3586,6 +3603,7 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 	},
 	.enabled = true,
 	.qp_size = ACCEL_MLX5_QP_SIZE,
+	.cq_size = ACCEL_MLX5_CQ_SIZE,
 	.num_requests = ACCEL_MLX5_NUM_MKEYS,
 	.split_mb_blocks = 0
 };

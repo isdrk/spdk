@@ -3002,6 +3002,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def mlx5_scan_accel_module(args):
         rpc.mlx5.mlx5_scan_accel_module(args.client,
                                         qp_size=args.qp_size,
+                                        cq_size=args.cq_size,
                                         num_requests=args.num_requests,
                                         split_mb_blocks=args.split_mb_blocks,
                                         allowed_crypto_devs=args.allowed_crypto_devs,
@@ -3010,6 +3011,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
+    p.add_argument('-c', '--cq-size', type=int, help='CQ size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
     p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR. Requires crypto-mb")
     p.add_argument('-d', '--allowed-crypto-devs', help="Comma separated list of allowed crypto device names")

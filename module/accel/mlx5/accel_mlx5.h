@@ -9,6 +9,8 @@ struct accel_mlx5_attr {
 	char *allowed_crypto_devs;
 	/* The number of entries in qp submission/receive queue */
 	uint16_t qp_size;
+	/* The number of entries in completion queue */
+	uint16_t cq_size;
 	/* The number of requests in the global pool */
 	uint32_t num_requests;
 	/* The number of data blocks to be processed in 1 UMR.
