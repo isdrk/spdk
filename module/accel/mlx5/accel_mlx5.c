@@ -48,13 +48,12 @@ struct accel_mlx5_iov_sgl {
 struct accel_mlx5_io_channel;
 struct accel_mlx5_task;
 
-struct accel_mlx5_cryptodev_memory_domain {
+struct accel_mlx5_memory_domain {
 	struct spdk_memory_domain_rdma_ctx rdma_ctx;
 	struct spdk_memory_domain *domain;
 };
 
-/* TODO: rename structures to remove 'crypto' word */
-struct accel_mlx5_crypto_dev_ctx {
+struct accel_mlx5_dev_ctx {
 	struct spdk_mempool *mkey_pool;
 	struct spdk_mlx5_indirect_mkey **mkeys;
 	struct spdk_mempool *sig_mkey_pool;
@@ -64,7 +63,7 @@ struct accel_mlx5_crypto_dev_ctx {
 	uint32_t *crc_dma_buf;
 	struct ibv_context *context;
 	struct ibv_pd *pd;
-	struct accel_mlx5_cryptodev_memory_domain domain;
+	struct accel_mlx5_memory_domain domain;
 	uint32_t num_mkeys;
 	bool crypto_multi_block;
 	RB_HEAD(mkeys_tree, accel_mlx5_sig_key_wrapper) sig_mkey_tree;
@@ -72,8 +71,8 @@ struct accel_mlx5_crypto_dev_ctx {
 
 struct accel_mlx5_module {
 	struct spdk_accel_module_if module;
-	struct accel_mlx5_crypto_dev_ctx *crypto_ctxs;
-	uint32_t num_crypto_ctxs;
+	struct accel_mlx5_dev_ctx *devices;
+	uint32_t num_devs;
 	uint16_t qp_size;
 	uint16_t cq_size;
 	uint32_t num_requests;
@@ -2710,21 +2709,21 @@ static int
 accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 {
 	struct accel_mlx5_io_channel *ch = ctx_buf;
-	struct accel_mlx5_crypto_dev_ctx *dev_ctx;
+	struct accel_mlx5_dev_ctx *dev_ctx;
 	struct accel_mlx5_dev *dev;
 	uint32_t i;
 	int rc;
 
-	ch->devs = calloc(g_accel_mlx5.num_crypto_ctxs, sizeof(*ch->devs));
+	ch->devs = calloc(g_accel_mlx5.num_devs, sizeof(*ch->devs));
 	if (!ch->devs) {
 		SPDK_ERRLOG("Memory allocation failed\n");
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < g_accel_mlx5.num_crypto_ctxs; i++) {
+	for (i = 0; i < g_accel_mlx5.num_devs; i++) {
 		struct spdk_mlx5_cq_attr mlx5_cq_attr = {};
 
-		dev_ctx = &g_accel_mlx5.crypto_ctxs[i];
+		dev_ctx = &g_accel_mlx5.devices[i];
 		dev = &ch->devs[i];
 		dev->mkey_pool_ref = dev_ctx->mkey_pool;
 		dev->sig_mkey_pool_ref = dev_ctx->sig_mkey_pool;
@@ -2916,7 +2915,7 @@ accel_mlx5_mkeys_release(struct spdk_mempool *mkey_pool, struct spdk_mlx5_indire
 }
 
 static void
-accel_mlx5_crypto_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_crypto_mkeys_release(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	if (dev_ctx->mkeys) {
 		accel_mlx5_mkeys_release(dev_ctx->mkey_pool, dev_ctx->mkeys, dev_ctx->num_mkeys);
@@ -2926,14 +2925,14 @@ accel_mlx5_crypto_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 static void
 accel_mlx5_sig_mkey_remove_from_tree(struct spdk_mempool *mp, void *cb_arg, void *obj, unsigned obj_idx)
 {
-	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_dev_ctx *dev_ctx = cb_arg;
 	struct accel_mlx5_sig_key_wrapper *wrapper = obj;
 
 	RB_REMOVE(mkeys_tree, &dev_ctx->sig_mkey_tree, wrapper);
 }
 
 static void
-accel_mlx5_sig_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_sig_mkeys_release(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	if (dev_ctx->sig_mkeys) {
 		spdk_mempool_obj_iter(dev_ctx->sig_mkey_pool, accel_mlx5_sig_mkey_remove_from_tree, dev_ctx);
@@ -2942,7 +2941,7 @@ accel_mlx5_sig_mkeys_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 }
 
 static void
-accel_mlx5_psvs_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_psvs_release(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	uint32_t i, num_psvs, num_psvs_in_pool;
 
@@ -2977,16 +2976,16 @@ accel_mlx5_free_resources(void)
 {
 	uint32_t i;
 
-	for (i = 0; i < g_accel_mlx5.num_crypto_ctxs; i++) {
-		accel_mlx5_crypto_mkeys_release(&g_accel_mlx5.crypto_ctxs[i]);
-		accel_mlx5_sig_mkeys_release(&g_accel_mlx5.crypto_ctxs[i]);
-		accel_mlx5_psvs_release(&g_accel_mlx5.crypto_ctxs[i]);
-		spdk_memory_domain_destroy(g_accel_mlx5.crypto_ctxs[i].domain.domain);
-		spdk_rdma_utils_put_pd(g_accel_mlx5.crypto_ctxs[i].pd);
+	for (i = 0; i < g_accel_mlx5.num_devs; i++) {
+		accel_mlx5_crypto_mkeys_release(&g_accel_mlx5.devices[i]);
+		accel_mlx5_sig_mkeys_release(&g_accel_mlx5.devices[i]);
+		accel_mlx5_psvs_release(&g_accel_mlx5.devices[i]);
+		spdk_memory_domain_destroy(g_accel_mlx5.devices[i].domain.domain);
+		spdk_rdma_utils_put_pd(g_accel_mlx5.devices[i].pd);
 	}
 
-	free(g_accel_mlx5.crypto_ctxs);
-	g_accel_mlx5.crypto_ctxs = NULL;
+	free(g_accel_mlx5.devices);
+	g_accel_mlx5.devices = NULL;
 }
 
 static void
@@ -3003,7 +3002,7 @@ accel_mlx5_deinit(void *ctx)
 		accel_mlx5_allowed_crypto_devs_free();
 		spdk_mlx5_crypto_devs_allow(NULL, 0);
 	}
-	if (g_accel_mlx5.crypto_ctxs) {
+	if (g_accel_mlx5.devices) {
 		spdk_io_device_unregister(&g_accel_mlx5, accel_mlx5_deinit_cb);
 	} else {
 		spdk_accel_module_finish();
@@ -3014,7 +3013,7 @@ static void
 accel_mlx5_set_crypto_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
 {
 	struct accel_mlx5_crypto_key_wrapper *wrapper = _mkey;
-	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_dev_ctx *dev_ctx = cb_arg;
 
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->mkeys[obj_idx] != NULL);
@@ -3063,7 +3062,7 @@ accel_mlx5_configure_mkey(struct spdk_mlx5_indirect_mkey **_mkey, struct ibv_pd 
 }
 
 static int
-accel_mlx5_fill_pool_name(struct accel_mlx5_crypto_dev_ctx *dev_ctx, char *suffix, char *pool_name,
+accel_mlx5_fill_pool_name(struct accel_mlx5_dev_ctx *dev_ctx, char *suffix, char *pool_name,
 			  size_t pool_name_size)
 {
 	/* Compiler may produce a warning like
@@ -3076,7 +3075,7 @@ accel_mlx5_fill_pool_name(struct accel_mlx5_crypto_dev_ctx *dev_ctx, char *suffi
 }
 
 static int
-accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_crypto_ctx_mkeys_create(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	char pool_name[32];
 	uint32_t i;
@@ -3119,7 +3118,7 @@ static void
 accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsigned obj_idx)
 {
 	struct accel_mlx5_sig_key_wrapper *wrapper = _mkey;
-	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_dev_ctx *dev_ctx = cb_arg;
 
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->sig_mkeys[obj_idx] != NULL);
@@ -3132,7 +3131,7 @@ accel_mlx5_set_sig_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mk
 }
 
 static int
-accel_mlx5_sig_ctx_mkeys_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_sig_ctx_mkeys_create(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	char pool_name[32];
 	uint32_t i;
@@ -3175,7 +3174,7 @@ static void
 accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, unsigned obj_idx)
 {
 	struct accel_mlx5_psv_wrapper *wrapper = _psv;
-	struct accel_mlx5_crypto_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_dev_ctx *dev_ctx = cb_arg;
 
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->psvs[obj_idx] != NULL);
@@ -3189,7 +3188,7 @@ accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, un
 }
 
 static int
-accel_mlx5_psvs_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
+accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 {
 	char pool_name[32];
 	uint32_t i;
@@ -3254,8 +3253,8 @@ accel_mlx5_rdma_get_mlx5_dev(struct ibv_context **devices, int num_devs)
 static int
 accel_mlx5_init_mem_op(void)
 {
-	struct accel_mlx5_crypto_dev_ctx *crypto_dev_ctx;
-	struct accel_mlx5_cryptodev_memory_domain *domain;
+	struct accel_mlx5_dev_ctx *crypto_dev_ctx;
+	struct accel_mlx5_memory_domain *domain;
 	struct ibv_context **rdma_devs, *dev;
 	struct spdk_memory_domain_ctx ctx;
 	struct ibv_pd *pd;
@@ -3273,14 +3272,14 @@ accel_mlx5_init_mem_op(void)
 		goto cleanup;
 	}
 
-	g_accel_mlx5.crypto_ctxs = calloc(1, sizeof(*g_accel_mlx5.crypto_ctxs));
-	if (!g_accel_mlx5.crypto_ctxs) {
+	g_accel_mlx5.devices = calloc(1, sizeof(*g_accel_mlx5.devices));
+	if (!g_accel_mlx5.devices) {
 		SPDK_ERRLOG("Memory allocation failed\n");
 		rc = -ENOMEM;
 		goto cleanup;
 	}
 
-	crypto_dev_ctx = &g_accel_mlx5.crypto_ctxs[0];
+	crypto_dev_ctx = &g_accel_mlx5.devices[0];
 
 	pd = spdk_rdma_utils_get_pd(dev);
 	if (!pd) {
@@ -3291,7 +3290,7 @@ accel_mlx5_init_mem_op(void)
 	crypto_dev_ctx->context = dev;
 	crypto_dev_ctx->pd = pd;
 
-	domain = &g_accel_mlx5.crypto_ctxs[0].domain;
+	domain = &g_accel_mlx5.devices[0].domain;
 	domain->rdma_ctx.size = sizeof(domain->rdma_ctx);
 	domain->rdma_ctx.ibv_pd = (void *) pd;
 	ctx.size = sizeof(ctx);
@@ -3303,7 +3302,7 @@ accel_mlx5_init_mem_op(void)
 		goto cleanup;
 	}
 
-	g_accel_mlx5.num_crypto_ctxs = 1;
+	g_accel_mlx5.num_devs = 1;
 
 	SPDK_NOTICELOG("Accel framework mlx5 initialized\n");
 	spdk_io_device_register(&g_accel_mlx5, accel_mlx5_create_cb, accel_mlx5_destroy_cb,
@@ -3321,8 +3320,8 @@ cleanup:
 static int
 accel_mlx5_init(void)
 {
-	struct accel_mlx5_crypto_dev_ctx *crypto_dev_ctx;
-	struct accel_mlx5_cryptodev_memory_domain *domain;
+	struct accel_mlx5_dev_ctx *dev_ctx;
+	struct accel_mlx5_memory_domain *domain;
 	struct ibv_context **rdma_devs, *dev;
 	struct spdk_memory_domain_ctx ctx;
 	struct ibv_pd *pd;
@@ -3378,15 +3377,15 @@ accel_mlx5_init(void)
 		}
 	}
 
-	g_accel_mlx5.crypto_ctxs = calloc(num_devs, sizeof(*g_accel_mlx5.crypto_ctxs));
-	if (!g_accel_mlx5.crypto_ctxs) {
+	g_accel_mlx5.devices = calloc(num_devs, sizeof(*g_accel_mlx5.devices));
+	if (!g_accel_mlx5.devices) {
 		SPDK_ERRLOG("Memory allocation failed\n");
 		rc = -ENOMEM;
 		goto cleanup;
 	}
 
 	for (i = 0; i < num_devs; i++) {
-		crypto_dev_ctx = &g_accel_mlx5.crypto_ctxs[i];
+		dev_ctx = &g_accel_mlx5.devices[i];
 		dev = rdma_devs[i];
 		SPDK_NOTICELOG("Crypto dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d, crc32c %d\n",
 			       dev->device->name,
@@ -3402,27 +3401,27 @@ accel_mlx5_init(void)
 			rc = -EINVAL;
 			goto cleanup;
 		}
-		crypto_dev_ctx->context = dev;
-		crypto_dev_ctx->pd = pd;
-		RB_INIT(&crypto_dev_ctx->sig_mkey_tree);
-		crypto_dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
-		rc = accel_mlx5_crypto_ctx_mkeys_create(crypto_dev_ctx);
+		dev_ctx->context = dev;
+		dev_ctx->pd = pd;
+		RB_INIT(&dev_ctx->sig_mkey_tree);
+		dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
+		rc = accel_mlx5_crypto_ctx_mkeys_create(dev_ctx);
 		if (rc) {
 			goto cleanup;
 		}
 
 		if (g_accel_mlx5.crc_supported) {
-			rc = accel_mlx5_sig_ctx_mkeys_create(crypto_dev_ctx);
+			rc = accel_mlx5_sig_ctx_mkeys_create(dev_ctx);
 			if (rc) {
 				goto cleanup;
 			}
-			rc = accel_mlx5_psvs_create(crypto_dev_ctx);
+			rc = accel_mlx5_psvs_create(dev_ctx);
 			if (rc) {
 				goto cleanup;
 			}
 		}
 
-		domain = &g_accel_mlx5.crypto_ctxs[i].domain;
+		domain = &g_accel_mlx5.devices[i].domain;
 		domain->rdma_ctx.size = sizeof(domain->rdma_ctx);
 		domain->rdma_ctx.ibv_pd = (void *) pd;
 		ctx.size = sizeof(ctx);
@@ -3435,16 +3434,16 @@ accel_mlx5_init(void)
 		}
 
 		/* Explicitly disabled by default */
-		crypto_dev_ctx->crypto_multi_block = false;
+		dev_ctx->crypto_multi_block = false;
 		if (crypto_caps[i].multi_block_be_tweak) {
 			/* TODO: multi_block LE tweak will be checked later once LE BSF is fixed */
-			crypto_dev_ctx->crypto_multi_block = true;
+			dev_ctx->crypto_multi_block = true;
 		} else if (g_accel_mlx5.split_mb_blocks) {
 			SPDK_WARNLOG("\"split_mb_block\" is set but dev %s doesn't support multi block crypto\n",
 				     dev->device->name);
 		}
 
-		g_accel_mlx5.num_crypto_ctxs++;
+		g_accel_mlx5.num_devs++;
 	}
 
 	SPDK_NOTICELOG("Accel framework mlx5 initialized, found %d devices.\n", num_devs);
@@ -3542,16 +3541,16 @@ accel_mlx5_get_memory_domains(struct spdk_memory_domain **domains, int array_siz
 	int i, size;
 
 	if (!domains || !array_size) {
-		return (int)g_accel_mlx5.num_crypto_ctxs;
+		return (int)g_accel_mlx5.num_devs;
 	}
 
-	size = spdk_min(array_size, (int)g_accel_mlx5.num_crypto_ctxs);
+	size = spdk_min(array_size, (int)g_accel_mlx5.num_devs);
 
 	for (i = 0; i < size; i++) {
-		domains[i] = g_accel_mlx5.crypto_ctxs[i].domain.domain;
+		domains[i] = g_accel_mlx5.devices[i].domain.domain;
 	}
 
-	return (int)g_accel_mlx5.num_crypto_ctxs;
+	return (int)g_accel_mlx5.num_devs;
 }
 
 static bool accel_mlx5_crypto_supports_tweak_mode(enum spdk_accel_crypto_tweak_mode tweak_mode)
