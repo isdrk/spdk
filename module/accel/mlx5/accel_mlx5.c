@@ -45,8 +45,11 @@ struct accel_mlx5_iov_sgl {
 	uint32_t        iov_offset;
 };
 
+struct accel_mlx5_qp;
 struct accel_mlx5_io_channel;
 struct accel_mlx5_task;
+
+RB_HEAD(accel_mlx5_qpairs_map, accel_mlx5_qp);
 
 struct accel_mlx5_dev_ctx {
 	struct spdk_mempool *mkey_pool;
@@ -73,6 +76,7 @@ struct accel_mlx5_module {
 	uint32_t num_requests;
 	uint32_t split_mb_blocks;
 	bool siglast;
+	bool qp_per_domain;
 	/* copy of user input to make dump config easier */
 	char *allowed_crypto_devs_str;
 	char **allowed_crypto_devs;
@@ -206,6 +210,9 @@ struct accel_mlx5_dev_stats {
 struct accel_mlx5_qp {
 	struct spdk_mlx5_qp *qp;
 	struct accel_mlx5_dev *dev;
+	RB_ENTRY(accel_mlx5_qp) node;
+	/* Memory domain which this qpair serves */
+	struct spdk_memory_domain *domain;
 	uint16_t wrs_submitted;
 	uint16_t max_wrs;
 	bool recovering;
@@ -219,6 +226,7 @@ struct accel_mlx5_dev {
 	struct spdk_mlx5_cq *cq;
 	struct accel_mlx5_qp mlx5_qp;
 	struct spdk_rdma_utils_mem_map *mmap;
+	struct accel_mlx5_qpairs_map qpairs_map;
 	/* Points to a pool owned by dev_ctx */
 	struct spdk_mempool *mkey_pool_ref;
 	/* Points to a pool owned by dev_ctx */
@@ -244,6 +252,16 @@ struct accel_mlx5_io_channel {
 	/* Index in \b devs to be used for crypto in round-robin way */
 	uint32_t dev_idx;
 };
+
+static int accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp);
+
+static int
+accel_mlx5_qpair_compare(struct accel_mlx5_qp *qp1, struct accel_mlx5_qp *qp2)
+{
+	return (uint64_t)qp1->domain < (uint64_t)qp2->domain ? -1 : (uint64_t)qp1->domain > (uint64_t)qp2->domain;
+}
+
+RB_GENERATE_STATIC(accel_mlx5_qpairs_map, accel_mlx5_qp, node, accel_mlx5_qpair_compare);
 
 static struct accel_mlx5_module g_accel_mlx5;
 static void(*g_accel_mlx5_process_cpl_fn)(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc, int reaped);
@@ -1846,9 +1864,89 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 }
 
 static inline struct accel_mlx5_qp *
-accel_mlx5_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
+accel_mlx5_qp_find(struct accel_mlx5_qpairs_map *map, struct spdk_memory_domain *domain)
 {
-	return &dev->mlx5_qp;
+	struct accel_mlx5_qp _qp;
+
+	_qp.domain = domain;
+
+	return RB_FIND(accel_mlx5_qpairs_map, map, &_qp);
+}
+
+static inline struct accel_mlx5_qp *
+accel_mlx5_dev_get_qp_by_domain(struct accel_mlx5_dev *dev, struct spdk_memory_domain *domain)
+{
+	struct accel_mlx5_qp *qp;
+	int rc;
+
+	qp = accel_mlx5_qp_find(&dev->qpairs_map, domain);
+	if (!qp) {
+		qp = calloc(1, sizeof(*qp));
+		if (!qp) {
+			SPDK_ERRLOG("Memory allocation failed\n");
+			return NULL;
+		}
+		rc = accel_mlx5_create_qp(dev, qp);
+		if (rc) {
+			SPDK_ERRLOG("Failed to create qp, rc %d\n", rc);
+			free(qp);
+			return NULL;
+		}
+		qp->domain = domain;
+		RB_INSERT(accel_mlx5_qpairs_map, &dev->qpairs_map, qp);
+		SPDK_NOTICELOG("created new qp num %u for domain %p\n", qp->qp->hw.qp_num, domain);
+	}
+	assert(qp->dev == dev);
+
+	return qp;
+}
+
+static inline struct accel_mlx5_qp *
+accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
+{
+	if (!g_accel_mlx5.qp_per_domain || (!mlx5_task->base.src_domain && !mlx5_task->base.dst_domain)) {
+		return &dev->mlx5_qp;
+	}
+
+	/* TODO: find a way to distinguish between SPDK internal and app external domains.
+	 * We need to use app domain to find a qp. For now, make an assumption that app domain (src or dst)
+	 * depends on the opcode */
+	switch (mlx5_task->mlx5_opcode) {
+	case ACCEL_MLX5_OPC_CRYPTO:
+	case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
+		if (mlx5_task->base.op_code == ACCEL_OPC_ENCRYPT) {
+			if (mlx5_task->base.src_domain) {
+				return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
+			} else {
+				return &dev->mlx5_qp;
+			}
+		} else {
+			assert((mlx5_task->base.op_code == ACCEL_OPC_DECRYPT && mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) ||
+			       (mlx5_task->base.op_code == ACCEL_OPC_CHECK_CRC32C && mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C));
+			if (mlx5_task->base.dst_domain) {
+				return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+			} else {
+				return &dev->mlx5_qp;
+			}
+		};
+		break;
+	case ACCEL_MLX5_OPC_COPY:
+		if (mlx5_task->base.dst_domain) {
+			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+		} else {
+			return &dev->mlx5_qp;
+		}
+		break;
+	case ACCEL_MLX5_OPC_CRC32C:
+		if (mlx5_task->base.src_domain) {
+			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+		} else {
+			return &dev->mlx5_qp;
+		}
+		break;
+	default:
+		return NULL;
+	}
 }
 
 static inline int
@@ -1868,8 +1966,11 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 		return -EINVAL;
 	}
 
-	mlx5_task->qp = accel_mlx5_assign_qp(mlx5_task, dev);
-	assert(mlx5_task->qp);
+	mlx5_task->qp = accel_mlx5_task_assign_qp(mlx5_task, dev);
+	if (spdk_unlikely(!mlx5_task->qp)) {
+		return -EIO;
+	}
+
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
 	mlx5_task->write_wrid.wrid = ACCEL_MLX5_WRID_WRITE;
@@ -2231,6 +2332,13 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 	STAILQ_FOREACH(task, &dev->nomem, link) {
 		accel_mlx5_task_clear_mkey_cache(task, qp);
 	}
+	if (qp->domain) {
+		/* No need to re-create a qp created for a specific domain, it will be created when needed */
+		assert(qp != &qp->dev->mlx5_qp);
+		RB_REMOVE(accel_mlx5_qpairs_map, &dev->qpairs_map, qp);
+		free(qp);
+		return;
+	}
 
 	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
 	mlx5_qp_attr.cap.max_recv_wr = 0;
@@ -2561,6 +2669,25 @@ accel_mlx5_get_io_channel(void)
 }
 
 static void
+accel_mlx5_dev_destroy_qps(struct accel_mlx5_dev *dev)
+{
+	struct accel_mlx5_qp *qpair, *tmp_qpair;
+
+	if (dev->mlx5_qp.qp) {
+		spdk_mlx5_qp_destroy(dev->mlx5_qp.qp);
+	}
+
+	RB_FOREACH_SAFE(qpair, accel_mlx5_qpairs_map, &dev->qpairs_map, tmp_qpair) {
+		if (qpair->dev == dev) {
+			RB_REMOVE(accel_mlx5_qpairs_map, &dev->qpairs_map, qpair);
+			spdk_mlx5_qp_destroy(qpair->qp);
+			free(qpair);
+		}
+	}
+
+}
+
+static void
 accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 {
 	struct accel_mlx5_io_channel *ch = ctx_buf;
@@ -2570,10 +2697,8 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 	spdk_poller_unregister(&ch->poller);
 	for (i = 0; i < ch->num_devs; i++) {
 		dev = &ch->devs[i];
-		if (dev->mlx5_qp.qp) {
-			spdk_mlx5_qp_destroy(dev->mlx5_qp.qp);
-		}
-		if (dev->mlx5_qp.qp) {
+		accel_mlx5_dev_destroy_qps(dev);
+		if (dev->cq) {
 			spdk_mlx5_cq_destroy(dev->cq);
 		}
 		spdk_poller_unregister(&dev->mlx5_qp.recover_poller);
@@ -2672,6 +2797,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		dev->domain_ref = dev_ctx->domain->domain;
 		dev->crypto_multi_block = dev_ctx->crypto_multi_block;
 		dev->sig_mkey_tree_ref = &dev_ctx->sig_mkey_tree;
+		RB_INIT(&dev->qpairs_map);
 		ch->num_devs++;
 
 		mlx5_cq_attr.cqe_cnt = g_accel_mlx5.cq_size;
@@ -2727,6 +2853,7 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->split_mb_blocks = 0;
 	attr->siglast = false;
 	attr->merge = false;
+	attr->qp_per_domain = false;
 }
 
 static void
@@ -2803,6 +2930,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
 		g_accel_mlx5.merge = attr->merge;
+		g_accel_mlx5.qp_per_domain= attr->qp_per_domain;
 
 		if (attr->allowed_crypto_devs) {
 			int rc;
@@ -3402,6 +3530,7 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 			spdk_json_write_named_string(w, "allowed_crypto_devs", g_accel_mlx5.allowed_crypto_devs_str);
 		}
 		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.siglast);
+		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.qp_per_domain);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);
 	}

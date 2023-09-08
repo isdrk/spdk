@@ -20,6 +20,7 @@ struct accel_mlx5_attr {
 	bool siglast;
 	/* Merge tasks in the sequence when possible. */
 	bool merge;
+	bool qp_per_domain;
 };
 
 void accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr);
