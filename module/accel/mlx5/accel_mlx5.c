@@ -119,6 +119,10 @@ RB_GENERATE_STATIC(mkeys_tree, accel_mlx5_sig_key_wrapper, node, accel_mlx5_sig_
 
 struct accel_mlx5_psv_wrapper {
 	uint32_t psv_index;
+	struct {
+		uint32_t error : 1;
+		uint32_t reserved : 31;
+	} bits;
 };
 
 enum accel_mlx5_opcode {
@@ -944,6 +948,15 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		dev->reqs_submitted++;
 	}
 
+	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
+		rc = spdk_mlx5_set_psv(dev->dma_qp, mlx5_task->psv->psv_index, task_crc->seed, 0, 0);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
+			return rc;
+		}
+		dev->reqs_submitted++;
+	}
+
 	for (i = 0; i < num_ops - 1; i++) {
 		/* UMR is used as a destination for RDMA_READ - from UMR to klms
 		 * XTS is applied on DPS */
@@ -1145,6 +1158,15 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		return rc;
 	}
 
+	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
+		rc = spdk_mlx5_set_psv(dev->dma_qp, mlx5_task->psv->psv_index, *mlx5_task->base.crc, 0, 0);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
+			return rc;
+		}
+		dev->reqs_submitted++;
+	}
+
 	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->sig_mkeys[0]->mkey,
 					(uint64_t) &mlx5_task->write_wrid,
 					rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
@@ -1178,6 +1200,18 @@ accel_mlx5_task_alloc_crc_ctx(struct accel_mlx5_task *task)
 		spdk_mempool_put_bulk(task->dev->sig_mkey_pool_ref, (void **)task->sig_mkeys, task->num_ops);
 		task->num_ops = 0;
 		return -ENOMEM;
+	}
+	/* One extra slot is needed for SET_PSV WQE to reset the error state in PSV. */
+	if (spdk_unlikely(task->psv->bits.error)) {
+		uint32_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+		uint32_t n_slots = task->num_ops * 2 + 1;
+
+		if (qp_slot < n_slots) {
+			spdk_mempool_put(task->dev->psv_pool_ref, task->psv);
+			spdk_mempool_put_bulk(task->dev->sig_mkey_pool_ref, (void **)task->sig_mkeys, task->num_ops);
+			task->num_ops = 0;
+			return -ENOMEM;
+		}
 	}
 	return 0;
 }
@@ -1689,7 +1723,7 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 	struct accel_mlx5_task *task, *signaled_task, *task_tmp;
 	struct accel_mlx5_wrid *wr;
 	uint32_t completed;
-	uint32_t num_ops;
+	uint32_t num_completed_ops;
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
@@ -1707,10 +1741,28 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				STAILQ_REMOVE_HEAD(&dev->in_hw, link);
 				assert(task->num_submitted_reqs > task->num_completed_reqs);
 				completed = task->num_submitted_reqs - task->num_completed_reqs;
-				/* Copy consumes 1 op, the other 2 ops.*/
-				num_ops = task->mlx5_opcode == ACCEL_MLX5_OPC_COPY ? 1 : 2;
-				assert(dev->reqs_submitted >= completed * num_ops);
-				dev->reqs_submitted -= completed * num_ops;
+				num_completed_ops = 0;
+				switch (task->mlx5_opcode) {
+				case ACCEL_MLX5_OPC_COPY:
+					num_completed_ops = completed;
+					break;
+				case ACCEL_MLX5_OPC_CRYPTO:
+					num_completed_ops = completed * 2;
+					break;
+				case ACCEL_MLX5_OPC_CRC32C:
+				case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
+					num_completed_ops = completed * 2;
+					if (spdk_unlikely(task->psv->bits.error)) {
+						num_completed_ops++;
+						if (wc[i].status == IBV_WC_SUCCESS) {
+							task->psv->bits.error = 0;
+						}
+					}
+					break;
+				}
+				assert(num_completed_ops != 0);
+				assert(dev->reqs_submitted >= num_completed_ops);
+				dev->reqs_submitted -= num_completed_ops;
 				if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
 					/* We may have X unsignaled tasks queued in in_hw, if an error happens,
 					 * then HW generates completions for every unsignaled WQE.
@@ -1767,7 +1819,7 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 	struct accel_mlx5_task *task;
 	struct accel_mlx5_wrid *wr;
 	uint32_t completed;
-	uint32_t num_ops;
+	uint32_t num_completed_ops;
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
@@ -1785,10 +1837,28 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			STAILQ_REMOVE_HEAD(&dev->in_hw, link);
 			assert(task->num_submitted_reqs > task->num_completed_reqs);
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
-			/* Copy consumes 1 op, the other 2 ops.*/
-			num_ops = task->mlx5_opcode == ACCEL_MLX5_OPC_COPY ? 1 : 2;
-			assert(dev->reqs_submitted >= completed * num_ops);
-			dev->reqs_submitted -= completed * num_ops;
+			num_completed_ops = 0;
+			switch (task->mlx5_opcode) {
+			case ACCEL_MLX5_OPC_COPY:
+				num_completed_ops = completed;
+				break;
+			case ACCEL_MLX5_OPC_CRYPTO:
+				num_completed_ops = completed * 2;
+				break;
+			case ACCEL_MLX5_OPC_CRC32C:
+			case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
+				num_completed_ops = completed * 2;
+				if (spdk_unlikely(task->psv->bits.error)) {
+					num_completed_ops++;
+					if (wc[i].status == IBV_WC_SUCCESS) {
+						task->psv->bits.error = 0;
+					}
+				}
+				break;
+			}
+			assert(num_completed_ops != 0);
+			assert(dev->reqs_submitted >= num_completed_ops);
+			dev->reqs_submitted -= num_completed_ops;
 
 			if (spdk_unlikely(wc[i].status)) {
 				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
@@ -2428,6 +2498,7 @@ accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, un
 
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->psvs[obj_idx] != NULL);
+	memset(wrapper, 0, sizeof(*wrapper));
 	wrapper->psv_index = dev_ctx->psvs[obj_idx]->index;
 }
 
