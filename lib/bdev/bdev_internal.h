@@ -48,14 +48,12 @@ bdev_get_group(struct spdk_bdev *bdev)
 void bdev_trigger_qos_queued_io_resend(struct spdk_bdev *bdev);
 
 bool bdev_group_qos_bdev_poll(struct spdk_bdev_group *group, struct spdk_bdev *bdev,
-				uint64_t now);
+			      uint64_t now);
 
-void bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_bdev_limits,
-			      bool group_disable_rate_limit,
-			      void (*cb_fn)(void *cb_arg, int status), void *cb_arg);
+void bdev_set_qos_group_rate_limits(struct spdk_bdev *bdev, bool disable,
+				    void (*cb_fn)(void *cb_arg, int status), void *cb_arg);
 
-struct bdev_qos_limits *
-bdev_group_get_qos_limits(struct spdk_bdev_group *group);
+struct bdev_qos_limits *bdev_group_get_qos_limits(struct spdk_bdev_group *group);
 
 void bdev_qos_limits_rewind(struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io);
 

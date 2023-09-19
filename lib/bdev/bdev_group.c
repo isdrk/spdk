@@ -267,8 +267,7 @@ spdk_bdev_group_add_bdev(struct spdk_bdev_group *group, const char *bdev_name,
 		bdev_group_add_set_qos_rate_limits_cb(ctx, 0);
 	} else {
 		/* if QoS is enabled for the group, enable it for the bdev first */
-		bdev_set_qos_rate_limits(bdev, NULL, false,
-					 bdev_group_add_set_qos_rate_limits_cb, ctx);
+		bdev_set_qos_group_rate_limits(bdev, false, bdev_group_add_set_qos_rate_limits_cb, ctx);
 	}
 }
 
@@ -376,8 +375,7 @@ spdk_bdev_group_remove_bdev(struct spdk_bdev_group *group,
 		bdev_group_remove_set_qos_rate_limits_cb(ctx, 0);
 	} else {
 		/* if QoS is enabled for the group, firts we have to disable it for the bdev */
-		bdev_set_qos_rate_limits(bdev, NULL, true,
-					 bdev_group_remove_set_qos_rate_limits_cb, ctx);
+		bdev_set_qos_group_rate_limits(bdev, true, bdev_group_remove_set_qos_rate_limits_cb, ctx);
 	}
 }
 
@@ -507,8 +505,8 @@ spdk_bdev_group_set_qos_rate_limits(struct spdk_bdev_group *group, const uint64_
 
 	TAILQ_FOREACH(node, &group->bdevs, link) {
 		__atomic_add_fetch(&ctx->ref_cnt, 1, __ATOMIC_RELAXED); /* add reference by the device */
-		bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(node->desc), NULL, disable_rate_limit,
-						bdev_group_set_qos_rate_limits_cb, ctx);
+		bdev_set_qos_group_rate_limits(spdk_bdev_desc_get_bdev(node->desc), disable_rate_limit,
+					       bdev_group_set_qos_rate_limits_cb, ctx);
 	}
 
 	bdev_group_set_qos_rate_limits_cb(ctx, 0); /* release the reference by the caller */
