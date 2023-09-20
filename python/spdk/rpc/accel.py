@@ -34,7 +34,7 @@ def accel_assign_opc(client, opname, module):
     return client.call('accel_assign_opc', params)
 
 
-def accel_crypto_key_create(client, cipher, key, key2, name, tweak_offset):
+def accel_crypto_key_create(client, cipher, key, key2, name):
     """Create Data Encryption Key Identifier.
 
     Args:
@@ -50,8 +50,7 @@ def accel_crypto_key_create(client, cipher, key, key2, name, tweak_offset):
     }
     if key2 is not None:
         params['key2'] = key2
-    if tweak_offset is not None:
-        params['tweak_offset'] = tweak_offset
+
     return client.call('accel_crypto_key_create', params)
 
 

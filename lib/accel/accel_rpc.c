@@ -184,14 +184,13 @@ static const struct spdk_json_object_decoder rpc_accel_dek_create_decoders[] = {
 	{"key", offsetof(struct rpc_accel_crypto_key_create, param.hex_key),   spdk_json_decode_string},
 	{"key2", offsetof(struct rpc_accel_crypto_key_create, param.hex_key2), spdk_json_decode_string, true},
 	{"name", offsetof(struct rpc_accel_crypto_key_create, param.key_name), spdk_json_decode_string},
-	{"tweak_offset", offsetof(struct rpc_accel_crypto_key_create, param.tweak_offset), spdk_json_decode_uint8, true},
 };
 
 static void
 rpc_accel_crypto_key_create(struct spdk_jsonrpc_request *request,
 			    const struct spdk_json_val *params)
 {
-	struct rpc_accel_crypto_key_create req = {.param.tweak_offset = 8};
+	struct rpc_accel_crypto_key_create req = {};
 	size_t key_size;
 	int rc;
 

@@ -29,7 +29,6 @@ struct spdk_accel_crypto_key_create_param {
 	char *hex_key;	/**< Hexlified key */
 	char *hex_key2;	/**< Hexlified key2 */
 	char *key_name;	/**< Key name */
-	uint8_t tweak_offset;	/** 64 bytes tweak offset in 128 bytes IV. Possible values are 0-8 bytes */
 };
 
 enum accel_opcode {

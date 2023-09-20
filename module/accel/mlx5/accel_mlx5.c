@@ -616,7 +616,8 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	}
 	cattr.xts_iv = iv;
 	cattr.keytag = 0;
-	cattr.tweak_offset = task->crypto_key->param.tweak_offset;
+	/* Temporal limitation */
+	cattr.tweak_offset = 0;
 
 	umr_attr.dv_mkey = dv_mkey;
 	umr_attr.umr_len = req_len;

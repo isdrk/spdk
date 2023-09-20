@@ -2900,15 +2900,13 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                                      cipher=args.cipher,
                                                      key=args.key,
                                                      key2=args.key2,
-                                                     name=args.name,
-                                                     tweak_offset=args.tweak_offset))
+                                                     name=args.name))
 
     p = subparsers.add_parser('accel_crypto_key_create', help='Create encryption key')
     p.add_argument('-c', '--cipher', help='cipher', required=True, type=str)
     p.add_argument('-k', '--key', help='key', required=True, type=str)
     p.add_argument('-e', '--key2', help='key2', required=False, type=str)
     p.add_argument('-n', '--name', help='key name', required=True, type=str)
-    p.add_argument('-o', '--tweak-offset', help='Offset of a tweak (8 bytes) in 16 bytes IV', required=False, type=int, default=8)
     p.set_defaults(func=accel_crypto_key_create)
 
     def accel_crypto_key_destroy(args):
