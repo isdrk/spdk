@@ -788,10 +788,16 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	sattr.psv_index = psv_index;
 	sattr.domain = sig_domain;
 	sattr.sigerr_count = 0;
+	/* raw_data_size is a size of data without signature. */
+	sattr.raw_data_size = req_len;
 	sattr.init = init_signature;
 	sattr.check_gen = gen_signature;
 
 	umr_attr.dv_mkey = dv_mkey;
+	/*
+	 * umr_len is the size of data addressed by MKey in memory and includes
+	 * the size of the signature if it exists in memory.
+	 */
 	umr_attr.umr_len = req_len;
 	umr_attr.klm_count = klm->src_klm_count;
 	umr_attr.klm = klm->src_klm;
@@ -1040,6 +1046,7 @@ accel_mlx5_configure_sig_umr(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	sattr.psv_index = psv_index;
 	sattr.domain = sig_domain;
 	sattr.sigerr_count = 0;
+	sattr.raw_data_size = req_len;
 	sattr.init = true;
 	sattr.check_gen = true;
 

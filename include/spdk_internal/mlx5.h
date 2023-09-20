@@ -291,6 +291,7 @@ struct spdk_mlx5_umr_sig_attr {
 	uint32_t psv_index;
 	enum spdk_mlx5_umr_sig_domain domain;
 	unsigned sigerr_count;
+	uint32_t raw_data_size;
 	bool init;
 	bool check_gen;
 };

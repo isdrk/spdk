@@ -119,7 +119,7 @@ mlx5_build_inline_mtt(struct spdk_mlx5_hw_qp *qp,
 
 static inline void
 _set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_crypto_attr *attr,
-			uint32_t umr_len, bool tweak_inc_64, bool tweak_be, uint8_t bsf_size)
+			uint32_t raw_data_size, bool tweak_inc_64, bool tweak_be, uint8_t bsf_size)
 {
 	uint64_t *iv = (void *)bsf->xts_initial_tweak;
 	uint32_t tweak_mode = attr->tweak_offset + (uint32_t)!!tweak_be;
@@ -154,7 +154,7 @@ _set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_cr
 
 	bsf->size_type = (bsf_size << 6) | MLX5_CRYPTO_BSF_P_TYPE_CRYPTO;
 	bsf->enc_order = attr->enc_order;
-	bsf->raw_data_size = htobe32(umr_len);
+	bsf->raw_data_size = htobe32(raw_data_size);
 	bsf->crypto_block_size_pointer = attr->bs_selector;
 	bsf->dek_pointer = htobe32(attr->dek_obj_id);
 	*((uint64_t *)bsf->keytag) = attr->keytag;
@@ -162,16 +162,16 @@ _set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_cr
 
 static inline void
 set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_crypto_attr *attr,
-		       uint32_t umr_len, bool tweak_inc_64, bool tweak_be)
+		       uint32_t raw_data_size, bool tweak_inc_64, bool tweak_be)
 {
-	_set_umr_crypto_bsf_seg(bsf, attr, umr_len, tweak_inc_64, tweak_be, MLX5_CRYPTO_BSF_SIZE_64B);
+	_set_umr_crypto_bsf_seg(bsf, attr, raw_data_size, tweak_inc_64, tweak_be, MLX5_CRYPTO_BSF_SIZE_64B);
 }
 
 static inline void
 set_umr_crypto_bsf_seg_with_sig(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_crypto_attr *attr,
-			        uint32_t umr_len, bool tweak_inc_64, bool tweak_be)
+			        uint32_t raw_data_size, bool tweak_inc_64, bool tweak_be)
 {
-	_set_umr_crypto_bsf_seg(bsf, attr, umr_len, tweak_inc_64, tweak_be, MLX5_CRYPTO_BSF_SIZE_WITH_SIG);
+	_set_umr_crypto_bsf_seg(bsf, attr, raw_data_size, tweak_inc_64, tweak_be, MLX5_CRYPTO_BSF_SIZE_WITH_SIG);
 }
 
 static inline uint8_t
@@ -184,7 +184,6 @@ get_crc32c_tfs(uint32_t seed)
 static inline void
 _set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 		     struct spdk_mlx5_umr_sig_attr *attr,
-		     uint32_t umr_len,
 		     uint8_t bsf_size)
 {
 	uint32_t tfs_psv;
@@ -192,7 +191,7 @@ _set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 
 	memset(bsf, 0, sizeof(*bsf));
 	bsf->basic.bsf_size_sbs = (bsf_size << 6);
-	bsf->basic.raw_data_size = htobe32(umr_len);
+	bsf->basic.raw_data_size = htobe32(attr->raw_data_size);
 	bsf->basic.check_byte_mask = 0xff;
 
 	tfs_psv = get_crc32c_tfs(attr->seed);
@@ -218,18 +217,16 @@ _set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 
 static inline void
 set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
-		    struct spdk_mlx5_umr_sig_attr *attr,
-		    uint32_t umr_len)
+		    struct spdk_mlx5_umr_sig_attr *attr)
 {
-	_set_umr_sig_bsf_seg(bsf, attr, umr_len, MLX5_SIG_BSF_SIZE_32B);
+	_set_umr_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_32B);
 }
 
 static inline void
 set_umr_sig_bsf_seg_with_crypto(struct mlx5_sig_bsf_seg *bsf,
-				struct spdk_mlx5_umr_sig_attr *attr,
-				uint32_t umr_len)
+				struct spdk_mlx5_umr_sig_attr *attr)
 {
-	_set_umr_sig_bsf_seg(bsf, attr, umr_len, MLX5_SIG_BSF_SIZE_WITH_CRYPTO);
+	_set_umr_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_WITH_CRYPTO);
 }
 
 static inline void
@@ -351,7 +348,7 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	}
 
 	bsf = (struct mlx5_sig_bsf_seg *)klm;
-	set_umr_sig_bsf_seg(bsf, sig_attr, umr_attr->umr_len);
+	set_umr_sig_bsf_seg(bsf, sig_attr);
 
 	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
@@ -417,11 +414,15 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_
 
 	/* build signature BSF */
 	sig_bsf = (struct mlx5_sig_bsf_seg *)klm;
-	set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr, umr_attr->umr_len);
+	set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
 
 	/* build crypto BSF */
 	crypto_bsf = (struct mlx5_crypto_bsf_seg *)(sig_bsf + 1);
-	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, umr_attr->umr_len,
+	/*
+	 * raw_data_size is equal for signature and crypto operations because we apply both
+	 * operations for the same data.
+	 */
+	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size,
 					dv_qp->aes_xts_inc_64, dv_qp->aes_xts_tweak_be);
 
 	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
@@ -594,7 +595,7 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 	klm = mlx5_qp_get_next_wqbb(hw, &to_end, mkey);
 	bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
 
-	set_umr_sig_bsf_seg(bsf, sig_attr, umr_attr->umr_len);
+	set_umr_sig_bsf_seg(bsf, sig_attr);
 
 	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
@@ -656,11 +657,15 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp, struc
 	sig_bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
 
 	/* build signature BSF */
-	set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr, umr_attr->umr_len);
+	set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
 
 	/* build crypto BSF */
 	crypto_bsf = mlx5_qp_get_next_wqbb(hw, &to_end, sig_bsf);
-	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, umr_attr->umr_len,
+	/*
+	 * raw_data_size is equal for signature and crypto operations because we apply both
+	 * operations for the same data.
+	 */
+	set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size,
 					dv_qp->aes_xts_inc_64, dv_qp->aes_xts_tweak_be);
 
 	mlx5_qp_wqe_submit(dv_qp, ctrl, umr_wqe_n_bb, pi);
