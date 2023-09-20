@@ -583,6 +583,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct spdk_mlx5_umr_crypto_attr cattr;
 	struct spdk_mlx5_umr_attr umr_attr;
+	struct spdk_mlx5_crypto_dek_data dek_data;
 	uint32_t remaining;
 	int rc;
 
@@ -603,7 +604,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 
 	SPDK_DEBUGLOG(accel_mlx5, "task %p crypto_attr: bs %u, iv %"PRIu64", enc_on_tx %d\n",
 		      mlx5_task, task->block_size, iv, mlx5_task->enc_order);
-	rc = spdk_mlx5_crypto_get_dek_obj_id(task->crypto_key->priv, dev->pd_ref, &cattr.dek_obj_id);
+	rc = spdk_mlx5_crypto_get_dek_data(task->crypto_key->priv, dev->pd_ref, &dek_data);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("failed to set crypto attr, rc %d\n", rc);
 		return rc;
@@ -616,8 +617,8 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	}
 	cattr.xts_iv = iv;
 	cattr.keytag = 0;
-	/* Temporal limitation */
-	cattr.tweak_offset = 0;
+	cattr.dek_obj_id = dek_data.dek_obj_id;
+	cattr.tweak_mode = dek_data.tweak_mode;
 
 	umr_attr.dv_mkey = dv_mkey;
 	umr_attr.umr_len = req_len;
@@ -798,6 +799,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	struct spdk_mlx5_umr_crypto_attr cattr;
 	struct spdk_mlx5_umr_sig_attr sattr;
 	struct spdk_mlx5_umr_attr umr_attr;
+	struct spdk_mlx5_crypto_dek_data dek_data;
 	uint32_t remaining;
 	uint32_t umr_klm_count;
 	int rc;
@@ -856,7 +858,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 
 	SPDK_DEBUGLOG(accel_mlx5, "task %p crypto_attr: bs %u, iv %"PRIu64", enc_on_tx %d\n",
 		      mlx5_task, task->block_size, iv, mlx5_task->enc_order);
-	rc = spdk_mlx5_crypto_get_dek_obj_id(task->crypto_key->priv, dev->pd_ref, &cattr.dek_obj_id);
+	rc = spdk_mlx5_crypto_get_dek_data(task->crypto_key->priv, dev->pd_ref, &dek_data);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("failed to set crypto attr, rc %d\n", rc);
 		return rc;
@@ -869,7 +871,8 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	}
 	cattr.xts_iv = iv;
 	cattr.keytag = 0;
-	cattr.tweak_offset = task->crypto_key->param.tweak_offset;
+	cattr.dek_obj_id = dek_data.dek_obj_id;
+	cattr.tweak_mode = dek_data.tweak_mode;
 
 	sattr.seed = crc_seed;
 	sattr.psv_index = psv_index;
@@ -2991,6 +2994,7 @@ accel_mlx5_crypto_key_init(struct spdk_accel_crypto_key *key)
 	memcpy(attr.dek, key->key, key->key_size);
 	memcpy(attr.dek + key->key_size, key->key2, key->key2_size);
 	attr.dek_len = key->key_size + key->key2_size;
+	attr.tweak_upper_lba = key->tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_INCR_512_UPPER_LBA;
 
 	rc = spdk_mlx5_crypto_keytag_create(&attr, &keytag);
 	spdk_memset_s(attr.dek, attr.dek_len, 0, attr.dek_len);
@@ -3032,6 +3036,38 @@ accel_mlx5_get_memory_domains(struct spdk_memory_domain **domains, int array_siz
 	return (int)g_accel_mlx5.num_crypto_ctxs;
 }
 
+static bool accel_mlx5_crypto_supports_tweak_mode(enum spdk_accel_crypto_tweak_mode tweak_mode)
+{
+	struct ibv_context **devs;
+	struct spdk_mlx5_crypto_caps dev_caps;
+	int devs_count, i, rc;
+	bool upper_lba_supported;
+
+	if (!g_accel_mlx5.crypto_supported) {
+		return false;
+	}
+
+	if (tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_SIMPLE_LBA) {
+		return true;
+	}
+	if (tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_INCR_512_UPPER_LBA) {
+		upper_lba_supported = true;
+		devs = spdk_mlx5_crypto_devs_get(&devs_count);
+		assert(devs);
+		for (i = 0; i < devs_count; i++) {
+			rc = spdk_mlx5_query_crypto_caps(devs[i], &dev_caps);
+			if (rc || !dev_caps.tweak_inc_64) {
+				upper_lba_supported = false;
+				break;
+			}
+		}
+		spdk_mlx5_crypto_devs_release(devs);
+		return upper_lba_supported;
+	}
+
+	return false;
+}
+
 static struct accel_mlx5_module g_accel_mlx5 = {
 	.module = {
 		.module_init		= accel_mlx5_init,
@@ -3045,6 +3081,7 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 		.crypto_key_init	= accel_mlx5_crypto_key_init,
 		.crypto_key_deinit	= accel_mlx5_crypto_key_deinit,
 		.get_memory_domains	= accel_mlx5_get_memory_domains,
+		.crypto_supports_tweak_mode	= accel_mlx5_crypto_supports_tweak_mode,
 	},
 	.enabled = true,
 	.qp_size = ACCEL_MLX5_QP_SIZE,

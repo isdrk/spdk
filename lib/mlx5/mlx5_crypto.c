@@ -27,10 +27,44 @@
 /* key1_256b + key2_256b + 64b_keytag */
 #define SPDK_MLX5_AES_XTS_256_DEK_BYTES_WITH_KEYTAG (SPDK_MLX5_AES_XTS_256_DEK_BYTES + SPDK_MLX5_AES_XTS_KEYTAG_SIZE)
 
+//TODO: rdma-core hides these definitions, we'll need to create DEK manually
+
+enum mlx5_devx_obj_type {
+	MLX5_DEVX_FLOW_TABLE		= 1,
+	MLX5_DEVX_FLOW_COUNTER		= 2,
+	MLX5_DEVX_FLOW_METER		= 3,
+	MLX5_DEVX_QP			= 4,
+	MLX5_DEVX_PKT_REFORMAT_CTX	= 5,
+	MLX5_DEVX_TIR			= 6,
+	MLX5_DEVX_FLOW_GROUP		= 7,
+	MLX5_DEVX_FLOW_TABLE_ENTRY	= 8,
+	MLX5_DEVX_FLOW_SAMPLER		= 9,
+	MLX5_DEVX_ASO_FIRST_HIT		= 10,
+	MLX5_DEVX_ASO_FLOW_METER	= 11,
+	MLX5_DEVX_ASO_CT		= 12,
+};
+
+struct mlx5dv_devx_obj {
+	struct ibv_context *context;
+	uint32_t handle;
+	enum mlx5_devx_obj_type type;
+	uint32_t object_id;
+	uint64_t rx_icm_addr;
+	uint8_t log_obj_range;
+	void *priv;
+};
+
+struct mlx5dv_dek {
+    struct mlx5dv_devx_obj *devx_obj;
+};
+
 struct spdk_mlx5_crypto_dek {
 	struct mlx5dv_dek *dek_obj;
 	struct ibv_pd *pd;
 	struct ibv_context *context;
+	/* Cached dek_obj_id */
+	uint32_t dek_obj_id;
+	enum spdk_mlx5_crypto_key_tweak_mode tweak_mode;
 };
 
 struct spdk_mlx5_crypto_keytag {
@@ -271,6 +305,17 @@ spdk_mlx5_crypto_keytag_destroy(struct spdk_mlx5_crypto_keytag *keytag)
 	free(keytag);
 }
 
+static const enum spdk_mlx5_crypto_key_tweak_mode g_tweak_mode_map[][2] = {
+	[0] = { /* SIMPLE or LOWER LBA */
+		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE,
+		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE,
+	},
+	[1] = { /* UPPER LBA */
+		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE,
+		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE,
+	}
+};
+
 int
 spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 			       struct spdk_mlx5_crypto_keytag **out)
@@ -280,6 +325,7 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	struct ibv_context **devs;
 	struct mlx5dv_dek_init_attr init_attr = {};
 	struct mlx5dv_dek_attr query_attr;
+	struct spdk_mlx5_crypto_caps dev_caps;
 	int num_devs = 0, i, rc;
 	bool has_keytag;
 
@@ -342,6 +388,12 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	for (i = 0; i < num_devs; i++) {
 		keytag->deks_num++;
 		dek = &keytag->deks[i];
+		memset(&dev_caps, 0, sizeof(dev_caps));
+		rc =  spdk_mlx5_query_crypto_caps(devs[i], &dev_caps);
+		if (rc) {
+			SPDK_ERRLOG("Failed to get device %s crypto caps\n", devs[i]->device->name);
+			goto err_out;
+		}
 		dek->pd = spdk_rdma_utils_get_pd(devs[i]);
 		if (!dek->pd) {
 			SPDK_ERRLOG("Failed to get PD on device %s\n", devs[i]->device->name);
@@ -376,6 +428,9 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 			rc = -EINVAL;
 			goto err_out;
 		}
+		/* We have only mode one BE mode, if it is not set then tweak is LE */
+		dek->tweak_mode = g_tweak_mode_map[!!attr->tweak_upper_lba][!!dev_caps.multi_block_be_tweak];
+		dek->dek_obj_id = dek->dek_obj->devx_obj->object_id & 0x00FFFFFF;
 	}
 
 	if (has_keytag) {
@@ -413,39 +468,8 @@ mlx5_crypto_get_dek_by_pd(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd 
 	return NULL;
 }
 
-//TODO: rdma-core hides these definitions, we'll need to create DEK manually
-
-enum mlx5_devx_obj_type {
-	MLX5_DEVX_FLOW_TABLE		= 1,
-	MLX5_DEVX_FLOW_COUNTER		= 2,
-	MLX5_DEVX_FLOW_METER		= 3,
-	MLX5_DEVX_QP			= 4,
-	MLX5_DEVX_PKT_REFORMAT_CTX	= 5,
-	MLX5_DEVX_TIR			= 6,
-	MLX5_DEVX_FLOW_GROUP		= 7,
-	MLX5_DEVX_FLOW_TABLE_ENTRY	= 8,
-	MLX5_DEVX_FLOW_SAMPLER		= 9,
-	MLX5_DEVX_ASO_FIRST_HIT		= 10,
-	MLX5_DEVX_ASO_FLOW_METER	= 11,
-	MLX5_DEVX_ASO_CT		= 12,
-};
-
-struct mlx5dv_devx_obj {
-	struct ibv_context *context;
-	uint32_t handle;
-	enum mlx5_devx_obj_type type;
-	uint32_t object_id;
-	uint64_t rx_icm_addr;
-	uint8_t log_obj_range;
-	void *priv;
-};
-
-struct mlx5dv_dek {
-    struct mlx5dv_devx_obj *devx_obj;
-};
-
 int
-spdk_mlx5_crypto_get_dek_obj_id(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd, uint32_t *dek_obj_id)
+spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd, struct spdk_mlx5_crypto_dek_data *data)
 {
 	struct spdk_mlx5_crypto_dek *dek;
 
@@ -457,55 +481,8 @@ spdk_mlx5_crypto_get_dek_obj_id(struct spdk_mlx5_crypto_keytag *keytag, struct i
 		SPDK_ERRLOG("No DEK for pd %p (dev %s)\n", pd, pd->context->device->name);
 		return -EINVAL;
 	}
-	*dek_obj_id = dek->dek_obj->devx_obj->object_id & 0x00FFFFFF;
-
-	return 0;
-}
-
-int
-spdk_mlx5_crypto_set_attr(struct mlx5dv_crypto_attr *attr_out,
-			  struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd,
-			  uint32_t block_size, uint64_t iv, bool encrypt_on_tx)
-{
-	struct spdk_mlx5_crypto_dek *dek;
-	enum mlx5dv_block_size bs;
-
-	dek = mlx5_crypto_get_dek_by_pd(keytag, pd);
-	if (spdk_unlikely(!dek)) {
-		SPDK_ERRLOG("No DEK for pd %p (dev %s)\n", pd, pd->context->device->name);
-		return -EINVAL;
-	}
-
-	switch (block_size) {
-	case 512:
-		bs = MLX5DV_BLOCK_SIZE_512;
-		break;
-	case 520:
-		bs = MLX5DV_BLOCK_SIZE_520;
-		break;
-	case 4048:
-		bs = MLX5DV_BLOCK_SIZE_4048;
-		break;
-	case 4096:
-		bs = MLX5DV_BLOCK_SIZE_4096;
-		break;
-	case 4160:
-		bs = MLX5DV_BLOCK_SIZE_4160;
-		break;
-	default:
-		SPDK_ERRLOG("Unsupported block size %u\n", block_size);
-		return -EINVAL;
-	}
-
-	memset(attr_out, 0, sizeof(*attr_out));
-	attr_out->dek = dek->dek_obj;
-	attr_out->crypto_standard = MLX5DV_CRYPTO_STANDARD_AES_XTS;
-	attr_out->data_unit_size = bs;
-	attr_out->encrypt_on_tx = encrypt_on_tx;
-	memcpy(attr_out->initial_tweak, &iv, sizeof(iv));
-	if (keytag->has_keytag) {
-		memcpy(attr_out->keytag, keytag->keytag, sizeof(keytag->keytag));
-	}
+	data->dek_obj_id = dek->dek_obj_id;
+	data->tweak_mode = dek->tweak_mode;
 
 	return 0;
 }

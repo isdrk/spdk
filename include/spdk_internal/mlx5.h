@@ -20,6 +20,22 @@ struct spdk_mlx5_crypto_dek_create_attr {
 	char *dek;
 	/* Length of the dek */
 	size_t dek_len;
+	/* LBA is located in upper part of a tweak */
+	bool tweak_upper_lba;
+};
+
+enum spdk_mlx5_crypto_key_tweak_mode {
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE	= 0,
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE	= 1,
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE	= 2,
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE	= 3
+};
+
+struct spdk_mlx5_crypto_dek_data {
+	/** low level devx obj id which represents the DEK */
+	uint32_t dek_obj_id;
+	/** Crypto key tweak mode */
+	enum spdk_mlx5_crypto_key_tweak_mode tweak_mode;
 };
 
 /**
@@ -74,30 +90,16 @@ int spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr
 void spdk_mlx5_crypto_keytag_destroy(struct spdk_mlx5_crypto_keytag *keytag);
 
 /**
- * Fills attributes used to register UMR with crypto operation
- *
- * \param attr_out Configured UMR attributes
- * \param keytag Keytag with DEKs
- * \param pd Protection Domain which is going to be used to register UMR. This function will find a DEK in \b keytag with the same PD
- * \param block_size Logical block size
- * \param iv Initialization vector or tweak. Usually that is logical block address
- * \param encrypt_on_tx If set, memory data will be encrypted during TX and wire data will be decrypted during RX. If not set, memory data will be decrypted during TX and wire data will be encrypted during RX.
- * \return 0 on success, negated errno on failure
- */
-int spdk_mlx5_crypto_set_attr(struct mlx5dv_crypto_attr *attr_out,
-			      struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd,
-			      uint32_t block_size, uint64_t iv, bool encrypt_on_tx);
-
-/**
- * Get low level devx obj id which represents the DEK
+ * Get Data Encryption Key data
  *
  * \param keytag Keytag with DEKs
  * \param pd Protection Domain which is going to be used to register UMR.
- * \param dek_obj_id Output value
+ * \param data Data to be filled by this function
  * \return 0 on success, negated errno on failure
  */
 int
-spdk_mlx5_crypto_get_dek_obj_id(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd, uint32_t *dek_obj_id);
+spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd,
+	struct spdk_mlx5_crypto_dek_data *data);
 
 /* low level cq view, suitable for the direct polling, adapted from struct mlx5dv_cq */
 struct spdk_mlx5_hw_cq {
@@ -158,9 +160,6 @@ struct spdk_mlx5_qp {
 	uint16_t last_pi;
 	bool tx_need_ring_db;
 	bool aes_xts_inc_64;
-	/* If set, HW expects tweak in big endian
-	 * Otherwise, in little endian */
-	bool aes_xts_tweak_be;
 };
 
 /* QP + CQ */
@@ -206,7 +205,8 @@ struct spdk_mlx5_umr_crypto_attr {
     	 * MLX5_ENCRYPTION_ORDER_ENCRYPTED_MEMORY_SIGNATURE to decrypt */
 	uint8_t enc_order;
 	uint8_t bs_selector;
-	uint8_t tweak_offset;
+	/* Uses enum spdk_mlx5_crypto_key_tweak_mode */
+	uint8_t tweak_mode;
 	uint32_t dek_obj_id;
     	uint64_t xts_iv;
     	uint64_t keytag;

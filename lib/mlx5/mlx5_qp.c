@@ -182,8 +182,6 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->tx_available = qp->hw.sq_wqe_cnt;
 	qp->max_sge = attr->cap.max_send_sge;
 	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
-	/* We have only mode BE mode, if it is not set then tweak is LE */
-	qp->aes_xts_tweak_be = crypto_caps.multi_block_be_tweak;
 	rc = posix_memalign((void **)&qp->completions, 4096, qp->hw.sq_wqe_cnt * sizeof(*qp->completions));
 	if (rc) {
 		SPDK_ERRLOG("Failed to alloc completions\n");
