@@ -80,6 +80,12 @@ struct xlio_sock_buf {
 	struct xlio_sock_packet *packet;
 };
 
+struct spdk_xlio_ring_fd {
+	int			ring_fd;
+	int			refs;
+	TAILQ_ENTRY(spdk_xlio_ring_fd)	link;
+};
+
 struct spdk_xlio_sock {
 	struct spdk_sock	base;
 	int			fd;
@@ -97,7 +103,7 @@ struct spdk_xlio_sock {
 	size_t			cur_offset;
 	uint64_t		batch_start_tsc;
 	int			batch_nr;
-	int			ring_fd;
+	struct spdk_xlio_ring_fd	*ring_fd;
 
 	TAILQ_ENTRY(spdk_xlio_sock)	link;
 	TAILQ_ENTRY(spdk_xlio_sock)	link_send;
@@ -105,7 +111,7 @@ struct spdk_xlio_sock {
 
 struct spdk_xlio_sock_group_impl {
 	struct spdk_sock_group_impl	base;
-	int				ring_fd;
+	TAILQ_HEAD(, spdk_xlio_ring_fd)	ring_fd;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_recv;
 	TAILQ_HEAD(, spdk_xlio_sock)	pending_send;
 	struct xlio_packets_pool	*xlio_packets_pool;
@@ -614,7 +620,6 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 	}
 
 	sock->fd = fd;
-	sock->ring_fd = -1;
 
 #if defined(SPDK_ZEROCOPY)
 	flag = 1;
@@ -1035,6 +1040,10 @@ xlio_sock_close(struct spdk_sock *_sock)
 	 * memory. */
 	g_xlio_ops.close(sock->fd);
 
+	if (sock->ring_fd && --sock->ring_fd->refs == 0) {
+		free(sock->ring_fd);
+		sock->ring_fd = NULL;
+	}
 	free(sock);
 
 	return 0;
@@ -1295,7 +1304,7 @@ poll_no_group_socket(struct spdk_xlio_sock *sock)
 	 * Polling may find events for other sockets but not for this one.
 	 * So, we need to check if new packets were added for this socket.
 	 */
-	if (sock->ring_fd == -1) {
+	if (!sock->ring_fd) {
 		int ring_fds[2];
 		int num_rings;
 
@@ -1309,15 +1318,21 @@ poll_no_group_socket(struct spdk_xlio_sock *sock)
 		num_rings = ret;
 		/* @todo: add support for multiple rings */
 		assert(num_rings == 1);
-		sock->ring_fd = ring_fds[0];
+		sock->ring_fd = calloc(1, sizeof(struct spdk_xlio_ring_fd));
+		if (!sock->ring_fd) {
+			SPDK_ERRLOG("Failed to allocate ring_fd\n");
+			return -1;
+		}
+		sock->ring_fd->ring_fd = ring_fds[0];
+		sock->ring_fd->refs = 1;
 		SPDK_NOTICELOG("Discovered ring fd %d for socket %d, num_rings %d\n",
-			       sock->ring_fd, sock->fd, num_rings);
+			       sock->ring_fd->ring_fd, sock->fd, num_rings);
 	}
 
 	if (sock->xlio_packets_pool->num_free_packets) {
 		max_events_per_poll = spdk_min(sock->xlio_packets_pool->num_free_packets, MAX_EVENTS_PER_POLL);
 
-		ret = xlio_sock_poll_fd(sock->ring_fd, max_events_per_poll);
+		ret = xlio_sock_poll_fd(sock->ring_fd->ring_fd, max_events_per_poll);
 		if (ret < 0) {
 			return -1;
 		}
@@ -1813,7 +1828,7 @@ xlio_sock_group_impl_create(void)
 		return NULL;
 	}
 
-	group_impl->ring_fd = -1;
+	TAILQ_INIT(&group_impl->ring_fd);
 	TAILQ_INIT(&group_impl->pending_recv);
 	TAILQ_INIT(&group_impl->pending_send);
 
@@ -1841,8 +1856,8 @@ xlio_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_s
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
+	struct spdk_xlio_ring_fd *ring_fd;
 	int ring_fds[2];
-	int num_rings;
 	int rc;
 
 	rc = g_xlio_api->get_socket_rings_fds(sock->fd, ring_fds, 2);
@@ -1851,22 +1866,28 @@ xlio_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group, struct spdk_s
 		return rc;
 	}
 
-	num_rings = rc;
 	/* @todo: add support for multiple rings */
-	assert(num_rings == 1);
+	assert(rc == 1);
 	SPDK_DEBUGLOG(xlio, "Sock %d ring %d\n", sock->fd, ring_fds[0]);
-	/* Ring can be removed when no more sockets on it.
-	 * Update ring fd if it is the first socket in poll group.
-	 */
-	if (group->ring_fd == -1 || TAILQ_EMPTY(&_group->socks)) {
-		group->ring_fd = ring_fds[0];
-		SPDK_NOTICELOG("Discovered ring fd %d, core %u, num_rings %d\n",
-			       group->ring_fd, spdk_env_get_current_core(), num_rings);
-	} else if (group->ring_fd != ring_fds[0]) {
-		SPDK_ERRLOG("Socket ring fd %d differs from group ring fd %d, core %u\n",
-			    ring_fds[0], group->ring_fd, spdk_env_get_current_core());
-		return -1;
+
+	TAILQ_FOREACH(ring_fd, &group->ring_fd, link) {
+		if (ring_fd->ring_fd == ring_fds[0]) {
+			sock->ring_fd = ring_fd;
+			ring_fd->refs++;
+			return 0;
+		}
 	}
+
+	if (!sock->ring_fd) {
+		sock->ring_fd = calloc(1, sizeof(struct spdk_xlio_ring_fd));
+		if (!sock->ring_fd) {
+			SPDK_ERRLOG("Failed to allocate ring_fd\n");
+			return -1;
+		}
+	}
+	sock->ring_fd->ring_fd = ring_fds[0];
+	sock->ring_fd->refs = 1;
+	TAILQ_INSERT_TAIL(&group->ring_fd, sock->ring_fd, link);
 
 	return 0;
 }
@@ -1886,6 +1907,12 @@ xlio_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spd
 		TAILQ_REMOVE(&group->pending_recv, sock, link);
 		sock->pending_recv = false;
 	}
+	if (--sock->ring_fd->refs == 0) {
+		TAILQ_REMOVE(&group->ring_fd, sock->ring_fd, link);
+		free(sock->ring_fd);
+	}
+	sock->ring_fd = NULL;
+
 	return 0;
 }
 
@@ -1964,6 +1991,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	int num_events, i, rc;
 	struct spdk_xlio_sock *vsock, *ptmp;
 	uint32_t max_events_per_poll;
+	struct spdk_xlio_ring_fd *ring_fd;
 
 	/*
 	 * Important to use TAILQ_FOREACH_SAFE() here bacause of the following:
@@ -1997,15 +2025,18 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		}
 	}
 
-	if (group->xlio_packets_pool->num_free_packets) {
-		max_events_per_poll = spdk_min(group->xlio_packets_pool->num_free_packets, MAX_EVENTS_PER_POLL);
-		num_events = xlio_sock_poll_fd(group->ring_fd, max_events_per_poll);
-		if (num_events < 0) {
-			return -1;
+	TAILQ_FOREACH(ring_fd, &group->ring_fd, link) {
+		if (group->xlio_packets_pool->num_free_packets) {
+			max_events_per_poll = spdk_min(group->xlio_packets_pool->num_free_packets, MAX_EVENTS_PER_POLL);
+			num_events = xlio_sock_poll_fd(ring_fd->ring_fd, max_events_per_poll);
+			if (num_events < 0) {
+				/* @todo: what if we have a problem with just one ring and another one is good? */
+				return -1;
+			}
+		} else {
+			SPDK_DEBUGLOG(xlio, "no free packets\n");
+			break;
 		}
-	} else {
-		SPDK_DEBUGLOG(xlio, "no free packets\n");
-		return 0;
 	}
 
 	num_events = 0;
@@ -2041,6 +2072,14 @@ static int
 xlio_sock_group_impl_close(struct spdk_sock_group_impl *_group)
 {
 	struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(_group);
+	struct spdk_xlio_ring_fd *ring_fd, *ptmp;
+
+	/* All ring_fds should have already been removed while removing sockets from group */
+	assert(TAILQ_EMPTY(&group->ring_fd));
+	TAILQ_FOREACH_SAFE(ring_fd, &group->ring_fd, link, ptmp) {
+		TAILQ_REMOVE(&group->ring_fd, ring_fd, link);
+		free(ring_fd);
+	}
 
 	free(group);
 	return 0;
