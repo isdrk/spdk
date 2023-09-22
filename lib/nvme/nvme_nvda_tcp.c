@@ -1303,8 +1303,9 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 	}
 
 	xfer = spdk_nvmf_cmd_get_data_transfer(&req->cmd);
-	if (xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER && nvme_tcp_req_with_memory_domain(tcp_req) &&
-	    (tcp_req->in_capsule_data || !tcp_req->tqpair->flags.host_ddgst_enable)) {
+	if (xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER && req->payload.opts &&
+	    (req->payload.opts->accel_seq || (tcp_req->tqpair->flags.host_ddgst_enable &&
+					      req->payload.opts->memory_domain && tcp_req->in_capsule_data))) {
 		struct spdk_iobuf_channel *iobuf_ch;
 		struct spdk_nvme_poll_group *group;
 
