@@ -3570,6 +3570,9 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
         if rpc_module in plugins:
             return
 
+        if rpc_module is None:
+            rpc_module = os.environ.get('SPDK_RPC_PLUGIN')
+
         if rpc_module is not None:
             try:
                 rpc_plugin = importlib.import_module(rpc_module)
