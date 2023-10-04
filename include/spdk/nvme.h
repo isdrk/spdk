@@ -639,7 +639,7 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	uint16_t apptag;
 	/** Command dword 13 specific field. */
 	uint32_t cdw13;
-	struct spdk_accel_sequence *accel_seq;
+	struct spdk_accel_sequence *accel_sequence;
 	/** A scatter gather list of buffers. */
 	struct iovec *iov;
 	/** The number of elements in iov. */
