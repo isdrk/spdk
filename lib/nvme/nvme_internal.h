@@ -382,6 +382,8 @@ struct nvme_request {
 	 * Data payload for this request's command.
 	 */
 	struct nvme_payload		payload;
+	/** Sequence of accel operations associated with this request */
+	void				*accel_sequence;
 
 	spdk_nvme_cmd_cb		cb_fn;
 	void				*cb_arg;
@@ -454,9 +456,6 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		user_cb_fn;
 	void				*user_cb_arg;
 	void				*user_buffer;
-
-	/** Sequence of accel operations associated with this request */
-	void				*accel_sequence;
 };
 
 typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
