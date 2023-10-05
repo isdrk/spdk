@@ -3488,7 +3488,7 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 			} else {
 				if (nvme_tcp_memory_domain_enabled() &&
 				    getenv("SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ") == NULL) {
-					ctrlr->accel_seq_supported = true;
+					ctrlr->flags |= SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED;
 				} else {
 					SPDK_NOTICELOG("Accel sequence support disabled\n");
 				}

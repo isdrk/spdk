@@ -5308,7 +5308,7 @@ spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 bool
 spdk_nvme_ctrlr_accel_seq_supported(const struct spdk_nvme_ctrlr *ctrlr)
 {
-	return ctrlr->accel_seq_supported;
+	return (ctrlr->flags & SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED) != 0;
 }
 
 uint16_t
