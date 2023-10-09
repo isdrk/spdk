@@ -27,11 +27,10 @@
 struct mlx5_qp_conn_caps {
 	bool resources_on_nvme_emulation_manager;
 	bool roce_enabled;
-	uint8_t roce_version;
 	bool fl_when_roce_disabled;
 	bool fl_when_roce_enabled;
-	uint16_t r_roce_max_src_udp_port;
-	uint16_t r_roce_min_src_udp_port;
+	bool port_ib_enabled;
+	uint8_t roce_version;
 	uint8_t port;
 	uint16_t pkey_idx;
 	enum ibv_mtu mtu;
@@ -204,12 +203,11 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 }
 
 static int
-mlx5_qp_get_port_pkey_idx(struct spdk_mlx5_qp *qp, uint8_t *port, uint16_t *pkey_idx)
+mlx5_qp_get_port_pkey_idx(struct spdk_mlx5_qp *qp, struct mlx5_qp_conn_caps *conn_caps)
 {
 	struct ibv_qp_attr attr = {};
 	struct ibv_qp_init_attr init_attr = {};
-	int attr_mask = IBV_QP_PKEY_INDEX |
-			IBV_QP_PORT;
+	int attr_mask = IBV_QP_PKEY_INDEX | IBV_QP_PORT;
 	int rc;
 
 	rc = ibv_query_qp(qp->verbs_qp, &attr, attr_mask, &init_attr);
@@ -217,15 +215,14 @@ mlx5_qp_get_port_pkey_idx(struct spdk_mlx5_qp *qp, uint8_t *port, uint16_t *pkey
 		SPDK_ERRLOG("Failed to query qp %p %u\n", qp, qp->hw.qp_num);
 		return rc;
 	}
-	*port = attr.port_num;
-	*pkey_idx = attr.pkey_index;
+	conn_caps->port = attr.port_num;
+	conn_caps->pkey_idx = attr.pkey_index;
 
 	return 0;
 }
 
 static int
-mlx5_check_port(struct ibv_context *ctx, int port_num, bool *roce_en,
-		bool *ib_en, enum ibv_mtu *mtu)
+mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 {
 	uint8_t in[DEVX_ST_SZ_BYTES(query_nic_vport_context_in)] = {0};
 	uint8_t out[DEVX_ST_SZ_BYTES(query_nic_vport_context_out)] = {0};
@@ -233,10 +230,9 @@ mlx5_check_port(struct ibv_context *ctx, int port_num, bool *roce_en,
 	struct ibv_port_attr port_attr = {};
 	int rc;
 
-	*roce_en = false;
-	*ib_en = false;
+	conn_caps->port_ib_enabled = false;
 
-	rc = ibv_query_port(ctx, port_num, &port_attr);
+	rc = ibv_query_port(ctx, conn_caps->port, &port_attr);
 	if (rc) {
 		return rc;
 	}
@@ -247,8 +243,8 @@ mlx5_check_port(struct ibv_context *ctx, int port_num, bool *roce_en,
 			SPDK_ERRLOG("IB enabled and GRH addressing is required but only local addressing is supported\n");
 			return -1;
 		}
-		*mtu = port_attr.active_mtu;
-		*ib_en = true;
+		conn_caps->mtu = port_attr.active_mtu;
+		conn_caps->port_ib_enabled = true;
 		return 0;
 	}
 
@@ -265,14 +261,14 @@ mlx5_check_port(struct ibv_context *ctx, int port_num, bool *roce_en,
 		SPDK_ERRLOG("Failed to get VPORT context - assuming ROCE is disabled\n");
 		return rc;
 	}
-	devx_v = DEVX_GET(query_nic_vport_context_out, out,
-			  nic_vport_context.roce_en);
-	if (devx_v) {
-		*roce_en = true;
+	devx_v = DEVX_GET(query_nic_vport_context_out, out, nic_vport_context.roce_en);
+	if (!devx_v) {
+		SPDK_ERRLOG("Eth port %d, RoCE disabled\n", conn_caps->port);
+		return -1;
 	}
 
 	/* Always use 4K MTU */
-	*mtu = IBV_MTU_4096;
+	conn_caps->mtu = IBV_MTU_4096;
 
 	return 0;
 }
@@ -320,10 +316,6 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 					   capability.roce_cap.roce_version);
 	conn_caps->fl_when_roce_enabled = DEVX_GET(query_hca_cap_out,
 					  out, capability.roce_cap.fl_rc_qp_when_roce_enabled);
-	conn_caps->r_roce_max_src_udp_port = DEVX_GET(query_hca_cap_out,
-					     out, capability.roce_cap.r_roce_max_src_udp_port);
-	conn_caps->r_roce_min_src_udp_port = DEVX_GET(query_hca_cap_out,
-					     out, capability.roce_cap.r_roce_min_src_udp_port);
 out:
 	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d\n",
 		       conn_caps->roce_enabled, conn_caps->roce_version,
@@ -527,17 +519,9 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 {
 	struct mlx5_qp_conn_caps conn_caps = {};
 	struct ibv_context *context = qp->verbs_qp->context;
-	bool roce_en, ib_en;
-	uint8_t port;
-	uint16_t pkey_idx;
-	enum ibv_mtu mtu;
 	int rc;
 
-	rc = mlx5_qp_get_port_pkey_idx(qp, &port, &pkey_idx);
-	if (rc) {
-		return rc;
-	}
-	rc = mlx5_check_port(context, port, &roce_en, &ib_en, &mtu);
+	rc = mlx5_qp_get_port_pkey_idx(qp, &conn_caps);
 	if (rc) {
 		return rc;
 	}
@@ -545,12 +529,13 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 	if (rc) {
 		return rc;
 	}
-	conn_caps.port = port;
-	conn_caps.pkey_idx = pkey_idx;
-	conn_caps.mtu = mtu;
+	rc = mlx5_check_port(context, &conn_caps);
+	if (rc) {
+		return rc;
+	}
 
 	/* Check if force-loopback is supported */
-	if (ib_en || (conn_caps.resources_on_nvme_emulation_manager &&
+	if (conn_caps.port_ib_enabled || (conn_caps.resources_on_nvme_emulation_manager &&
 		      ((conn_caps.roce_enabled && conn_caps.fl_when_roce_enabled) ||
 		       (!conn_caps.roce_enabled && conn_caps.fl_when_roce_disabled)))) {
 	} else if (conn_caps.resources_on_nvme_emulation_manager) {
