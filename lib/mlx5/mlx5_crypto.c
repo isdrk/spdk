@@ -189,6 +189,7 @@ spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto
 	caps->wrapped_import_method_aes_xts = (DEVX_GET(query_hca_cap_out, out,
 						    capability.crypto_caps.wrapped_import_method) &
 		    				MLX5_CRYPTO_CAPS_WRAPPED_IMPORT_METHOD_AES) != 0;
+	caps->large_mtu_tweak = DEVX_GET(query_hca_cap_out, out, capability.crypto_caps.large_mtu_tweak_64);
 
 	return 0;
 }

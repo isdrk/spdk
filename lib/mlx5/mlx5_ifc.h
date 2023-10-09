@@ -1096,7 +1096,9 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8         suspend_qp_ud[0x1];
 	u8         suspend_qp_rc[0x1];
 	u8         log_bf_reg_size[0x5];
-	u8         reserved_at_270[0x6];
+	u8         reserved_at_270[0x2];
+	u8         qp_8k_mtu[0x1];
+	u8         reserved_at_273[0x3];
 	u8         lag_dct[0x2];
 	u8         lag_tx_port_affinity[0x1];
 	u8         reserved_at_279[0x2];
@@ -1505,7 +1507,9 @@ enum {
 struct mlx5_ifc_crypto_caps_bits {
 	u8         wrapped_crypto_operational[0x1];
 	u8         wrapped_crypto_going_to_commissioning[0x1];
-	u8         reserved_at_2[0x16];
+	u8         reserved_at_2[0xe];
+	u8         large_mtu_tweak_64[0x1];
+	u8         reserved_at_11[0x7];
 	u8         wrapped_import_method[0x8];
 
 	u8         reserved_at_20[0xb];

@@ -24,12 +24,16 @@
 #define MLX5_QP_MAX_RD_ATOMIC      16
 #define MLX5_QP_SQ_PSN         0x4242
 
+/* TODO: there is no definition for 8K MTU */
+#define MLX5_QP_8K_MTU		6
+
 struct mlx5_qp_conn_caps {
 	bool resources_on_nvme_emulation_manager;
 	bool roce_enabled;
 	bool fl_when_roce_disabled;
 	bool fl_when_roce_enabled;
 	bool port_ib_enabled;
+	bool qp_8k_mtu;
 	uint8_t roce_version;
 	uint8_t port;
 	uint16_t pkey_idx;
@@ -243,7 +247,11 @@ mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 			SPDK_ERRLOG("IB enabled and GRH addressing is required but only local addressing is supported\n");
 			return -1;
 		}
-		conn_caps->mtu = port_attr.active_mtu;
+		if (conn_caps->qp_8k_mtu) {
+			conn_caps->mtu = MLX5_QP_8K_MTU;
+		} else {
+			conn_caps->mtu = port_attr.active_mtu;
+		}
 		conn_caps->port_ib_enabled = true;
 		return 0;
 	}
@@ -267,8 +275,11 @@ mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 		return -1;
 	}
 
-	/* Always use 4K MTU */
-	conn_caps->mtu = IBV_MTU_4096;
+	if (conn_caps->qp_8k_mtu) {
+		conn_caps->mtu = MLX5_QP_8K_MTU;
+	} else {
+		conn_caps->mtu = IBV_MTU_4096;
+	}
 
 	return 0;
 }
@@ -277,18 +288,23 @@ static int
 mlx5_fill_qp_conn_caps(struct ibv_context *context,
 		       struct mlx5_qp_conn_caps *conn_caps)
 {
-
+	struct spdk_mlx5_crypto_caps crypto_caps = {};
 	uint8_t in[DEVX_ST_SZ_BYTES(query_hca_cap_in)] = {0};
 	uint8_t out[DEVX_ST_SZ_BYTES(query_hca_cap_out)] = {0};
-	int ret;
+	int rc;
+
+	rc = spdk_mlx5_query_crypto_caps(context, &crypto_caps);
+	if (rc) {
+		return rc;
+	}
 
 	DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
 	DEVX_SET(query_hca_cap_in, in, op_mod,
 		 MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE);
-	ret = mlx5dv_devx_general_cmd(context, in, sizeof(in), out,
-				      sizeof(out));
-	if (ret) {
-		return ret;
+	rc = mlx5dv_devx_general_cmd(context, in, sizeof(in), out,
+				     sizeof(out));
+	if (rc) {
+		return rc;
 	}
 
 	conn_caps->resources_on_nvme_emulation_manager =
@@ -296,6 +312,7 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 			 capability.cmd_hca_cap.resources_on_nvme_emulation_manager);
 	conn_caps->fl_when_roce_disabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.fl_rc_qp_when_roce_disabled);
+	conn_caps->qp_8k_mtu = crypto_caps.crypto && crypto_caps.large_mtu_tweak;
 	conn_caps->roce_enabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.roce);
 	if (!conn_caps->roce_enabled) {
@@ -306,10 +323,10 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 	memset(out, 0, sizeof(out));
 	DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
 	DEVX_SET(query_hca_cap_in, in, op_mod, MLX5_SET_HCA_CAP_OP_MOD_ROCE);
-	ret = mlx5dv_devx_general_cmd(context, in, sizeof(in), out,
-				      sizeof(out));
-	if (ret) {
-		return ret;
+	rc = mlx5dv_devx_general_cmd(context, in, sizeof(in), out,
+				     sizeof(out));
+	if (rc) {
+		return rc;
 	}
 
 	conn_caps->roce_version = DEVX_GET(query_hca_cap_out, out,
@@ -317,10 +334,11 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 	conn_caps->fl_when_roce_enabled = DEVX_GET(query_hca_cap_out,
 					  out, capability.roce_cap.fl_rc_qp_when_roce_enabled);
 out:
-	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d\n",
+	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d; 8K MTU %d\n",
 		       conn_caps->roce_enabled, conn_caps->roce_version,
 		       conn_caps->roce_enabled ? conn_caps->fl_when_roce_enabled :
-		       conn_caps->fl_when_roce_disabled);
+		       conn_caps->fl_when_roce_disabled,
+		       conn_caps->qp_8k_mtu);
 	return 0;
 }
 

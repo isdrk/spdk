@@ -350,6 +350,7 @@ struct spdk_mlx5_crypto_caps {
 	bool multi_block_be_tweak;
 	bool multi_block_le_tweak;
 	bool tweak_inc_64;
+	bool large_mtu_tweak;
 };
 
 int spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto_caps *caps);
