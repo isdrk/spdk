@@ -1,0 +1,16 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "accel",
+      "config": [
+        {
+          "method": "mlx5_scan_accel_module",
+          "params": {
+            "enable_crc": true,
+            "allowed_crypto_devs": "mlx5_2"
+          }
+        }
+      ]
+    }
+  ]
+}
