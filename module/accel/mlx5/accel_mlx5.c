@@ -162,6 +162,7 @@ struct accel_mlx5_task {
 		} bits;
 	} flags;
 	uint8_t mlx5_opcode;
+	uint16_t num_wrs;
 	union {
 		/* The struct is used for crypto */
 		struct {
@@ -212,8 +213,8 @@ struct accel_mlx5_dev {
 	struct ibv_pd *pd_ref;
 	/* Points to a memory domain owned by dev_ctx */
 	struct spdk_memory_domain *domain_ref;
-	uint16_t reqs_submitted;
-	uint16_t max_reqs;
+	uint16_t wrs_submitted;
+	uint16_t max_wrs;
 	bool crypto_multi_block;
 	bool recovering;
 	struct accel_mlx5_dev_stats stats;
@@ -439,7 +440,7 @@ accel_mlx5_task_alloc_mkeys(struct accel_mlx5_task *task, struct spdk_mempool *m
 	/* Each request consists of UMR and RDMA, or 2 operations.
 	 * qp slot is the total number of operations available in qp */
 	uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
-	uint32_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+	uint32_t qp_slot = task->dev->max_wrs - task->dev->wrs_submitted;
 	uint32_t num_mkeys;
 	int rc;
 
@@ -545,6 +546,7 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 	int rc;
 
 	dev->stats.tasks++;
+	mlx5_task->num_wrs = 0;
 	assert(mlx5_task->num_reqs > 0);
 	assert(mlx5_task->num_ops > 0);
 
@@ -555,8 +557,9 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 			return rc;
 		}
 		dev->stats.rdma_writes++;
-		assert(dev->reqs_submitted < dev->max_reqs);
-		dev->reqs_submitted++;
+		assert(dev->wrs_submitted < dev->max_wrs);
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 		mlx5_task->num_submitted_reqs++;
 	}
 
@@ -566,8 +569,9 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 		return rc;
 	}
 	dev->stats.rdma_writes++;
-	assert(dev->reqs_submitted < dev->max_reqs);
-	dev->reqs_submitted++;
+	assert(dev->wrs_submitted < dev->max_wrs);
+	dev->wrs_submitted++;
+	mlx5_task->num_wrs++;
 	mlx5_task->num_submitted_reqs++;
 	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
 
@@ -711,6 +715,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 
 	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
+	mlx5_task->num_wrs = 0;
 	/* At this moment we have as many requests as can be submitted to a qp */
 	for (i = 0; i < num_ops; i++) {
 		if (mlx5_task->num_submitted_reqs + i + 1 == mlx5_task->num_reqs) {
@@ -730,8 +735,9 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		iv += mlx5_task->blocks_per_req;
 		dev->stats.umrs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-		assert(dev->reqs_submitted < dev->max_reqs);
-		dev->reqs_submitted++;
+		assert(dev->wrs_submitted < dev->max_wrs);
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	for (i = 0; i < num_ops - 1; i++) {
@@ -756,8 +762,9 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		dev->stats.rdma_writes++;
 		mlx5_task->num_submitted_reqs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-		assert(dev->reqs_submitted < dev->max_reqs);
-		dev->reqs_submitted++;
+		assert(dev->wrs_submitted < dev->max_wrs);
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	if (mlx5_task->flags.bits.inplace) {
@@ -779,8 +786,9 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	dev->stats.rdma_writes++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-	assert(dev->reqs_submitted < dev->max_reqs);
-	dev->reqs_submitted++;
+	assert(dev->wrs_submitted < dev->max_wrs);
+	dev->wrs_submitted++;
+	mlx5_task->num_wrs++;
 	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
@@ -987,6 +995,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	SPDK_DEBUGLOG(accel_mlx5, "begin, crypto and crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
 
+	mlx5_task->num_wrs = 0;
 	/* At this moment we have as many requests as can be submitted to a qp */
 	for (i = 0; i < num_ops; i++) {
 		init_signature = false;
@@ -1032,7 +1041,8 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		iv += mlx5_task->blocks_per_req;
 		dev->stats.umrs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-		dev->reqs_submitted++;
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
@@ -1041,7 +1051,8 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
-		dev->reqs_submitted++;
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	for (i = 0; i < num_ops - 1; i++) {
@@ -1064,7 +1075,8 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		dev->stats.rdma_writes++;
 		mlx5_task->num_submitted_reqs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-		dev->reqs_submitted++;
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	if (mlx5_task->flags.bits.inplace) {
@@ -1111,7 +1123,8 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	dev->stats.rdma_writes++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-	dev->reqs_submitted++;
+	dev->wrs_submitted++;
+	mlx5_task->num_wrs++;
 	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, crypto and crc task, %p, reqs: total %u, submitted %u, completed %u\n",
@@ -1214,7 +1227,8 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 	dev->stats.umrs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-	dev->reqs_submitted++;
+	dev->wrs_submitted++;
+	mlx5_task->num_wrs = 1;
 
 	if (mlx5_task->flags.bits.inplace) {
 		klm = klms.src_klm;
@@ -1255,7 +1269,8 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
-		dev->reqs_submitted++;
+		dev->wrs_submitted++;
+		mlx5_task->num_wrs++;
 	}
 
 	if (check_op) {
@@ -1276,7 +1291,8 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	dev->stats.rdma_writes++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
-	dev->reqs_submitted++;
+	dev->wrs_submitted++;
+	mlx5_task->num_wrs++;
 	STAILQ_INSERT_TAIL(&dev->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, crc task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
@@ -1302,7 +1318,7 @@ accel_mlx5_task_alloc_crc_ctx(struct accel_mlx5_task *task)
 	}
 	/* One extra slot is needed for SET_PSV WQE to reset the error state in PSV. */
 	if (spdk_unlikely(task->psv->bits.error)) {
-		uint32_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+		uint32_t qp_slot = task->dev->max_wrs - task->dev->wrs_submitted;
 		uint32_t n_slots = task->num_ops * 2 + 1;
 
 		if (qp_slot < n_slots) {
@@ -1335,7 +1351,7 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 			}
 		} else {
 			/* Check that we have enough slots in QP */
-			uint32_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+			uint32_t qp_slot = task->dev->max_wrs - task->dev->wrs_submitted;
 			uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
 
 			num_ops = spdk_min(num_ops, 2 * task->num_ops);
@@ -1357,7 +1373,7 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 			}
 		} else {
 			/* Check that we have enough slots in QP */
-			uint32_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+			uint32_t qp_slot = task->dev->max_wrs - task->dev->wrs_submitted;
 			uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
 
 			num_ops = spdk_min(num_ops, 2 * task->num_ops);
@@ -1373,7 +1389,7 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 
 		return accel_mlx5_crypto_and_crc_task_process(task);
 	} else {
-		uint16_t qp_slot = task->dev->max_reqs - task->dev->reqs_submitted;
+		uint16_t qp_slot = task->dev->max_wrs - task->dev->wrs_submitted;
 		task->num_ops = spdk_min(qp_slot, task->num_reqs - task->num_completed_reqs);
 		if (task->num_ops == 0) {
 			/* Pool is empty, queue this task */
@@ -1536,7 +1552,7 @@ accel_mlx5_task_init(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *d
 			return -ENOMEM;
 		}
 	} else {
-		uint32_t qp_slot = dev->max_reqs - dev->reqs_submitted;
+		uint32_t qp_slot = dev->max_wrs - dev->wrs_submitted;
 
 		if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
 			if (task->d.iovcnt == 1) {
@@ -1897,7 +1913,6 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 	struct accel_mlx5_task *task, *signaled_task, *task_tmp;
 	struct accel_mlx5_wrid *wr;
 	uint32_t completed;
-	uint32_t num_completed_ops;
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
@@ -1925,28 +1940,8 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				STAILQ_REMOVE_HEAD(&dev->in_hw, link);
 				assert(task->num_submitted_reqs > task->num_completed_reqs);
 				completed = task->num_submitted_reqs - task->num_completed_reqs;
-				num_completed_ops = 0;
-				switch (task->mlx5_opcode) {
-				case ACCEL_MLX5_OPC_COPY:
-					num_completed_ops = completed;
-					break;
-				case ACCEL_MLX5_OPC_CRYPTO:
-					num_completed_ops = completed * 2;
-					break;
-				case ACCEL_MLX5_OPC_CRC32C:
-				case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
-					num_completed_ops = completed * 2;
-					if (spdk_unlikely(task->psv->bits.error)) {
-						num_completed_ops++;
-						if (wc[i].status == IBV_WC_SUCCESS) {
-							task->psv->bits.error = 0;
-						}
-					}
-					break;
-				}
-				assert(num_completed_ops != 0);
-				assert(dev->reqs_submitted >= num_completed_ops);
-				dev->reqs_submitted -= num_completed_ops;
+				assert(dev->wrs_submitted >= task->num_wrs);
+				dev->wrs_submitted -= task->num_wrs;
 				if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
 					/* We may have X unsignaled tasks queued in in_hw, if an error happens,
 					 * then HW generates completions for every unsignaled WQE.
@@ -1965,7 +1960,7 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 
 					dev->recovering = true;
 					STAILQ_INSERT_TAIL(&dev->recover, task, link);
-					if (dev->reqs_submitted == 0) {
+					if (dev->wrs_submitted == 0) {
 						assert(STAILQ_EMPTY(&dev->in_hw));
 						accel_mlx5_recover_dev(dev);
 					}
@@ -2003,7 +1998,6 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 	struct accel_mlx5_task *task;
 	struct accel_mlx5_wrid *wr;
 	uint32_t completed;
-	uint32_t num_completed_ops;
 	int i, rc;
 
 	for (i = 0; i < reaped; i++) {
@@ -2031,28 +2025,8 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			STAILQ_REMOVE_HEAD(&dev->in_hw, link);
 			assert(task->num_submitted_reqs > task->num_completed_reqs);
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
-			num_completed_ops = 0;
-			switch (task->mlx5_opcode) {
-			case ACCEL_MLX5_OPC_COPY:
-				num_completed_ops = completed;
-				break;
-			case ACCEL_MLX5_OPC_CRYPTO:
-				num_completed_ops = completed * 2;
-				break;
-			case ACCEL_MLX5_OPC_CRC32C:
-			case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
-				num_completed_ops = completed * 2;
-				if (spdk_unlikely(task->psv->bits.error)) {
-					num_completed_ops++;
-					if (wc[i].status == IBV_WC_SUCCESS) {
-						task->psv->bits.error = 0;
-					}
-				}
-				break;
-			}
-			assert(num_completed_ops != 0);
-			assert(dev->reqs_submitted >= num_completed_ops);
-			dev->reqs_submitted -= num_completed_ops;
+			assert(dev->wrs_submitted >= task->num_wrs);
+			dev->wrs_submitted -= task->num_wrs;
 
 			if (spdk_unlikely(wc[i].status)) {
 				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
@@ -2071,7 +2045,7 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 
 				dev->recovering = true;
 				STAILQ_INSERT_TAIL(&dev->recover, task, link);
-				if (dev->reqs_submitted == 0) {
+				if (dev->wrs_submitted == 0) {
 					assert(STAILQ_EMPTY(&dev->in_hw));
 					accel_mlx5_recover_dev(dev);
 				}
@@ -2168,7 +2142,7 @@ accel_mlx5_poller(void *ctx)
 
 	for (i = 0; i < ch->num_devs; i++) {
 		dev = &ch->devs[i];
-		if (dev->reqs_submitted) {
+		if (dev->wrs_submitted) {
 			rc = accel_mlx5_poll_cq(dev);
 			if (spdk_unlikely(rc < 0)) {
 				SPDK_ERRLOG("Error %"PRId64" on CQ, dev %s\n", rc,
@@ -2287,7 +2261,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		STAILQ_INIT(&dev->in_hw);
 		STAILQ_INIT(&dev->recover);
 		STAILQ_INIT(&dev->merged);
-		dev->max_reqs = g_accel_mlx5.qp_size;
+		dev->max_wrs = g_accel_mlx5.qp_size;
 		dev->mmap = spdk_rdma_utils_create_mem_map(dev->pd_ref, NULL,
 			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 		if (!dev->mmap) {
