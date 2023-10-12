@@ -205,3 +205,24 @@ mlx5_set_ctrl_seg(struct mlx5_wqe_ctrl_seg *ctrl, uint16_t pi,
 	mlx5dv_set_ctrl_seg(ctrl, pi, opcode, opmod, qp_num,
 			    fm_ce_se, ds, signature, imm);
 }
+
+static inline int
+mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
+{
+	struct mlx5dv_pd pd_info;
+	struct mlx5dv_obj obj;
+	int rc;
+
+	if (!pd) {
+		return -EINVAL;
+	}
+	obj.pd.in = pd;
+	obj.pd.out = &pd_info;
+	rc = mlx5dv_init_obj(&obj, MLX5DV_OBJ_PD);
+	if (rc) {
+		return rc;
+	}
+	*pd_id = pd_info.pdn;
+
+	return 0;
+}

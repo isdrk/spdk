@@ -998,26 +998,6 @@ spdk_mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 
 #define SPDK_KLM_MAX_TRANSLATION_ENTRIES_NUM   128
 
-static int
-mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
-{
-	int ret = 0;
-	struct mlx5dv_pd pd_info;
-	struct mlx5dv_obj obj;
-
-	if (!pd) {
-		return -EINVAL;
-	}
-	obj.pd.in = pd;
-	obj.pd.out = &pd_info;
-	ret = mlx5dv_init_obj(&obj, MLX5DV_OBJ_PD);
-	if (ret) {
-		return ret;
-	}
-	*pd_id = pd_info.pdn;
-	return 0;
-}
-
 struct spdk_mlx5_indirect_mkey *
 spdk_mlx5_create_indirect_mkey(struct ibv_pd *pd, struct mlx5_devx_mkey_attr *attr)
 {

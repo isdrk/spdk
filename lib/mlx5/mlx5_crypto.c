@@ -7,6 +7,7 @@
 #include <infiniband/mlx5dv.h>
 
 #include "mlx5_ifc.h"
+#include "mlx5_priv.h"
 #include "spdk/stdinc.h"
 #include "spdk/queue.h"
 #include "spdk/log.h"
@@ -27,39 +28,22 @@
 /* key1_256b + key2_256b + 64b_keytag */
 #define SPDK_MLX5_AES_XTS_256_DEK_BYTES_WITH_KEYTAG (SPDK_MLX5_AES_XTS_256_DEK_BYTES + SPDK_MLX5_AES_XTS_KEYTAG_SIZE)
 
-//TODO: rdma-core hides these definitions, we'll need to create DEK manually
-
-enum mlx5_devx_obj_type {
-	MLX5_DEVX_FLOW_TABLE		= 1,
-	MLX5_DEVX_FLOW_COUNTER		= 2,
-	MLX5_DEVX_FLOW_METER		= 3,
-	MLX5_DEVX_QP			= 4,
-	MLX5_DEVX_PKT_REFORMAT_CTX	= 5,
-	MLX5_DEVX_TIR			= 6,
-	MLX5_DEVX_FLOW_GROUP		= 7,
-	MLX5_DEVX_FLOW_TABLE_ENTRY	= 8,
-	MLX5_DEVX_FLOW_SAMPLER		= 9,
-	MLX5_DEVX_ASO_FIRST_HIT		= 10,
-	MLX5_DEVX_ASO_FLOW_METER	= 11,
-	MLX5_DEVX_ASO_CT		= 12,
+struct mlx5_crypto_dek_init_attr {
+	char *dek;
+	uint64_t opaque;
+	uint32_t key_size_bytes;
+	uint8_t key_size;
+	uint8_t keytag;
 };
 
-struct mlx5dv_devx_obj {
-	struct ibv_context *context;
-	uint32_t handle;
-	enum mlx5_devx_obj_type type;
-	uint32_t object_id;
-	uint64_t rx_icm_addr;
-	uint8_t log_obj_range;
-	void *priv;
-};
-
-struct mlx5dv_dek {
-    struct mlx5dv_devx_obj *devx_obj;
+struct mlx5_crypto_dek_query_attr {
+	/* state either MLX5_ENCRYPTION_KEY_OBJ_STATE_READY or MLX5_ENCRYPTION_KEY_OBJ_STATE_ERROR */
+	uint8_t state;
+	uint64_t opaque;
 };
 
 struct spdk_mlx5_crypto_dek {
-	struct mlx5dv_dek *dek_obj;
+	struct mlx5dv_devx_obj *devx_obj;
 	struct ibv_pd *pd;
 	struct ibv_context *context;
 	/* Cached dek_obj_id */
@@ -78,6 +62,76 @@ struct spdk_mlx5_crypto_keytag {
 
 static char **g_allowed_devices;
 static size_t g_allowed_devices_count;
+
+static int
+mlx5_crypto_dek_init(struct ibv_pd *pd, struct mlx5_crypto_dek_init_attr *attr, struct spdk_mlx5_crypto_dek *dek)
+{
+	uint32_t in[DEVX_ST_SZ_DW(create_encryption_key_obj_in)] = {};
+	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
+	uint8_t *dek_in;
+	uint32_t pdn;
+	int rc;
+
+	rc = mlx5_get_pd_id(pd, &pdn);
+	if (rc) {
+		return rc;
+	}
+
+	dek_in = DEVX_ADDR_OF(create_encryption_key_obj_in, in, hdr);
+	DEVX_SET(general_obj_in_cmd_hdr, dek_in, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
+	DEVX_SET(general_obj_in_cmd_hdr, dek_in, obj_type, MLX5_OBJ_TYPE_DEK);
+	dek_in = DEVX_ADDR_OF(create_encryption_key_obj_in, in, key_obj);
+	DEVX_SET(encryption_key_obj, dek_in, key_size, attr->key_size);
+	DEVX_SET(encryption_key_obj, dek_in, has_keytag, attr->keytag);
+	DEVX_SET(encryption_key_obj, dek_in, key_purpose, MLX5_ENCRYPTION_KEY_OBJ_KEY_PURPOSE_AES_XTS);
+	DEVX_SET(encryption_key_obj, dek_in, pd, pdn);
+	memcpy(DEVX_ADDR_OF(encryption_key_obj, dek_in, opaque), &attr->opaque, sizeof(attr->opaque));
+	memcpy(DEVX_ADDR_OF(encryption_key_obj, dek_in, key), attr->dek, attr->key_size_bytes);
+
+	dek->devx_obj = mlx5dv_devx_obj_create(pd->context, in, sizeof(in), out, sizeof(out));
+	spdk_memset_s(DEVX_ADDR_OF(encryption_key_obj, dek_in, key), attr->key_size_bytes, 0, attr->key_size_bytes);
+	if (!dek->devx_obj) {
+		return -errno;
+	}
+	dek->dek_obj_id = DEVX_GET(general_obj_out_cmd_hdr, out, obj_id);
+
+	return 0;
+}
+
+static void
+mlx5_crypto_dek_deinit(struct spdk_mlx5_crypto_dek *dek)
+{
+	int rc;
+
+	rc = mlx5dv_devx_obj_destroy(dek->devx_obj);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy crypto obj:%p, rc %d\n", dek->devx_obj, rc);
+	}
+}
+
+static int
+mlx5_crypto_dek_query(struct spdk_mlx5_crypto_dek *dek, struct mlx5_crypto_dek_query_attr *attr)
+{
+	uint32_t out[DEVX_ST_SZ_DW(query_encryption_key_obj_out)] = {};
+	uint32_t in[DEVX_ST_SZ_DW(general_obj_in_cmd_hdr)] = {};
+	uint8_t *dek_out;
+	int rc;
+
+	assert(attr);
+	DEVX_SET(general_obj_in_cmd_hdr, in, opcode, MLX5_CMD_OP_QUERY_GENERAL_OBJECT);
+	DEVX_SET(general_obj_in_cmd_hdr, in, obj_type, MLX5_OBJ_TYPE_DEK);
+	DEVX_SET(general_obj_in_cmd_hdr, in, obj_id, dek->dek_obj_id);
+
+	rc = mlx5dv_devx_obj_query(dek->devx_obj, in, sizeof(in), out, sizeof(out));
+	if (rc)
+		return rc;
+
+	dek_out = DEVX_ADDR_OF(query_encryption_key_obj_out, out, obj);
+	attr->state = DEVX_GET(encryption_key_obj, dek_out, state);
+	memcpy(&attr->opaque, DEVX_ADDR_OF(encryption_key_obj, dek_out, opaque), sizeof(attr->opaque));
+
+	return 0;
+}
 
 static void
 mlx5_crypto_devs_free(void)
@@ -294,8 +348,8 @@ spdk_mlx5_crypto_keytag_destroy(struct spdk_mlx5_crypto_keytag *keytag)
 
 	for (i = 0; i < keytag->deks_num; i++) {
 		dek = &keytag->deks[i];
-		if (dek->dek_obj) {
-			mlx5dv_dek_destroy(dek->dek_obj);
+		if (dek->devx_obj) {
+			mlx5_crypto_dek_deinit(dek);
 		}
 		if (dek->pd) {
 			spdk_rdma_utils_put_pd(dek->pd);
@@ -324,35 +378,38 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	struct spdk_mlx5_crypto_dek *dek;
 	struct spdk_mlx5_crypto_keytag *keytag;
 	struct ibv_context **devs;
-	struct mlx5dv_dek_init_attr init_attr = {};
-	struct mlx5dv_dek_attr query_attr;
+	struct ibv_pd *pd;
 	struct spdk_mlx5_crypto_caps dev_caps;
+	struct mlx5_crypto_dek_init_attr dek_attr = {};
+	struct mlx5_crypto_dek_query_attr query_attr;
 	int num_devs = 0, i, rc;
-	bool has_keytag;
-
 
 	if (!attr || !attr->dek) {
 		return -EINVAL;
 	}
-	switch (attr->dek_len) {
+
+	dek_attr.dek = attr->dek;
+	dek_attr.key_size_bytes = attr->dek_len;
+	dek_attr.opaque = 0;
+	switch (dek_attr.key_size_bytes) {
 	case SPDK_MLX5_AES_XTS_128_DEK_BYTES_WITH_KEYTAG:
-		init_attr.key_size = MLX5DV_CRYPTO_KEY_SIZE_128;
-		has_keytag = true;
+		dek_attr.key_size = MLX5_ENCRYPTION_KEY_OBJ_KEY_SIZE_SIZE_128;
+		dek_attr.keytag = 1;
 		SPDK_DEBUGLOG(mlx5, "128b AES_XTS with keytag\n");
 		break;
 	case SPDK_MLX5_AES_XTS_256_DEK_BYTES_WITH_KEYTAG:
-		init_attr.key_size = MLX5DV_CRYPTO_KEY_SIZE_256;
-		has_keytag = true;
+		dek_attr.key_size = MLX5_ENCRYPTION_KEY_OBJ_KEY_SIZE_SIZE_256;
+		dek_attr.keytag = 1;
 		SPDK_DEBUGLOG(mlx5, "256b AES_XTS with keytag\n");
 		break;
 	case SPDK_MLX5_AES_XTS_128_DEK_BYTES:
-		init_attr.key_size = MLX5DV_CRYPTO_KEY_SIZE_128;
-		has_keytag = false;
+		dek_attr.key_size = MLX5_ENCRYPTION_KEY_OBJ_KEY_SIZE_SIZE_128;
+		dek_attr.keytag = 0;
 		SPDK_DEBUGLOG(mlx5, "128b AES_XTS\n");
 		break;
 	case SPDK_MLX5_AES_XTS_256_DEK_BYTES:
-		init_attr.key_size = MLX5DV_CRYPTO_KEY_SIZE_256;
-		has_keytag = false;
+		dek_attr.key_size = MLX5_ENCRYPTION_KEY_OBJ_KEY_SIZE_SIZE_256;
+		dek_attr.keytag = 0;
 		SPDK_DEBUGLOG(mlx5, "256b AES_XTS\n");
 		break;
 	default:
@@ -389,52 +446,44 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	for (i = 0; i < num_devs; i++) {
 		keytag->deks_num++;
 		dek = &keytag->deks[i];
+		pd = spdk_rdma_utils_get_pd(devs[i]);
+		if (!pd) {
+			SPDK_ERRLOG("Failed to get PD on device %s\n", devs[i]->device->name);
+			rc = -EINVAL;
+			goto err_out;
+		}
+
 		memset(&dev_caps, 0, sizeof(dev_caps));
 		rc =  spdk_mlx5_query_crypto_caps(devs[i], &dev_caps);
 		if (rc) {
 			SPDK_ERRLOG("Failed to get device %s crypto caps\n", devs[i]->device->name);
 			goto err_out;
 		}
-		dek->pd = spdk_rdma_utils_get_pd(devs[i]);
-		if (!dek->pd) {
-			SPDK_ERRLOG("Failed to get PD on device %s\n", devs[i]->device->name);
-			rc = -EINVAL;
-			goto err_out;
-		}
-		dek->context = devs[i];
-
-		init_attr.pd = dek->pd;
-		init_attr.has_keytag = has_keytag;
-		init_attr.key_purpose = MLX5DV_CRYPTO_KEY_PURPOSE_AES_XTS;
-		init_attr.comp_mask = MLX5DV_DEK_INIT_ATTR_CRYPTO_LOGIN;
-		init_attr.crypto_login = NULL;
-		memcpy(init_attr.key, attr->dek, attr->dek_len);
-
-		dek->dek_obj = mlx5dv_dek_create(dek->context, &init_attr);
-		spdk_memset_s(init_attr.key, sizeof(init_attr.key), 0, sizeof(init_attr.key));
-		if (!dek->dek_obj) {
-			SPDK_ERRLOG("mlx5dv_dek_create failed on dev %s, errno %d\n", dek->context->device->name, errno);
-			rc = -EINVAL;
-			goto err_out;
-		}
-
-		memset(&query_attr, 0, sizeof(query_attr));
-		rc = mlx5dv_dek_query(dek->dek_obj, &query_attr);
+		rc = mlx5_crypto_dek_init(pd, &dek_attr, dek);
 		if (rc) {
-			SPDK_ERRLOG("Failed to query DEK on dev %s, rc %d\n", dek->context->device->name, rc);
+			SPDK_ERRLOG("Failed to create DEK on dev %s, rc %d\n", pd->context->device->name, rc);
 			goto err_out;
 		}
-		if (query_attr.state != MLX5DV_DEK_STATE_READY) {
-			SPDK_ERRLOG("DEK on dev %s state %d\n", dek->context->device->name, query_attr.state);
+		memset(&query_attr, 0, sizeof(query_attr));
+		rc = mlx5_crypto_dek_query(dek, &query_attr);
+		if (rc) {
+			SPDK_ERRLOG("Failed to query DEK on dev %s, rc %d\n", pd->context->device->name, rc);
+			goto err_out;
+		}
+		if (query_attr.opaque != 0 || query_attr.state != MLX5_ENCRYPTION_KEY_OBJ_STATE_READY) {
+			SPDK_ERRLOG("DEK on dev %s in bad state %d, oapque %"PRIu64"\n", pd->context->device->name,
+				    query_attr.state, query_attr.opaque);
 			rc = -EINVAL;
 			goto err_out;
 		}
+
+		dek->pd = pd;
+		dek->context = devs[i];
 		/* We have only mode one BE mode, if it is not set then tweak is LE */
 		dek->tweak_mode = g_tweak_mode_map[!!attr->tweak_upper_lba][!!dev_caps.multi_block_be_tweak];
-		dek->dek_obj_id = dek->dek_obj->devx_obj->object_id & 0x00FFFFFF;
 	}
 
-	if (has_keytag) {
+	if (dek_attr.keytag) {
 		/* Save keytag, it will be used to configure crypto MKEY */
 		keytag->has_keytag = true;
 		memcpy(keytag->keytag, attr->dek + attr->dek_len - SPDK_MLX5_AES_XTS_KEYTAG_SIZE,
