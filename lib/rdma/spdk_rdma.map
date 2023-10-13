@@ -15,9 +15,8 @@
 	spdk_rdma_qp_flush_send_wrs;
 	spdk_rdma_qp_queue_recv_wrs;
 	spdk_rdma_qp_flush_recv_wrs;
-	spdk_rdma_get_memory_domain;
-	spdk_rdma_get_tcp_memory_domain;
-	spdk_rdma_put_memory_domain;
+	spdk_rdma_utils_get_memory_domain;
+	spdk_rdma_utils_put_memory_domain;
 
 	local: *;
 };

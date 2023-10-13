@@ -28,6 +28,10 @@ struct spdk_rdma_utils_mem_map {
 	LIST_ENTRY(spdk_rdma_utils_mem_map)	link;
 };
 
+static TAILQ_HEAD(, spdk_rdma_utils_memory_domain) g_memory_domains = TAILQ_HEAD_INITIALIZER(
+			g_memory_domains);
+static pthread_mutex_t g_memory_domains_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static pthread_mutex_t g_dev_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct ibv_context **g_ctx_list = NULL;
 static TAILQ_HEAD(, rdma_utils_device) g_dev_list = TAILQ_HEAD_INITIALIZER(g_dev_list);
@@ -402,6 +406,76 @@ spdk_rdma_utils_put_pd(struct ibv_pd *pd)
 	rdma_sync_dev_list();
 
 	pthread_mutex_unlock(&g_dev_mutex);
+}
+
+
+struct spdk_rdma_utils_memory_domain *
+spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd, enum spdk_dma_device_type type)
+{
+	struct spdk_rdma_utils_memory_domain *domain = NULL;
+	struct spdk_memory_domain_ctx ctx;
+	int rc;
+
+	pthread_mutex_lock(&g_memory_domains_lock);
+
+	TAILQ_FOREACH(domain, &g_memory_domains, link) {
+		if (domain->pd == pd && domain->type == type) {
+			domain->ref++;
+			pthread_mutex_unlock(&g_memory_domains_lock);
+			return domain;
+		}
+	}
+
+	domain = calloc(1, sizeof(*domain));
+	if (!domain) {
+		SPDK_ERRLOG("Memory allocation failed\n");
+		pthread_mutex_unlock(&g_memory_domains_lock);
+		return NULL;
+	}
+
+	domain->rdma_ctx.size = sizeof(domain->rdma_ctx);
+	domain->rdma_ctx.ibv_pd = pd;
+	ctx.size = sizeof(ctx);
+	ctx.user_ctx = &domain->rdma_ctx;
+
+	rc = spdk_memory_domain_create(&domain->domain, type, &ctx,SPDK_RDMA_DMA_DEVICE);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create memory domain\n");
+		free(domain);
+		pthread_mutex_unlock(&g_memory_domains_lock);
+		return NULL;
+	}
+
+	domain->type = type;
+	domain->pd = pd;
+	domain->ref = 1;
+	TAILQ_INSERT_TAIL(&g_memory_domains, domain, link);
+
+	pthread_mutex_unlock(&g_memory_domains_lock);
+
+	return domain;
+}
+
+void
+spdk_rdma_utils_put_memory_domain(struct spdk_rdma_utils_memory_domain *domain)
+{
+	if (!domain) {
+		return;
+	}
+
+	pthread_mutex_lock(&g_memory_domains_lock);
+
+	assert(domain->ref > 0);
+
+	domain->ref--;
+
+	if (domain->ref == 0) {
+		spdk_memory_domain_destroy(domain->domain);
+		TAILQ_REMOVE(&g_memory_domains, domain, link);
+		free(domain);
+	}
+
+	pthread_mutex_unlock(&g_memory_domains_lock);
 }
 
 __attribute__((destructor)) static void

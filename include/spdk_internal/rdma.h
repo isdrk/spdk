@@ -70,14 +70,6 @@ struct spdk_rdma_srq {
 	bool shared_stats;
 };
 
-struct spdk_rdma_memory_domain {
-	TAILQ_ENTRY(spdk_rdma_memory_domain) link;
-	uint32_t ref;
-	struct ibv_pd *pd;
-	struct spdk_memory_domain *domain;
-	struct spdk_memory_domain_rdma_ctx rdma_ctx;
-};
-
 struct spdk_rdma_memory_translation_ctx {
 	void *addr;
 	size_t length;
@@ -199,34 +191,5 @@ bool spdk_rdma_qp_queue_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_r
  * \return 0 on succes, errno on failure
  */
 int spdk_rdma_qp_flush_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_recv_wr **bad_wr);
-
-/**
- * Get memory domain for the specified protection domain.
- *
- * If memory domain does not exist for the specified protection domain, it will be allocated.
- * If memory domain already exists, reference will be increased.
- *
- * \param pd Protection domain of memory domain
- * \return Pointer to memory domain or NULL;
- */
-struct spdk_rdma_memory_domain * spdk_rdma_get_memory_domain(struct ibv_pd *pd);
-
-/**
- * Get TCP memory domain for the specified protection domain.
- *
- * If memory domain does not exist for the specified protection domain, it will be allocated.
- * If memory domain already exists, reference will be increased.
- *
- * \param pd Protection domain of memory domain
- * \return Pointer to memory domain or NULL;
- */
-struct spdk_rdma_memory_domain * spdk_rdma_get_tcp_memory_domain(struct ibv_pd *pd);
-
-/**
- * Release a reference to a memory domain, which will be destroyed when reference becomes 0.
- *
- * \param domain Pointer to memory domain
- */
-void spdk_rdma_put_memory_domain(struct spdk_rdma_memory_domain *domain);
 
 #endif /* SPDK_RDMA_H */

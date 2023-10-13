@@ -224,7 +224,7 @@ struct nvme_rdma_qpair {
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	free_reqs;
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	outstanding_reqs;
 
-	struct spdk_rdma_memory_domain		*memory_domain;
+	struct spdk_rdma_utils_memory_domain		*memory_domain;
 
 	/* Count of outstanding send objects */
 	uint16_t				current_num_sends;
@@ -749,7 +749,8 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 		return -1;
 	}
 
-	rqpair->memory_domain = spdk_rdma_get_memory_domain(rqpair->rdma_qp->qp->pd);
+	rqpair->memory_domain = spdk_rdma_utils_get_memory_domain(rqpair->rdma_qp->qp->pd,
+								  SPDK_DMA_DEVICE_TYPE_RDMA);
 	if (!rqpair->memory_domain) {
 		SPDK_ERRLOG("Failed to get memory domain\n");
 		return -1;
@@ -2107,7 +2108,7 @@ nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	nvme_rdma_qpair_abort_reqs(qpair, 0);
 	nvme_qpair_deinit(qpair);
 
-	spdk_rdma_put_memory_domain(rqpair->memory_domain);
+	spdk_rdma_utils_put_memory_domain(rqpair->memory_domain);
 
 	spdk_free(rqpair);
 

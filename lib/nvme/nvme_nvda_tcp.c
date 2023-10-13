@@ -81,7 +81,7 @@ struct nvme_tcp_qpair {
 	struct nvme_tcp_req			**tcp_reqs_lookup;
 	struct ibv_pd				*pd;
 	struct spdk_rdma_utils_mem_map		*mem_map;
-	struct spdk_rdma_memory_domain		*memory_domain;
+	struct spdk_rdma_utils_memory_domain		*memory_domain;
 
 	struct nvme_tcp_req			*tcp_reqs;
 	struct nvme_tcp_req			*reserved_tcp_req;
@@ -507,7 +507,7 @@ nvme_tcp_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_q
 		free(tqpair->stats);
 	}
 	spdk_rdma_utils_free_mem_map(&tqpair->mem_map);
-	spdk_rdma_put_memory_domain(tqpair->memory_domain);
+	spdk_rdma_utils_put_memory_domain(tqpair->memory_domain);
 	free(tqpair);
 
 	return 0;
@@ -3461,10 +3461,12 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 			char *tcp_mem_domain = getenv("SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN");
 			if (tcp_mem_domain) {
 				SPDK_NOTICELOG("Using TCP memory domain\n");
-				tqpair->memory_domain = spdk_rdma_get_tcp_memory_domain(tqpair->pd);
+				tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
+											  SPDK_DMA_DEVICE_TYPE_RDMA_TCP);
 			} else {
 				SPDK_NOTICELOG("Using RDMA memory domain\n");
-				tqpair->memory_domain = spdk_rdma_get_memory_domain(tqpair->pd);
+				tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
+											  SPDK_DMA_DEVICE_TYPE_RDMA);
 			}
 
 			if (!tqpair->memory_domain) {

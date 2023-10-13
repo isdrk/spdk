@@ -1071,23 +1071,23 @@ test_nvme_rdma_memory_domain(void)
 
 	/* spdk_memory_domain_create failed, expect fail */
 	MOCK_SET(spdk_memory_domain_create, -1);
-	domain_1 = spdk_rdma_get_memory_domain(pd_1);
+	domain_1 = spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA);
 	CU_ASSERT(domain_1 == NULL);
 	MOCK_CLEAR(spdk_memory_domain_create);
 
 	/* Normal scenario */
-	domain_1 = spdk_rdma_get_memory_domain(pd_1);
+	domain_1 = spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA);
 	SPDK_CU_ASSERT_FATAL(domain_1 != NULL);
 	CU_ASSERT(domain_1->domain != NULL);
 	CU_ASSERT(domain_1->pd == pd_1);
 	CU_ASSERT(domain_1->ref == 1);
 
 	/* Request the same pd, ref counter increased */
-	CU_ASSERT(spdk_rdma_get_memory_domain(pd_1) == domain_1);
+	CU_ASSERT(spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA) == domain_1);
 	CU_ASSERT(domain_1->ref == 2);
 
 	/* Request another pd */
-	domain_2 = spdk_rdma_get_memory_domain(pd_2);
+	domain_2 = spdk_rdma_utils_get_memory_domain(pd_2, SPDK_DMA_DEVICE_TYPE_RDMA);
 	SPDK_CU_ASSERT_FATAL(domain_2 != NULL);
 	CU_ASSERT(domain_2->domain != NULL);
 	CU_ASSERT(domain_2->pd == pd_2);
@@ -1099,12 +1099,12 @@ test_nvme_rdma_memory_domain(void)
 	CU_ASSERT(dma_dev_count == dma_dev_count_start + 2);
 
 	/* put domain_1, decrement refcount */
-	spdk_rdma_put_memory_domain(domain_1);
+	spdk_rdma_utils_put_memory_domain(domain_1);
 
 	/* Release both devices */
 	CU_ASSERT(domain_2->ref == 1);
-	spdk_rdma_put_memory_domain(domain_1);
-	spdk_rdma_put_memory_domain(domain_2);
+	spdk_rdma_utils_put_memory_domain(domain_1);
+	spdk_rdma_utils_put_memory_domain(domain_2);
 
 	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
 		dma_dev_count_end++;
@@ -1156,7 +1156,7 @@ test_rdma_get_memory_translation(void)
 	};
 	int rc;
 
-	rqpair.memory_domain = spdk_rdma_get_memory_domain(rqpair.rdma_qp->qp->pd);
+	rqpair.memory_domain = spdk_rdma_utils_get_memory_domain(rqpair.rdma_qp->qp->pd, SPDK_DMA_DEVICE_TYPE_RDMA);
 	SPDK_CU_ASSERT_FATAL(rqpair.memory_domain != NULL);
 
 	/* case 1, using extended IO opts with DMA device.
@@ -1195,7 +1195,7 @@ test_rdma_get_memory_translation(void)
 	CU_ASSERT(ctx.rkey == RDMA_UT_RKEY);
 
 	/* Cleanup */
-	spdk_rdma_put_memory_domain(rqpair.memory_domain);
+	spdk_rdma_utils_put_memory_domain(rqpair.memory_domain);
 }
 
 static void

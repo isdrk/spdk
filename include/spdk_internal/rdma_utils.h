@@ -17,6 +17,15 @@ extern "C" {
 /* Contains hooks definition */
 #include "spdk/nvme.h"
 
+struct spdk_rdma_utils_memory_domain {
+	TAILQ_ENTRY(spdk_rdma_utils_memory_domain) link;
+	uint32_t ref;
+	enum spdk_dma_device_type type;
+	struct ibv_pd *pd;
+	struct spdk_memory_domain *domain;
+	struct spdk_memory_domain_rdma_ctx rdma_ctx;
+};
+
 struct spdk_rdma_utils_mem_map;
 
 union spdk_rdma_utils_mr {
@@ -114,6 +123,25 @@ spdk_rdma_utils_get_pd(struct ibv_context *context);
  * \param pd Pointer to the Protection Domain
  */
 void spdk_rdma_utils_put_pd(struct ibv_pd *pd);
+
+/**
+ * Get memory domain for the specified protection domain.
+ *
+ * If memory domain does not exist for the specified protection domain, it will be allocated.
+ * If memory domain already exists, reference will be increased.
+ *
+ * \param pd Protection domain of memory domain
+ * \param type Memory domain type, allows flexible customization
+ * \return Pointer to memory domain or NULL;
+ */
+struct spdk_rdma_utils_memory_domain * spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd, enum spdk_dma_device_type type);
+
+/**
+ * Release a reference to a memory domain, which will be destroyed when reference becomes 0.
+ *
+ * \param domain Pointer to memory domain
+ */
+void spdk_rdma_utils_put_memory_domain(struct spdk_rdma_utils_memory_domain *domain);
 
 #ifdef __cplusplus
 }
