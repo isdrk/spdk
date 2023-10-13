@@ -21,7 +21,7 @@ struct spdk_rdma_utils_mem_map;
 
 union spdk_rdma_utils_mr {
 	struct ibv_mr	*mr;
-	uint64_t		key;
+	uint64_t	key;
 };
 
 enum SPDK_RDMA_UTILS_TRANSLATION_TYPE {
@@ -99,7 +99,6 @@ spdk_rdma_utils_memory_translation_get_rkey(struct spdk_rdma_utils_memory_transl
 	       translation->mr_or_key.mr->rkey : (uint32_t)translation->mr_or_key.key;
 }
 
-
 /**
  * Get a Protection Domain for an RDMA device context.
  *
@@ -115,18 +114,6 @@ spdk_rdma_utils_get_pd(struct ibv_context *context);
  * \param pd Pointer to the Protection Domain
  */
 void spdk_rdma_utils_put_pd(struct ibv_pd *pd);
-
-/**
- * Initializes qpair state from \b init to \b RTS (ready to send). Should only be used for qpairs
- * created without rdmacm.
- *
- * For loopback connection pass \b dest_qp_num equal to the local qp number
- *
- * \param qp Qpair to initialize
- * \param dest_qp_num Destination qp number.
- * \return
- */
-int spdk_rdma_utils_qp_init_2_rts(struct ibv_qp *qp, uint32_t dest_qp_num);
 
 #ifdef __cplusplus
 }

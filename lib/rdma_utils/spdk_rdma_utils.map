@@ -7,7 +7,6 @@
 	spdk_rdma_utils_get_translation;
 	spdk_rdma_utils_get_pd;
 	spdk_rdma_utils_put_pd;
-	spdk_rdma_utils_qp_init_2_rts;
 
 	local: *;
 };
