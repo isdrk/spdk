@@ -3635,7 +3635,14 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 static uint32_t
 nvme_tcp_ctrlr_get_max_xfer_size(struct spdk_nvme_ctrlr *ctrlr)
 {
-	/* TCP transport doesn't limit maximum IO transfer size. */
+	/* We can handle only IO that fits into iobuf if data digest is enabled. */
+	if (ctrlr->opts.data_digest) {
+		struct spdk_iobuf_opts iobuf_opts;
+
+		spdk_iobuf_get_opts(&iobuf_opts);
+		return iobuf_opts.large_bufsize;
+	}
+	/* In other cases, TCP transport doesn't limit maximum IO transfer size. */
 	return UINT32_MAX;
 }
 
