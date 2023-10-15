@@ -873,6 +873,7 @@ static void
 _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 {
 	struct nvme_tcp_req *tcp_req = cb_arg;
+	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
 	struct nvme_tcp_qpair *tqpair = tcp_req->tqpair;
 	struct spdk_nvme_cpl cpl;
 	enum spdk_nvme_generic_command_status_code sc;
@@ -894,6 +895,9 @@ _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 		sc = SPDK_NVME_SC_ABORTED_SQ_DELETION;
 		goto fail_req;
 	}
+
+	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
+	MAKE_DIGEST_WORD(pdu->data_digest, pdu->data_digest_crc32);
 
 	/* Once copy task is finished, we use a single staging buffer.
 	 * To reuse existing functions to build a capsule, remove reset_sgl_fn since
@@ -956,16 +960,16 @@ nvme_tcp_apply_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 	if (tcp_req->tqpair->flags.host_ddgst_enable) {
 		if (!skip_copy) {
 			rc = spdk_accel_append_copy_crc32c(&accel_seq, accel_ch,
-							   (uint32_t *)tcp_req->pdu.data_digest,
+							   &tcp_req->pdu.data_digest_crc32,
 							   &tcp_req->iobuf_iov, 1, NULL, NULL,
 							   tcp_req->iov, tcp_req->iovcnt,
 							   req->payload.opts->memory_domain,
 							   req->payload.opts->memory_domain_ctx,
-							   SPDK_CRC32C_XOR, NULL, NULL);
+							   0, NULL, NULL);
 			skip_copy = true;
 		} else {
-			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch, (uint32_t *)tcp_req->pdu.data_digest,
-						      &tcp_req->iobuf_iov, 1, NULL, NULL, SPDK_CRC32C_XOR, NULL, NULL);
+			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch, &tcp_req->pdu.data_digest_crc32,
+						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
@@ -2010,9 +2014,10 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 			return rc;
 		}
 	}
-	rc = spdk_accel_append_check_crc32c(&accel_seq, accel_ch, (uint32_t *)&pdu->data_digest,
-					    req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL, SPDK_CRC32C_XOR, NULL,
-					    NULL);
+	pdu->data_digest_crc32 = DGET32(pdu->data_digest);
+	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
+	rc = spdk_accel_append_check_crc32c(&accel_seq, accel_ch, &pdu->data_digest_crc32, req->zcopy.iovs,
+					    req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("Failed to append check crc accel task, rc %d\n", rc);
 		goto abort_sequence;
@@ -2382,6 +2387,10 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 		goto fail_req;
 	}
 
+	rsp_pdu = &tcp_req->pdu;
+	rsp_pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
+	MAKE_DIGEST_WORD(rsp_pdu->data_digest, rsp_pdu->data_digest_crc32);
+
 	/* Once copy task is finished, we use a single staging buffer.
 	 * To reuse existing functions to build a capsule, remove reset_sgl_fn since
 	 * it is not needed any more and overwrite contig_or_cb_arg with address of the
@@ -2395,7 +2404,6 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 
 	/* At this point tcp_req->iovs point to outdated values */
 	nvme_tcp_build_contig_request(tcp_req->tqpair, tcp_req);
-	rsp_pdu = &tcp_req->pdu;
 	h2c_data = &rsp_pdu->hdr.h2c_data;
 	nvme_tcp_pdu_set_data_buf(rsp_pdu, tcp_req->iov, tcp_req->iovcnt, h2c_data->datao, h2c_data->datal);
 
@@ -2457,17 +2465,16 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 	if (tcp_req->tqpair->flags.host_ddgst_enable && !tcp_req->r2tl_remain) {
 		if (!skip_copy) {
 			rc = spdk_accel_append_copy_crc32c(&accel_seq, accel_ch,
-							   (uint32_t *)tcp_req->pdu.data_digest,
+							   &tcp_req->pdu.data_digest_crc32,
 							   &tcp_req->iobuf_iov, 1, NULL, NULL,
 							   tcp_req->iov, tcp_req->iovcnt,
 							   req->payload.opts->memory_domain,
 							   req->payload.opts->memory_domain_ctx,
-							   SPDK_CRC32C_XOR, NULL, NULL);
+							   0, NULL, NULL);
 			skip_copy = true;
 		} else {
-			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch,
-						      (uint32_t *)tcp_req->pdu.data_digest, &tcp_req->iobuf_iov, 1,
-						      NULL, NULL, SPDK_CRC32C_XOR, NULL, NULL);
+			rc = spdk_accel_append_crc32c(&accel_seq, accel_ch, &tcp_req->pdu.data_digest_crc32,
+						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
