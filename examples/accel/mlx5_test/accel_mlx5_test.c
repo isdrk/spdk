@@ -418,8 +418,7 @@ accel_done(void *arg1, int status)
 	if (status == 0) {
 		switch (worker->workload) {
 		case ACCEL_OPC_COPY_CRC32C:
-			sw_crc32c = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, g_crc32c_seed);
-			sw_crc32c ^= 0xffffffffUL;
+			sw_crc32c = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
 			if (*task->crc_dst != sw_crc32c) {
 				SPDK_NOTICELOG("CRC-32C miscompare: actual 0x%x, expected 0x%x\n", *task->crc_dst,
 					       sw_crc32c);
@@ -439,8 +438,7 @@ accel_done(void *arg1, int status)
 			}
 			break;
 		case ACCEL_OPC_CRC32C:
-			sw_crc32c = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, g_crc32c_seed);
-			sw_crc32c ^= 0xffffffffUL;
+			sw_crc32c = spdk_crc32c_iov_update(task->src_iovs, task->src_iovcnt, ~g_crc32c_seed);
 			if (*task->crc_dst != sw_crc32c) {
 				SPDK_NOTICELOG("CRC-32C miscompare: actual 0x%x, expected 0x%x\n", *task->crc_dst,
 					       sw_crc32c);
