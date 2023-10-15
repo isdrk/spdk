@@ -60,6 +60,7 @@ struct accel_mlx5_crypto_dev_ctx {
 	struct spdk_mlx5_indirect_mkey **sig_mkeys;
 	struct spdk_mempool *psv_pool;
 	struct spdk_mlx5_psv **psvs;
+	uint32_t *crc_dma_buf;
 	struct ibv_context *context;
 	struct ibv_pd *pd;
 	struct accel_mlx5_cryptodev_memory_domain domain;
@@ -125,6 +126,8 @@ struct accel_mlx5_psv_wrapper {
 		uint32_t error : 1;
 		uint32_t reserved : 31;
 	} bits;
+	uint32_t *crc;
+	uint32_t crc_lkey;
 };
 
 enum accel_mlx5_opcode {
@@ -856,15 +859,10 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 			return -EINVAL;
 		}
 
-		rc = accel_mlx5_translate_addr(crc, sizeof(*crc), NULL, NULL, dev, &klm->src_klm[umr_klm_count++]);
-		if (spdk_unlikely(rc)) {
-			/*
-			 * TODO: Add a pool of 4-byte memory chunks. Each chunk is DMAable. Allocate a staging
-			 * buffer for crc_dst here instead of returning the error.
-			 */
-			SPDK_ERRLOG("Failed to translate address of crc_dst\n");
-			return rc;
-		}
+		*mlx5_task->psv->crc = *crc ^ UINT32_MAX;
+		klm->src_klm[umr_klm_count].lkey = mlx5_task->psv->crc_lkey;
+		klm->src_klm[umr_klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		klm->src_klm[umr_klm_count++].byte_count = sizeof(uint32_t);
 	}
 
 	SPDK_DEBUGLOG(accel_mlx5, "task %p crypto_attr: bs %u, iv %"PRIu64", enc_on_tx %d\n",
@@ -1104,16 +1102,9 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			return -EINVAL;
 		}
 
-		rc = accel_mlx5_translate_addr(task_crc->crc_dst, sizeof(uint32_t), NULL, NULL, dev,
-					       &klm[klm_count++]);
-		if (spdk_unlikely(rc)) {
-			/*
-			 * TODO: Add a pool of 4-byte memory chunks. Each chunk is DMAable. Allocate a staging
-			 * buffer for crc_dst here instead of returning the error.
-			 */
-			SPDK_ERRLOG("Failed to translate address of crc_dst\n");
-			return rc;
-		}
+		klm[klm_count].lkey = mlx5_task->psv->crc_lkey;
+		klm[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		klm[klm_count++].byte_count = sizeof(uint32_t);
 	}
 
 	rc = spdk_mlx5_dma_qp_rdma_read(dev->dma_qp, klm, klm_count, 0, mlx5_task->sig_mkeys[i]->mkey,
@@ -1241,16 +1232,12 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	 * because the task init function reserved it.
 	 */
 	assert(klm_count < ACCEL_MLX5_MAX_SGE);
-	rc = accel_mlx5_translate_addr(check_op ? mlx5_task->base.crc : mlx5_task->base.crc_dst,
-				       sizeof(uint32_t), NULL, NULL, dev, &klm[klm_count++]);
-	if (spdk_unlikely(rc)) {
-		/*
-		 * TODO: Add a pool of 4-byte memory chunks. Each chunk is DMAable. Allocate a staging buffer
-		 * for crc_dst here instead of returning the error.
-		 */
-		SPDK_ERRLOG("Failed to translate address of crc_dst\n");
-		return rc;
+	if (check_op) {
+		*mlx5_task->psv->crc = *mlx5_task->base.crc ^ UINT32_MAX;
 	}
+	klm[klm_count].lkey = mlx5_task->psv->crc_lkey;
+	klm[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
+	klm[klm_count++].byte_count = sizeof(uint32_t);
 
 	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
 		rc = spdk_mlx5_set_psv(dev->dma_qp, mlx5_task->psv->psv_index, *mlx5_task->base.crc, 0, 0);
@@ -1518,16 +1505,12 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		/* Ensure that there is a free KLM for the CRC destination. */
 		assert(klm_count < (int)ACCEL_MLX5_MAX_SGE);
 		/* Add the crc destination to the end of KLMs. */
-		rc = accel_mlx5_translate_addr(check_op ? mlx5_task->base.crc : mlx5_task->base.crc_dst,
-					       sizeof(uint32_t), NULL, NULL, dev, &klms[klm_count++]);
-		if (spdk_unlikely(rc)) {
-			/*
-		 * TODO: Add a pool of 4-byte memory chunks. Each chunk is DMAable. Allocate a staging buffer
-		 * for crc_dst here instead of returning the error.
-		 */
-			SPDK_ERRLOG("Failed to translate address of crc_dst\n");
-			return rc;
+		if (check_op) {
+			*mlx5_task->psv->crc = *mlx5_task->base.crc ^ UINT32_MAX;
 		}
+		klms[klm_count].lkey = mlx5_task->psv->crc_lkey;
+		klms[klm_count].addr = (uintptr_t)mlx5_task->psv->crc;
+		klms[klm_count++].byte_count = sizeof(uint32_t);
 	}
 	rdma_fence |= SPDK_MLX5_WQE_CTRL_CQ_UPDATE;
 	if (check_op) {
@@ -2122,9 +2105,6 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 	case ACCEL_OPC_CHECK_CRC32C:
 		mlx5_task->flags.bits.inplace = 1;
 		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C;
-		/* Modifying the given CRC is a bad practice but it is a temporary solution.
-		 * It will be fixed in the next commits. */
-		*mlx5_task->base.crc ^= UINT32_MAX;
 		if (g_accel_mlx5.merge) {
 			accel_mlx5_task_merge_crc_and_decrypt(mlx5_task);
 		}
@@ -2381,11 +2361,12 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				if (task->num_completed_reqs == task->num_reqs) {
 					if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
 					    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
-						*task->base.crc_dst ^= UINT32_MAX;
+						*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
 					} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
 						   task->base.op_code == ACCEL_OPC_ENCRYPT) {
 						struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
-						*task_crc->crc_dst ^= UINT32_MAX;
+
+						*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
 					}
 					accel_mlx5_task_complete(task, 0);
 				} else if (task->num_completed_reqs == task->num_submitted_reqs) {
@@ -2474,11 +2455,12 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			if (task->num_completed_reqs == task->num_reqs) {
 				if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
 				    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
-					*task->base.crc_dst ^= UINT32_MAX;
+					*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
 				} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
 					   task->base.op_code == ACCEL_OPC_ENCRYPT) {
 					struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
-					*task_crc->crc_dst ^= UINT32_MAX;
+
+					*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
 				}
 				accel_mlx5_task_complete(task, 0);
 			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
@@ -2635,6 +2617,40 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 	free(ch->devs);
 }
 
+struct accel_mlx5_psv_pool_iter_cb_args {
+	struct accel_mlx5_dev *dev;
+	int rc;
+};
+
+static void
+accel_mlx5_psv_pool_iter_cb(struct spdk_mempool *mp, void *_arg, void *_obj, unsigned obj_idx)
+{
+	struct accel_mlx5_psv_pool_iter_cb_args *args = _arg;
+	struct accel_mlx5_psv_wrapper *wrapper = _obj;
+	struct spdk_rdma_utils_memory_translation map_translation;
+	int rc;
+
+	rc = spdk_rdma_utils_get_translation(args->dev->mmap, wrapper->crc, sizeof(uint32_t), &map_translation);
+	if (rc) {
+		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", wrapper->crc, sizeof(uint32_t));
+		args->rc = -EINVAL;
+	} else {
+		wrapper->crc_lkey = spdk_rdma_utils_memory_translation_get_lkey(&map_translation);
+	}
+}
+
+static int
+accel_mlx5_translate_crc_addr(struct accel_mlx5_dev *dev)
+{
+	struct accel_mlx5_psv_pool_iter_cb_args args = {
+		.dev = dev
+	};
+
+	spdk_mempool_obj_iter(dev->psv_pool_ref, accel_mlx5_psv_pool_iter_cb, &args);
+
+	return args.rc;
+}
+
 static int
 accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 {
@@ -2689,6 +2705,11 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 		if (!dev->mmap) {
 			SPDK_ERRLOG("Failed to create memory map\n");
+			goto err_out;
+		}
+		rc = accel_mlx5_translate_crc_addr(dev);
+		if (rc) {
+			SPDK_ERRLOG("Failed to translate crc addresses\n");
 			goto err_out;
 		}
 	}
@@ -2867,6 +2888,8 @@ static void
 accel_mlx5_psvs_release(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 {
 	uint32_t i, num_psvs, num_psvs_in_pool;
+
+	spdk_dma_free(dev_ctx->crc_dma_buf);
 
 	if (!dev_ctx->psvs) {
 		return;
@@ -3101,6 +3124,11 @@ accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, un
 	assert(dev_ctx->psvs[obj_idx] != NULL);
 	memset(wrapper, 0, sizeof(*wrapper));
 	wrapper->psv_index = dev_ctx->psvs[obj_idx]->index;
+	wrapper->crc = &dev_ctx->crc_dma_buf[obj_idx];
+	/*
+	 * We cannot translate the crc address here because the memory map will be created later in
+	 * accel_mlx5_create_cb(). The address translation will be done there as well.
+	 */
 }
 
 static int
@@ -3111,6 +3139,11 @@ accel_mlx5_psvs_create(struct accel_mlx5_crypto_dev_ctx *dev_ctx)
 	uint32_t num_psvs = dev_ctx->num_mkeys;
 	int rc;
 
+	dev_ctx->crc_dma_buf = spdk_dma_malloc(sizeof(uint32_t) * num_psvs, sizeof(uint32_t), NULL);
+	if (!dev_ctx->crc_dma_buf) {
+		SPDK_ERRLOG("Failed to allocate memory for CRC DMA buffer\n");
+		return -ENOMEM;
+	}
 	dev_ctx->psvs = calloc(num_psvs, (sizeof(struct spdk_mlx5_psv *)));
 	if (!dev_ctx->psvs) {
 		SPDK_ERRLOG("Failed to alloc PSVs array\n");
