@@ -885,7 +885,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	cattr.dek_obj_id = dek_data.dek_obj_id;
 	cattr.tweak_mode = dek_data.tweak_mode;
 
-	sattr.seed = crc_seed;
+	sattr.seed = crc_seed ^ UINT32_MAX;
 	sattr.psv_index = psv_index;
 	sattr.domain = sig_domain;
 	sattr.sigerr_count = mkey->sigerr_count;
@@ -1142,7 +1142,7 @@ accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct mlx5
 				  bool sig_init, bool sig_check_gen)
 {
 	struct spdk_mlx5_umr_sig_attr sattr = {
-		.seed = mlx5_task->base.seed,
+		.seed = mlx5_task->base.seed ^ UINT32_MAX,
 		.psv_index = mlx5_task->psv->psv_index,
 		.domain = sig_domain,
 		.sigerr_count = mkey->sigerr_count,
@@ -2122,6 +2122,9 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 	case ACCEL_OPC_CHECK_CRC32C:
 		mlx5_task->flags.bits.inplace = 1;
 		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C;
+		/* Modifying the given CRC is a bad practice but it is a temporary solution.
+		 * It will be fixed in the next commits. */
+		*mlx5_task->base.crc ^= UINT32_MAX;
 		if (g_accel_mlx5.merge) {
 			accel_mlx5_task_merge_crc_and_decrypt(mlx5_task);
 		}
@@ -2376,6 +2379,14 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
 					      task->num_reqs - task->num_completed_reqs);
 				if (task->num_completed_reqs == task->num_reqs) {
+					if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
+					    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
+						*task->base.crc_dst ^= UINT32_MAX;
+					} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
+						   task->base.op_code == ACCEL_OPC_ENCRYPT) {
+						struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
+						*task_crc->crc_dst ^= UINT32_MAX;
+					}
 					accel_mlx5_task_complete(task, 0);
 				} else if (task->num_completed_reqs == task->num_submitted_reqs) {
 					assert(task->num_submitted_reqs < task->num_reqs);
@@ -2461,6 +2472,14 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
 				      task->num_reqs - task->num_completed_reqs);
 			if (task->num_completed_reqs == task->num_reqs) {
+				if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
+				    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
+					*task->base.crc_dst ^= UINT32_MAX;
+				} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
+					   task->base.op_code == ACCEL_OPC_ENCRYPT) {
+					struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
+					*task_crc->crc_dst ^= UINT32_MAX;
+				}
 				accel_mlx5_task_complete(task, 0);
 			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
 				assert(task->num_submitted_reqs < task->num_reqs);
