@@ -2734,7 +2734,6 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->num_requests = ACCEL_MLX5_NUM_MKEYS;
 	attr->split_mb_blocks = 0;
 	attr->siglast = false;
-	attr->enable_crc = false;
 	attr->merge = false;
 }
 
@@ -3417,7 +3416,6 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_object_begin(w, "params");
 		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
-		spdk_json_write_named_bool(w, "enable_crc", g_accel_mlx5.crc_supported);
 		spdk_json_write_named_bool(w, "merge", g_accel_mlx5.merge);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);

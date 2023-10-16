@@ -3006,7 +3006,6 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                         split_mb_blocks=args.split_mb_blocks,
                                         allowed_crypto_devs=args.allowed_crypto_devs,
                                         siglast=args.siglast,
-                                        enable_crc=args.enable_crc,
                                         merge=args.merge)
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
@@ -3016,7 +3015,6 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-d', '--allowed-crypto-devs', help="Comma separated list of allowed crypto device names")
     p.add_argument('-l', '--siglast', dest='siglast', action='store_true',
                    help="Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB")
-    p.add_argument('-g', '--enable-crc', dest='enable_crc', action='store_true', help="Enable CRC32C and COPY_CRC32C operations")
     p.add_argument('-m', '--merge', dest='merge', action='store_true', help="Merge tasks in the sequence when possible")
     p.set_defaults(func=mlx5_scan_accel_module)
 
