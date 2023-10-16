@@ -2809,7 +2809,6 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.num_requests = attr->num_requests;
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
-		g_accel_mlx5.crc_supported = attr->enable_crc;
 		g_accel_mlx5.merge = attr->merge;
 
 		if (attr->allowed_crypto_devs) {
@@ -3269,7 +3268,7 @@ accel_mlx5_init(void)
 	struct ibv_context **rdma_devs, *dev;
 	struct spdk_memory_domain_ctx ctx;
 	struct ibv_pd *pd;
-	struct spdk_mlx5_crypto_caps crypto_caps;
+	struct spdk_mlx5_crypto_caps *crypto_caps = NULL;
 	int num_devs = 0, rc = 0, i;
 
 	if (!g_accel_mlx5.enabled) {
@@ -3295,6 +3294,32 @@ accel_mlx5_init(void)
 		g_accel_mlx5.crypto_supported = true;
 	}
 
+	crypto_caps = calloc(num_devs, sizeof(*crypto_caps));
+	if (!crypto_caps) {
+		rc = -ENOMEM;
+		goto cleanup;
+	}
+
+	for (i = 0; i < num_devs; i++) {
+		dev = rdma_devs[i];
+		rc = spdk_mlx5_query_crypto_caps(dev, &crypto_caps[i]);
+		if (rc) {
+			SPDK_ERRLOG("Failed to get aes_xts caps, dev %s\n", dev->device->name);
+			goto cleanup;
+		}
+	}
+
+	if (g_accel_mlx5.crypto_supported) {
+		g_accel_mlx5.crc_supported = true;
+		for (i = 0; i < num_devs; i++) {
+			if (!crypto_caps[i].crc32c) {
+				SPDK_NOTICELOG("Disable crc32c support because dev %s doesn't support it\n",
+					       rdma_devs[i]->device->name);
+				g_accel_mlx5.crc_supported = false;
+			}
+		}
+	}
+
 	g_accel_mlx5.crypto_ctxs = calloc(num_devs, sizeof(*g_accel_mlx5.crypto_ctxs));
 	if (!g_accel_mlx5.crypto_ctxs) {
 		SPDK_ERRLOG("Memory allocation failed\n");
@@ -3305,18 +3330,13 @@ accel_mlx5_init(void)
 	for (i = 0; i < num_devs; i++) {
 		crypto_dev_ctx = &g_accel_mlx5.crypto_ctxs[i];
 		dev = rdma_devs[i];
-		memset(&crypto_caps, 0, sizeof(crypto_caps));
-		rc = spdk_mlx5_query_crypto_caps(dev, &crypto_caps);
-		if (rc) {
-			SPDK_ERRLOG("Failed to get aes_xts caps, dev %s\n", dev->device->name);
-			goto cleanup;
-		}
-		SPDK_NOTICELOG("Crypto dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d\n",
+		SPDK_NOTICELOG("Crypto dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d, crc32c %d\n",
 			       dev->device->name,
-			       crypto_caps.single_block_le_tweak,
-			       crypto_caps.multi_block_be_tweak,
-			       crypto_caps.multi_block_le_tweak,
-			       crypto_caps.tweak_inc_64);
+			       crypto_caps[i].single_block_le_tweak,
+			       crypto_caps[i].multi_block_be_tweak,
+			       crypto_caps[i].multi_block_le_tweak,
+			       crypto_caps[i].tweak_inc_64,
+			       g_accel_mlx5.crc_supported);
 
 		pd = spdk_rdma_utils_get_pd(dev);
 		if (!pd) {
@@ -3358,7 +3378,7 @@ accel_mlx5_init(void)
 
 		/* Explicitly disabled by default */
 		crypto_dev_ctx->crypto_multi_block = false;
-		if (crypto_caps.multi_block_be_tweak) {
+		if (crypto_caps[i].multi_block_be_tweak) {
 			/* TODO: multi_block LE tweak will be checked later once LE BSF is fixed */
 			crypto_dev_ctx->crypto_multi_block = true;
 		} else if (g_accel_mlx5.split_mb_blocks) {
@@ -3373,11 +3393,15 @@ accel_mlx5_init(void)
 	spdk_io_device_register(&g_accel_mlx5, accel_mlx5_create_cb, accel_mlx5_destroy_cb,
 				sizeof(struct accel_mlx5_io_channel), "accel_mlx5");
 
+	free(crypto_caps);
 	spdk_mlx5_crypto_devs_release(rdma_devs);
 
 	return rc;
 
 cleanup:
+	if (crypto_caps) {
+		free(crypto_caps);
+	}
 	spdk_mlx5_crypto_devs_release(rdma_devs);
 	accel_mlx5_free_resources();
 

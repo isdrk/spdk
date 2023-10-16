@@ -220,6 +220,8 @@ spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto
 						capability.cmd_hca_cap.aes_xts_multi_block_le_tweak);
 	caps->tweak_inc_64 = DEVX_GET(query_hca_cap_out, out,
 					       capability.cmd_hca_cap.aes_xts_tweak_inc_64);
+	caps->crc32c = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.sho) &&
+		       DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.sig_crc32c);
 	if (!caps->crypto) {
 		return 0;
 	}
