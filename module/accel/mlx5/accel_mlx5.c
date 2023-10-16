@@ -81,7 +81,7 @@ struct accel_mlx5_module {
 	size_t allowed_crypto_devs_count;
 	bool enabled;
 	bool crypto_supported;
-	bool enable_crc;
+	bool crc_supported;
 	bool merge;
 };
 
@@ -2580,7 +2580,7 @@ accel_mlx5_supports_opcode(enum accel_opcode opc)
 	case ACCEL_OPC_CRC32C:
 	case ACCEL_OPC_COPY_CRC32C:
 	case ACCEL_OPC_CHECK_CRC32C:
-		return g_accel_mlx5.enable_crc;
+		return g_accel_mlx5.crc_supported;
 	default:
 		return false;
 	}
@@ -2809,7 +2809,7 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.num_requests = attr->num_requests;
 		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
 		g_accel_mlx5.siglast= attr->siglast;
-		g_accel_mlx5.enable_crc = attr->enable_crc;
+		g_accel_mlx5.crc_supported = attr->enable_crc;
 		g_accel_mlx5.merge = attr->merge;
 
 		if (attr->allowed_crypto_devs) {
@@ -3333,7 +3333,7 @@ accel_mlx5_init(void)
 			goto cleanup;
 		}
 
-		if (g_accel_mlx5.enable_crc) {
+		if (g_accel_mlx5.crc_supported) {
 			rc = accel_mlx5_sig_ctx_mkeys_create(crypto_dev_ctx);
 			if (rc) {
 				goto cleanup;
@@ -3393,7 +3393,7 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_object_begin(w, "params");
 		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
-		spdk_json_write_named_bool(w, "enable_crc", g_accel_mlx5.enable_crc);
+		spdk_json_write_named_bool(w, "enable_crc", g_accel_mlx5.crc_supported);
 		spdk_json_write_named_bool(w, "merge", g_accel_mlx5.merge);
 		spdk_json_write_object_end(w);
 		spdk_json_write_object_end(w);
