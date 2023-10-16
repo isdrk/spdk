@@ -839,7 +839,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 		klm->dst_klm_count = rc;
 	}
 
-	if (!encrypt) {
+	if (gen_signature && !encrypt) {
 		/* Ensure that there is a free KLM */
 		if (umr_klm_count >= ACCEL_MLX5_MAX_SGE) {
 			SPDK_ERRLOG("No space left for crc_dst in klm\n");
