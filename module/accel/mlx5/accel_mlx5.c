@@ -212,8 +212,6 @@ struct accel_mlx5_qp {
 	/* tasks submitted to HW. We can't complete a task even in error case until we reap completions for all
 	 * submitted requests */
 	STAILQ_HEAD(, accel_mlx5_task) in_hw;
-	/* tasks waiting for device recovery */
-	STAILQ_HEAD(, accel_mlx5_task) recover;
 	struct spdk_poller *recover_poller;
 };
 
@@ -2199,64 +2197,6 @@ accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5
 	}
 }
 
-
-static inline void
-accel_mlx5_resubmit_recover_tasks(struct accel_mlx5_qp *qp)
-{
-	struct accel_mlx5_dev *dev = qp->dev;
-	struct accel_mlx5_task *task, *tmp;
-	int rc;
-
-	assert(qp->recovering == false);
-	/* There is a good chance that WR failure was caused by invalidated cached mkey.
-	 * Clear the cache to avoid new failures. We clear cache for all tasks here,
-	 * including ones queued in nomem queue. This may clear mkeys that are still
-	 * valid, but it is better than triggering another QP recovery. Caches will be
-	 * refilled quickly.
-	 */
-	STAILQ_FOREACH(task, &dev->nomem, link) {
-		accel_mlx5_task_clear_mkey_cache(task, qp);
-	}
-
-	STAILQ_FOREACH_SAFE(task, &qp->recover, link, tmp) {
-		STAILQ_REMOVE_HEAD(&qp->recover, link);
-		SPDK_DEBUGLOG(accel_mlx5,
-			      "Resubmit task %p: num_ops %u, num_reqs %u, submitted_reqs %u, completed_reqs %u\n",
-			      task, task->num_ops, task->num_reqs, task->num_submitted_reqs, task->num_completed_reqs);
-
-		/* It is safe to restart an inplace CRC32C task because it does not modify data */
-		if (task->flags.bits.inplace && task->mlx5_opcode != ACCEL_MLX5_OPC_CRC32C) {
-			/* @todo: We can't restart inplace task from the beggining without data corruption.
-			 * For now we fail such tasks. Better solution should be implemented later.
-			 */
-			SPDK_ERRLOG("Recovery of inplace tasks is not supported\n");
-			accel_mlx5_task_complete(task, -EIO);
-		}
-
-		/* Restart the task from the beginning */
-		accel_mlx5_task_release_mkeys(task);
-
-		/* Clear mkey cache */
-		accel_mlx5_task_clear_mkey_cache(task, qp);
-
-		rc = accel_mlx5_task_init(task, dev);
-		if (spdk_likely(!rc)) {
-			rc = accel_mlx5_task_process(task);
-		}
-
-		if (spdk_unlikely(rc)) {
-			if (rc == -ENOMEM) {
-				SPDK_DEBUGLOG(accel_mlx5, "no reqs to handle new task %p (required %u), put to queue\n",
-					      task, task->num_reqs);
-				STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-				continue;
-			}
-
-			accel_mlx5_task_complete(task, rc);
-		}
-	}
-}
-
 static void accel_mlx5_recover_qp(struct accel_mlx5_qp *qp);
 
 static int
@@ -2272,6 +2212,7 @@ accel_mlx5_recover_qp_poller(void *arg)
 static void
 accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 {
+	struct accel_mlx5_task *task;
 	struct accel_mlx5_dev *dev = qp->dev;
 	struct spdk_mlx5_qp_attr mlx5_qp_attr = {};
 	int rc;
@@ -2280,6 +2221,15 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 	if (qp->qp) {
 		spdk_mlx5_qp_destroy(qp->qp);
 		qp->qp = NULL;
+	}
+	/* There is a good chance that WR failure was caused by invalidated cached mkey.
+	 * Clear the cache to avoid new failures. We clear cache for all tasks here,
+	 * including ones queued in nomem queue. This may clear mkeys that are still
+	 * valid, but it is better than triggering another QP recovery. Caches will be
+	 * refilled quickly.
+	 */
+	STAILQ_FOREACH(task, &dev->nomem, link) {
+		accel_mlx5_task_clear_mkey_cache(task, qp);
 	}
 
 	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
@@ -2298,7 +2248,6 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 	}
 
 	qp->recovering = false;
-	accel_mlx5_resubmit_recover_tasks(qp);
 }
 
 static struct accel_mlx5_sig_key_wrapper *
@@ -2349,6 +2298,9 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				completed = task->num_submitted_reqs - task->num_completed_reqs;
 				assert(qp->wrs_submitted >= task->num_wrs);
 				qp->wrs_submitted -= task->num_wrs;
+				task->num_completed_reqs += completed;
+				SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
+					      task->num_reqs - task->num_completed_reqs);
 				if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
 					/* We may have X unsignaled tasks queued in in_hw, if an error happens,
 					 * then HW generates completions for every unsignaled WQE.
@@ -2364,7 +2316,10 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 					}
 
 					qp->recovering = true;
-					STAILQ_INSERT_TAIL(&qp->recover, task, link);
+					assert(task->num_completed_reqs <= task->num_submitted_reqs);
+					if (task->num_completed_reqs == task->num_submitted_reqs) {
+						accel_mlx5_task_complete(task, -EIO);
+					}
 					if (qp->wrs_submitted == 0) {
 						assert(STAILQ_EMPTY(&qp->in_hw));
 						accel_mlx5_recover_qp(qp);
@@ -2373,9 +2328,6 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 					break;
 				}
 
-				task->num_completed_reqs += completed;
-				SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
-					      task->num_reqs - task->num_completed_reqs);
 				if (task->num_completed_reqs == task->num_reqs) {
 					if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
 					    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
@@ -2443,6 +2395,9 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
 			assert(qp->wrs_submitted >= task->num_wrs);
 			qp->wrs_submitted -= task->num_wrs;
+			task->num_completed_reqs += completed;
+			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
+				      task->num_reqs - task->num_completed_reqs);
 
 			if (spdk_unlikely(wc[i].status)) {
 				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
@@ -2460,7 +2415,10 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 				accel_mlx5_task_check_sigerr(task);
 
 				qp->recovering = true;
-				STAILQ_INSERT_TAIL(&qp->recover, task, link);
+				assert(task->num_completed_reqs <= task->num_submitted_reqs);
+				if (task->num_completed_reqs == task->num_submitted_reqs) {
+					accel_mlx5_task_complete(task, -EIO);
+				}
 				if (qp->wrs_submitted == 0) {
 					assert(STAILQ_EMPTY(&qp->in_hw));
 					accel_mlx5_recover_qp(qp);
@@ -2469,9 +2427,6 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 				continue;
 			}
 
-			task->num_completed_reqs += completed;
-			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
-				      task->num_reqs - task->num_completed_reqs);
 			if (task->num_completed_reqs == task->num_reqs) {
 				if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
 				    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
@@ -2693,7 +2648,6 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 	}
 
 	STAILQ_INIT(&qp->in_hw);
-	STAILQ_INIT(&qp->recover);
 	qp->dev = dev;
 	qp->max_wrs = g_accel_mlx5.qp_size;
 
