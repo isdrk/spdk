@@ -878,6 +878,7 @@ _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 	struct spdk_nvme_cpl cpl;
 	enum spdk_nvme_generic_command_status_code sc;
 	int rc;
+	uint16_t dnr = 0;
 
 	SPDK_DEBUGLOG(nvme, "accel cpl, req %p, status %d\n", tcp_req, status);
 	assert(tcp_req->ordering.bits.in_progress_accel);
@@ -886,6 +887,7 @@ _nvme_tcp_accel_finished_in_capsule(void *cb_arg, int status)
 	if (spdk_unlikely(status)) {
 		SPDK_ERRLOG("tqair %p, req %p, accel sequence status %d\n", tqpair, tcp_req, status);
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		dnr = 1;
 		goto fail_req;
 	}
 	if (spdk_unlikely(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_QUIESCING ||
@@ -926,7 +928,7 @@ fail_req:
 	memset(&cpl, 0, sizeof(cpl));
 	cpl.status.sc = sc;
 	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	cpl.status.dnr = 0;
+	cpl.status.dnr = dnr;
 	nvme_tcp_req_complete(tcp_req, tqpair, &cpl, true);
 }
 
@@ -1434,7 +1436,7 @@ nvme_tcp_req_accel_seq_complete_cb(void *arg, int status)
 		SPDK_ERRLOG("tqair %p, req %p, accel sequence status %d\n", tqpair, tcp_req, status);
 		tcp_req->rsp.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 		tcp_req->rsp.status.sct = SPDK_NVME_SCT_GENERIC;
-		tcp_req->rsp.status.dnr = 0;
+		tcp_req->rsp.status.dnr = 1;
 		goto complete;
 	}
 	if (spdk_unlikely(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_QUIESCING ||
@@ -1930,6 +1932,7 @@ nvme_tcp_req_accel_seq_complete_crc_c2h_cb(void *arg, int status)
 	if (spdk_unlikely(status)) {
 		SPDK_ERRLOG("Failed to compute the data digest for pdu =%p\n", &tcp_req->pdu);
 		tcp_req->rsp.status.sc = SPDK_NVME_SC_COMMAND_TRANSIENT_TRANSPORT_ERROR;
+		tcp_req->rsp.status.dnr = 1;
 
 		/* Prevent aborting this sequence in nvme_tcp_req_complete_memory_domain(). */
 		tcp_req->req.accel_sequence = NULL;
@@ -2369,6 +2372,7 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 	bool has_memory_domain;
 	enum spdk_nvme_generic_command_status_code sc;
 	struct spdk_nvme_cpl cpl;
+	uint16_t dnr = 0;
 
 	SPDK_DEBUGLOG(nvme, "accel cpl, req %p, status %d\n", tcp_req, status);
 	assert(tcp_req->ordering.bits.in_progress_accel);
@@ -2377,6 +2381,7 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 	if (spdk_unlikely(status)) {
 		SPDK_ERRLOG("tqair %p, req %p, accel sequence status %d\n", tqpair, tcp_req, status);
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		dnr = 1;
 		goto fail_req;
 	}
 	if (spdk_unlikely(tqpair->recv_state == NVME_TCP_PDU_RECV_STATE_QUIESCING ||
@@ -2426,7 +2431,7 @@ fail_req:
 	memset(&cpl, 0, sizeof(cpl));
 	cpl.status.sc = sc;
 	cpl.status.sct = SPDK_NVME_SCT_GENERIC;
-	cpl.status.dnr = 0;
+	cpl.status.dnr = dnr;
 	nvme_tcp_req_complete(tcp_req, tqpair, &cpl, true);
 }
 
