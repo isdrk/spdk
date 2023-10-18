@@ -988,10 +988,9 @@ nvme_tcp_apply_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 			return rc;
 		}
 	}
-
-	spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_in_capsule, tcp_req);
 	TAILQ_INSERT_TAIL(&tcp_req->tqpair->outstanding_reqs, tcp_req, link);
 	tcp_req->ordering.bits.in_progress_accel = 1;
+	spdk_accel_sequence_finish(accel_seq, _nvme_tcp_accel_finished_in_capsule, tcp_req);
 	return -EINPROGRESS;
 }
 
@@ -1544,10 +1543,8 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 
 		}
 		spdk_accel_sequence_reverse(accel_seq);
-		spdk_accel_sequence_finish(accel_seq,
-						nvme_tcp_req_accel_seq_complete_cb,
-						tcp_req);
 		tcp_req->ordering.bits.in_progress_accel = 1;
+		spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_cb, tcp_req);
 		return;
 	}
 
@@ -2027,8 +2024,8 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 	}
 
 	spdk_accel_sequence_reverse(accel_seq);
-	spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb, tcp_req);
 	tcp_req->ordering.bits.in_progress_accel = 1;
+	spdk_accel_sequence_finish(accel_seq, nvme_tcp_req_accel_seq_complete_crc_c2h_cb, tcp_req);
 
 	return 0;
 abort_sequence:
@@ -2497,8 +2494,8 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 		}
 	}
 
-	spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
 	tcp_req->ordering.bits.in_progress_accel = 1;
+	spdk_accel_sequence_finish(accel_seq, nvme_tcp_accel_seq_finished_h2c_cb, tcp_req);
 
 	return rc;
 }
