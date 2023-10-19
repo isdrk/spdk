@@ -258,6 +258,8 @@ int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
  */
 int spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out);
 
+int spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp);
+
 /**
  * Destroy qpair
  *

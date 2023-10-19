@@ -1873,6 +1873,60 @@ accel_mlx5_qp_find(struct accel_mlx5_qpairs_map *map, struct spdk_memory_domain 
 	return RB_FIND(accel_mlx5_qpairs_map, map, &_qp);
 }
 
+static void
+accel_mlx5_del_qps_on_ch_done(struct spdk_io_channel_iter *i, int status)
+{
+
+}
+
+static void
+accel_mlx5_destroy_qp_with_domain(struct accel_mlx5_qp *qp)
+{
+	if (qp->wrs_submitted == 0) {
+		if (qp->qp) {
+			spdk_mlx5_qp_destroy(qp->qp);
+			qp->qp = NULL;
+		}
+		RB_REMOVE(accel_mlx5_qpairs_map, &qp->dev->qpairs_map, qp);
+		free(qp);
+	} else {
+		/* Move QP to error state, that will flush all outstanding requests.
+		 * QP will be deleted once empty */
+		spdk_mlx5_qp_set_error_state(qp->qp);
+	}
+}
+
+static void
+accel_mlx5_del_qps_on_ch(struct spdk_io_channel_iter *i)
+{
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct accel_mlx5_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct spdk_memory_domain *domain = spdk_io_channel_iter_get_ctx(i);
+	struct accel_mlx5_qp *qp;
+	uint32_t j;
+
+	for (j = 0; j < ch->num_devs; j++) {
+		qp = accel_mlx5_qp_find(&ch->devs[j].qpairs_map, domain);
+		if (qp) {
+			accel_mlx5_destroy_qp_with_domain(qp);
+		}
+	}
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+static void
+accel_mlx5_domain_notification(void *user_ctx, struct spdk_memory_domain_update_notification_ctx *ctx)
+{
+	assert(user_ctx == &g_accel_mlx5);
+
+	if (ctx->type == SPDK_MEMORY_DOMAIN_UPDATE_NOTIFICATION_TYPE_DELETED) {
+		spdk_for_each_channel(user_ctx, accel_mlx5_del_qps_on_ch, ctx->domain,
+				      accel_mlx5_del_qps_on_ch_done);
+	}
+}
+
+
 static inline struct accel_mlx5_qp *
 accel_mlx5_dev_get_qp_by_domain(struct accel_mlx5_dev *dev, struct spdk_memory_domain *domain)
 {
@@ -3066,6 +3120,7 @@ accel_mlx5_deinit_cb(void *ctx)
 static void
 accel_mlx5_deinit(void *ctx)
 {
+	spdk_memory_domain_update_notification_unsubscribe(&g_accel_mlx5);
 	if (g_accel_mlx5.allowed_crypto_devs) {
 		accel_mlx5_allowed_crypto_devs_free();
 		spdk_mlx5_crypto_devs_allow(NULL, 0);
@@ -3493,6 +3548,11 @@ accel_mlx5_init(void)
 		}
 
 		g_accel_mlx5.num_devs++;
+	}
+
+	rc = spdk_memory_domain_update_notification_subscribe(&g_accel_mlx5, accel_mlx5_domain_notification);
+	if (rc) {
+		SPDK_WARNLOG("Failed to subscribe on memory domain updates (rc %d), ignoring\n", rc);
 	}
 
 	SPDK_NOTICELOG("Accel framework mlx5 initialized, found %d devices.\n", num_devs);

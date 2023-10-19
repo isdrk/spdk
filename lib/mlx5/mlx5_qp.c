@@ -675,3 +675,13 @@ spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
         mlx5_qp_destroy(qp);
         free(qp);
 }
+
+int
+spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp)
+{
+	struct ibv_qp_attr attr = {
+		.qp_state = IBV_QPS_ERR,
+	};
+
+	return ibv_modify_qp(qp->verbs_qp, &attr, IBV_QP_STATE);
+}
