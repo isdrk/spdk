@@ -255,6 +255,12 @@ xlio_unload(void)
 	int rc;
 
 	if (g_xlio_handle) {
+		int (*xlio_exit)(void) = dlsym(g_xlio_handle, "xlio_exit");
+
+		if (xlio_exit) {
+			xlio_exit();
+		}
+
 		memset(&g_xlio_ops, 0, sizeof(g_xlio_ops));
 		rc = dlclose(g_xlio_handle);
 		if (rc) {
