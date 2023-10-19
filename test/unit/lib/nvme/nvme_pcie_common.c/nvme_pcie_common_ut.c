@@ -53,6 +53,15 @@ DEFINE_STUB(nvme_ctrlr_disable_poll, int, (struct spdk_nvme_ctrlr *ctrlr), 0);
 
 DEFINE_STUB_V(nvme_transport_ctrlr_disconnect_qpair_done, (struct spdk_nvme_qpair *qpair));
 
+struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
+	.rdma_srq_size = 0,
+	.poll_group_requests = 1024,
+};
+
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
+
 int
 nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
 		struct spdk_nvme_ctrlr *ctrlr,

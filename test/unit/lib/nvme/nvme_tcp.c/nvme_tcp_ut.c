@@ -45,6 +45,15 @@ DEFINE_STUB_V(spdk_nvme_qpair_print_command, (struct spdk_nvme_qpair *qpair,
 DEFINE_STUB_V(spdk_nvme_qpair_print_completion, (struct spdk_nvme_qpair *qpair,
 		struct spdk_nvme_cpl *cpl));
 
+struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
+	.rdma_srq_size = 0,
+	.poll_group_requests = 1024,
+};
+
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
+
 static void
 test_nvme_tcp_pdu_set_data_buf(void)
 {

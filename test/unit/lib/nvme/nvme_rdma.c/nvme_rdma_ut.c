@@ -51,6 +51,10 @@ DEFINE_STUB_V(spdk_nvme_qpair_print_command, (struct spdk_nvme_qpair *qpair,
 DEFINE_STUB_V(spdk_nvme_qpair_print_completion, (struct spdk_nvme_qpair *qpair,
 		struct spdk_nvme_cpl *cpl));
 
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
+
 DEFINE_RETURN_MOCK(spdk_memory_domain_create, int);
 int
 spdk_memory_domain_create(struct spdk_memory_domain **domain, enum spdk_dma_device_type type,
