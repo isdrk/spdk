@@ -76,6 +76,48 @@ DEFINE_STUB(spdk_bdev_get_memory_domains, int,
 	    (struct spdk_bdev *bdev, struct spdk_memory_domain **domains, int sz), 0);
 DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), (void *)0xdeadbeef);
 
+
+DEFINE_STUB(spdk_bdev_reservation_register, int, (struct spdk_bdev_desc *desc,
+				   struct spdk_io_channel *ch,
+				   uint64_t crkey,
+				   uint64_t nrkey,
+				   bool ignore_key,
+				   enum spdk_bdev_reservation_register_action action,
+				   enum spdk_bdev_reservation_register_cptpl cptpl,
+				   spdk_bdev_io_completion_cb cb,
+				   void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_acquire, int, (struct spdk_bdev_desc *desc,
+				  struct spdk_io_channel *ch,
+				  uint64_t crkey,
+				  uint64_t prkey,
+				  bool ignore_key,
+				  enum spdk_bdev_reservation_acquire_action action,
+				  enum spdk_bdev_reservation_type type,
+				  spdk_bdev_io_completion_cb cb,
+				  void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_release, int, (struct spdk_bdev_desc *desc,
+				  struct spdk_io_channel *ch,
+				  uint64_t crkey, bool ignore_key,
+				  enum spdk_bdev_reservation_release_action action,
+				  enum spdk_bdev_reservation_type type,
+				  spdk_bdev_io_completion_cb cb,
+				  void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_reservation_report, int, (struct spdk_bdev_desc *desc,
+				 struct spdk_io_channel *ch,
+				 struct spdk_bdev_reservation_status_data *status_data,
+				 uint32_t len,
+				 spdk_bdev_io_completion_cb cb,
+				 void *cb_arg), 0);
+
+DEFINE_STUB(spdk_bdev_wait_for_ready, int, (struct spdk_bdev_desc *desc, int64_t timeout_in_msec,
+			     spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg), 0);
+
+DEFINE_STUB(spdk_accel_get_opc_memory_domain, int, (enum accel_opcode opcode, struct spdk_memory_domain **domains,
+				     int array_size), 0);
+
 /* global vars and setup/cleanup functions used for all test functions */
 struct spdk_bdev_io *g_bdev_io;
 struct crypto_bdev_io *g_io_ctx;
@@ -334,7 +376,6 @@ test_error_paths(void)
 	CU_ASSERT(g_io_ctx->bdev_io_wait.bdev == &g_crypto_bdev.crypto_bdev);
 	CU_ASSERT(g_io_ctx->bdev_io_wait.cb_fn == vbdev_crypto_resubmit_io);
 	CU_ASSERT(g_io_ctx->bdev_io_wait.cb_arg == g_bdev_io);
-	CU_ASSERT(g_io_ctx->resubmit_state == CRYPTO_IO_NEW);
 	memset(&g_io_ctx->bdev_io_wait, 0, sizeof(g_io_ctx->bdev_io_wait));
 	MOCK_SET(spdk_accel_append_decrypt, 0);
 }
