@@ -2283,79 +2283,74 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 
 		wr = (struct accel_mlx5_wrid *)wc[i].wr_id;
 
-		if (spdk_unlikely(!wr)) {
+		if (spdk_unlikely(!wr || wr->wrid != ACCEL_MLX5_WRID_WRITE)) {
 			/* That is unsignaled completion with error, just ignore it */
 			continue;
 		}
 
-		switch (wr->wrid) {
-		case ACCEL_MLX5_WRID_WRITE:
-			signaled_task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
-			qp = signaled_task->qp;
-			STAILQ_FOREACH_SAFE(task, &qp->in_hw, link, task_tmp) {
-				STAILQ_REMOVE_HEAD(&qp->in_hw, link);
-				assert(task->num_submitted_reqs > task->num_completed_reqs);
-				completed = task->num_submitted_reqs - task->num_completed_reqs;
-				assert(qp->wrs_submitted >= task->num_wrs);
-				qp->wrs_submitted -= task->num_wrs;
-				task->num_completed_reqs += completed;
-				SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
-					      task->num_reqs - task->num_completed_reqs);
-				if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
-					/* We may have X unsignaled tasks queued in in_hw, if an error happens,
-					 * then HW generates completions for every unsignaled WQE.
-					 * If cpl with error generated for task X+1 then we still can process
-					 * previous tasks as usual */
-					if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
-						SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-							     qp, task, wc[i].status, spdk_env_get_current_core());
-					} else {
-						SPDK_DEBUGLOG(accel_mlx5,
-							      "RDMA: qp %p, task %p, WC status %d, core %u\n",
-							      qp, task, wc[i].status, spdk_env_get_current_core());
-					}
-
-					qp->recovering = true;
-					assert(task->num_completed_reqs <= task->num_submitted_reqs);
-					if (task->num_completed_reqs == task->num_submitted_reqs) {
-						accel_mlx5_task_complete(task, -EIO);
-					}
-					if (qp->wrs_submitted == 0) {
-						assert(STAILQ_EMPTY(&qp->in_hw));
-						accel_mlx5_recover_qp(qp);
-					}
-
-					break;
+		signaled_task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
+		qp = signaled_task->qp;
+		STAILQ_FOREACH_SAFE(task, &qp->in_hw, link, task_tmp) {
+			STAILQ_REMOVE_HEAD(&qp->in_hw, link);
+			assert(task->num_submitted_reqs > task->num_completed_reqs);
+			completed = task->num_submitted_reqs - task->num_completed_reqs;
+			assert(qp->wrs_submitted >= task->num_wrs);
+			qp->wrs_submitted -= task->num_wrs;
+			task->num_completed_reqs += completed;
+			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
+				      task->num_reqs - task->num_completed_reqs);
+			if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
+				/* We may have X unsignaled tasks queued in in_hw, if an error happens,
+				 * then HW generates completions for every unsignaled WQE.
+				 * If cpl with error generated for task X+1 then we still can process
+				 * previous tasks as usual */
+				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
+					SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
+						     qp, task, wc[i].status, spdk_env_get_current_core());
+				} else {
+					SPDK_DEBUGLOG(accel_mlx5,
+						      "RDMA: qp %p, task %p, WC status %d, core %u\n",
+						      qp, task, wc[i].status, spdk_env_get_current_core());
 				}
 
-				if (task->num_completed_reqs == task->num_reqs) {
-					if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
-					    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
-						*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
-					} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
-						   task->base.op_code == ACCEL_OPC_ENCRYPT) {
-						struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
-
-						*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
-					}
-					accel_mlx5_task_complete(task, 0);
-				} else if (task->num_completed_reqs == task->num_submitted_reqs) {
-					assert(task->num_submitted_reqs < task->num_reqs);
-					rc = accel_mlx5_task_continue(task);
-					if (spdk_unlikely(rc)) {
-						if (rc != -ENOMEM) {
-							accel_mlx5_task_complete(task, rc);
-						}
-					}
+				qp->recovering = true;
+				assert(task->num_completed_reqs <= task->num_submitted_reqs);
+				if (task->num_completed_reqs == task->num_submitted_reqs) {
+					accel_mlx5_task_complete(task, -EIO);
 				}
-				if (task == signaled_task) {
-					break;
+				if (qp->wrs_submitted == 0) {
+					assert(STAILQ_EMPTY(&qp->in_hw));
+					accel_mlx5_recover_qp(qp);
+				}
+
+				break;
+			}
+
+			if (task->num_completed_reqs == task->num_reqs) {
+				if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
+				    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
+					*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
+				} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
+					   task->base.op_code == ACCEL_OPC_ENCRYPT) {
+					struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
+
+					*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
+				}
+				accel_mlx5_task_complete(task, 0);
+			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
+				assert(task->num_submitted_reqs < task->num_reqs);
+				rc = accel_mlx5_task_continue(task);
+				if (spdk_unlikely(rc)) {
+					if (rc != -ENOMEM) {
+						accel_mlx5_task_complete(task, rc);
+					}
 				}
 			}
-			break;
+			if (task == signaled_task) {
+				break;
+			}
 		}
 	}
-
 }
 
 static inline void
@@ -2380,74 +2375,70 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 
 		wr = (struct accel_mlx5_wrid *)wc[i].wr_id;
 
-		if (spdk_unlikely(!wr)) {
+		if (spdk_unlikely(!wr || wr->wrid != ACCEL_MLX5_WRID_WRITE)) {
 			/* That is unsignaled completion with error, just ignore it */
 			continue;
 		}
 
-		switch (wr->wrid) {
-		case ACCEL_MLX5_WRID_WRITE:
-			task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
-			qp = task->qp;
-			assert(task == STAILQ_FIRST(&qp->in_hw) && "submission mismatch");
-			STAILQ_REMOVE_HEAD(&qp->in_hw, link);
-			assert(task->num_submitted_reqs > task->num_completed_reqs);
-			completed = task->num_submitted_reqs - task->num_completed_reqs;
-			assert(qp->wrs_submitted >= task->num_wrs);
-			qp->wrs_submitted -= task->num_wrs;
-			task->num_completed_reqs += completed;
-			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
-				      task->num_reqs - task->num_completed_reqs);
+		task = SPDK_CONTAINEROF(wr, struct accel_mlx5_task, write_wrid);
+		qp = task->qp;
+		assert(task == STAILQ_FIRST(&qp->in_hw) && "submission mismatch");
+		STAILQ_REMOVE_HEAD(&qp->in_hw, link);
+		assert(task->num_submitted_reqs > task->num_completed_reqs);
+		completed = task->num_submitted_reqs - task->num_completed_reqs;
+		assert(qp->wrs_submitted >= task->num_wrs);
+		qp->wrs_submitted -= task->num_wrs;
+		task->num_completed_reqs += completed;
+		SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
+			      task->num_reqs - task->num_completed_reqs);
 
-			if (spdk_unlikely(wc[i].status)) {
-				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
-					SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-						     qp, task, wc[i].status, spdk_env_get_current_core());
-				} else {
-					SPDK_DEBUGLOG(accel_mlx5, "RDMA: qp %p, task %p, WC status %d, core %u\n",
-						      qp, task, wc[i].status, spdk_env_get_current_core());
-				}
-
-				/*
-				 * Check if SIGERR CQE happened before the WQE error or flush.
-				 * It is needed to recover the affected MKey and PSV properly.
-				 */
-				accel_mlx5_task_check_sigerr(task);
-
-				qp->recovering = true;
-				assert(task->num_completed_reqs <= task->num_submitted_reqs);
-				if (task->num_completed_reqs == task->num_submitted_reqs) {
-					accel_mlx5_task_complete(task, -EIO);
-				}
-				if (qp->wrs_submitted == 0) {
-					assert(STAILQ_EMPTY(&qp->in_hw));
-					accel_mlx5_recover_qp(qp);
-				}
-
-				continue;
+		if (spdk_unlikely(wc[i].status)) {
+			if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
+				SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
+					     qp, task, wc[i].status, spdk_env_get_current_core());
+			} else {
+				SPDK_DEBUGLOG(accel_mlx5, "RDMA: qp %p, task %p, WC status %d, core %u\n",
+					      qp, task, wc[i].status, spdk_env_get_current_core());
 			}
 
-			if (task->num_completed_reqs == task->num_reqs) {
-				if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
-				    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
-					*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
-				} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
-					   task->base.op_code == ACCEL_OPC_ENCRYPT) {
-					struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
+			/*
+			 * Check if SIGERR CQE happened before the WQE error or flush.
+			 * It is needed to recover the affected MKey and PSV properly.
+			 */
+			accel_mlx5_task_check_sigerr(task);
 
-					*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
-				}
-				accel_mlx5_task_complete(task, 0);
-			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
-				assert(task->num_submitted_reqs < task->num_reqs);
-				rc = accel_mlx5_task_continue(task);
-				if (spdk_unlikely(rc)) {
-					if (rc != -ENOMEM) {
-						accel_mlx5_task_complete(task, rc);
-					}
+			qp->recovering = true;
+			assert(task->num_completed_reqs <= task->num_submitted_reqs);
+			if (task->num_completed_reqs == task->num_submitted_reqs) {
+				accel_mlx5_task_complete(task, -EIO);
+			}
+			if (qp->wrs_submitted == 0) {
+				assert(STAILQ_EMPTY(&qp->in_hw));
+				accel_mlx5_recover_qp(qp);
+			}
+
+			continue;
+		}
+
+		if (task->num_completed_reqs == task->num_reqs) {
+			if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C &&
+			    task->base.op_code != ACCEL_OPC_CHECK_CRC32C) {
+				*task->base.crc_dst = *task->psv->crc ^ UINT32_MAX;
+			} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C &&
+				   task->base.op_code == ACCEL_OPC_ENCRYPT) {
+				struct spdk_accel_task *task_crc = TAILQ_NEXT(&task->base, seq_link);
+
+				*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
+			}
+			accel_mlx5_task_complete(task, 0);
+		} else if (task->num_completed_reqs == task->num_submitted_reqs) {
+			assert(task->num_submitted_reqs < task->num_reqs);
+			rc = accel_mlx5_task_continue(task);
+			if (spdk_unlikely(rc)) {
+				if (rc != -ENOMEM) {
+					accel_mlx5_task_complete(task, rc);
 				}
 			}
-			break;
 		}
 	}
 }
