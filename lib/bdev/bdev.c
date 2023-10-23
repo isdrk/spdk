@@ -5943,9 +5943,14 @@ spdk_bdev_reset(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		spdk_bdev_io_completion_cb cb, void *cb_arg)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
+	struct spdk_bdev_channel *channel;
 	struct spdk_bdev_io *bdev_io;
-	struct spdk_bdev_channel *channel = __io_ch_to_bdev_ch(ch);
 
+	if (!ch) {
+		return -EINVAL;
+	}
+
+	channel = __io_ch_to_bdev_ch(ch);
 	bdev_io = bdev_channel_get_io(channel);
 	if (!bdev_io) {
 		return -ENOMEM;
