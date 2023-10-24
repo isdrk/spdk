@@ -62,6 +62,7 @@ struct accel_mlx5_dev_ctx {
 	struct ibv_context *context;
 	struct ibv_pd *pd;
 	struct spdk_rdma_utils_memory_domain *domain;
+	struct spdk_rdma_utils_mem_map *map;
 	uint32_t num_mkeys;
 	bool crypto_multi_block;
 	RB_HEAD(mkeys_tree, accel_mlx5_sig_key_wrapper) sig_mkey_tree;
@@ -225,7 +226,8 @@ struct accel_mlx5_qp {
 struct accel_mlx5_dev {
 	struct spdk_mlx5_cq *cq;
 	struct accel_mlx5_qp mlx5_qp;
-	struct spdk_rdma_utils_mem_map *mmap;
+	/* Points to a map owned by dev_ctx */
+	struct spdk_rdma_utils_mem_map *map_ref;
 	struct accel_mlx5_qpairs_map qpairs_map;
 	/* Points to a pool owned by dev_ctx */
 	struct spdk_mempool *mkey_pool_ref;
@@ -393,7 +395,7 @@ accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *do
 		klm->addr = (uint64_t) domain_translation.iov.iov_base;
 		klm->byte_count = domain_translation.iov.iov_len;
 	} else {
-		rc = spdk_rdma_utils_get_translation(dev->mmap, addr, size,
+		rc = spdk_rdma_utils_get_translation(dev->map_ref, addr, size,
 						     &map_translation);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", addr, size);
@@ -2756,7 +2758,6 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 			spdk_mlx5_cq_destroy(dev->cq);
 		}
 		spdk_poller_unregister(&dev->mlx5_qp.recover_poller);
-		spdk_rdma_utils_free_mem_map(&dev->mmap);
 		SPDK_NOTICELOG("Accel mlx5 device %p channel %p stats: tasks %lu, umrs %lu, "
 			       "rdma_writes %lu, polls %lu, idle_polls %lu, completions %lu\n",
 			       dev, ch, dev->stats.tasks, dev->stats.umrs,
@@ -2767,7 +2768,7 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 }
 
 struct accel_mlx5_psv_pool_iter_cb_args {
-	struct accel_mlx5_dev *dev;
+	struct accel_mlx5_dev_ctx *dev;
 	int rc;
 };
 
@@ -2779,7 +2780,7 @@ accel_mlx5_psv_pool_iter_cb(struct spdk_mempool *mp, void *_arg, void *_obj, uns
 	struct spdk_rdma_utils_memory_translation map_translation;
 	int rc;
 
-	rc = spdk_rdma_utils_get_translation(args->dev->mmap, wrapper->crc, sizeof(uint32_t), &map_translation);
+	rc = spdk_rdma_utils_get_translation(args->dev->map, wrapper->crc, sizeof(uint32_t), &map_translation);
 	if (rc) {
 		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", wrapper->crc, sizeof(uint32_t));
 		args->rc = -EINVAL;
@@ -2789,13 +2790,13 @@ accel_mlx5_psv_pool_iter_cb(struct spdk_mempool *mp, void *_arg, void *_obj, uns
 }
 
 static int
-accel_mlx5_translate_crc_addr(struct accel_mlx5_dev *dev)
+accel_mlx5_translate_crc_addr(struct accel_mlx5_dev_ctx *dev)
 {
 	struct accel_mlx5_psv_pool_iter_cb_args args = {
 		.dev = dev
 	};
 
-	spdk_mempool_obj_iter(dev->psv_pool_ref, accel_mlx5_psv_pool_iter_cb, &args);
+	spdk_mempool_obj_iter(dev->psv_pool, accel_mlx5_psv_pool_iter_cb, &args);
 
 	return args.rc;
 }
@@ -2851,6 +2852,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 		dev->domain_ref = dev_ctx->domain->domain;
 		dev->crypto_multi_block = dev_ctx->crypto_multi_block;
 		dev->sig_mkey_tree_ref = &dev_ctx->sig_mkey_tree;
+		dev->map_ref = dev_ctx->map;
 		RB_INIT(&dev->qpairs_map);
 		ch->num_devs++;
 
@@ -2872,17 +2874,6 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 
 		STAILQ_INIT(&dev->nomem);
 		STAILQ_INIT(&dev->merged);
-		dev->mmap = spdk_rdma_utils_create_mem_map(dev->pd_ref, NULL,
-			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
-		if (!dev->mmap) {
-			SPDK_ERRLOG("Failed to create memory map\n");
-			goto err_out;
-		}
-		rc = accel_mlx5_translate_crc_addr(dev);
-		if (rc) {
-			SPDK_ERRLOG("Failed to translate crc addresses\n");
-			goto err_out;
-		}
 	}
 
 	ch->poller = SPDK_POLLER_REGISTER(accel_mlx5_poller, ch, 0);
@@ -3103,6 +3094,7 @@ accel_mlx5_free_resources(void)
 		accel_mlx5_sig_mkeys_release(&g_accel_mlx5.devices[i]);
 		accel_mlx5_psvs_release(&g_accel_mlx5.devices[i]);
 		spdk_rdma_utils_put_memory_domain(g_accel_mlx5.devices[i].domain);
+		spdk_rdma_utils_free_mem_map(&g_accel_mlx5.devices[i].map);
 		spdk_rdma_utils_put_pd(g_accel_mlx5.devices[i].pd);
 	}
 
@@ -3534,6 +3526,16 @@ accel_mlx5_init(void)
 
 		dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
 		if (!dev_ctx->domain) {
+			goto cleanup;
+		}
+		dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
+			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+		if (!dev_ctx->map) {
+			goto cleanup;
+		}
+		rc = accel_mlx5_translate_crc_addr(dev_ctx);
+		if (rc) {
+			SPDK_ERRLOG("Failed to translate crc addresses\n");
 			goto cleanup;
 		}
 
