@@ -96,7 +96,8 @@ struct spdk_xlio_sock {
 		uint8_t		pending_send	: 1;
 		uint8_t		zcopy		: 1;
 		uint8_t		recv_zcopy	: 1;
-		uint8_t		reserved	: 4;
+		uint8_t		disconnected	: 1;
+		uint8_t		reserved	: 3;
 	} flags;
 	int			so_priority;
 
@@ -1370,10 +1371,16 @@ readv_wrapper(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 			if (spdk_unlikely(!sock->base.group_impl)) {
 				ret = poll_no_group_socket(sock);
 				if (ret < 0) {
+					if (sock->flags.disconnected) {
+						return 0;
+					}
 					return ret;
 				}
 			} else {
 				/* @todo: should we try to poll here? */
+				if (sock->flags.disconnected) {
+					return 0;
+				}
 				errno = EAGAIN;
 				return -1;
 			}
@@ -1952,6 +1959,12 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 		SPDK_DEBUGLOG(xlio, "XLIO completion[%d]: ring fd %d, events %" PRIx64 ", user_data %p, listen_fd %d\n",
 			      i, fd, comp->events, (void *)comp->user_data, comp->listen_fd);
 
+		if (comp->events & EPOLLHUP) {
+			SPDK_ERRLOG("Got EPOLLHUP event on socket %d, events %" PRIx64 "\n",
+				    vsock->fd, comp->events);
+			vsock->flags.disconnected = true;
+		}
+
 #ifdef SPDK_ZEROCOPY
 		if (comp->events & EPOLLERR) {
 			rc = _sock_check_zcopy(sock);
@@ -1963,25 +1976,24 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 			}
 		}
 #endif
-		if (!(comp->events & XLIO_SOCKETXTREME_PACKET)) {
-			continue;
+		if (comp->events & XLIO_SOCKETXTREME_PACKET) {
+			packet = xlio_sock_get_packet(vsock);
+			packet->xlio_packet = comp->packet;
+			/*
+			 * While the packet is in received list there is data
+			 * to read from it.  To avoid free of packets with
+			 * unread data we intialize reference counter to 1.
+			 */
+			packet->refs = 1;
+			STAILQ_INSERT_TAIL(&vsock->received_packets, packet, link);
+#ifdef DEBUG
+			dump_packet(vsock, packet);
+#endif
 		}
 
-		packet = xlio_sock_get_packet(vsock);
-		packet->xlio_packet = comp->packet;
-		/*
-		 * While the packet is in received list there is data
-		 * to read from it.  To avoid free of packets with
-		 * unread data we intialize reference counter to 1.
-		 */
-		packet->refs = 1;
-		STAILQ_INSERT_TAIL(&vsock->received_packets, packet, link);
-#ifdef DEBUG
-		dump_packet(vsock, packet);
-#endif
-
 		/* If the socket does not already have recv pending, add it now */
-		if (spdk_likely(sock->group_impl) && !vsock->flags.pending_recv) {
+		if ((comp->events & (XLIO_SOCKETXTREME_PACKET | EPOLLHUP)) &&
+			spdk_likely(sock->group_impl) && !vsock->flags.pending_recv) {
 			struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(sock->group_impl);
 
 			vsock->flags.pending_recv = true;
@@ -2203,9 +2215,15 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 		if (spdk_unlikely(!_sock->group_impl)) {
 			ret = poll_no_group_socket(sock);
 			if (ret < 0) {
+				if (sock->flags.disconnected) {
+					return 0;
+				}
 				return ret;
 			}
 		} else {
+			if (sock->flags.disconnected) {
+				return 0;
+			}
 			errno = EAGAIN;
 			return -1;
 		}
