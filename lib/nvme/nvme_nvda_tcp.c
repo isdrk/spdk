@@ -3480,7 +3480,7 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 				SPDK_NOTICELOG("TCP qpair %p %u, PD %p\n", tqpair, tqpair->qpair.id, tqpair->pd);
 
 				tqpair->mem_map = spdk_rdma_utils_create_mem_map(tqpair->pd, NULL,
-										 IBV_ACCESS_LOCAL_WRITE);
+					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 				if (!tqpair->mem_map) {
 					SPDK_ERRLOG("Failed to create memory map\n");
 					return -ENOTSUP;
