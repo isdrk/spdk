@@ -350,7 +350,6 @@ lvs_load(struct spdk_bs_dev *dev, const struct spdk_lvs_opts *lvs_opts,
 	SPDK_CU_ASSERT_FATAL(lvs->blobstore != NULL);
 	TAILQ_INIT(&lvs->lvols);
 	TAILQ_INIT(&lvs->pending_lvols);
-	TAILQ_INIT(&lvs->retry_open_lvols);
 	spdk_uuid_generate(&lvs->uuid);
 	lvs->bs_dev = dev;
 	for (i = 0; i < g_num_lvols; i++) {
