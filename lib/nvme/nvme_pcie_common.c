@@ -1389,7 +1389,8 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	uint64_t phys_addr, mapping_length;
 	uint32_t remaining_transfer_len, remaining_user_sge_len, length;
 	struct spdk_nvme_sgl_descriptor *sgl;
-	uint32_t nseg = 0, iov_idx = 0;
+	uint32_t nseg = 0;
+	int iov_idx = 0;
 	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
 	/*
@@ -1530,7 +1531,8 @@ nvme_pcie_qpair_build_prps_sgl_request(struct spdk_nvme_qpair *qpair, struct nvm
 	int rc;
 	void *virt_addr;
 	uint32_t remaining_transfer_len, length;
-	uint32_t prp_index = 0, iov_idx = 0;
+	uint32_t prp_index = 0;
+	int iov_idx = 0;
 	uint32_t page_size = qpair->ctrlr->page_size;
 	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 

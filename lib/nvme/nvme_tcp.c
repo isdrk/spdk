@@ -518,7 +518,8 @@ static int
 nvme_tcp_build_sgl_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 {
 	int rc;
-	uint32_t length, remaining_size, iovcnt = 0, max_num_sgl;
+	uint32_t length, remaining_size;
+	int iovcnt = 0, max_num_sgl;
 	struct nvme_request *req = tcp_req->req;
 	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
