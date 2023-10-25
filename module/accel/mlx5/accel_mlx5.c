@@ -47,6 +47,18 @@ struct accel_mlx5_task;
 
 RB_HEAD(accel_mlx5_qpairs_map, accel_mlx5_qp);
 
+struct accel_mlx5_stats {
+	uint64_t tasks;
+	uint64_t crypto_umrs;
+	uint64_t sig_umrs;
+	uint64_t sig_crypto_umrs;
+	uint64_t rdma_reads;
+	uint64_t rdma_writes;
+	uint64_t polls;
+	uint64_t idle_polls;
+	uint64_t completions;
+};
+
 struct accel_mlx5_dev_ctx {
 	struct spdk_mlx5_indirect_mkey **mkeys;
 	struct spdk_mempool *psv_pool;
@@ -65,6 +77,8 @@ struct accel_mlx5_dev_ctx {
 struct accel_mlx5_module {
 	struct spdk_accel_module_if module;
 	struct accel_mlx5_dev_ctx *devices;
+	struct accel_mlx5_stats stats;
+	struct spdk_spinlock lock;
 	uint32_t num_devs;
 	uint16_t qp_size;
 	uint16_t cq_size;
@@ -172,18 +186,6 @@ struct accel_mlx5_task {
 
 SPDK_STATIC_ASSERT(offsetof(struct accel_mlx5_task, qp) % 64 == 0, "qp pointer is not cache line aligned");
 
-struct accel_mlx5_dev_stats {
-	uint64_t tasks;
-	uint64_t crypto_umrs;
-	uint64_t sig_umrs;
-	uint64_t sig_crypto_umrs;
-	uint64_t rdma_reads;
-	uint64_t rdma_writes;
-	uint64_t polls;
-	uint64_t idle_polls;
-	uint64_t completions;
-};
-
 struct accel_mlx5_qp {
 	struct spdk_mlx5_qp *qp;
 	struct accel_mlx5_dev *dev;
@@ -217,7 +219,7 @@ struct accel_mlx5_dev {
 	STAILQ_HEAD(, accel_mlx5_task) nomem;
 	STAILQ_HEAD(, accel_mlx5_task) merged;
 	bool crypto_multi_block;
-	struct accel_mlx5_dev_stats stats;
+	struct accel_mlx5_stats stats;
 };
 
 struct accel_mlx5_io_channel {
@@ -268,6 +270,20 @@ accel_mlx5_iov_sgl_advance(struct accel_mlx5_iov_sgl *s, uint32_t step)
 		s->iov++;
 		s->iovcnt--;
 	}
+}
+
+static void
+accel_mlx5_add_stats(struct accel_mlx5_stats *stats, const struct accel_mlx5_stats *to_add)
+{
+	stats->tasks += to_add->tasks;
+	stats->crypto_umrs += to_add->crypto_umrs;
+	stats->sig_umrs += to_add->sig_umrs;
+	stats->sig_crypto_umrs += to_add->sig_crypto_umrs;
+	stats->rdma_reads += to_add->rdma_reads;
+	stats->rdma_writes += to_add->rdma_writes;
+	stats->polls += to_add->polls;
+	stats->idle_polls += to_add->idle_polls;
+	stats->completions += to_add->completions;
 }
 
 static inline int
@@ -2723,13 +2739,9 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 		if (dev->sig_mkeys) {
 			spdk_mlx5_mkey_pool_put_channel(dev->sig_mkeys);
 		}
-		SPDK_NOTICELOG("Dev %s channel %p stats: tasks: %lu; umrs: crypto %lu, sig %lu, crypto+sig %lu, total %lu;\n"
-			       "rdma: writes %lu, reads %lu, total %lu, polls %lu, idle_polls %lu, completions %lu\n",
-			       dev->pd_ref->context->device->name, ch, dev->stats.tasks,
-			       dev->stats.crypto_umrs, dev->stats.sig_umrs, dev->stats.sig_crypto_umrs,
-			       dev->stats.crypto_umrs + dev->stats.sig_umrs + dev->stats.sig_crypto_umrs,
-			       dev->stats.rdma_writes, dev->stats.rdma_reads, dev->stats.rdma_writes + dev->stats.rdma_reads,
-			       dev->stats.polls, dev->stats.idle_polls, dev->stats.completions);
+		spdk_spin_lock(&g_accel_mlx5.lock);
+		accel_mlx5_add_stats(&g_accel_mlx5.stats, &dev->stats);
+		spdk_spin_unlock(&g_accel_mlx5.lock);
 	}
 	free(ch->devs);
 }
@@ -3012,6 +3024,16 @@ accel_mlx5_free_resources(void)
 static void
 accel_mlx5_deinit_cb(void *ctx)
 {
+	struct accel_mlx5_stats *stats = &g_accel_mlx5.stats;
+
+	SPDK_NOTICELOG("mlx5 stats: tasks: %lu; umrs: crypto %lu, sig %lu, crypto+sig %lu, total %lu;\n"
+		       "rdma: writes %lu, reads %lu, total %lu, polls %lu, idle_polls %lu, completions %lu\n",
+		       stats->tasks,
+		       stats->crypto_umrs, stats->sig_umrs, stats->sig_crypto_umrs,
+		       stats->crypto_umrs + stats->sig_umrs + stats->sig_crypto_umrs,
+		       stats->rdma_writes, stats->rdma_reads, stats->rdma_writes + stats->rdma_reads,
+		       stats->polls, stats->idle_polls, stats->completions);
+
 	accel_mlx5_free_resources();
 	spdk_accel_module_finish();
 }
@@ -3024,6 +3046,7 @@ accel_mlx5_deinit(void *ctx)
 		accel_mlx5_allowed_crypto_devs_free();
 		spdk_mlx5_crypto_devs_allow(NULL, 0);
 	}
+	spdk_spin_destroy(&g_accel_mlx5.lock);
 	if (g_accel_mlx5.initialized) {
 		spdk_io_device_unregister(&g_accel_mlx5, accel_mlx5_deinit_cb);
 	} else {
@@ -3209,6 +3232,8 @@ accel_mlx5_init(void)
 	if (!g_accel_mlx5.enabled) {
 		return -EINVAL;
 	}
+
+	spdk_spin_init(&g_accel_mlx5.lock);
 
 	if (g_accel_mlx5.siglast) {
 		g_accel_mlx5_process_cpl_fn = accel_mlx5_process_cpls_siglast;
