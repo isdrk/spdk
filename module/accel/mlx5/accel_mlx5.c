@@ -174,7 +174,10 @@ SPDK_STATIC_ASSERT(offsetof(struct accel_mlx5_task, qp) % 64 == 0, "qp pointer i
 
 struct accel_mlx5_dev_stats {
 	uint64_t tasks;
-	uint64_t umrs;
+	uint64_t crypto_umrs;
+	uint64_t sig_umrs;
+	uint64_t sig_crypto_umrs;
+	uint64_t rdma_reads;
 	uint64_t rdma_writes;
 	uint64_t polls;
 	uint64_t idle_polls;
@@ -730,7 +733,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		}
 		blocks_processed += mlx5_task->blocks_per_req;
 		iv += mlx5_task->blocks_per_req;
-		dev->stats.umrs++;
+		dev->stats.crypto_umrs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		assert(qp->wrs_submitted < qp->max_wrs);
 		qp->wrs_submitted++;
@@ -756,7 +759,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 			return rc;
 		}
 		first_rdma_fence = 0;
-		dev->stats.rdma_writes++;
+		dev->stats.rdma_reads++;
 		mlx5_task->num_submitted_reqs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		assert(qp->wrs_submitted < qp->max_wrs);
@@ -780,7 +783,7 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		SPDK_ERRLOG("RDMA WRITE failed with %d\n", rc);
 		return rc;
 	}
-	dev->stats.rdma_writes++;
+	dev->stats.rdma_reads++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	assert(qp->wrs_submitted < qp->max_wrs);
@@ -1032,7 +1035,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		}
 		blocks_processed += mlx5_task->blocks_per_req;
 		iv += mlx5_task->blocks_per_req;
-		dev->stats.umrs++;
+		dev->stats.sig_crypto_umrs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		qp->wrs_submitted++;
 		mlx5_task->num_wrs++;
@@ -1064,7 +1067,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			return rc;
 		}
 		rdma_fence = SPDK_MLX5_WQE_CTRL_STRONG_ORDERING;
-		dev->stats.rdma_writes++;
+		dev->stats.rdma_reads++;
 		mlx5_task->num_submitted_reqs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		qp->wrs_submitted++;
@@ -1105,7 +1108,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 		SPDK_ERRLOG("RDMA WRITE failed with %d\n", rc);
 		return rc;
 	}
-	dev->stats.rdma_writes++;
+	dev->stats.rdma_reads++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	qp->wrs_submitted++;
@@ -1208,7 +1211,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
 		return rc;
 	}
-	dev->stats.umrs++;
+	dev->stats.sig_umrs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	qp->wrs_submitted++;
 	mlx5_task->num_wrs = 1;
@@ -1249,16 +1252,17 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 		rc = spdk_mlx5_qp_rdma_write(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
 						 (uint64_t)&mlx5_task->write_wrid,
 						 rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
+		dev->stats.rdma_writes++;
 	} else {
 		rc = spdk_mlx5_qp_rdma_read(qp->qp, klm, klm_count, 0, mlx5_task->mkeys[0]->mkey,
 						(uint64_t)&mlx5_task->write_wrid,
 						rdma_fence | SPDK_MLX5_WQE_CTRL_CQ_UPDATE);
+		dev->stats.rdma_reads++;
 	}
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("RDMA READ/WRITE failed with %d\n", rc);
 		return rc;
 	}
-	dev->stats.rdma_writes++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	qp->wrs_submitted++;
@@ -1423,7 +1427,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 			return rc;
 		}
 		sig_init = false;
-		dev->stats.umrs++;
+		dev->stats.sig_umrs++;
 		qp->wrs_submitted++;
 		mlx5_task->num_wrs++;
 	}
@@ -1456,15 +1460,16 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 			assert(mlx5_task->flags.bits.inplace);
 			rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, 0, mlx5_task->mkeys[i]->mkey,
 							 0, rdma_fence);
+			dev->stats.rdma_writes++;
 		} else {
 			rc = spdk_mlx5_qp_rdma_read(qp->qp, klms, klm_count, 0, mlx5_task->mkeys[i]->mkey,
 							0, rdma_fence);
+			dev->stats.rdma_reads++;
 		}
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("RDMA READ/WRITE failed with %d\n", rc);
 			return rc;
 		}
-		dev->stats.rdma_writes++;
 		mlx5_task->num_submitted_reqs++;
 		assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 		qp->wrs_submitted++;
@@ -1514,16 +1519,17 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 		rc = spdk_mlx5_qp_rdma_write(qp->qp, klms, klm_count, umr_offset,
 						 mlx5_task->mkeys[mlx5_task->last_mkey_idx]->mkey,
 						 (uint64_t)&mlx5_task->write_wrid, rdma_fence);
+		dev->stats.rdma_writes++;
 	} else {
 		rc = spdk_mlx5_qp_rdma_read(qp->qp, klms, klm_count, umr_offset,
 						mlx5_task->mkeys[mlx5_task->last_mkey_idx]->mkey,
 						(uint64_t)&mlx5_task->write_wrid, rdma_fence);
+		dev->stats.rdma_reads++;
 	}
 	if (spdk_unlikely(rc)) {
 		SPDK_ERRLOG("RDMA READ/WRITE failed with %d\n", rc);
 		return rc;
 	}
-	dev->stats.rdma_writes++;
 	mlx5_task->num_submitted_reqs++;
 	assert(mlx5_task->num_submitted_reqs <= mlx5_task->num_reqs);
 	qp->wrs_submitted++;
@@ -2694,7 +2700,6 @@ accel_mlx5_dev_destroy_qps(struct accel_mlx5_dev *dev)
 			free(qpair);
 		}
 	}
-
 }
 
 static void
@@ -2718,11 +2723,13 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 		if (dev->sig_mkeys) {
 			spdk_mlx5_mkey_pool_put_channel(dev->sig_mkeys);
 		}
-		SPDK_NOTICELOG("Accel mlx5 device %p channel %p stats: tasks %lu, umrs %lu, "
-			       "rdma_writes %lu, polls %lu, idle_polls %lu, completions %lu\n",
-			       dev, ch, dev->stats.tasks, dev->stats.umrs,
-			       dev->stats.rdma_writes, dev->stats.polls,
-			       dev->stats.idle_polls, dev->stats.completions);
+		SPDK_NOTICELOG("Dev %s channel %p stats: tasks: %lu; umrs: crypto %lu, sig %lu, crypto+sig %lu, total %lu;\n"
+			       "rdma: writes %lu, reads %lu, total %lu, polls %lu, idle_polls %lu, completions %lu\n",
+			       dev->pd_ref->context->device->name, ch, dev->stats.tasks,
+			       dev->stats.crypto_umrs, dev->stats.sig_umrs, dev->stats.sig_crypto_umrs,
+			       dev->stats.crypto_umrs + dev->stats.sig_umrs + dev->stats.sig_crypto_umrs,
+			       dev->stats.rdma_writes, dev->stats.rdma_reads, dev->stats.rdma_writes + dev->stats.rdma_reads,
+			       dev->stats.polls, dev->stats.idle_polls, dev->stats.completions);
 	}
 	free(ch->devs);
 }
