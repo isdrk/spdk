@@ -225,6 +225,11 @@ struct accel_mlx5_io_channel {
 	uint32_t dev_idx;
 };
 
+struct accel_mlx5_psv_pool_iter_cb_args {
+	struct accel_mlx5_dev_ctx *dev;
+	int rc;
+};
+
 static int accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp);
 
 static int
@@ -2722,40 +2727,6 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 	free(ch->devs);
 }
 
-struct accel_mlx5_psv_pool_iter_cb_args {
-	struct accel_mlx5_dev_ctx *dev;
-	int rc;
-};
-
-static void
-accel_mlx5_psv_pool_iter_cb(struct spdk_mempool *mp, void *_arg, void *_obj, unsigned obj_idx)
-{
-	struct accel_mlx5_psv_pool_iter_cb_args *args = _arg;
-	struct accel_mlx5_psv_wrapper *wrapper = _obj;
-	struct spdk_rdma_utils_memory_translation map_translation;
-	int rc;
-
-	rc = spdk_rdma_utils_get_translation(args->dev->map, wrapper->crc, sizeof(uint32_t), &map_translation);
-	if (rc) {
-		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", wrapper->crc, sizeof(uint32_t));
-		args->rc = -EINVAL;
-	} else {
-		wrapper->crc_lkey = spdk_rdma_utils_memory_translation_get_lkey(&map_translation);
-	}
-}
-
-static int
-accel_mlx5_translate_crc_addr(struct accel_mlx5_dev_ctx *dev)
-{
-	struct accel_mlx5_psv_pool_iter_cb_args args = {
-		.dev = dev
-	};
-
-	spdk_mempool_obj_iter(dev->psv_pool, accel_mlx5_psv_pool_iter_cb, &args);
-
-	return args.rc;
-}
-
 static int
 accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 {
@@ -3068,23 +3039,36 @@ accel_mlx5_mkeys_create(struct accel_mlx5_dev_ctx *dev_ctx, uint32_t flags)
 static void
 accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, unsigned obj_idx)
 {
+	struct spdk_rdma_utils_memory_translation translation = {};
+	struct accel_mlx5_psv_pool_iter_cb_args *args = cb_arg;
 	struct accel_mlx5_psv_wrapper *wrapper = _psv;
-	struct accel_mlx5_dev_ctx *dev_ctx = cb_arg;
+	struct accel_mlx5_dev_ctx *dev_ctx = args->dev;
+	int rc;
 
+	if (args->rc) {
+		return;
+	}
 	assert(obj_idx < dev_ctx->num_mkeys);
 	assert(dev_ctx->psvs[obj_idx] != NULL);
 	memset(wrapper, 0, sizeof(*wrapper));
 	wrapper->psv_index = dev_ctx->psvs[obj_idx]->index;
 	wrapper->crc = &dev_ctx->crc_dma_buf[obj_idx];
-	/*
-	 * We cannot translate the crc address here because the memory map will be created later in
-	 * accel_mlx5_create_cb(). The address translation will be done there as well.
-	 */
+
+	rc = spdk_rdma_utils_get_translation(dev_ctx->map, wrapper->crc, sizeof(uint32_t), &translation);
+	if (rc) {
+		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", wrapper->crc, sizeof(uint32_t));
+		args->rc = -EINVAL;
+	} else {
+		wrapper->crc_lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
+	}
 }
 
 static int
 accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 {
+	struct accel_mlx5_psv_pool_iter_cb_args args = {
+		.dev = dev_ctx
+	};
 	char pool_name[32];
 	uint32_t i;
 	uint32_t num_psvs = dev_ctx->num_mkeys;
@@ -3118,10 +3102,14 @@ accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 	dev_ctx->psv_pool = spdk_mempool_create_ctor(pool_name, num_psvs,
 						     sizeof(struct accel_mlx5_psv_wrapper),
 						     cache_size, SPDK_ENV_SOCKET_ID_ANY,
-						     accel_mlx5_set_psv_in_pool, dev_ctx);
+						     accel_mlx5_set_psv_in_pool, &args);
 	if (!dev_ctx->psv_pool) {
-		SPDK_ERRLOG("Failed to create memory pool\n");
+		SPDK_ERRLOG("Failed to create PSV memory pool\n");
 		return -ENOMEM;
+	}
+	if (args.rc) {
+		SPDK_ERRLOG("Failed to init PSV memory pool objects, rc %d\n", args.rc);
+		return args.rc;
 	}
 
 	return 0;
@@ -3294,7 +3282,15 @@ accel_mlx5_init(void)
 			dev_ctx->crypto_mkey_flags = 0;
 			goto cleanup;
 		}
-
+		dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
+		if (!dev_ctx->domain) {
+			goto cleanup;
+		}
+		dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
+			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+		if (!dev_ctx->map) {
+			goto cleanup;
+		}
 		if (g_accel_mlx5.crc_supported) {
 			dev_ctx->sig_mkey_flags = SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE;
 			if (g_accel_mlx5.merge) {
@@ -3312,21 +3308,6 @@ accel_mlx5_init(void)
 				SPDK_ERRLOG("Failed to create PSVs pool, rc %d, dev %s\n", rc, dev->device->name);
 				goto cleanup;
 			}
-		}
-
-		dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
-		if (!dev_ctx->domain) {
-			goto cleanup;
-		}
-		dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
-			    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
-		if (!dev_ctx->map) {
-			goto cleanup;
-		}
-		rc = accel_mlx5_translate_crc_addr(dev_ctx);
-		if (rc) {
-			SPDK_ERRLOG("Failed to translate crc addresses\n");
-			goto cleanup;
 		}
 
 		/* Explicitly disabled by default */
