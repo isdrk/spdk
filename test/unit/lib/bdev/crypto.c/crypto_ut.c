@@ -301,7 +301,6 @@ test_error_paths(void)
 	CU_ASSERT(g_io_ctx->bdev_io_wait.bdev == &g_crypto_bdev.crypto_bdev);
 	CU_ASSERT(g_io_ctx->bdev_io_wait.cb_fn == vbdev_crypto_resubmit_io);
 	CU_ASSERT(g_io_ctx->bdev_io_wait.cb_arg == g_bdev_io);
-	CU_ASSERT(g_io_ctx->resubmit_state == CRYPTO_IO_NEW);
 	memset(&g_io_ctx->bdev_io_wait, 0, sizeof(g_io_ctx->bdev_io_wait));
 
 	MOCK_SET(spdk_accel_append_encrypt, -EINVAL);
