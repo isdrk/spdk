@@ -1887,7 +1887,7 @@ test_sequence_copy_elision(void)
 	src_iovs[1].iov_len = sizeof(tmp[1]);
 	rc = spdk_accel_append_decrypt(&seq, ioch, &key, &dst_iovs[1], 1, (void *)0xdead, (void *)0xbeef,
 				       &src_iovs[1], 1, (void *)0xdead, (void *)0xbeef, 0,
-				       sizeof(tmp[2]), 0, ut_sequence_step_cb, &completed);
+				       sizeof(tmp[2]), 0, ut_sequence_step_cb, &completed, NULL);
 	CU_ASSERT_EQUAL(rc, 0);
 
 	dst_iovs[2].iov_base = buf;
