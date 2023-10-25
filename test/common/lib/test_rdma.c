@@ -42,6 +42,10 @@ DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (s
 		struct spdk_nvme_rdma_hooks *hooks, int acces_flags), NULL)
 DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **map));
 
+DEFINE_STUB(spdk_rdma_utils_get_memory_domain, struct spdk_rdma_utils_memory_domain *,
+		(struct ibv_pd *pd, enum spdk_dma_device_type type), NULL);
+DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_rdma_utils_memory_domain *domain));
+
 /* used to mock out having to split an SGL over a memory region */
 size_t g_mr_size;
 uint64_t g_mr_next_size;
@@ -50,6 +54,9 @@ struct ibv_mr g_rdma_mr = {
 	.lkey = RDMA_UT_LKEY,
 	.rkey = RDMA_UT_RKEY
 };
+
+static TAILQ_HEAD(, spdk_rdma_utils_memory_domain) g_memory_domains = TAILQ_HEAD_INITIALIZER(
+			g_memory_domains);
 
 DEFINE_RETURN_MOCK(spdk_rdma_utils_get_translation, int);
 int

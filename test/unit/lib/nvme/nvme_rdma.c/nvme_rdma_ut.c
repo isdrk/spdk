@@ -6,10 +6,9 @@
 #include "spdk/stdinc.h"
 #include "spdk_cunit.h"
 #include "spdk_internal/rdma.h"
+#include "common/lib/test_rdma.c"
 #include "nvme/nvme_rdma.c"
 #include "common/lib/nvme/common_stubs.h"
-#include "common/lib/test_rdma.c"
-#include "rdma/rdma_memory.c"
 
 SPDK_LOG_REGISTER_COMPONENT(nvme)
 
@@ -1063,7 +1062,7 @@ test_nvme_rdma_qpair_submit_request(void)
 static void
 test_nvme_rdma_memory_domain(void)
 {
-	struct spdk_rdma_memory_domain *domain_1 = NULL, *domain_2 = NULL, *domain_tmp;
+	struct spdk_rdma_utils_memory_domain *domain_1 = NULL, *domain_2 = NULL, *domain_tmp;
 	struct ibv_pd *pd_1 = (struct ibv_pd *)0x1, *pd_2 = (struct ibv_pd *)0x2;
 	/* Counters below are used to check the number of created/destroyed rdma_dma_device objects.
 	 * Since other unit tests may create dma_devices, we can't just check that the queue is empty or not */
@@ -1122,7 +1121,7 @@ test_rdma_ctrlr_get_memory_domains(void)
 	struct nvme_rdma_ctrlr rctrlr = {};
 	struct nvme_rdma_qpair rqpair = {};
 	struct spdk_memory_domain *domain = (struct spdk_memory_domain *)0xbaadbeef;
-	struct spdk_rdma_memory_domain rdma_domain = { .domain = domain };
+	struct spdk_rdma_utils_memory_domain rdma_domain = { .domain = domain };
 	struct spdk_memory_domain *domains[1] = {NULL};
 
 	rqpair.memory_domain = &rdma_domain;
