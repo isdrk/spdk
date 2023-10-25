@@ -21,7 +21,8 @@ DEFINE_STUB_V(spdk_rpc_register_method, (const char *method, spdk_rpc_method_han
 DEFINE_STUB_V(spdk_rpc_register_alias_deprecated, (const char *method, const char *alias));
 DEFINE_STUB_V(spdk_rpc_set_state, (uint32_t state));
 DEFINE_STUB(spdk_rpc_get_state, uint32_t, (void), SPDK_RPC_RUNTIME);
-DEFINE_STUB(spdk_rpc_initialize, int, (const char *listen_addr), 0);
+DEFINE_STUB(spdk_rpc_initialize, int, (const char *listen_addr, FILE *log_file,
+			enum spdk_log_level log_level), 0);
 DEFINE_STUB_V(spdk_rpc_set_allowlist, (const char **rpc_allowlist));
 DEFINE_STUB_V(spdk_rpc_finish, (void));
 DEFINE_STUB_V(spdk_subsystem_init_from_json_config, (const char *json_config_file,
