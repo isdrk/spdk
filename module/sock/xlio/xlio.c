@@ -91,10 +91,13 @@ struct spdk_xlio_sock {
 	int			fd;
 	uint32_t		sendmsg_idx;
 	struct ibv_pd *pd;
-	bool			pending_recv;
-	bool			pending_send;
-	bool			zcopy;
-	bool			recv_zcopy;
+	struct {
+		uint8_t		pending_recv	: 1;
+		uint8_t		pending_send	: 1;
+		uint8_t		zcopy		: 1;
+		uint8_t		recv_zcopy	: 1;
+		uint8_t		reserved	: 4;
+	} flags;
 	int			so_priority;
 
 	struct xlio_packets_pool	*xlio_packets_pool;
@@ -635,7 +638,7 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 		/* Try to turn on zero copy sends */
 		rc = g_xlio_ops.setsockopt(sock->fd, SOL_SOCKET, SO_ZEROCOPY, &flag, sizeof(flag));
 		if (rc == 0) {
-			sock->zcopy = true;
+			sock->flags.zcopy = true;
 		} else {
 			SPDK_WARNLOG("Zcopy send is not supported\n");
 		}
@@ -657,7 +660,7 @@ xlio_sock_alloc(int fd, bool enable_zero_copy, enum xlio_sock_create_type type)
 	}
 
 	if (g_spdk_xlio_sock_impl_opts.enable_zerocopy_recv) {
-		sock->recv_zcopy = true;
+		sock->flags.recv_zcopy = true;
 
 		STAILQ_INIT(&sock->received_packets);
 
@@ -947,7 +950,7 @@ retry:
 	}
 
 	SPDK_NOTICELOG("Created xlio sock %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u\n",
-		       fd, sock->zcopy, sock->recv_zcopy, sock->pd,
+		       fd, sock->flags.zcopy, sock->flags.recv_zcopy, sock->pd,
 		       sock->pd ? sock->pd->context : NULL,
 		       sock->pd ? sock->pd->context->device->name : "unknown",
 		       sock->pd ? sock->pd->handle : 0);
@@ -1008,7 +1011,7 @@ xlio_sock_accept(struct spdk_sock *_sock)
 #endif
 
 	/* Inherit the zero copy feature from the listen socket */
-	new_sock = xlio_sock_alloc(fd, sock->zcopy, SPDK_SOCK_CREATE_CONNECT);
+	new_sock = xlio_sock_alloc(fd, sock->flags.zcopy, SPDK_SOCK_CREATE_CONNECT);
 	if (new_sock == NULL) {
 		g_xlio_ops.close(fd);
 		return NULL;
@@ -1133,8 +1136,8 @@ _sock_check_zcopy(struct spdk_sock *sock)
 
 			/* If we reaped buffer reclaim notification and sock is not in pending_recv list yet,
 			 * add it now. It allows to call socket callback and process completions */
-			if (found && !vsock->pending_recv && group) {
-				vsock->pending_recv = true;
+			if (found && !vsock->flags.pending_recv && group) {
+				vsock->flags.pending_recv = true;
 				TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
 			}
 		}
@@ -1151,7 +1154,7 @@ xlio_sock_flush(struct spdk_sock *sock)
 #ifdef SPDK_ZEROCOPY
 	struct spdk_xlio_sock *vsock = __xlio_sock(sock);
 
-	if (vsock->zcopy && !TAILQ_EMPTY(&sock->pending_reqs)) {
+	if (vsock->flags.zcopy && !TAILQ_EMPTY(&sock->pending_reqs)) {
 		_sock_check_zcopy(sock);
 	}
 #endif
@@ -1359,7 +1362,7 @@ readv_wrapper(struct spdk_xlio_sock *sock, struct iovec *iovs, int iovcnt)
 {
 	int ret;
 
-	if (sock->recv_zcopy) {
+	if (sock->flags.recv_zcopy) {
 		int i;
 		size_t offset = 0;
 
@@ -1495,7 +1498,7 @@ xlio_sock_prep_reqs(struct spdk_sock *_sock, struct iovec *iovs, struct msghdr *
 				continue;
 			}
 
-			if (vsock->zcopy && vsock->pd && req->mkeys) {
+			if (vsock->flags.zcopy && vsock->pd && req->mkeys) {
 				if (!mkeys) {
 					msg->msg_control = mkeys_container->buf;
 					msg->msg_controllen = sizeof(mkeys_container->buf);
@@ -1611,7 +1614,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 		return 0;
 	}
 
-	assert(!(!vsock->zcopy && msg.msg_controllen > 0));
+	assert(!(!vsock->flags.zcopy && msg.msg_controllen > 0));
 
 	zerocopy_threshold = g_spdk_xlio_sock_impl_opts.zerocopy_threshold;
 
@@ -1622,7 +1625,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 	/* Allow zcopy if enabled on socket and either the data needs to be sent,
 	 * which is reported by xlio_sock_prep_reqs() with setting msg.msg_controllen
 	 * or the msg size is bigger than the threshold configured. */
-	if (vsock->zcopy && (msg.msg_controllen || total >= zerocopy_threshold)) {
+	if (vsock->flags.zcopy && (msg.msg_controllen || total >= zerocopy_threshold)) {
 		flags = MSG_ZEROCOPY;
 	} else {
 		flags = 0;
@@ -1636,7 +1639,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 
 	rc = g_xlio_ops.sendmsg(vsock->fd, &msg, flags);
 	if (rc <= 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && vsock->zcopy)) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && vsock->flags.zcopy)) {
 			return 0;
 		}
 
@@ -1726,16 +1729,16 @@ xlio_sock_writev_async(struct spdk_sock *sock, struct spdk_sock_request *req)
 	if (sock->queued_iovcnt >= IOV_BATCH_SIZE) {
 		rc = _sock_flush_ext(sock);
 		if (spdk_likely(rc == 0)) {
-			if (TAILQ_EMPTY(&sock->queued_reqs) && vsock->pending_send && sock->group_impl) {
+			if (TAILQ_EMPTY(&sock->queued_reqs) && vsock->flags.pending_send && sock->group_impl) {
 				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-				vsock->pending_send = false;
+				vsock->flags.pending_send = false;
 			}
 		} else {
 			spdk_sock_abort_requests(sock);
 		}
-	} else if (!vsock->pending_send && sock->group_impl) {
+	} else if (!vsock->flags.pending_send && sock->group_impl) {
 		TAILQ_INSERT_TAIL(&group->pending_send, vsock, link_send);
-		vsock->pending_send = true;
+		vsock->flags.pending_send = true;
 	}
 }
 
@@ -1905,13 +1908,13 @@ xlio_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group, struct spd
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 
 	spdk_sock_abort_requests(_sock);
-	if (sock->pending_send) {
+	if (sock->flags.pending_send) {
 		TAILQ_REMOVE(&group->pending_send, sock, link_send);
-		sock->pending_send = false;
+		sock->flags.pending_send = false;
 	}
-	if (sock->pending_recv) {
+	if (sock->flags.pending_recv) {
 		TAILQ_REMOVE(&group->pending_recv, sock, link);
-		sock->pending_recv = false;
+		sock->flags.pending_recv = false;
 	}
 	if (--sock->ring_fd->refs == 0) {
 		TAILQ_REMOVE(&group->ring_fd, sock->ring_fd, link);
@@ -1978,10 +1981,10 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 #endif
 
 		/* If the socket does not already have recv pending, add it now */
-		if (spdk_likely(sock->group_impl) && !vsock->pending_recv) {
+		if (spdk_likely(sock->group_impl) && !vsock->flags.pending_recv) {
 			struct spdk_xlio_sock_group_impl *group = __xlio_group_impl(sock->group_impl);
 
-			vsock->pending_recv = true;
+			vsock->flags.pending_recv = true;
 			TAILQ_INSERT_TAIL(&group->pending_recv, vsock, link);
 		}
 	}
@@ -2006,7 +2009,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 	 * - we remove from ->pending_send if no more ->queued_reqs left.
 	 */
 	TAILQ_FOREACH_SAFE(vsock, &group->pending_send, link_send, ptmp) {
-		assert(vsock->pending_send);
+		assert(vsock->flags.pending_send);
 
 		rc = _sock_flush_ext(&vsock->base);
 		if (spdk_likely(rc == 0)) {
@@ -2018,7 +2021,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 			 */
 			if (TAILQ_EMPTY(&vsock->base.queued_reqs)) {
 				TAILQ_REMOVE(&group->pending_send, vsock, link_send);
-				vsock->pending_send = false;
+				vsock->flags.pending_send = false;
 			}
 		} else {
 			/*
@@ -2054,7 +2057,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		/* If the socket's cb_fn is NULL, just remove it from the
 		 * list and do not add it to socks array */
 		if (spdk_unlikely(vsock->base.cb_fn == NULL)) {
-			vsock->pending_recv = false;
+			vsock->flags.pending_recv = false;
 			TAILQ_REMOVE(&group->pending_recv, vsock, link);
 			continue;
 		}
@@ -2068,7 +2071,7 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 		vsock = __xlio_sock(socks[i]);
 
 		TAILQ_REMOVE(&group->pending_recv, vsock, link);
-		vsock->pending_recv = false;
+		vsock->flags.pending_recv = false;
 	}
 
 	return num_events;
@@ -2178,9 +2181,9 @@ xlio_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 {
 	struct spdk_xlio_sock *vsock = __xlio_sock(sock);
 
-	caps->zcopy_send = vsock->zcopy;
+	caps->zcopy_send = vsock->flags.zcopy;
 	caps->ibv_pd = vsock->pd;
-	caps->zcopy_recv = vsock->recv_zcopy;
+	caps->zcopy_recv = vsock->flags.recv_zcopy;
 
 	return 0;
 }
@@ -2193,7 +2196,7 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 	int ret;
 
 	SPDK_DEBUGLOG(xlio, "Sock %d: zcopy recv %lu bytes\n", sock->fd, len);
-	assert(sock->recv_zcopy);
+	assert(sock->flags.recv_zcopy);
 	*sock_buf = NULL;
 
 	if (STAILQ_EMPTY(&sock->received_packets)) {
@@ -2227,10 +2230,10 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 		if (spdk_unlikely(!buf)) {
 			SPDK_DEBUGLOG(xlio, "Sock %d: no more buffers, total_len %d\n", sock->fd, ret);
 			if (ret == 0) {
-				if (spdk_unlikely(!_sock->group_impl) && !sock->pending_recv) {
+				if (spdk_unlikely(!_sock->group_impl) && !sock->flags.pending_recv) {
 					struct spdk_xlio_sock_group_impl *group =
 						__xlio_group_impl(sock->base.group_impl);
-					sock->pending_recv = true;
+					sock->flags.pending_recv = true;
 					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
 				}
 				ret = -1;
