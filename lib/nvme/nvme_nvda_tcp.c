@@ -2082,8 +2082,6 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 			memcpy(tcp_req->pdu.data_digest, pdu->data_digest, sizeof(pdu->data_digest));
 			tcp_req->pdu.data_len = pdu->data_len;
 
-			nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
-
 			if (nvme_tcp_req_with_memory_domain(tcp_req)) {
 				tqpair->stats->recv_ddgsts++;
 				tcp_req->ordering.bits.digest_offloaded = 1;
@@ -2091,6 +2089,7 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 				if (spdk_unlikely(rc)) {
 					goto transient_error;
 				}
+				nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 				return;
 			} else if (tgroup->group.group->accel_fn_table.submit_accel_crc32c) {
 				memcpy(tcp_req->pdu.data_iov, pdu->data_iov,
@@ -2101,6 +2100,7 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 					tgroup->group.group->ctx, &tcp_req->pdu.data_digest_crc32,
 					tcp_req->pdu.data_iov, tcp_req->pdu.data_iovcnt, 0, tcp_data_recv_crc32_done,
 					tcp_req);
+				nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 				return;
 			}
 		}
