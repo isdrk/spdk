@@ -1307,6 +1307,7 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 		group = tqpair->qpair.poll_group->group;
 		if (spdk_unlikely(!group)) {
 			SPDK_ERRLOG("accel_seq is only supported with poll groups\n");
+			nvme_tcp_req_put(tqpair, tcp_req);
 			return -ENOTSUP;
 		}
 		iobuf_ch = group->accel_fn_table.get_iobuf_channel(group->ctx);
@@ -1320,15 +1321,28 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 			return 0;
 		}
 		rc = nvme_tcp_apply_accel_sequence_in_capsule(tcp_req);
+		if (rc != 0 && rc != -EINPROGRESS) {
+			nvme_tcp_req_put(tqpair, tcp_req);
+			return rc;
+		}
 		return (rc == -EINPROGRESS) ? 0 : rc;
+	}
+
+	TAILQ_INSERT_TAIL(&tqpair->outstanding_reqs, tcp_req, link);
+	tqpair->stats->outstanding_reqs++;
+	rc = nvme_tcp_qpair_capsule_cmd_send(tqpair, tcp_req);
+	if (rc) {
+		SPDK_ERRLOG("Failed to send capsule cmd, rc %d\n", rc);
+		TAILQ_REMOVE(&tqpair->outstanding_reqs, tcp_req, link);
+		tqpair->stats->outstanding_reqs--;
+		nvme_tcp_req_put(tqpair, tcp_req);
+		return -1;
 	}
 
 	spdk_trace_record(TRACE_NVME_TCP_SUBMIT, qpair->id, 0, (uintptr_t)req, req->cb_arg,
 			  (uint32_t)req->cmd.cid, (uint32_t)req->cmd.opc,
 			  req->cmd.cdw10, req->cmd.cdw11, req->cmd.cdw12);
-	TAILQ_INSERT_TAIL(&tqpair->outstanding_reqs, tcp_req, link);
-	tqpair->stats->outstanding_reqs++;
-	return nvme_tcp_qpair_capsule_cmd_send(tqpair, tcp_req);
+	return 0;
 }
 
 static int
