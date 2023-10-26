@@ -3024,10 +3024,16 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    help="Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB")
     p.add_argument('-m', '--merge', dest='merge', action='store_true', help="Merge tasks in the sequence when possible")
     p.add_argument('-f', '--qp-per-domain', dest='qp_per_domain', action='store_true',
-                   help="Use dedicated qpair per memory domain"
-                        "")
-
+                   help="Use dedicated qpair per memory domain")
     p.set_defaults(func=mlx5_scan_accel_module)
+
+    def accel_mlx5_dump_stats(args):
+        print_dict(rpc.mlx5.accel_mlx5_dump_stats(args.client,
+                                       level=args.level))
+
+    p = subparsers.add_parser('accel_mlx5_dump_stats', help='Dump accel mlx5 module statistics.')
+    p.add_argument('-l', '--level', type=str, help='Verbose level, one of \"total\", \"channel\" or \"device\"')
+    p.set_defaults(func=accel_mlx5_dump_stats)
 
     # opal
     def bdev_nvme_opal_init(args):

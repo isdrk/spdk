@@ -33,3 +33,12 @@ def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None
     if qp_per_domain is not None:
         params['qp_per_domain'] = qp_per_domain
     return client.call('mlx5_scan_accel_module', params)
+
+
+def accel_mlx5_dump_stats(client, level=None):
+
+    params = {}
+
+    if level is not None:
+        params['level'] = level
+    return client.call('accel_mlx5_dump_stats', params)
