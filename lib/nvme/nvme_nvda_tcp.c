@@ -974,7 +974,11 @@ nvme_tcp_apply_accel_sequence_in_capsule(struct nvme_tcp_req *tcp_req)
 						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
-			SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
+			if (rc != -ENOMEM) {
+				SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
+			} else {
+				SPDK_DEBUGLOG(nvme, "Failed to append crc32 accel task, rc %d\n", rc);
+			}
 			return rc;
 		}
 		tcp_req->ordering.bits.digest_offloaded = 1;
@@ -1317,7 +1321,7 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 							     &tcp_req->iobuf_entry, nvme_tcp_iobuf_get_cb);
 		if (spdk_unlikely(!tcp_req->iobuf_iov.iov_base)) {
 			/* Finish accel sequence once buffer is allocated */
-			SPDK_WARNLOG("no buffer, in progress\n");
+			SPDK_DEBUGLOG(nvme, "no buffer, in progress\n");
 			return 0;
 		}
 		rc = nvme_tcp_apply_accel_sequence_in_capsule(tcp_req);
@@ -2493,7 +2497,11 @@ nvme_tcp_apply_accel_sequence_h2c(struct nvme_tcp_req *tcp_req)
 						      &tcp_req->iobuf_iov, 1, NULL, NULL, 0, NULL, NULL);
 		}
 		if (spdk_unlikely(rc)) {
-			SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
+			if (rc != -ENOMEM) {
+				SPDK_ERRLOG("Failed to append crc32 accel task, rc %d\n", rc);
+			} else {
+				SPDK_DEBUGLOG(nvme, "Failed to append crc32 accel task, rc %d\n", rc);
+			}
 			return rc;
 		}
 		tcp_req->ordering.bits.digest_offloaded = 1;
@@ -2619,7 +2627,7 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 							     &tcp_req->iobuf_entry, nvme_tcp_h2c_iobuf_get_cb);
 		if (spdk_unlikely(!tcp_req->iobuf_iov.iov_base)) {
 			/* Finish accel sequence once buffer is allocated */
-			SPDK_WARNLOG("no buffer, in progress\n");
+			SPDK_DEBUGLOG(nvme, "no buffer, in progress\n");
 			return;
 		}
 		rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
