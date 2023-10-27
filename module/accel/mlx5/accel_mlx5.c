@@ -3082,6 +3082,7 @@ accel_mlx5_psvs_release(struct accel_mlx5_dev_ctx *dev_ctx)
 		SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n", num_psvs, num_psvs_in_pool);
 	}
 	spdk_mempool_free(dev_ctx->psv_pool);
+	free(dev_ctx->psvs);
 }
 
 static void
