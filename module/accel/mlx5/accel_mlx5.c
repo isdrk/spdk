@@ -51,7 +51,8 @@ enum accel_mlx5_opcode {
 	ACCEL_MLX5_OPC_COPY,
 	ACCEL_MLX5_OPC_CRYPTO,
 	ACCEL_MLX5_OPC_CRC32C,
-	ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C,
+	ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C,
+	ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT,
 	ACCEL_MLX5_OPC_LAST
 };
 
@@ -330,7 +331,7 @@ accel_mlx5_task_check_sigerr(struct accel_mlx5_task *task)
 
 	task->psv->bits.error = 1;
 
-	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
+	if (task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C) {
 		struct spdk_accel_task *task_next = TAILQ_NEXT(&task->base, seq_link);
 		struct accel_mlx5_task *mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
 
@@ -379,18 +380,27 @@ accel_mlx5_crc_task_complete(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline void
-accel_mlx5_crypto_crc_task_complete(struct accel_mlx5_task *mlx5_task)
+accel_mlx5_encrypt_crc_task_complete(struct accel_mlx5_task *mlx5_task)
+{
+	struct spdk_accel_task *task_crc = TAILQ_NEXT(&mlx5_task->base, seq_link);
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+
+	*task_crc->crc_dst = *mlx5_task->psv->crc ^ UINT32_MAX;
+	/* Normal task completion without allocated mkeys is not possible */
+	assert(mlx5_task->num_ops);
+	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
+	spdk_mempool_put(dev->psv_pool_ref, mlx5_task->psv);
+	spdk_accel_task_complete(&mlx5_task->base, 0);
+}
+
+static inline void
+accel_mlx5_crc_decrypt_task_complete(struct accel_mlx5_task *mlx5_task)
 {
 	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
 	int sigerr = 0;
 
-	if (mlx5_task->base.op_code == ACCEL_OPC_ENCRYPT) {
-	    struct spdk_accel_task *task_crc = TAILQ_NEXT(&mlx5_task->base, seq_link);
-
-	    *task_crc->crc_dst = *mlx5_task->psv->crc ^ UINT32_MAX;
-	} else if (mlx5_task->base.op_code == ACCEL_OPC_CHECK_CRC32C) {
-		sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
-	}
+	assert(mlx5_task->base.op_code == ACCEL_OPC_CHECK_CRC32C);
+	sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
@@ -431,7 +441,8 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, task->mkeys, task->num_ops);
 		}
 		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C ||
-			task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
+		    task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
+			task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
 			spdk_mempool_put(dev->psv_pool_ref, task->psv);
 		}
@@ -545,8 +556,7 @@ accel_mlx5_task_alloc_mkeys(struct accel_mlx5_task *task, void *mkey_pool)
 	int rc;
 
 	assert(task->num_reqs >= task->num_completed_reqs);
-	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO || task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C ||
-	       task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C);
+	assert(task->mlx5_opcode != ACCEL_MLX5_OPC_COPY);
 	num_ops = spdk_min(num_ops, qp_slot);
 	num_ops = spdk_min(num_ops, ACCEL_MLX5_MAX_MKEYS_IN_TASK * 2);
 	if (num_ops < 2) {
@@ -906,7 +916,8 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task, struc
 	uint32_t umr_klm_count;
 	int rc;
 
-	assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C);
+	assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
+		mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT);
 
 	rc = accel_mlx5_fill_block_sge(qp, klm->src_klm, &mlx5_task->src, task->src_domain,
 				       task->src_domain_ctx, src_lkey, req_len, &remaining);
@@ -2074,22 +2085,19 @@ accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_d
 	 * depends on the opcode */
 	switch (mlx5_task->mlx5_opcode) {
 	case ACCEL_MLX5_OPC_CRYPTO:
-	case ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C:
-		if (mlx5_task->base.op_code == ACCEL_OPC_ENCRYPT) {
-			if (mlx5_task->base.src_domain) {
-				return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
-			} else {
-				return &dev->mlx5_qp;
-			}
+	case ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C:
+		if (mlx5_task->base.src_domain) {
+			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
 		} else {
-			assert((mlx5_task->base.op_code == ACCEL_OPC_DECRYPT && mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) ||
-			       (mlx5_task->base.op_code == ACCEL_OPC_CHECK_CRC32C && mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C));
-			if (mlx5_task->base.dst_domain) {
-				return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
-			} else {
-				return &dev->mlx5_qp;
-			}
-		};
+			return &dev->mlx5_qp;
+		}
+		break;
+	case ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT:
+		if (mlx5_task->base.dst_domain) {
+			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+		} else {
+			return &dev->mlx5_qp;
+		}
 		break;
 	case ACCEL_MLX5_OPC_COPY:
 		if (mlx5_task->base.dst_domain) {
@@ -2224,7 +2232,48 @@ accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_crypto_crc_task_init(struct accel_mlx5_task *mlx5_task)
+accel_mlx5_encrypt_and_crc_task_init(struct accel_mlx5_task *mlx5_task)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+	size_t src_nbytes = 0;
+	uint32_t num_blocks;
+	uint32_t i;
+
+	for (i = 0; i < task->s.iovcnt; i++) {
+		src_nbytes += task->s.iovs[i].iov_len;
+	}
+
+	accel_mlx5_iov_sgl_init(&mlx5_task->src, mlx5_task->base.s.iovs, mlx5_task->base.s.iovcnt);
+	if (!mlx5_task->flags.bits.inplace) {
+		accel_mlx5_iov_sgl_init(&mlx5_task->dst, mlx5_task->base.d.iovs, mlx5_task->base.d.iovcnt);
+	}
+	num_blocks = src_nbytes / mlx5_task->base.block_size;
+	mlx5_task->num_blocks = num_blocks;
+	if (dev->crypto_multi_block) {
+		if (g_accel_mlx5.split_mb_blocks) {
+			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.split_mb_blocks);
+			/* Last req may consume less blocks */
+			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.split_mb_blocks);
+		} else {
+			mlx5_task->num_reqs = 1;
+			mlx5_task->blocks_per_req = num_blocks;
+		}
+	} else {
+		mlx5_task->num_reqs = num_blocks;
+		mlx5_task->blocks_per_req = 1;
+	}
+
+	if (spdk_unlikely(accel_mlx5_task_alloc_crc_ctx(mlx5_task))) {
+		return -ENOMEM;
+	}
+	SPDK_DEBUGLOG(accel_mlx5, "crypto and crc task num_reqs %u, num_ops %u, num_blocks %u\n", mlx5_task->num_reqs, mlx5_task->num_ops, mlx5_task->num_blocks);
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_accel_task *task_crypto;
 	struct spdk_accel_task *task = &mlx5_task->base;
@@ -2237,11 +2286,7 @@ accel_mlx5_crypto_crc_task_init(struct accel_mlx5_task *mlx5_task)
 		src_nbytes += task->s.iovs[i].iov_len;
 	}
 
-	if (task->op_code == ACCEL_OPC_ENCRYPT) {
-		task_crypto = task;
-	} else {
-		task_crypto = TAILQ_NEXT(task, seq_link);
-	}
+	task_crypto = TAILQ_NEXT(task, seq_link);
 	assert(task_crypto);
 
 	accel_mlx5_iov_sgl_init(&mlx5_task->src, task_crypto->s.iovs, task_crypto->s.iovcnt);
@@ -2304,7 +2349,7 @@ accel_mlx5_task_merge_encrypt_and_crc(struct accel_mlx5_task *mlx5_task)
 		return;
 	}
 
-	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C;
+	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C;
 	mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
 	mlx5_task_next->flags.bits.merged = 1;
 }
@@ -2338,7 +2383,7 @@ accel_mlx5_task_merge_crc_and_decrypt(struct accel_mlx5_task *mlx5_task_crc)
 	}
 
 	mlx5_task_crypto->flags.bits.merged = true;
-	mlx5_task_crc->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C;
+	mlx5_task_crc->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT;
 	mlx5_task_crc->enc_order = MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
 }
 
@@ -2425,11 +2470,17 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 		.cont = accel_mlx5_crc_task_continue,
 		.complete = accel_mlx5_crc_task_complete,
 	},
-	[ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C] = {
-		.init = accel_mlx5_crypto_crc_task_init,
+	[ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C] = {
+		.init = accel_mlx5_encrypt_and_crc_task_init,
 		.process = accel_mlx5_crypto_and_crc_task_process,
 		.cont = accel_mlx5_crypto_crc_task_continue,
-		.complete = accel_mlx5_crypto_crc_task_complete,
+		.complete = accel_mlx5_encrypt_crc_task_complete,
+	},
+	[ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT] = {
+		.init = accel_mlx5_crc_and_decrypt_task_init,
+		.process = accel_mlx5_crypto_and_crc_task_process,
+		.cont = accel_mlx5_crypto_crc_task_continue,
+		.complete = accel_mlx5_crc_decrypt_task_complete,
 	},
 	[ACCEL_MLX5_OPC_LAST] = {
 		.init = accel_mlx5_task_op_not_supported,
@@ -2521,7 +2572,7 @@ accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5
 		*task->base.cached_lkey = 0;
 	}
 	/* Clear the mkey cache when the decrypt task is merged into check CRC. */
-	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
+	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
 		next_task = TAILQ_NEXT(&task->base, seq_link);
 		if (next_task->cached_lkey) {
 			*next_task->cached_lkey = 0;
@@ -3705,7 +3756,8 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header, co
 	spdk_json_write_named_uint64(w, "copy", stats->opcodes[ACCEL_MLX5_OPC_COPY]);
 	spdk_json_write_named_uint64(w, "crypto", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO]);
 	spdk_json_write_named_uint64(w, "crc32c", stats->opcodes[ACCEL_MLX5_OPC_CRC32C]);
-	spdk_json_write_named_uint64(w, "crypto_crc", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C]);
+	spdk_json_write_named_uint64(w, "encrypt_crc", stats->opcodes[ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C]);
+	spdk_json_write_named_uint64(w, "crc_decrypt", stats->opcodes[ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT]);
 	spdk_json_write_named_uint64(w, "total", total_tasks);
 	spdk_json_write_object_end(w);
 
