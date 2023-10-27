@@ -1630,74 +1630,122 @@ accel_mlx5_task_alloc_crc_ctx(struct accel_mlx5_task *task)
 }
 
 static inline int
-accel_mlx5_task_continue(struct accel_mlx5_task *task)
+accel_mlx5_crypto_task_continue(struct accel_mlx5_task *task)
 {
 	struct accel_mlx5_qp *qp = task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	int rc;
+
+	if (task->num_ops == 0) {
+		rc = accel_mlx5_task_alloc_mkeys(task, dev->crypto_mkeys);
+		if (spdk_unlikely(rc != 0)) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	} else {
+		/* Check that we have enough slots in QP */
+		uint32_t qp_slot = qp->max_wrs - qp->wrs_submitted;
+		uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
+
+		num_ops = spdk_min(num_ops, 2 * task->num_ops);
+		if (num_ops > qp_slot) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	}
+	return accel_mlx5_crypto_task_process(task);
+}
+
+static inline int
+accel_mlx5_crc_task_continue(struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+
+	if (task->num_ops == 0) {
+		rc = accel_mlx5_task_alloc_crc_ctx(task);
+		if (spdk_unlikely(rc != 0)) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	} else {
+		/* Check that we have enough slots in QP */
+		uint32_t qp_slot = qp->max_wrs - qp->wrs_submitted;
+		uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
+
+		num_ops = spdk_min(num_ops, 2 * task->num_ops);
+		if (num_ops > qp_slot) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	}
+
+	return accel_mlx5_crc_task_process(task);
+}
+
+static inline int
+accel_mlx5_crypto_crc_task_continue(struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+
+	if (task->num_ops == 0) {
+		rc = accel_mlx5_task_alloc_crc_ctx(task);
+		if (spdk_unlikely(rc != 0)) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	} else {
+		/* Check that we have enough slots in QP */
+		uint32_t qp_slot = qp->max_wrs - qp->wrs_submitted;
+		uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
+
+		num_ops = spdk_min(num_ops, 2 * task->num_ops);
+		if (num_ops > qp_slot) {
+			/* Pool is empty, queue this task */
+			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			return -ENOMEM;
+		}
+	}
+
+	return accel_mlx5_crypto_and_crc_task_process(task);
+}
+
+static inline int
+accel_mlx5_copy_task_continue(struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+
+	uint16_t qp_slot = qp->max_wrs - qp->wrs_submitted;
+	task->num_ops = spdk_min(qp_slot, task->num_reqs - task->num_completed_reqs);
+	if (task->num_ops == 0) {
+		/* Pool is empty, queue this task */
+		STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+		return -ENOMEM;
+	}
+	return accel_mlx5_copy_task_process(task);
+}
+
+static inline int
+accel_mlx5_task_continue(struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
 
 	if (spdk_unlikely(qp->recovering)) {
 		STAILQ_INSERT_TAIL(&dev->nomem, task, link);
 		return 0;
 	}
 
-	if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
-		if (task->num_ops == 0) {
-			rc = accel_mlx5_task_alloc_mkeys(task, dev->crypto_mkeys);
-			if (spdk_unlikely(rc != 0)) {
-				/* Pool is empty, queue this task */
-				STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-				return -ENOMEM;
-			}
-		} else {
-			/* Check that we have enough slots in QP */
-			uint32_t qp_slot = qp->max_wrs - qp->wrs_submitted;
-			uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
-
-			num_ops = spdk_min(num_ops, 2 * task->num_ops);
-			if (num_ops > qp_slot) {
-				/* Pool is empty, queue this task */
-				STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-				return -ENOMEM;
-			}
-		}
-		return accel_mlx5_crypto_task_process(task);
-	} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C ||
-		   task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
-		if (task->num_ops == 0) {
-			rc = accel_mlx5_task_alloc_crc_ctx(task);
-			if (spdk_unlikely(rc != 0)) {
-				/* Pool is empty, queue this task */
-				STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-				return -ENOMEM;
-			}
-		} else {
-			/* Check that we have enough slots in QP */
-			uint32_t qp_slot = qp->max_wrs - qp->wrs_submitted;
-			uint32_t num_ops = (task->num_reqs - task->num_completed_reqs) * 2;
-
-			num_ops = spdk_min(num_ops, 2 * task->num_ops);
-			if (num_ops > qp_slot) {
-				/* Pool is empty, queue this task */
-				STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-				return -ENOMEM;
-			}
-		}
-
-		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C)
-			return accel_mlx5_crc_task_process(task);
-
-		return accel_mlx5_crypto_and_crc_task_process(task);
-	} else {
-		uint16_t qp_slot = qp->max_wrs - qp->wrs_submitted;
-		task->num_ops = spdk_min(qp_slot, task->num_reqs - task->num_completed_reqs);
-		if (task->num_ops == 0) {
-			/* Pool is empty, queue this task */
-			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-			return -ENOMEM;
-		}
-		return accel_mlx5_copy_task_process(task);
-	}
+	return g_accel_mlx5_tasks_ops[task->mlx5_opcode].cont(task);
 }
 
 static inline uint32_t
@@ -2298,25 +2346,25 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 	[ACCEL_MLX5_OPC_COPY] = {
 		.init = accel_mlx5_copy_task_init,
 		.process = accel_mlx5_copy_task_process,
-		.cont = accel_mlx5_task_op_not_implemented,
+		.cont = accel_mlx5_copy_task_continue,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRYPTO] = {
 		.init = accel_mlx5_crypto_task_init,
 		.process = accel_mlx5_crypto_task_process,
-		.cont = accel_mlx5_task_op_not_implemented,
+		.cont = accel_mlx5_crypto_task_continue,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRC32C] = {
 		.init = accel_mlx5_crc_task_init,
 		.process = accel_mlx5_crc_task_process,
-		.cont = accel_mlx5_task_op_not_implemented,
+		.cont = accel_mlx5_crc_task_continue,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C] = {
 		.init = accel_mlx5_crypto_crc_task_init,
 		.process = accel_mlx5_crypto_and_crc_task_process,
-		.cont = accel_mlx5_task_op_not_implemented,
+		.cont = accel_mlx5_crypto_crc_task_continue,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_LAST] = {
