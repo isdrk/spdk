@@ -758,6 +758,50 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	return rc;
 }
 
+static inline int
+accel_mlx5_task_pretranslate_single_mkey(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_qp *qp,
+					 struct iovec *base_addr, struct spdk_memory_domain *domain,
+					 void *domain_ctx, uint32_t *mkey)
+{
+	struct mlx5_wqe_data_seg klm;
+	struct spdk_accel_task *task = &mlx5_task->base;
+	int rc;
+
+	if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !domain) {
+		rc = accel_mlx5_translate_addr(base_addr->iov_base, base_addr->iov_len,
+					       domain, domain_ctx, qp, &klm);
+		if (spdk_unlikely(rc)) {
+			return rc;
+		}
+		if (task->cached_lkey && domain) {
+			*task->cached_lkey = klm.lkey;
+		}
+		*mkey = klm.lkey;
+	} else {
+		*mkey = *task->cached_lkey;
+	}
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_task_pretranslate_mkeys(struct accel_mlx5_task *mlx5_task, size_t op_len, uint32_t *src_lkey, uint32_t *dst_lkey)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	int rc = 0;
+
+	if (op_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task->s.iovcnt == 1) {
+		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task, mlx5_task->qp, &task->s.iovs[0],
+							      task->src_domain, task->src_domain_ctx, src_lkey);
+	}
+	if (!mlx5_task->flags.bits.inplace &&
+	    (op_len <= mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset || task->d.iovcnt == 1)) {
+		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task, mlx5_task->qp, &task->d.iovs[0],
+							      task->dst_domain, task->dst_domain_ctx, dst_lkey);
+	}
+
+	return rc;
+}
 
 static inline int
 accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
@@ -781,36 +825,9 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 		return -EINVAL;
 	}
 
-	if (ops_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task->s.iovcnt == 1) {
-		if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !task->src_domain) {
-			rc = accel_mlx5_translate_addr(task->s.iovs[0].iov_base, task->s.iovs[0].iov_len, task->src_domain,
-						       task->src_domain_ctx, qp, klms[0].src_klm);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			src_lkey = klms[0].src_klm->lkey;
-			if (task->cached_lkey && task->src_domain) {
-				*task->cached_lkey = src_lkey;
-			}
-		} else {
-			src_lkey = *task->cached_lkey;
-		}
-	}
-	if (!mlx5_task->flags.bits.inplace &&
-	    (ops_len <= mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset || task->d.iovcnt == 1)) {
-		if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !task->dst_domain) {
-			rc = accel_mlx5_translate_addr(task->d.iovs[0].iov_base, task->d.iovs[0].iov_len, task->dst_domain,
-						       task->dst_domain_ctx, qp, klms[0].dst_klm);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			dst_lkey = klms[0].dst_klm->lkey;
-			if (task->cached_lkey && task->dst_domain) {
-				*task->cached_lkey = dst_lkey;
-			}
-		} else {
-			dst_lkey = *task->cached_lkey;
-		}
+	rc = accel_mlx5_task_pretranslate_mkeys(mlx5_task, ops_len, &src_lkey, &dst_lkey);
+	if (spdk_unlikely(rc)) {
+		return rc;
 	}
 	blocks_processed = mlx5_task->num_submitted_reqs * mlx5_task->blocks_per_req;
 	iv = task->iv + blocks_processed;
@@ -1052,38 +1069,18 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (ops_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task_crypto->s.iovcnt == 1) {
-		if (task_crypto->cached_lkey == NULL || *task_crypto->cached_lkey == 0 || !task_crypto->src_domain) {
-			rc = accel_mlx5_translate_addr(task_crypto->s.iovs[0].iov_base, task_crypto->s.iovs[0].iov_len,
-						       task_crypto->src_domain, task_crypto->src_domain_ctx, qp,
-						       klms[0].src_klm);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			src_lkey = klms[0].src_klm->lkey;
-			if (task_crypto->cached_lkey && task_crypto->src_domain) {
-				*task_crypto->cached_lkey = src_lkey;
-			}
-		} else {
-			src_lkey = *task_crypto->cached_lkey;
-		}
+		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task_crypto, qp, &task_crypto->s.iovs[0],
+							      task_crypto->src_domain, task_crypto->src_domain_ctx,
+							      &src_lkey);
 	}
-
 	if (!mlx5_task->flags.bits.inplace &&
 	    (ops_len <= mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset || task_crypto->d.iovcnt == 1)) {
-		if (task_crypto->cached_lkey == NULL || *task_crypto->cached_lkey == 0 || !task_crypto->dst_domain) {
-			rc = accel_mlx5_translate_addr(task_crypto->d.iovs[0].iov_base, task_crypto->d.iovs[0].iov_len,
-						       task_crypto->dst_domain, task_crypto->dst_domain_ctx, qp,
-						       klms[0].dst_klm);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			dst_lkey = klms[0].dst_klm->lkey;
-			if (task_crypto->cached_lkey && task_crypto->dst_domain) {
-				*task_crypto->cached_lkey = dst_lkey;
-			}
-		} else {
-			dst_lkey = *task_crypto->cached_lkey;
-		}
+		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task_crypto, qp, &task_crypto->d.iovs[0],
+							      task_crypto->dst_domain, task_crypto->dst_domain_ctx,
+							      &dst_lkey);
+	}
+	if (spdk_unlikely(rc)) {
+		return rc;
 	}
 
 	blocks_processed = mlx5_task->num_submitted_reqs * mlx5_task->blocks_per_req;
