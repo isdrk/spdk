@@ -64,7 +64,8 @@ static char **g_allowed_devices;
 static size_t g_allowed_devices_count;
 
 static int
-mlx5_crypto_dek_init(struct ibv_pd *pd, struct mlx5_crypto_dek_init_attr *attr, struct spdk_mlx5_crypto_dek *dek)
+mlx5_crypto_dek_init(struct ibv_pd *pd, struct mlx5_crypto_dek_init_attr *attr,
+		     struct spdk_mlx5_crypto_dek *dek)
 {
 	uint32_t in[DEVX_ST_SZ_DW(create_encryption_key_obj_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
@@ -89,7 +90,8 @@ mlx5_crypto_dek_init(struct ibv_pd *pd, struct mlx5_crypto_dek_init_attr *attr, 
 	memcpy(DEVX_ADDR_OF(encryption_key_obj, dek_in, key), attr->dek, attr->key_size_bytes);
 
 	dek->devx_obj = mlx5dv_devx_obj_create(pd->context, in, sizeof(in), out, sizeof(out));
-	spdk_memset_s(DEVX_ADDR_OF(encryption_key_obj, dek_in, key), attr->key_size_bytes, 0, attr->key_size_bytes);
+	spdk_memset_s(DEVX_ADDR_OF(encryption_key_obj, dek_in, key), attr->key_size_bytes, 0,
+		      attr->key_size_bytes);
 	if (!dek->devx_obj) {
 		return -errno;
 	}
@@ -123,8 +125,9 @@ mlx5_crypto_dek_query(struct spdk_mlx5_crypto_dek *dek, struct mlx5_crypto_dek_q
 	DEVX_SET(general_obj_in_cmd_hdr, in, obj_id, dek->dek_obj_id);
 
 	rc = mlx5dv_devx_obj_query(dek->devx_obj, in, sizeof(in), out, sizeof(out));
-	if (rc)
+	if (rc) {
 		return rc;
+	}
 
 	dek_out = DEVX_ADDR_OF(query_encryption_key_obj_out, out, obj);
 	attr->state = DEVX_GET(encryption_key_obj, dek_out, state);
@@ -168,7 +171,7 @@ mlx5_crypto_dev_allowed(const char *dev)
 }
 
 int
-spdk_mlx5_crypto_devs_allow(const char * const dev_names[], size_t devs_count)
+spdk_mlx5_crypto_devs_allow(const char *const dev_names[], size_t devs_count)
 {
 	size_t i;
 
@@ -198,7 +201,7 @@ int
 spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto_caps *caps)
 {
 	uint16_t opmod = MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE |
-		HCA_CAP_OPMOD_GET_CUR;
+			 HCA_CAP_OPMOD_GET_CUR;
 	uint32_t out[DEVX_ST_SZ_DW(query_hca_cap_out)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {};
 	int rc;
@@ -213,13 +216,13 @@ spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto
 
 	caps->crypto = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.crypto);
 	caps->single_block_le_tweak = DEVX_GET(query_hca_cap_out,
-			out, capability.cmd_hca_cap.aes_xts_single_block_le_tweak);
+					       out, capability.cmd_hca_cap.aes_xts_single_block_le_tweak);
 	caps->multi_block_be_tweak = DEVX_GET(query_hca_cap_out, out,
-						capability.cmd_hca_cap.aes_xts_multi_block_be_tweak);
+					      capability.cmd_hca_cap.aes_xts_multi_block_be_tweak);
 	caps->multi_block_le_tweak = DEVX_GET(query_hca_cap_out, out,
-						capability.cmd_hca_cap.aes_xts_multi_block_le_tweak);
+					      capability.cmd_hca_cap.aes_xts_multi_block_le_tweak);
 	caps->tweak_inc_64 = DEVX_GET(query_hca_cap_out, out,
-					       capability.cmd_hca_cap.aes_xts_tweak_inc_64);
+				      capability.cmd_hca_cap.aes_xts_tweak_inc_64);
 	caps->crc32c = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.sho) &&
 		       DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.sig_crc32c);
 	if (!caps->crypto) {
@@ -239,12 +242,12 @@ spdk_mlx5_query_crypto_caps(struct ibv_context *context, struct spdk_mlx5_crypto
 	}
 
 	caps->wrapped_crypto_operational = DEVX_GET(query_hca_cap_out, out,
-						    capability.crypto_caps.wrapped_crypto_operational);
+					   capability.crypto_caps.wrapped_crypto_operational);
 	caps->wrapped_crypto_going_to_commissioning = DEVX_GET(query_hca_cap_out, out,
-						    capability.crypto_caps .wrapped_crypto_going_to_commissioning);
+			capability.crypto_caps .wrapped_crypto_going_to_commissioning);
 	caps->wrapped_import_method_aes_xts = (DEVX_GET(query_hca_cap_out, out,
-						    capability.crypto_caps.wrapped_import_method) &
-		    				MLX5_CRYPTO_CAPS_WRAPPED_IMPORT_METHOD_AES) != 0;
+					       capability.crypto_caps.wrapped_import_method) &
+					       MLX5_CRYPTO_CAPS_WRAPPED_IMPORT_METHOD_AES) != 0;
 	caps->large_mtu_tweak = DEVX_GET(query_hca_cap_out, out, capability.crypto_caps.large_mtu_tweak_64);
 
 	return 0;
@@ -328,11 +331,11 @@ spdk_mlx5_crypto_devs_get(int *dev_num)
 			continue;
 		}
 		if (!(crypto_caps.single_block_le_tweak || crypto_caps.multi_block_le_tweak ||
-			crypto_caps.multi_block_be_tweak)) {
+		      crypto_caps.multi_block_be_tweak)) {
 			SPDK_WARNLOG("dev %s crypto engine doesn't support AES_XTS\n", dev->device->name);
 			continue;
 		}
-		if (crypto_caps.wrapped_import_method_aes_xts ) {
+		if (crypto_caps.wrapped_import_method_aes_xts) {
 			SPDK_WARNLOG("dev %s uses wrapped import method which is not supported by mlx5 lib\n",
 				     dev->device->name);
 			continue;
@@ -550,7 +553,8 @@ mlx5_crypto_get_dek_by_pd(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd 
 }
 
 int
-spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd, struct spdk_mlx5_crypto_dek_data *data)
+spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct ibv_pd *pd,
+			      struct spdk_mlx5_crypto_dek_data *data)
 {
 	struct spdk_mlx5_crypto_dek *dek;
 

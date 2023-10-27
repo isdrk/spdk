@@ -52,7 +52,7 @@ mlx5_cq_deinit(struct spdk_mlx5_cq *cq)
 }
 
 static int
-mlx5_cq_init(struct ibv_pd* pd, const struct spdk_mlx5_cq_attr *attr, struct spdk_mlx5_cq *cq)
+mlx5_cq_init(struct ibv_pd *pd, const struct spdk_mlx5_cq_attr *attr, struct spdk_mlx5_cq *cq)
 {
 	struct ibv_cq_init_attr_ex cq_attr = {
 		.cqe = attr->cqe_cnt,
@@ -115,7 +115,8 @@ mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 }
 
 static int
-mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv_cq *cq, struct spdk_mlx5_qp *qp)
+mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv_cq *cq,
+	     struct spdk_mlx5_qp *qp)
 {
 	struct mlx5dv_qp dv_qp;
 	struct mlx5dv_obj dv_obj;
@@ -155,7 +156,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 
 	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_QP);
 	if (rc) {
-                ibv_destroy_qp(qp->verbs_qp);
+		ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to init DV QP, rc %d\n", rc);
 		return rc;
 	}
@@ -184,22 +185,22 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
 	rc = posix_memalign((void **)&qp->completions, 4096, qp->hw.sq_wqe_cnt * sizeof(*qp->completions));
 	if (rc) {
-                ibv_destroy_qp(qp->verbs_qp);
+		ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to alloc completions\n");
 		return rc;
 	}
 	if (attr->sigall) {
 		qp->tx_flags |= SPDK_MLX5_WQE_CTRL_CQ_UPDATE;
 	}
-	qp->tx_revert_flags = (uint16_t)-1;
+	qp->tx_revert_flags = (uint16_t) -1;
 	if (attr->siglast) {
 		qp->tx_revert_flags &= ~SPDK_MLX5_WQE_CTRL_CQ_UPDATE;
 	}
 
 	rc = mlx5_qp_connect(qp);
 	if (rc) {
-                ibv_destroy_qp(qp->verbs_qp);
-                free(qp->completions);
+		ibv_destroy_qp(qp->verbs_qp);
+		free(qp->completions);
 		return rc;
 	}
 
@@ -317,10 +318,10 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 					  out, capability.roce_cap.fl_rc_qp_when_roce_enabled);
 out:
 	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d; 8K MTU %d\n",
-		       conn_caps->roce_enabled, conn_caps->roce_version,
-		       conn_caps->roce_enabled ? conn_caps->fl_when_roce_enabled :
-		       conn_caps->fl_when_roce_disabled,
-		       conn_caps->qp_8k_mtu);
+		      conn_caps->roce_enabled, conn_caps->roce_version,
+		      conn_caps->roce_enabled ? conn_caps->fl_when_roce_enabled :
+		      conn_caps->fl_when_roce_disabled,
+		      conn_caps->qp_8k_mtu);
 	return 0;
 }
 
@@ -536,8 +537,8 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 
 	/* Check if force-loopback is supported */
 	if (conn_caps.port_ib_enabled || (conn_caps.resources_on_nvme_emulation_manager &&
-		      ((conn_caps.roce_enabled && conn_caps.fl_when_roce_enabled) ||
-		       (!conn_caps.roce_enabled && conn_caps.fl_when_roce_disabled)))) {
+					  ((conn_caps.roce_enabled && conn_caps.fl_when_roce_enabled) ||
+					   (!conn_caps.roce_enabled && conn_caps.fl_when_roce_disabled)))) {
 	} else if (conn_caps.resources_on_nvme_emulation_manager) {
 		SPDK_ERRLOG("Force-loopback QP is not supported. Cannot create queue.\n");
 		return -ENOTSUP;
@@ -589,25 +590,26 @@ mlx5_cq_add_qp(struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp *qp)
 }
 
 int
-spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr, struct spdk_mlx5_cq **cq_out)
+spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
+		    struct spdk_mlx5_cq **cq_out)
 {
-        struct spdk_mlx5_cq *cq;
-        int rc;
+	struct spdk_mlx5_cq *cq;
+	int rc;
 
-        cq = calloc(1, sizeof(*cq));
-       	if (!cq) {
-       		return -ENOMEM;
-       	}
+	cq = calloc(1, sizeof(*cq));
+	if (!cq) {
+		return -ENOMEM;
+	}
 
-       	rc = mlx5_cq_init(pd, cq_attr, cq);
-       	if (rc) {
-       		free(cq);
-       		return rc;
-       	}
+	rc = mlx5_cq_init(pd, cq_attr, cq);
+	if (rc) {
+		free(cq);
+		return rc;
+	}
 	STAILQ_INIT(&cq->ring_db_qps);
-        *cq_out = cq;
+	*cq_out = cq;
 
-        return 0;
+	return 0;
 }
 
 int
@@ -618,44 +620,45 @@ spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
 		return -EBUSY;
 	}
 
-        mlx5_cq_deinit(cq);
-        free(cq);
+	mlx5_cq_deinit(cq);
+	free(cq);
 
 	return 0;
 }
 
 int
-spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out)
+spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr,
+		    struct spdk_mlx5_qp **qp_out)
 {
-        int rc;
-       	struct spdk_mlx5_qp *qp;
+	int rc;
+	struct spdk_mlx5_qp *qp;
 
-        qp = calloc(1, sizeof(*qp));
-        if (!qp) {
-       		return -ENOMEM;
-       	}
+	qp = calloc(1, sizeof(*qp));
+	if (!qp) {
+		return -ENOMEM;
+	}
 
-        rc = mlx5_qp_init(pd, qp_attr, cq->verbs_cq, qp);
-       	if (rc) {
-                free(qp);
-       		return rc;
-       	}
+	rc = mlx5_qp_init(pd, qp_attr, cq->verbs_cq, qp);
+	if (rc) {
+		free(qp);
+		return rc;
+	}
 	qp->cq = cq;
 	rc = mlx5_cq_add_qp(cq, qp);
 	if (rc) {
 		return rc;
 	}
-        *qp_out = qp;
+	*qp_out = qp;
 
-       	return 0;
+	return 0;
 }
 
 void
 spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 {
 	mlx5_cq_remove_qp(qp->cq, qp);
-        mlx5_qp_destroy(qp);
-        free(qp);
+	mlx5_qp_destroy(qp);
+	free(qp);
 }
 
 int

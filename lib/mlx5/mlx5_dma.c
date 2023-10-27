@@ -153,7 +153,7 @@ mlx5_cqe_err(struct mlx5_cqe64 *cqe)
 
 static inline void
 mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-	      uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
+		   uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
@@ -194,8 +194,9 @@ mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint3
 }
 
 static inline void
-mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-	      uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
+mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm,
+			  uint32_t klm_count,
+			  uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
@@ -247,7 +248,7 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm
 
 int
 spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-                        uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
+			uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
@@ -267,9 +268,11 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, 
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
-		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid, bb_count);
+		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
+				   bb_count);
 	} else {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid, bb_count);
+		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
+					  bb_count);
 	}
 
 	return 0;
@@ -277,7 +280,7 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, 
 
 int
 spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, uint32_t klm_count,
-                       uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
+		       uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
 	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
@@ -299,7 +302,8 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct mlx5_wqe_data_seg *klm, u
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
 	} else {
-		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
+		mlx5_dma_xfer_wrap_around(qp, klm, klm_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid,
+					  bb_count);
 	}
 
 	return 0;
@@ -319,7 +323,7 @@ mlx5_qp_tx_complete(struct spdk_mlx5_qp *qp)
 {
 	qp->tx_need_ring_db = false;
 	qp->ctrl->fm_ce_se |= ~qp->tx_revert_flags;
-	if (qp->tx_revert_flags != (uint16_t)-1) {
+	if (qp->tx_revert_flags != (uint16_t) -1) {
 		mlx5_qp_update_comp(qp);
 	}
 	mlx5_ring_tx_db(qp, qp->ctrl);
@@ -392,13 +396,15 @@ mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion
 	comp->status = MLX5_CQE_SYNDROME_SIGERR;
 	comp->mkey = be32toh(cqe->mkey);
 
-	SPDK_DEBUGLOG(mlx5, "got SIGERR CQE, syndrome 0x%x, mkey 0x%x, expected_sig 0x%x, actual_trans_sig 0x%x\n",
+	SPDK_DEBUGLOG(mlx5,
+		      "got SIGERR CQE, syndrome 0x%x, mkey 0x%x, expected_sig 0x%x, actual_trans_sig 0x%x\n",
 		      be16toh(cqe->syndrome), comp->mkey, be32toh(cqe->expected_trans_sig),
 		      be32toh(cqe->actual_trans_sig));
 }
 
 int
-spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_completion *comp, int max_completions)
+spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_completion *comp,
+			      int max_completions)
 {
 	struct spdk_mlx5_qp *qp, *tqp;
 	struct mlx5_cqe64 *cqe;

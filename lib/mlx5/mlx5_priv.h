@@ -184,7 +184,8 @@ void mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
 #endif
 
 static inline void
-mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb, uint16_t ctrlr_pi)
+mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb,
+		   uint16_t ctrlr_pi)
 {
 	mlx5_qp_dump_wqe(qp, n_wqe_bb);
 
