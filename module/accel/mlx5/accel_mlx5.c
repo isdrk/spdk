@@ -363,11 +363,27 @@ accel_mlx5_task_release_mkeys(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline void
-accel_mlx5_task_complete(struct accel_mlx5_task *task, int rc)
+accel_mlx5_task_complete(struct accel_mlx5_task *task)
 {
-	assert(task->num_reqs == task->num_completed_reqs || rc);
-	SPDK_DEBUGLOG(accel_mlx5, "Complete task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
+	SPDK_DEBUGLOG(accel_mlx5, "Complete task %p, opc %d\n", task, task->base.op_code);
 	int sigerr;
+
+	if (task->flags.bits.merged) {
+		task->flags.bits.merged = 0;
+		spdk_accel_task_complete(&task->base, 0);
+		return;
+	}
+
+	sigerr = accel_mlx5_task_check_sigerr(task);
+	accel_mlx5_task_release_mkeys(task);
+	spdk_accel_task_complete(&task->base, sigerr);
+}
+
+static inline void
+accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
+{
+	assert(rc);
+	SPDK_DEBUGLOG(accel_mlx5, "Fail task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
 
 	if (task->flags.bits.merged) {
 		task->flags.bits.merged = 0;
@@ -375,8 +391,6 @@ accel_mlx5_task_complete(struct accel_mlx5_task *task, int rc)
 		return;
 	}
 
-	sigerr = accel_mlx5_task_check_sigerr(task);
-	rc = rc ? rc : sigerr;
 	accel_mlx5_task_release_mkeys(task);
 	spdk_accel_task_complete(&task->base, rc);
 }
@@ -2580,7 +2594,7 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				qp->recovering = true;
 				assert(task->num_completed_reqs <= task->num_submitted_reqs);
 				if (task->num_completed_reqs == task->num_submitted_reqs) {
-					accel_mlx5_task_complete(task, -EIO);
+					accel_mlx5_task_fail(task, -EIO);
 				}
 				if (qp->wrs_submitted == 0) {
 					assert(STAILQ_EMPTY(&qp->in_hw));
@@ -2600,13 +2614,13 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 
 					*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
 				}
-				accel_mlx5_task_complete(task, 0);
+				accel_mlx5_task_complete(task);
 			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
 				assert(task->num_submitted_reqs < task->num_reqs);
 				rc = accel_mlx5_task_continue(task);
 				if (spdk_unlikely(rc)) {
 					if (rc != -ENOMEM) {
-						accel_mlx5_task_complete(task, rc);
+						accel_mlx5_task_fail(task, rc);
 					}
 				}
 			}
@@ -2674,7 +2688,7 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			qp->recovering = true;
 			assert(task->num_completed_reqs <= task->num_submitted_reqs);
 			if (task->num_completed_reqs == task->num_submitted_reqs) {
-				accel_mlx5_task_complete(task, -EIO);
+				accel_mlx5_task_fail(task, -EIO);
 			}
 			if (qp->wrs_submitted == 0) {
 				assert(STAILQ_EMPTY(&qp->in_hw));
@@ -2694,13 +2708,13 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 
 				*task_crc->crc_dst = *task->psv->crc ^ UINT32_MAX;
 			}
-			accel_mlx5_task_complete(task, 0);
+			accel_mlx5_task_complete(task);
 		} else if (task->num_completed_reqs == task->num_submitted_reqs) {
 			assert(task->num_submitted_reqs < task->num_reqs);
 			rc = accel_mlx5_task_continue(task);
 			if (spdk_unlikely(rc)) {
 				if (rc != -ENOMEM) {
-					accel_mlx5_task_complete(task, rc);
+					accel_mlx5_task_fail(task, rc);
 				}
 			}
 		}
@@ -2739,7 +2753,7 @@ accel_mlx5_complete_merged_tasks(struct accel_mlx5_dev *dev)
 
 	STAILQ_FOREACH_SAFE(task, &dev->merged, link, tmp) {
 		STAILQ_REMOVE_HEAD(&dev->merged, link);
-		accel_mlx5_task_complete(task, 0);
+		accel_mlx5_task_complete(task);
 	}
 }
 
@@ -2757,7 +2771,7 @@ accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 			if (rc == -ENOMEM) {
 				break;
 			} else {
-				accel_mlx5_task_complete(task, rc);
+				accel_mlx5_task_fail(task, rc);
 			}
 		}
 		/* If qpair is recovering, task is added back to the nomem list and 0 is returned. In that case we
