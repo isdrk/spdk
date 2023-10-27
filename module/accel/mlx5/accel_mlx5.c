@@ -219,6 +219,7 @@ struct accel_mlx5_dev {
 	/* Pending tasks waiting for requests resources */
 	STAILQ_HEAD(, accel_mlx5_task) nomem;
 	STAILQ_HEAD(, accel_mlx5_task) merged;
+	uint32_t wrs_in_cq;
 	bool crypto_multi_block;
 	struct accel_mlx5_stats stats;
 };
@@ -2553,7 +2554,10 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return 0;
 	}
 
-	return g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
+	rc = g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
+	dev->wrs_in_cq += mlx5_task->num_wrs;
+
+	return rc;
 }
 
 static inline void
@@ -2701,7 +2705,9 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 			assert(task->num_submitted_reqs > task->num_completed_reqs);
 			completed = task->num_submitted_reqs - task->num_completed_reqs;
 			assert(qp->wrs_submitted >= task->num_wrs);
+			assert(dev->wrs_in_cq >= task->num_wrs);
 			qp->wrs_submitted -= task->num_wrs;
+			dev->wrs_in_cq -= task->num_wrs;
 			task->num_completed_reqs += completed;
 			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
 				      task->num_reqs - task->num_completed_reqs);
@@ -2724,6 +2730,7 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 						accel_mlx5_task_fail(task, rc);
 					}
 				}
+				dev->wrs_in_cq += task->num_wrs;
 			}
 			if (task == signaled_task) {
 				break;
@@ -2766,7 +2773,9 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 		assert(task->num_submitted_reqs > task->num_completed_reqs);
 		completed = task->num_submitted_reqs - task->num_completed_reqs;
 		assert(qp->wrs_submitted >= task->num_wrs);
+		assert(dev->wrs_in_cq >= task->num_wrs);
 		qp->wrs_submitted -= task->num_wrs;
+		dev->wrs_in_cq -= task->num_wrs;
 		task->num_completed_reqs += completed;
 		SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
 			      task->num_reqs - task->num_completed_reqs);
@@ -2786,6 +2795,7 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 					accel_mlx5_task_fail(task, rc);
 				}
 			}
+			dev->wrs_in_cq += task->num_wrs;
 		}
 	}
 }
@@ -2843,6 +2853,7 @@ accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 				accel_mlx5_task_fail(task, rc);
 			}
 		}
+		dev->wrs_in_cq += task->num_wrs;
 		/* If qpair is recovering, task is added back to the nomem list and 0 is returned. In that case we
 		 * need a special condition to iterate the list once and stop this FOREACH loop */
 		if (task == last) {
@@ -2862,16 +2873,18 @@ accel_mlx5_poller(void *ctx)
 
 	for (i = 0; i < ch->num_devs; i++) {
 		dev = &ch->devs[i];
-		rc = accel_mlx5_poll_cq(dev);
-		if (!STAILQ_EMPTY(&dev->merged)) {
-			accel_mlx5_complete_merged_tasks(dev);
+		if (dev->wrs_in_cq) {
+			rc = accel_mlx5_poll_cq(dev);
+			if (!STAILQ_EMPTY(&dev->merged)) {
+				accel_mlx5_complete_merged_tasks(dev);
+			}
+			if (spdk_unlikely(rc < 0)) {
+				SPDK_ERRLOG("Error %"PRId64" on CQ, dev %s\n", rc,
+					    dev->pd_ref->context->device->name);
+				continue;
+			}
+			completions += rc;
 		}
-		if (spdk_unlikely(rc < 0)) {
-			SPDK_ERRLOG("Error %"PRId64" on CQ, dev %s\n", rc,
-				    dev->pd_ref->context->device->name);
-			continue;
-		}
-		completions += rc;
 		if (!STAILQ_EMPTY(&dev->nomem)) {
 			accel_mlx5_resubmit_nomem_tasks(dev);
 		}
