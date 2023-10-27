@@ -73,11 +73,13 @@ struct accel_mlx5_rpc_dump_stats_ctx {
 	struct spdk_json_write_ctx *w;
 };
 
-static void accel_mlx5_dump_stats_done(void* _ctx, int rc)
+static void
+accel_mlx5_dump_stats_done(void *_ctx, int rc)
 {
 	struct accel_mlx5_rpc_dump_stats_ctx *ctx = _ctx;
 	if (rc) {
-		spdk_jsonrpc_send_error_response(ctx->request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, "Failed to dump stats");
+		spdk_jsonrpc_send_error_response(ctx->request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "Failed to dump stats");
 	} else {
 		spdk_jsonrpc_end_result(ctx->request, ctx->w);
 	}
@@ -90,7 +92,7 @@ static const struct spdk_json_object_decoder rpc_accel_mlx5_dump_stats_decoder[]
 
 static void
 rpc_accel_mlx5_dump_stats(struct spdk_jsonrpc_request *request,
-			   const struct spdk_json_val *params)
+			  const struct spdk_json_val *params)
 {
 	struct accel_mlx5_rpc_dump_stats_ctx *ctx;
 	enum accel_mlx5_dump_state_level level = ACCEL_MLX5_DUMP_STAT_LEVEL_CHANNEL;
