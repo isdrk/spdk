@@ -2590,6 +2590,37 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 }
 
 static inline void
+accel_mlx5_process_error_cpl(struct spdk_mlx5_cq_completion *wc, struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+
+	if (wc->status != IBV_WC_WR_FLUSH_ERR) {
+		SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
+			     qp, task, wc->status, spdk_env_get_current_core());
+	} else {
+		SPDK_DEBUGLOG(accel_mlx5,
+			      "RDMA: qp %p, task %p, WC status %d, core %u\n",
+			      qp, task, wc->status, spdk_env_get_current_core());
+	}
+	/* Check if SIGERR CQE happened before the WQE error or flush.
+	 * It is needed to recover the affected MKey and PSV properly.
+	 */
+	if (task->base.op_code == ACCEL_OPC_CHECK_CRC32C) {
+		accel_mlx5_task_check_sigerr(task);
+	}
+
+	qp->recovering = true;
+	assert(task->num_completed_reqs <= task->num_submitted_reqs);
+	if (task->num_completed_reqs == task->num_submitted_reqs) {
+		accel_mlx5_task_fail(task, -EIO);
+	}
+	if (qp->wrs_submitted == 0) {
+		assert(STAILQ_EMPTY(&qp->in_hw));
+		accel_mlx5_recover_qp(qp);
+	}
+}
+
+static inline void
 accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc, int reaped)
 {
 	struct accel_mlx5_task *task, *signaled_task, *task_tmp;
@@ -2632,31 +2663,7 @@ accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_
 				 * then HW generates completions for every unsignaled WQE.
 				 * If cpl with error generated for task X+1 then we still can process
 				 * previous tasks as usual */
-				if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
-					SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-						     qp, task, wc[i].status, spdk_env_get_current_core());
-				} else {
-					SPDK_DEBUGLOG(accel_mlx5,
-						      "RDMA: qp %p, task %p, WC status %d, core %u\n",
-						      qp, task, wc[i].status, spdk_env_get_current_core());
-				}
-				/* Check if SIGERR CQE happened before the WQE error or flush.
-				 * It is needed to recover the affected MKey and PSV properly.
-				 */
-				if (task->base.op_code == ACCEL_OPC_CHECK_CRC32C) {
-					accel_mlx5_task_check_sigerr(task);
-				}
-
-				qp->recovering = true;
-				assert(task->num_completed_reqs <= task->num_submitted_reqs);
-				if (task->num_completed_reqs == task->num_submitted_reqs) {
-					accel_mlx5_task_fail(task, -EIO);
-				}
-				if (qp->wrs_submitted == 0) {
-					assert(STAILQ_EMPTY(&qp->in_hw));
-					accel_mlx5_recover_qp(qp);
-				}
-
+				accel_mlx5_process_error_cpl(&wc[i], task);
 				break;
 			}
 
@@ -2718,32 +2725,7 @@ accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completi
 			      task->num_reqs - task->num_completed_reqs);
 
 		if (spdk_unlikely(wc[i].status)) {
-			if (wc[i].status != IBV_WC_WR_FLUSH_ERR) {
-				SPDK_WARNLOG("RDMA: qp %p, task %p, WC status %d, core %u\n",
-					     qp, task, wc[i].status, spdk_env_get_current_core());
-			} else {
-				SPDK_DEBUGLOG(accel_mlx5, "RDMA: qp %p, task %p, WC status %d, core %u\n",
-					      qp, task, wc[i].status, spdk_env_get_current_core());
-			}
-
-			/*
-			 * Check if SIGERR CQE happened before the WQE error or flush.
-			 * It is needed to recover the affected MKey and PSV properly.
-			 */
-			if (task->base.op_code == ACCEL_OPC_CHECK_CRC32C) {
-				accel_mlx5_task_check_sigerr(task);
-			}
-
-			qp->recovering = true;
-			assert(task->num_completed_reqs <= task->num_submitted_reqs);
-			if (task->num_completed_reqs == task->num_submitted_reqs) {
-				accel_mlx5_task_fail(task, -EIO);
-			}
-			if (qp->wrs_submitted == 0) {
-				assert(STAILQ_EMPTY(&qp->in_hw));
-				accel_mlx5_recover_qp(qp);
-			}
-
+			accel_mlx5_process_error_cpl(&wc[i], task);
 			continue;
 		}
 
