@@ -2237,25 +2237,6 @@ accel_mlx5_task_merge_crc_and_decrypt(struct accel_mlx5_task *mlx5_task_crc)
 	mlx5_task_crc->enc_order = MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
 }
 
-static inline int
-accel_mlx5_task_process(struct accel_mlx5_task *mlx5_task)
-{
-	int rc;
-
-	if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
-		rc = accel_mlx5_crypto_task_process(mlx5_task);
-	} else if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C) {
-		rc = accel_mlx5_crypto_and_crc_task_process(mlx5_task);
-	} else if (mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C) {
-		rc = accel_mlx5_crc_task_process(mlx5_task);
-	} else {
-		assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_COPY);
-		rc = accel_mlx5_copy_task_process(mlx5_task);
-	}
-
-	return rc;
-}
-
 static inline void
 accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 {
@@ -2316,25 +2297,25 @@ accel_mlx5_task_op_not_supported(struct accel_mlx5_task *mlx5_task)
 static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 	[ACCEL_MLX5_OPC_COPY] = {
 		.init = accel_mlx5_copy_task_init,
-		.process = accel_mlx5_task_op_not_implemented,
+		.process = accel_mlx5_copy_task_process,
 		.cont = accel_mlx5_task_op_not_implemented,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRYPTO] = {
 		.init = accel_mlx5_crypto_task_init,
-		.process = accel_mlx5_task_op_not_implemented,
+		.process = accel_mlx5_crypto_task_process,
 		.cont = accel_mlx5_task_op_not_implemented,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRC32C] = {
 		.init = accel_mlx5_crc_task_init,
-		.process = accel_mlx5_task_op_not_implemented,
+		.process = accel_mlx5_crc_task_process,
 		.cont = accel_mlx5_task_op_not_implemented,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
 	[ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C] = {
 		.init = accel_mlx5_crypto_crc_task_init,
-		.process = accel_mlx5_task_op_not_implemented,
+		.process = accel_mlx5_crypto_and_crc_task_process,
 		.cont = accel_mlx5_task_op_not_implemented,
 		.complete = accel_mlx5_task_op_not_implemented
 	},
@@ -2413,7 +2394,7 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return 0;
 	}
 
-	return accel_mlx5_task_process(mlx5_task);
+	return g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
 }
 
 static inline void
