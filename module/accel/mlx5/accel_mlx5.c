@@ -47,8 +47,15 @@ struct accel_mlx5_task;
 
 RB_HEAD(accel_mlx5_qpairs_map, accel_mlx5_qp);
 
+enum accel_mlx5_opcode {
+	ACCEL_MLX5_OPC_COPY,
+	ACCEL_MLX5_OPC_CRYPTO,
+	ACCEL_MLX5_OPC_CRC32C,
+	ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C,
+	ACCEL_MLX5_OPC_LAST
+};
+
 struct accel_mlx5_stats {
-	uint64_t tasks;
 	uint64_t crypto_umrs;
 	uint64_t sig_umrs;
 	uint64_t sig_crypto_umrs;
@@ -57,6 +64,7 @@ struct accel_mlx5_stats {
 	uint64_t polls;
 	uint64_t idle_polls;
 	uint64_t completions;
+	uint64_t opcodes[ACCEL_MLX5_OPC_LAST];
 };
 
 struct accel_mlx5_dev_ctx {
@@ -121,14 +129,6 @@ struct accel_mlx5_psv_wrapper {
 	} bits;
 	uint32_t *crc;
 	uint32_t crc_lkey;
-};
-
-enum accel_mlx5_opcode {
-	ACCEL_MLX5_OPC_COPY,
-	ACCEL_MLX5_OPC_CRYPTO,
-	ACCEL_MLX5_OPC_CRC32C,
-	ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C,
-	ACCEL_MLX5_OPC_LAST
 };
 
 struct accel_mlx5_task {
@@ -293,7 +293,8 @@ accel_mlx5_iov_sgl_advance(struct accel_mlx5_iov_sgl *s, uint32_t step)
 static void
 accel_mlx5_add_stats(struct accel_mlx5_stats *stats, const struct accel_mlx5_stats *to_add)
 {
-	stats->tasks += to_add->tasks;
+	int i;
+
 	stats->crypto_umrs += to_add->crypto_umrs;
 	stats->sig_umrs += to_add->sig_umrs;
 	stats->sig_crypto_umrs += to_add->sig_crypto_umrs;
@@ -302,6 +303,9 @@ accel_mlx5_add_stats(struct accel_mlx5_stats *stats, const struct accel_mlx5_sta
 	stats->polls += to_add->polls;
 	stats->idle_polls += to_add->idle_polls;
 	stats->completions += to_add->completions;
+	for (i = 0; i < ACCEL_MLX5_OPC_LAST; i++) {
+		stats->opcodes[i] += to_add->opcodes[i];
+	}
 }
 
 static inline int
@@ -582,7 +586,6 @@ accel_mlx5_copy_task_process(struct accel_mlx5_task *mlx5_task)
 	uint16_t i;
 	int rc;
 
-	dev->stats.tasks++;
 	mlx5_task->num_wrs = 0;
 	assert(mlx5_task->num_reqs > 0);
 	assert(mlx5_task->num_ops > 0);
@@ -710,8 +713,6 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 	if (spdk_unlikely(!num_ops)) {
 		return -EINVAL;
 	}
-
-	dev->stats.tasks++;
 
 	if (ops_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task->s.iovcnt == 1) {
 		if (task->cached_lkey == NULL || *task->cached_lkey == 0 || !task->src_domain) {
@@ -981,8 +982,6 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	if (spdk_unlikely(!num_ops)) {
 		return -EINVAL;
 	}
-
-	dev->stats.tasks++;
 
 	if (ops_len <= mlx5_task->src.iov->iov_len - mlx5_task->src.iov_offset || task_crypto->s.iovcnt == 1) {
 		if (task_crypto->cached_lkey == NULL || *task_crypto->cached_lkey == 0 || !task_crypto->src_domain) {
@@ -1574,13 +1573,9 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_dev *dev;
 	int rc;
 
 	assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C);
-
-	dev = mlx5_task->qp->dev;
-	dev->stats.tasks++;
 
 	SPDK_DEBUGLOG(accel_mlx5, "begin, crc task, %p, reqs: total %u, submitted %u, completed %u\n",
 		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
@@ -2400,6 +2395,7 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
 	mlx5_task->write_wrid.wrid = ACCEL_MLX5_WRID_WRITE;
+	dev->stats.opcodes[mlx5_task->mlx5_opcode]++;
 
 	rc = g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].init(mlx5_task);
 	if (spdk_unlikely(rc)) {
@@ -3125,9 +3121,8 @@ accel_mlx5_deinit_cb(void *ctx)
 {
 	struct accel_mlx5_stats *stats = &g_accel_mlx5.stats;
 
-	SPDK_NOTICELOG("mlx5 stats: tasks: %lu; umrs: crypto %lu, sig %lu, crypto+sig %lu, total %lu;\n"
+	SPDK_NOTICELOG("mlx5 stats: umrs: crypto %lu, sig %lu, crypto+sig %lu, total %lu;\n"
 		       "rdma: writes %lu, reads %lu, total %lu, polls %lu, idle_polls %lu, completions %lu\n",
-		       stats->tasks,
 		       stats->crypto_umrs, stats->sig_umrs, stats->sig_crypto_umrs,
 		       stats->crypto_umrs + stats->sig_umrs + stats->sig_crypto_umrs,
 		       stats->rdma_writes, stats->rdma_reads, stats->rdma_writes + stats->rdma_reads,
@@ -3605,6 +3600,8 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header, co
 {
 	double idle_polls_percentage = 0;
 	double cpls_per_poll = 0;
+	uint64_t total_tasks = 0;
+	int i;
 
 	if (stats->polls) {
 		idle_polls_percentage = (double) stats->idle_polls * 100 / stats->polls;
@@ -3612,9 +3609,11 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header, co
 	if (stats->polls > stats->idle_polls) {
 		cpls_per_poll = (double) stats->completions / (stats->polls - stats->idle_polls);
 	}
+	for (i = 0; i < ACCEL_MLX5_OPC_LAST; i++) {
+		total_tasks += stats->opcodes[i];
+	}
 
 	spdk_json_write_named_object_begin(w, header);
-	spdk_json_write_named_uint64(w, "tasks", stats->tasks);
 
 	spdk_json_write_named_object_begin(w, "UMRs");
 	spdk_json_write_named_uint64(w, "crypto_umrs", stats->crypto_umrs);
@@ -3635,6 +3634,14 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header, co
 	spdk_json_write_named_uint64(w, "completions", stats->completions);
 	spdk_json_write_named_double(w, "idle_polls_percentage", idle_polls_percentage);
 	spdk_json_write_named_double(w, "cpls_per_poll", cpls_per_poll);
+	spdk_json_write_object_end(w);
+
+	spdk_json_write_named_object_begin(w, "tasks");
+	spdk_json_write_named_uint64(w, "copy", stats->opcodes[ACCEL_MLX5_OPC_COPY]);
+	spdk_json_write_named_uint64(w, "crypto", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO]);
+	spdk_json_write_named_uint64(w, "crc32c", stats->opcodes[ACCEL_MLX5_OPC_CRC32C]);
+	spdk_json_write_named_uint64(w, "crypto_crc", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_AND_CRC32C]);
+	spdk_json_write_named_uint64(w, "total", total_tasks);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);
