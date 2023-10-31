@@ -3180,7 +3180,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 	uint32_t reaped;
 	int rc;
 
-	if (qpair->poll_group == NULL) {
+	if (qpair->poll_group == NULL && tqpair->state != NVME_TCP_QPAIR_STATE_SOCK_CONNECTING) {
 		rc = spdk_sock_flush(tqpair->sock);
 		if (rc < 0) {
 			SPDK_ERRLOG("Failed to flush tqpair=%p (%d): %s\n", tqpair,
@@ -3293,6 +3293,98 @@ nvme_tcp_qpair_icreq_send(struct nvme_tcp_qpair *tqpair)
 	return 0;
 }
 
+static void
+nvme_tcp_qpair_connect_sock_done(void *arg, int err)
+{
+	int rc;
+	struct spdk_nvme_qpair *qpair = arg;
+	struct nvme_tcp_qpair *tqpair;
+	struct nvme_tcp_poll_group *tgroup = NULL;;
+	struct spdk_sock_caps sock_caps = {};
+	void *tcp_reqs;
+	struct spdk_rdma_utils_memory_translation mem_translation = {};
+	char *tcp_mem_domain = getenv("SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN");
+
+	tqpair = nvme_tcp_qpair(qpair);
+	assert(tqpair->state == NVME_TCP_QPAIR_STATE_SOCK_CONNECTING);
+
+	if (err) {
+		goto fail;
+	}
+
+	rc = spdk_sock_get_caps(tqpair->sock, &sock_caps);
+	if (rc) {
+		SPDK_NOTICELOG("Socket layer doesn't report capabilities. Full zero-copy write is disabled.\n");
+		goto send_icreq;
+	}
+
+	tqpair->pd = sock_caps.ibv_pd;
+	if (!tqpair->pd) {
+		SPDK_NOTICELOG("Full zero-copy write is disabled because pd is NULL.\n");
+		goto send_icreq;
+	}
+
+	if (tcp_mem_domain) {
+		SPDK_NOTICELOG("Using TCP memory domain\n");
+		tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
+									  SPDK_DMA_DEVICE_TYPE_RDMA_TCP);
+	} else {
+		SPDK_NOTICELOG("Using RDMA memory domain\n");
+		tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
+									  SPDK_DMA_DEVICE_TYPE_RDMA);
+	}
+
+	if (!tqpair->memory_domain) {
+		SPDK_ERRLOG("Failed to get memory domain\n");
+		goto fail;
+	}
+
+	if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
+		SPDK_NOTICELOG("TCP qpair %p %u, PD %p\n", tqpair, tqpair->qpair.id, tqpair->pd);
+
+		tqpair->mem_map = spdk_rdma_utils_create_mem_map(tqpair->pd, NULL,
+			IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+		if (!tqpair->mem_map) {
+			SPDK_ERRLOG("Failed to create memory map\n");
+			goto fail;
+		}
+
+		tgroup = qpair->poll_group ? nvme_tcp_poll_group(qpair->poll_group) : NULL;
+		tcp_reqs = (qpair->poll_group && tgroup->tcp_reqs) ?
+			   tgroup->tcp_reqs : tqpair->tcp_reqs;
+		rc = spdk_rdma_utils_get_translation(tqpair->mem_map, tcp_reqs,
+					       tqpair->num_entries * sizeof(struct nvme_tcp_req),
+					       &mem_translation);
+		if (rc) {
+			SPDK_ERRLOG("Failed to get mkey for PDUs\n");
+			goto fail;
+		}
+		tqpair->pdus_mkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
+	} else {
+		if (nvme_tcp_memory_domain_enabled() &&
+		    getenv("SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ") == NULL) {
+			qpair->ctrlr->flags |= SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED;
+		} else {
+			SPDK_NOTICELOG("Accel sequence support disabled\n");
+		}
+	}
+
+send_icreq:
+	tqpair->maxr2t = NVME_TCP_MAX_R2T_DEFAULT;
+	/* Explicitly set the state of tqpair */
+	tqpair->state = NVME_TCP_QPAIR_STATE_INVALID;
+	rc = nvme_tcp_qpair_icreq_send(tqpair);
+	if (rc != 0) {
+		SPDK_ERRLOG("Unable to connect the tqpair\n");
+		goto fail;
+	}
+
+	return;
+
+fail:
+	tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECT_FAIL;
+}
+
 static int
 nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
@@ -3364,6 +3456,8 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	spdk_sock_get_default_opts(&opts);
 	opts.priority = ctrlr->trid.priority;
 	opts.zcopy = !nvme_qpair_is_admin_queue(qpair);
+	opts.complete_cb = nvme_tcp_qpair_connect_sock_done;
+	opts.complete_cb_arg = qpair;
 	if (ctrlr->opts.transport_ack_timeout) {
 		opts.ack_timeout = 1ULL << ctrlr->opts.transport_ack_timeout;
 	}
@@ -3401,6 +3495,13 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	tqpair->flags.in_connect_poll = 1;
 
 	switch (tqpair->state) {
+	case NVME_TCP_QPAIR_STATE_SOCK_CONNECTING:
+		rc = -EAGAIN;
+		break;
+	case NVME_TCP_QPAIR_STATE_SOCK_CONNECT_FAIL:
+		SPDK_ERRLOG("Failed to connect socket for tqpair=%p\n", tqpair);
+		rc = -ENETDOWN;
+		break;
 	case NVME_TCP_QPAIR_STATE_INVALID:
 	case NVME_TCP_QPAIR_STATE_INITIALIZING:
 		if (spdk_get_ticks() > tqpair->icreq_timeout_tsc) {
@@ -3446,9 +3547,6 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 {
 	int rc = 0;
 	struct nvme_tcp_qpair *tqpair;
-	struct nvme_tcp_poll_group *tgroup = NULL;;
-	struct spdk_sock_caps sock_caps = {};
-	void *tcp_reqs;
 
 	tqpair = nvme_tcp_qpair(qpair);
 
@@ -3465,7 +3563,6 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 			SPDK_ERRLOG("Unable to activate the tcp qpair.\n");
 			return rc;
 		}
-		tgroup = nvme_tcp_poll_group(qpair->poll_group);
 	} else if (!tqpair->stats) {
 		tqpair->stats = calloc(1, sizeof(*tqpair->stats));
 		if (!tqpair->stats) {
@@ -3474,71 +3571,10 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 		}
 	}
 
-	rc = spdk_sock_get_caps(tqpair->sock, &sock_caps);
-	if (rc == 0) {
-		struct spdk_rdma_utils_memory_translation mem_translation = {};
-
-		tqpair->pd = sock_caps.ibv_pd;
-		if (tqpair->pd) {
-			char *tcp_mem_domain = getenv("SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN");
-			if (tcp_mem_domain) {
-				SPDK_NOTICELOG("Using TCP memory domain\n");
-				tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
-											  SPDK_DMA_DEVICE_TYPE_RDMA_TCP);
-			} else {
-				SPDK_NOTICELOG("Using RDMA memory domain\n");
-				tqpair->memory_domain = spdk_rdma_utils_get_memory_domain(tqpair->pd,
-											  SPDK_DMA_DEVICE_TYPE_RDMA);
-			}
-
-			if (!tqpair->memory_domain) {
-				SPDK_ERRLOG("Failed to get memory domain\n");
-				return -ENOTSUP;
-			}
-
-			if (!nvme_qpair_is_admin_queue(&tqpair->qpair)) {
-				SPDK_NOTICELOG("TCP qpair %p %u, PD %p\n", tqpair, tqpair->qpair.id, tqpair->pd);
-
-				tqpair->mem_map = spdk_rdma_utils_create_mem_map(tqpair->pd, NULL,
-					IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
-				if (!tqpair->mem_map) {
-					SPDK_ERRLOG("Failed to create memory map\n");
-					return -ENOTSUP;
-				}
-
-				tcp_reqs = (qpair->poll_group && tgroup->tcp_reqs) ?
-					   tgroup->tcp_reqs : tqpair->tcp_reqs;
-				rc = spdk_rdma_utils_get_translation(tqpair->mem_map, tcp_reqs,
-							       tqpair->num_entries * sizeof(struct nvme_tcp_req),
-							       &mem_translation);
-				if (rc) {
-					SPDK_ERRLOG("Failed to get mkey for PDUs\n");
-					return -ENOTSUP;
-				}
-				tqpair->pdus_mkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
-			} else {
-				if (nvme_tcp_memory_domain_enabled() &&
-				    getenv("SPDK_NVDA_TCP_DISABLE_ACCEL_SEQ") == NULL) {
-					ctrlr->flags |= SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED;
-				} else {
-					SPDK_NOTICELOG("Accel sequence support disabled\n");
-				}
-			}
-		}
-	} else {
-		SPDK_NOTICELOG("Socket layer doesn't report capabilities. Full zero-copy write is disabled.\n");
-	}
-
-	tqpair->maxr2t = NVME_TCP_MAX_R2T_DEFAULT;
 	/* Explicitly set the state and recv_state of tqpair */
-	tqpair->state = NVME_TCP_QPAIR_STATE_INVALID;
+	tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECTING;
 	if (tqpair->recv_state != NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY) {
 		nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
-	}
-	rc = nvme_tcp_qpair_icreq_send(tqpair);
-	if (rc != 0) {
-		SPDK_ERRLOG("Unable to connect the tqpair\n");
-		return rc;
 	}
 
 	return rc;
