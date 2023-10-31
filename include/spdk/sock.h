@@ -208,6 +208,14 @@ struct spdk_sock_caps {
 };
 
 /**
+ * Callback function for socket asynchronously connect.
+ *
+ * \param arg Argument for the callback function.
+ * \param err Connection status.
+ */
+typedef void (*async_connect_complete_cb)(void *arg, int err);
+
+/**
  * Spdk socket initialization options.
  *
  * A pointer to this structure will be used by spdk_sock_listen_ext() or spdk_sock_connect_ext() to
@@ -253,8 +261,18 @@ struct spdk_sock_opts {
 	 * Size of the impl_opts structure.
 	 */
 	size_t impl_opts_size;
+
+	/**
+	 * Callback function to notify connection status.
+	 */
+	async_connect_complete_cb complete_cb;
+
+	/**
+	 * Argument of async_connect_complete_cb for notifying connection status.
+	 */
+	void *complete_cb_arg;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 40, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 56, "Incorrect size");
 
 /**
  * Initialize the default value of opts.
