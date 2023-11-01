@@ -14,13 +14,7 @@ DPDK_OPTS += -Dtests=false
 DPDK_CFLAGS =
 
 ifeq ($(shell uname -m),aarch64)
-ifeq ($(shell uname -p),unknown)
-# Unknown ARM platform. ARM doesn't do platform=native which is DPDK's default. So change it.
-DPDK_OPTS += -Dplatform=generic
-endif
-ifneq (,$(findstring BlueField,$(shell cat /sys/devices/virtual/dmi/id/product_name)))
 DPDK_OPTS += --cross-file=config/arm/arm64_bluefield_linux_native_gcc
-endif
 endif
 
 DPDK_KMODS = false
