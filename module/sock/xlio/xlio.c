@@ -108,6 +108,8 @@ struct spdk_xlio_sock {
 	uint64_t		batch_start_tsc;
 	int			batch_nr;
 	struct spdk_xlio_ring_fd	*ring_fd;
+	async_connect_complete_cb	complete_cb;
+	void				*complete_cb_arg;
 
 	TAILQ_ENTRY(spdk_xlio_sock)	link;
 	TAILQ_ENTRY(spdk_xlio_sock)	link_send;
@@ -748,6 +750,21 @@ end:
 	return is_loopback;
 }
 
+static int
+xlio_sock_set_nonblock(int fd)
+{
+	int flag;
+
+	flag = g_xlio_ops.fcntl(fd, F_GETFL);
+	if (g_xlio_ops.fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
+		SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n",
+			    fd, errno);
+		return -1;
+	}
+
+	return 0;
+}
+
 static struct spdk_sock *
 xlio_sock_create(const char *ip, int port,
 		enum xlio_sock_create_type type,
@@ -758,7 +775,7 @@ xlio_sock_create(const char *ip, int port,
 	char portnum[PORTNUMLEN];
 	char *p;
 	struct addrinfo hints, *res, *res0;
-	int fd, flag;
+	int fd;
 	int val = 1;
 	int rc, sz;
 	bool enable_zcopy_user_opts = true;
@@ -909,21 +926,27 @@ retry:
 				break;
 			}
 
-			rc = g_xlio_ops.connect(fd, res->ai_addr, res->ai_addrlen);
-			if (rc != 0) {
-				SPDK_ERRLOG("connect() failed, errno = %d\n", errno);
-				/* try next family */
+			if (opts->complete_cb && xlio_sock_set_nonblock(fd)) {
 				g_xlio_ops.close(fd);
 				fd = -1;
-				continue;
+				break;
+			}
+
+			rc = g_xlio_ops.connect(fd, res->ai_addr, res->ai_addrlen);
+			if (rc != 0) {
+				if (rc != EAGAIN && rc != EWOULDBLOCK && errno != EINPROGRESS) {
+					SPDK_ERRLOG("connect() failed, rc %d, errno = %d\n", rc, errno);
+					/* try next family */
+					g_xlio_ops.close(fd);
+					fd = -1;
+					continue;
+				}
 			}
 
 			enable_zcopy_impl_opts = g_spdk_xlio_sock_impl_opts.enable_zerocopy_send_client;
 		}
 
-		flag = g_xlio_ops.fcntl(fd, F_GETFL);
-		if (g_xlio_ops.fcntl(fd, F_SETFL, flag | O_NONBLOCK) < 0) {
-			SPDK_ERRLOG("fcntl can't set nonblocking mode for socket, fd: %d (%d)\n", fd, errno);
+		if (!opts->complete_cb && xlio_sock_set_nonblock(fd)) {
 			g_xlio_ops.close(fd);
 			fd = -1;
 			break;
@@ -948,6 +971,10 @@ retry:
 
 	if (opts != NULL) {
 		sock->so_priority = opts->priority;
+		if (opts->complete_cb) {
+			sock->complete_cb = opts->complete_cb;
+			sock->complete_cb_arg = opts->complete_cb_arg;
+		}
 	}
 
 	SPDK_NOTICELOG("Created xlio sock %d: send zcopy %d, recv zcopy %d, pd %p, context %p, dev %s, handle %u\n",
@@ -1963,6 +1990,15 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 			SPDK_ERRLOG("Got EPOLLHUP event on socket %d, events %" PRIx64 "\n",
 				    vsock->fd, comp->events);
 			vsock->flags.disconnected = true;
+			if (vsock->complete_cb) {
+				vsock->complete_cb(vsock->complete_cb_arg, ETIMEDOUT);
+				vsock->complete_cb = NULL;
+			}
+		}
+
+		if (comp->events & EPOLLOUT && vsock->complete_cb) {
+			vsock->complete_cb(vsock->complete_cb_arg, 0);
+			vsock->complete_cb = NULL;
 		}
 
 #ifdef SPDK_ZEROCOPY
