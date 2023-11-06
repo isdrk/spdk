@@ -1695,53 +1695,47 @@ accel_mlx5_task_continue(struct accel_mlx5_task *task)
 }
 
 static inline uint32_t
-accel_mlx5_get_copy_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct iovec *dst_iov, uint32_t dst_iovcnt)
+accel_mlx5_get_copy_task_count(struct iovec *src_iov, uint32_t src_iovcnt,
+			       struct iovec *dst_iov, uint32_t dst_iovcnt)
 {
-	uint64_t src_len = 0;
-	uint32_t src_counter = 0;
-	uint32_t i, j;
+	uint32_t src = 0;
+	uint32_t dst = 0;
+	uint64_t src_offset = 0;
+	uint64_t dst_offset = 0;
 	uint32_t num_ops = 0;
-	uint32_t split_by_src_iov_counter = 0;
+	uint32_t src_sge_count = 0;
 
-	for (i = 0; i < dst_iovcnt; i++) {
-		for (;src_counter < src_iovcnt; src_counter++) {
-			split_by_src_iov_counter++;
-			if (split_by_src_iov_counter > ACCEL_MLX5_MAX_SGE) {
+	while (src < src_iovcnt && dst < dst_iovcnt) {
+		uint64_t src_len = src_iov[src].iov_len - src_offset;
+		uint64_t dst_len = dst_iov[dst].iov_len - dst_offset;
+
+		if (dst_len < src_len) {
+			num_ops++;
+			dst_offset = 0;
+			dst++;
+			src_offset += dst_len;
+			src_sge_count = 0;
+		} else if (src_len < dst_len) {
+			src_offset = 0;
+			dst_offset += src_len;
+			src++;
+			if (++src_sge_count >= ACCEL_MLX5_MAX_SGE) {
 				num_ops++;
-				split_by_src_iov_counter = 0;
+				src_sge_count = 0;
 			}
-
-			src_len += src_iov[src_counter].iov_len;
-			if (src_len >= dst_iov[i].iov_len) {
-				/* We accumulated src iovs bigger than dst iovs */
-				if (src_len > dst_iov[i].iov_len) {
-					/* src iov might be bigger than several dst iovs, find how many dst iovs
-					 * we should rewind starting from the current dst iov counter */
-					src_len -= dst_iov[i].iov_len;
-					/* check how many dst iovs in 1 src iov */
-					for (j = i + 1; j < dst_iovcnt; j++) {
-						if (dst_iov[j].iov_len > src_len) {
-							break;
-						}
-						src_len -= dst_iov[j].iov_len;
-						/* for each rewound dst iov element, increase the number of ops */
-						num_ops++;
-						i++;
-					}
-					/* Since src_len is bigger than last dst iov, remaining part of src iov will
-					 * become first sge element in next op */
-					split_by_src_iov_counter = 1;
-				} else {
-					src_len = 0;
-				    	split_by_src_iov_counter = 0;
-				}
-				src_counter++;
-				break;
-			}
+		} else {
+			num_ops++;
+			src_offset = dst_offset = 0;
+			src++;
+			dst++;
+			src_sge_count = 0;
 		}
-		num_ops++;
 	}
 
+	assert(src == src_iovcnt);
+	assert(dst == dst_iovcnt);
+	assert(src_offset == 0);
+	assert(dst_offset == 0);
 	return num_ops;
 }
 

@@ -7,7 +7,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y = accel.c
+DIRS-y = accel.c accel_mlx5.c
 DIRS-$(CONFIG_CRYPTO) += dpdk_cryptodev.c
 DIRS-$(CONFIG_DPDK_COMPRESSDEV) += dpdk_compressdev.c
 
