@@ -228,9 +228,6 @@ mlx5_qp_get_port_pkey_idx(struct spdk_mlx5_qp *qp, struct mlx5_qp_conn_caps *con
 static int
 mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 {
-	uint8_t in[DEVX_ST_SZ_BYTES(query_nic_vport_context_in)] = {0};
-	uint8_t out[DEVX_ST_SZ_BYTES(query_nic_vport_context_out)] = {0};
-	uint8_t devx_v;
 	struct ibv_port_attr port_attr = {};
 	int rc;
 
@@ -257,21 +254,6 @@ mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 	}
 
 	if (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
-		return -1;
-	}
-
-	/* port may be ethernet but still have roce disabled */
-	DEVX_SET(query_nic_vport_context_in, in, opcode,
-		 MLX5_CMD_OP_QUERY_NIC_VPORT_CONTEXT);
-	rc = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out,
-				     sizeof(out));
-	if (rc) {
-		SPDK_ERRLOG("Failed to get VPORT context - assuming ROCE is disabled\n");
-		return rc;
-	}
-	devx_v = DEVX_GET(query_nic_vport_context_out, out, nic_vport_context.roce_en);
-	if (!devx_v) {
-		SPDK_ERRLOG("Eth port %d, RoCE disabled\n", conn_caps->port);
 		return -1;
 	}
 

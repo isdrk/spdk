@@ -255,7 +255,11 @@ spdk_mlx5_crypto_devs_get(int *dev_num)
 {
 	struct ibv_context **rdma_devs, **rdma_devs_out = NULL, *dev;
 	struct ibv_device_attr dev_attr;
+	struct ibv_port_attr port_attr;
 	struct spdk_mlx5_crypto_caps crypto_caps;
+	uint8_t in[DEVX_ST_SZ_BYTES(query_nic_vport_context_in)];
+	uint8_t out[DEVX_ST_SZ_BYTES(query_nic_vport_context_out)];
+	uint8_t devx_v;
 	int num_rdma_devs = 0, i, rc;
 	int num_crypto_devs = 0;
 
@@ -286,6 +290,31 @@ spdk_mlx5_crypto_devs_get(int *dev_num)
 
 		if (!mlx5_crypto_dev_allowed(dev->device->name)) {
 			continue;
+		}
+
+		rc = ibv_query_port(dev, 1, &port_attr);
+		if (rc) {
+			SPDK_ERRLOG("Failed to query port attributes for device %s, rc %d\n", dev->device->name, rc);
+			continue;
+		}
+
+		if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+			/* port may be ethernet but still have roce disabled */
+			memset(in, 0, sizeof(in));
+			memset(out, 0, sizeof(out));
+			DEVX_SET(query_nic_vport_context_in, in, opcode, MLX5_CMD_OP_QUERY_NIC_VPORT_CONTEXT);
+			rc = mlx5dv_devx_general_cmd(dev, in, sizeof(in), out, sizeof(out));
+			if (rc) {
+				SPDK_ERRLOG("Failed to get VPORT context for device %s. Assuming ROCE is disabled\n",
+					    dev->device->name);
+				continue;
+			}
+
+			devx_v = DEVX_GET(query_nic_vport_context_out, out, nic_vport_context.roce_en);
+			if (!devx_v) {
+				SPDK_ERRLOG("Device %s, RoCE disabled\n", dev->device->name);
+				continue;
+			}
 		}
 
 		memset(&crypto_caps, 0, sizeof(crypto_caps));
