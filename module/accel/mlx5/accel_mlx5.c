@@ -3458,6 +3458,12 @@ accel_mlx5_init_mem_op(void)
 		goto cleanup;
 	}
 
+	dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
+			IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+	if (!dev_ctx->map) {
+		goto cleanup;
+	}
+
 	g_accel_mlx5.num_devs = 1;
 
 	SPDK_NOTICELOG("Accel framework mlx5 initialized\n");
