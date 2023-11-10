@@ -2531,12 +2531,10 @@ nvme_tcp_h2c_iobuf_get_cb(struct spdk_iobuf_entry *entry, void *buf)
 	tcp_req->iobuf_iov.iov_base = buf;
 
 	rc = nvme_tcp_apply_accel_sequence_h2c(tcp_req);
-	if (spdk_unlikely(rc != -EINPROGRESS)) {
+	if (spdk_unlikely(rc)) {
 		struct spdk_nvme_cpl cpl;
 
 		SPDK_ERRLOG("failed to apply sequence, rc %d\n", rc);
-		assert(rc != 0);
-
 		cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 		cpl.status.sct = SPDK_NVME_SCT_GENERIC;
 		cpl.status.dnr = 1;
