@@ -51,6 +51,13 @@ DEFINE_STUB(spdk_mlx5_destroy_indirect_mkey, int, (struct spdk_mlx5_indirect_mke
 //DEFINE_STUB(accel_mlx5_psvs_create, int, (struct accel_mlx5_dev_ctx *dev_ctx), 0);
 DEFINE_STUB(spdk_mlx5_create_psv, struct spdk_mlx5_psv *, (struct ibv_pd *pd), NULL);
 DEFINE_STUB(spdk_mlx5_destroy_psv, int, (struct spdk_mlx5_psv *psv), 0);
+DEFINE_STUB(spdk_mlx5_mkey_pools_init, int, (struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd **pds, uint32_t num_pds), 0);
+DEFINE_STUB(spdk_mlx5_mkey_pools_destroy, int, (struct ibv_pd **pds, uint32_t num_pds, uint32_t flags), 0);
+DEFINE_STUB(spdk_mlx5_mkey_pool_get_channel, void *, (struct ibv_pd *pd, uint32_t flags), NULL);
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_channel, (void *ch));
+DEFINE_STUB(spdk_mlx5_mkey_pool_get_bulk, int, (void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count), 0);
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_bulk, (void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count));
+DEFINE_STUB(spdk_mlx5_mkey_pool_find_mkey_by_id, struct spdk_mlx5_mkey_pool_obj *, (void *ch, uint32_t mkey_id), NULL);
 DEFINE_STUB(spdk_mempool_create_ctor, struct spdk_mempool *, (const char *name, size_t count, size_t ele_size, size_t cache_size, int socket_id, spdk_mempool_obj_cb_t *obj_init, void *obj_init_arg), NULL);
 DEFINE_STUB(spdk_mempool_obj_iter, uint32_t, (struct spdk_mempool *mp, spdk_mempool_obj_cb_t obj_cb, void *obj_cb_arg), 0);
 DEFINE_STUB_V(spdk_accel_module_list_add, (struct spdk_accel_module_if *accel_module));
