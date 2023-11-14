@@ -3194,7 +3194,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 				}
 				return 0;
 			}
-			return rc;
+			goto fail;
 		}
 	}
 
