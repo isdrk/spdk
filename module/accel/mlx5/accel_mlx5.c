@@ -328,20 +328,8 @@ accel_mlx5_task_check_sigerr(struct accel_mlx5_task *task)
 		}
 	}
 
-	if (spdk_likely(!rc)) {
-		return 0;
-	}
-
-	task->psv->bits.error = 1;
-
-	if (task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C) {
-		struct spdk_accel_task *task_next = TAILQ_NEXT(&task->base, seq_link);
-		struct accel_mlx5_task *mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
-
-		/* The accel will not submit the next task because the current one is failed.
-		 * That's why the merged flag is reset here.
-		 */
-		mlx5_task_next->flags.bits.merged = 0;
+	if (spdk_unlikely(rc)) {
+		task->psv->bits.error = 1;
 	}
 
 	return rc;
@@ -404,6 +392,16 @@ accel_mlx5_crc_decrypt_task_complete(struct accel_mlx5_task *mlx5_task)
 
 	assert(mlx5_task->base.op_code == ACCEL_OPC_CHECK_CRC32C);
 	sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
+	if (spdk_unlikely(sigerr)) {
+		struct spdk_accel_task *task_next = TAILQ_NEXT(&mlx5_task->base, seq_link);
+		struct accel_mlx5_task *mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
+
+		/* The accel will not submit the next task because the current one is failed.
+		 * That's why the merged flag is reset here.
+		 */
+		mlx5_task_next->flags.bits.merged = 0;
+	}
+
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
@@ -437,6 +435,17 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 		task->flags.bits.merged = 0;
 		spdk_accel_task_complete(&task->base, rc);
 		return;
+	}
+
+	if (task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
+	    task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
+		struct spdk_accel_task *task_next = TAILQ_NEXT(&task->base, seq_link);
+		struct accel_mlx5_task *mlx5_task_next = SPDK_CONTAINEROF(task_next, struct accel_mlx5_task, base);
+
+		/* The accel will not submit the next task because the current one is failed.
+		 * That's why the merged flag is reset here.
+		 */
+		mlx5_task_next->flags.bits.merged = 0;
 	}
 
 	if (task->num_ops) {
