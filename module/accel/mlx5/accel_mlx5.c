@@ -1063,7 +1063,7 @@ accel_mlx5_crypto_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	bool gen_signature = false;
 	bool encrypt;
 	enum spdk_mlx5_umr_sig_domain sig_domain;
-	int rc;
+	int rc = 0;
 
 	if (mlx5_task->base.op_code == ACCEL_OPC_ENCRYPT) {
 		mlx5_task_crypto = mlx5_task;
