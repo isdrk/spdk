@@ -2907,18 +2907,23 @@ accel_mlx5_poller(void *ctx)
 
 	for (i = 0; i < ch->num_devs; i++) {
 		dev = &ch->devs[i];
+		rc = 0;
+
 		if (dev->wrs_in_cq) {
 			rc = accel_mlx5_poll_cq(dev);
-			if (!STAILQ_EMPTY(&dev->merged)) {
-				accel_mlx5_complete_merged_tasks(dev);
-			}
-			if (spdk_unlikely(rc < 0)) {
-				SPDK_ERRLOG("Error %"PRId64" on CQ, dev %s\n", rc,
-					    dev->pd_ref->context->device->name);
-				continue;
-			}
-			completions += rc;
 		}
+
+		if (!STAILQ_EMPTY(&dev->merged)) {
+			accel_mlx5_complete_merged_tasks(dev);
+		}
+
+		if (spdk_unlikely(rc < 0)) {
+			SPDK_ERRLOG("Error %"PRId64" on CQ, dev %s\n", rc,
+				    dev->pd_ref->context->device->name);
+			continue;
+		}
+		completions += rc;
+
 		if (!STAILQ_EMPTY(&dev->nomem)) {
 			accel_mlx5_resubmit_nomem_tasks(dev);
 		}
