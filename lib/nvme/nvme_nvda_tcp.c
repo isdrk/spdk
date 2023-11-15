@@ -549,12 +549,12 @@ _pdu_write_done(void *cb_arg, int err)
 	 * that happen. Add it to a list of qpairs to poll regardless of network activity
 	 * here.
 	 * Besides, when tqpair state is NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL or
-	 * NVME_TCP_QPAIR_STATE_INITIALIZING, need to add it to needs_poll list too to make
+	 * NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED, need to add it to needs_poll list too to make
 	 * forward progress in case that the resources are released after icreq's or CONNECT's
 	 * resp is processed. */
 	if (tqpair->qpair.poll_group && !tqpair->needs_poll && (!STAILQ_EMPTY(&tqpair->qpair.queued_req) ||
 			tqpair->state == NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL ||
-			tqpair->state == NVME_TCP_QPAIR_STATE_INITIALIZING)) {
+			tqpair->state == NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED)) {
 		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 
 		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link);
@@ -1705,7 +1705,7 @@ nvme_tcp_pdu_ch_handle(struct nvme_tcp_qpair *tqpair)
 
 	SPDK_DEBUGLOG(nvme, "pdu type = %d\n", pdu->hdr.common.pdu_type);
 	if (spdk_unlikely(pdu->hdr.common.pdu_type == SPDK_NVME_TCP_PDU_TYPE_IC_RESP)) {
-		if (tqpair->state != NVME_TCP_QPAIR_STATE_INVALID) {
+		if (tqpair->state >= NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED) {
 			SPDK_ERRLOG("Already received IC_RESP PDU, and we should reject this pdu=%p\n", pdu);
 			fes = SPDK_NVME_TCP_TERM_REQ_FES_PDU_SEQUENCE_ERROR;
 			goto err;
@@ -2140,7 +2140,7 @@ nvme_tcp_send_icreq_complete(void *cb_arg)
 
 	tqpair->flags.icreq_send_ack = true;
 
-	if (tqpair->state == NVME_TCP_QPAIR_STATE_INITIALIZING) {
+	if (tqpair->state == NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED) {
 		SPDK_DEBUGLOG(nvme, "tqpair %p %u, finalize icresp\n", tqpair, tqpair->qpair.id);
 		tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND;
 	}
@@ -2208,7 +2208,7 @@ nvme_tcp_icresp_handle(struct nvme_tcp_qpair *tqpair,
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
 
 	if (!tqpair->flags.icreq_send_ack) {
-		tqpair->state = NVME_TCP_QPAIR_STATE_INITIALIZING;
+		tqpair->state = NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED;
 		SPDK_DEBUGLOG(nvme, "tqpair %p %u, waiting icreq ack\n", tqpair, tqpair->qpair.id);
 		return;
 	}
@@ -3180,7 +3180,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 	uint32_t reaped;
 	int rc;
 
-	if (qpair->poll_group == NULL && tqpair->state != NVME_TCP_QPAIR_STATE_SOCK_CONNECTING) {
+	if (qpair->poll_group == NULL && tqpair->state >= NVME_TCP_QPAIR_STATE_SOCK_CONNECTED) {
 		rc = spdk_sock_flush(tqpair->sock);
 		if (rc < 0) {
 			SPDK_ERRLOG("Failed to flush tqpair=%p (%d): %s\n", tqpair,
@@ -3299,14 +3299,14 @@ nvme_tcp_qpair_connect_sock_done(void *arg, int err)
 	int rc;
 	struct spdk_nvme_qpair *qpair = arg;
 	struct nvme_tcp_qpair *tqpair;
-	struct nvme_tcp_poll_group *tgroup = NULL;;
+	struct nvme_tcp_poll_group *tgroup = NULL;
 	struct spdk_sock_caps sock_caps = {};
 	void *tcp_reqs;
 	struct spdk_rdma_utils_memory_translation mem_translation = {};
 	char *tcp_mem_domain = getenv("SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN");
 
 	tqpair = nvme_tcp_qpair(qpair);
-	assert(tqpair->state == NVME_TCP_QPAIR_STATE_SOCK_CONNECTING);
+	assert(tqpair->state == NVME_TCP_QPAIR_STATE_CONNECTING || tqpair->state == NVME_TCP_QPAIR_STATE_INVALID);
 
 	if (err) {
 		goto fail;
@@ -3315,13 +3315,13 @@ nvme_tcp_qpair_connect_sock_done(void *arg, int err)
 	rc = spdk_sock_get_caps(tqpair->sock, &sock_caps);
 	if (rc) {
 		SPDK_NOTICELOG("Socket layer doesn't report capabilities. Full zero-copy write is disabled.\n");
-		goto send_icreq;
+		goto done;
 	}
 
 	tqpair->pd = sock_caps.ibv_pd;
 	if (!tqpair->pd) {
 		SPDK_NOTICELOG("Full zero-copy write is disabled because pd is NULL.\n");
-		goto send_icreq;
+		goto done;
 	}
 
 	if (tcp_mem_domain) {
@@ -3369,14 +3369,17 @@ nvme_tcp_qpair_connect_sock_done(void *arg, int err)
 		}
 	}
 
-send_icreq:
-	tqpair->maxr2t = NVME_TCP_MAX_R2T_DEFAULT;
-	/* Explicitly set the state of tqpair */
-	tqpair->state = NVME_TCP_QPAIR_STATE_INVALID;
-	rc = nvme_tcp_qpair_icreq_send(tqpair);
-	if (rc != 0) {
-		SPDK_ERRLOG("Unable to connect the tqpair\n");
-		goto fail;
+done:
+	/* We can send icreq only when user asked to connect qpair. If it didn't happen yet, just wait. */
+	if (tqpair->state == NVME_TCP_QPAIR_STATE_CONNECTING) {
+		tqpair->state = NVME_TCP_QPAIR_STATE_ICREQ_SEND;
+		if (tqpair->qpair.poll_group && !tqpair->needs_poll) {
+			tgroup = nvme_tcp_poll_group(qpair->poll_group);
+			TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
+			tqpair->needs_poll = true;
+		}
+	} else {
+		tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECTED;
 	}
 
 	return;
@@ -3495,15 +3498,27 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	tqpair->flags.in_connect_poll = 1;
 
 	switch (tqpair->state) {
-	case NVME_TCP_QPAIR_STATE_SOCK_CONNECTING:
+	case NVME_TCP_QPAIR_STATE_INVALID:
+	case NVME_TCP_QPAIR_STATE_CONNECTING:
+	case NVME_TCP_QPAIR_STATE_SOCK_CONNECTED:
 		rc = -EAGAIN;
 		break;
 	case NVME_TCP_QPAIR_STATE_SOCK_CONNECT_FAIL:
 		SPDK_ERRLOG("Failed to connect socket for tqpair=%p\n", tqpair);
 		rc = -ENETDOWN;
 		break;
-	case NVME_TCP_QPAIR_STATE_INVALID:
-	case NVME_TCP_QPAIR_STATE_INITIALIZING:
+	case NVME_TCP_QPAIR_STATE_ICREQ_SEND:
+		tqpair->maxr2t = NVME_TCP_MAX_R2T_DEFAULT;
+		rc = nvme_tcp_qpair_icreq_send(tqpair);
+		if (rc != 0) {
+			SPDK_ERRLOG("Unable to send ic_req, rc %d\n", rc);
+			break;
+		}
+		tqpair->state = NVME_TCP_QPAIR_STATE_ICRESP_WAIT;
+		rc = -EAGAIN;
+		break;
+	case NVME_TCP_QPAIR_STATE_ICRESP_WAIT:
+	case NVME_TCP_QPAIR_STATE_ICRESP_RECEIVED:
 		if (spdk_get_ticks() > tqpair->icreq_timeout_tsc) {
 			SPDK_ERRLOG("Failed to construct the tqpair=%p via correct icresp\n", tqpair);
 			rc = -ETIMEDOUT;
@@ -3571,10 +3586,21 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 		}
 	}
 
-	/* Explicitly set the state and recv_state of tqpair */
-	tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECTING;
+	/* Explicitly set the recv_state of tqpair */
 	if (tqpair->recv_state != NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY) {
 		nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_READY);
+	}
+
+	/* We can send icreq only when socket is connected. If it didn't happen yet, just wait. */
+	if (tqpair->state == NVME_TCP_QPAIR_STATE_SOCK_CONNECTED) {
+		tqpair->state = NVME_TCP_QPAIR_STATE_ICREQ_SEND;
+		if (tqpair->qpair.poll_group && !tqpair->needs_poll) {
+			struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(qpair->poll_group);
+			TAILQ_INSERT_TAIL(&tgroup->needs_poll, tqpair, link);
+			tqpair->needs_poll = true;
+		}
+	} else {
+		tqpair->state = NVME_TCP_QPAIR_STATE_CONNECTING;
 	}
 
 	return rc;
