@@ -253,6 +253,14 @@ spdk_sock_get_default_opts(struct spdk_sock_opts *opts)
 	if (SPDK_SOCK_OPTS_FIELD_OK(opts, impl_opts_size)) {
 		opts->impl_opts_size = 0;
 	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, complete_cb)) {
+		opts->complete_cb = NULL;
+	}
+
+	if (SPDK_SOCK_OPTS_FIELD_OK(opts, complete_cb_arg)) {
+		opts->complete_cb_arg = NULL;
+	}
 }
 
 /*
