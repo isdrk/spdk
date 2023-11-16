@@ -108,7 +108,7 @@ struct spdk_xlio_sock {
 	uint64_t		batch_start_tsc;
 	int			batch_nr;
 	struct spdk_xlio_ring_fd	*ring_fd;
-	async_connect_complete_cb	complete_cb;
+	spdk_sock_async_connect_complete_cb	complete_cb;
 	void				*complete_cb_arg;
 
 	TAILQ_ENTRY(spdk_xlio_sock)	link;

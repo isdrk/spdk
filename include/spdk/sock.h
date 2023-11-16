@@ -213,7 +213,7 @@ struct spdk_sock_caps {
  * \param arg Argument for the callback function.
  * \param err Connection status.
  */
-typedef void (*async_connect_complete_cb)(void *arg, int err);
+typedef void (*spdk_sock_async_connect_complete_cb)(void *arg, int err);
 
 /**
  * Spdk socket initialization options.
@@ -265,7 +265,7 @@ struct spdk_sock_opts {
 	/**
 	 * Callback function to notify connection status.
 	 */
-	async_connect_complete_cb complete_cb;
+	spdk_sock_async_connect_complete_cb complete_cb;
 
 	/**
 	 * Argument of async_connect_complete_cb for notifying connection status.
