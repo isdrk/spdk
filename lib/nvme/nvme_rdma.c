@@ -303,6 +303,8 @@ static struct nvme_rdma_poller *nvme_rdma_poll_group_get_poller(struct nvme_rdma
 		struct ibv_context *device);
 static void nvme_rdma_poll_group_put_poller(struct nvme_rdma_poll_group *group,
 		struct nvme_rdma_poller *poller);
+static inline int
+nvme_rdma_qpair_submit_recvs(struct nvme_rdma_qpair *rqpair);
 
 static inline void *
 nvme_rdma_calloc(size_t nmemb, size_t size)
@@ -417,6 +419,11 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 		TAILQ_REMOVE(&group->outstanding_qpairs, rqpair, link_outstanding);
 		assert(group->num_outstanding_qpairs > 0);
 		group->num_outstanding_qpairs--;
+		if (!rqpair->srq) {
+			/* We need to flush all queued recvs here since qpair is removed from the outstanding_qpairs
+			 * list which is used by the poll group to flush queued recv WRs */
+			nvme_rdma_qpair_submit_recvs(rqpair);
+		}
 	}
 
 	nvme_complete_request(req->cb_fn, req->cb_arg, qpair, req, rsp);
@@ -2410,8 +2417,7 @@ nvme_rdma_request_ready(struct nvme_rdma_qpair *rqpair, struct spdk_nvme_rdma_re
 {
 	struct spdk_nvme_rdma_rsp *rdma_rsp = rdma_req->rdma_rsp;
 	struct ibv_recv_wr *recv_wr = rdma_rsp->recv_wr;
-
-	nvme_rdma_req_complete(rdma_req, &rdma_rsp->cpl, true);
+	struct spdk_nvme_cpl cpl = rdma_rsp->cpl;
 
 	assert(rqpair->rsps->current_num_recvs < rqpair->rsps->num_entries);
 	rqpair->rsps->current_num_recvs++;
@@ -2424,6 +2430,8 @@ nvme_rdma_request_ready(struct nvme_rdma_qpair *rqpair, struct spdk_nvme_rdma_re
 	} else {
 		spdk_rdma_srq_queue_recv_wrs(rqpair->srq, recv_wr);
 	}
+
+	nvme_rdma_req_complete(rdma_req, &cpl, true);
 }
 
 #define MAX_COMPLETIONS_PER_POLL 128
