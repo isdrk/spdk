@@ -2283,13 +2283,14 @@ xlio_sock_recv_zcopy(struct spdk_sock *_sock, size_t len, struct spdk_sock_buf *
 		buf = spdk_mempool_get(g_xlio_buffers_pool);
 		if (spdk_unlikely(!buf)) {
 			SPDK_DEBUGLOG(xlio, "Sock %d: no more buffers, total_len %d\n", sock->fd, ret);
+			if (spdk_unlikely(_sock->group_impl && !sock->flags.pending_recv)) {
+				struct spdk_xlio_sock_group_impl *group =
+					__xlio_group_impl(sock->base.group_impl);
+				sock->flags.pending_recv = true;
+				SPDK_DEBUGLOG(xlio, "Sock %d, insert to pending_recv\n", sock->fd);
+				TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
+			}
 			if (ret == 0) {
-				if (spdk_unlikely(!_sock->group_impl) && !sock->flags.pending_recv) {
-					struct spdk_xlio_sock_group_impl *group =
-						__xlio_group_impl(sock->base.group_impl);
-					sock->flags.pending_recv = true;
-					TAILQ_INSERT_TAIL(&group->pending_recv, sock, link);
-				}
 				ret = -1;
 				errno = EAGAIN;
 			}
