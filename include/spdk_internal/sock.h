@@ -142,15 +142,21 @@ spdk_sock_request_pend(struct spdk_sock *sock, struct spdk_sock_request *req)
 #endif
 }
 
+static inline void
+spdk_sock_req_reset(struct spdk_sock_request *req)
+{
+	req->internal.offset = 0;
+	req->internal.is_zcopy = false;
+	req->has_memory_domain_data = false;
+}
+
 static inline int
 spdk_sock_request_complete(struct spdk_sock *sock, struct spdk_sock_request *req, int err)
 {
 	bool closed;
 	int rc = 0;
 
-	req->internal.offset = 0;
-	req->internal.is_zcopy = false;
-	req->has_memory_domain_data = false;
+	spdk_sock_req_reset(req);
 
 	closed = sock->flags.closed;
 	sock->cb_cnt++;
@@ -196,6 +202,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 		req->internal.curr_list = NULL;
 #endif
 
+		spdk_sock_req_reset(req);
 		req->cb_fn(req->cb_arg, -ECANCELED);
 
 		req = TAILQ_FIRST(&sock->pending_reqs);
@@ -212,6 +219,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 		assert(sock->queued_iovcnt >= req->iovcnt);
 		sock->queued_iovcnt -= req->iovcnt;
 
+		spdk_sock_req_reset(req);
 		req->cb_fn(req->cb_arg, -ECANCELED);
 
 		req = TAILQ_FIRST(&sock->queued_reqs);
@@ -219,6 +227,7 @@ spdk_sock_abort_requests(struct spdk_sock *sock)
 
 	req = sock->read_req;
 	if (req != NULL) {
+		spdk_sock_req_reset(req);
 		sock->read_req = NULL;
 		req->cb_fn(req->cb_arg, -ECANCELED);
 	}
