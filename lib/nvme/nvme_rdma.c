@@ -207,6 +207,7 @@ struct nvme_rdma_qpair {
 	uint16_t				num_entries;
 
 	bool					delay_cmd_submit;
+	bool					in_pg_outstanding;
 
 	uint32_t				num_completions;
 	uint32_t				num_outstanding_reqs;
@@ -365,10 +366,12 @@ nvme_rdma_req_get(struct nvme_rdma_qpair *rqpair)
 		TAILQ_INSERT_TAIL(&rqpair->outstanding_reqs, rdma_req, link);
 
 		rqpair->num_outstanding_reqs++;
-		if (rqpair->num_outstanding_reqs == 1 && rqpair->qpair.poll_group != NULL) {
+		if (!rqpair->in_pg_outstanding && rqpair->qpair.poll_group != NULL) {
+			assert(rqpair->num_outstanding_reqs == 1);
 			group = nvme_rdma_poll_group(rqpair->qpair.poll_group);
 			TAILQ_INSERT_TAIL(&group->outstanding_qpairs, rqpair, link_outstanding);
 			group->num_outstanding_qpairs++;
+			rqpair->in_pg_outstanding = true;
 		}
 	}
 
@@ -380,6 +383,7 @@ nvme_rdma_req_put(struct nvme_rdma_qpair *rqpair, struct spdk_nvme_rdma_req *rdm
 {
 	rdma_req->completion_flags = 0;
 	rdma_req->req = NULL;
+	rdma_req->rdma_rsp = NULL;
 	TAILQ_INSERT_HEAD(&rqpair->free_reqs, rdma_req, link);
 }
 
@@ -414,11 +418,13 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 
 	assert(rqpair->num_outstanding_reqs > 0);
 	rqpair->num_outstanding_reqs--;
-	if (rqpair->num_outstanding_reqs == 0 && qpair->poll_group != NULL) {
+	if (rqpair->num_outstanding_reqs == 0 && rqpair->in_pg_outstanding && STAILQ_EMPTY(&qpair->queued_req)) {
+		assert(qpair->poll_group);
 		group = nvme_rdma_poll_group(qpair->poll_group);
 		TAILQ_REMOVE(&group->outstanding_qpairs, rqpair, link_outstanding);
 		assert(group->num_outstanding_qpairs > 0);
 		group->num_outstanding_qpairs--;
+		rqpair->in_pg_outstanding = false;
 		if (!rqpair->srq) {
 			/* We need to flush all queued recvs here since qpair is removed from the outstanding_qpairs
 			 * list which is used by the poll group to flush queued recv WRs */
@@ -2313,11 +2319,13 @@ nvme_rdma_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 
 		assert(rqpair->num_outstanding_reqs > 0);
 		rqpair->num_outstanding_reqs--;
-		if (rqpair->num_outstanding_reqs == 0 && qpair->poll_group != NULL) {
+		if (rqpair->num_outstanding_reqs == 0 && rqpair->in_pg_outstanding) {
+			assert(qpair->poll_group);
 			group = nvme_rdma_poll_group(qpair->poll_group);
 			TAILQ_REMOVE(&group->outstanding_qpairs, rqpair, link_outstanding);
 			assert(group->num_outstanding_qpairs > 0);
 			group->num_outstanding_qpairs--;
+			rqpair->in_pg_outstanding = false;
 		}
 
 		nvme_rdma_req_put(rqpair, rdma_req);
@@ -3195,6 +3203,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 	TAILQ_FOREACH_SAFE(rqpair, &group->outstanding_qpairs, link_outstanding, tmp_rqpair) {
 		qpair = &rqpair->qpair;
 
+		assert(rqpair->in_pg_outstanding);
 		if (spdk_unlikely(rqpair->state <= NVME_RDMA_QPAIR_STATE_INITIALIZING)) {
 			continue;
 		}
@@ -3207,9 +3216,17 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		if (!rqpair->srq) {
 			nvme_rdma_qpair_submit_recvs(rqpair);
 		}
+		/* TODO: `rqpair->num_outstanding_reqs < rqpair->num_entries` might be better */
 		if (rqpair->num_completions > 0) {
 			nvme_qpair_resubmit_requests(qpair, rqpair->num_completions);
 			rqpair->num_completions = 0;
+		}
+
+		if (rqpair->num_outstanding_reqs == 0 && STAILQ_EMPTY(&qpair->queued_req)) {
+			TAILQ_REMOVE(&group->outstanding_qpairs, rqpair, link_outstanding);
+			assert(group->num_outstanding_qpairs > 0);
+			group->num_outstanding_qpairs--;
+			rqpair->in_pg_outstanding = false;
 		}
 	}
 
