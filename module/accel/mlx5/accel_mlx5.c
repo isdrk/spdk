@@ -3492,6 +3492,7 @@ accel_mlx5_init(void)
 	struct ibv_pd *pd;
 	struct spdk_mlx5_crypto_caps *crypto_caps = NULL;
 	int num_devs = 0, rc = 0, i;
+	int crc_dev = -1, first_dev = 0;
 
 	if (!g_accel_mlx5.enabled) {
 		return -EINVAL;
@@ -3533,14 +3534,23 @@ accel_mlx5_init(void)
 		}
 	}
 
-	if (g_accel_mlx5.crypto_supported) {
-		g_accel_mlx5.crc_supported = true;
-		for (i = 0; i < num_devs; i++) {
-			if (!crypto_caps[i].crc32c) {
-				SPDK_NOTICELOG("Disable crc32c support because dev %s doesn't support it\n",
-					       rdma_devs[i]->device->name);
-				g_accel_mlx5.crc_supported = false;
-			}
+	g_accel_mlx5.crc_supported = true;
+	for (i = 0; i < num_devs; i++) {
+		if (!crypto_caps[i].crc32c) {
+			SPDK_NOTICELOG("Disable crc32c support because dev %s doesn't support it\n",
+				       rdma_devs[i]->device->name);
+			g_accel_mlx5.crc_supported = false;
+		} else if (crc_dev == -1) {
+			crc_dev = i;
+		}
+	}
+
+	if (!g_accel_mlx5.allowed_crypto_devs) {
+		/* If allowed devices are not configured, use the first best device. */
+		num_devs = 1;
+		if (crc_dev != -1) {
+			first_dev = crc_dev;
+			g_accel_mlx5.crc_supported = true;
 		}
 	}
 
@@ -3551,8 +3561,8 @@ accel_mlx5_init(void)
 		goto cleanup;
 	}
 
-	for (i = 0; i < num_devs; i++) {
-		dev_ctx = &g_accel_mlx5.devices[i];
+	for (i = first_dev; i < first_dev + num_devs; i++) {
+		dev_ctx = &g_accel_mlx5.devices[g_accel_mlx5.num_devs];
 		dev = rdma_devs[i];
 		SPDK_NOTICELOG("Crypto dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d, crc32c %d\n",
 			       dev->device->name,
