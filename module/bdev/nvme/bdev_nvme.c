@@ -4160,6 +4160,12 @@ nvme_ctrlr_populate_namespaces(struct nvme_ctrlr *nvme_ctrlr,
 		if (spdk_nvme_ctrlr_is_active_ns(ctrlr, nvme_ns->id)) {
 			/* NS is still there but attributes may have changed */
 			ns = spdk_nvme_ctrlr_get_ns(ctrlr, nvme_ns->id);
+
+			if (nvme_ns->ns != ns) {
+				SPDK_NOTICELOG("NSID %u was reconstructed while reconnect\n", nvme_ns->id);
+				nvme_ns->ns = ns;
+			}
+
 			num_sectors = spdk_nvme_ns_get_num_sectors(ns);
 			bdev = nvme_ns->bdev;
 			assert(bdev != NULL);
