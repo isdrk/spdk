@@ -8516,7 +8516,9 @@ bdev_set_qos_group_rate_limits(struct spdk_bdev *bdev, bool disable,
 		bdev->internal.qos->clients &= ~SPDK_BDEV_QOS_CLIENT_GROUP;
 		if (bdev->internal.qos->clients) {
 			/* bdev QoS is still enabled, so there's nothing to do */
+			spdk_spin_unlock(&bdev->internal.spinlock);
 			bdev_set_qos_limit_done(ctx, 0);
+			return;
 		} else {
 			/* No more clients -> disable QoS and delete QoS object */
 			spdk_bdev_for_each_channel(bdev, bdev_disable_qos_msg, ctx,
