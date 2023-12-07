@@ -3090,6 +3090,16 @@ static int
 nvme_rdma_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 			    struct spdk_nvme_qpair *qpair)
 {
+	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(qpair);
+	struct nvme_rdma_poll_group *group = nvme_rdma_poll_group(qpair->poll_group);
+
+	if (rqpair->in_pg_outstanding) {
+		TAILQ_REMOVE(&group->outstanding_qpairs, rqpair, link_outstanding);
+		assert(group->num_outstanding_qpairs > 0);
+		group->num_outstanding_qpairs--;
+		rqpair->in_pg_outstanding = false;
+	}
+
 	return 0;
 }
 
