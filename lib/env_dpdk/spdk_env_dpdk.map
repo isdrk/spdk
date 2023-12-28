@@ -94,6 +94,8 @@
 	spdk_pci_device_cfg_read32;
 	spdk_pci_device_cfg_write32;
 	spdk_pci_device_is_removed;
+	spdk_pci_device_create_dmabuf;
+	spdk_pci_device_destroy_dmabuf;
 	spdk_pci_addr_compare;
 	spdk_pci_addr_parse;
 	spdk_pci_addr_fmt;
