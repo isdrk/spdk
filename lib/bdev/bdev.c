@@ -1319,7 +1319,9 @@ static int bdev_no_mem_degraded_poller(void *ctx)
 	if (!TAILQ_EMPTY(&shared_resource->nomem_io)) {
 		bdev_shared_ch_retry_io(shared_resource);
 	}
-	if (!TAILQ_EMPTY(&shared_resource->nomem_io) && shared_resource->io_outstanding == 0) {
+	/* the retry cb may re-register the poller so double check */
+	if (!TAILQ_EMPTY(&shared_resource->nomem_io) &&
+	    shared_resource->io_outstanding == 0 && shared_resource->nomem_poller == NULL) {
 		/* No IOs were submitted, try again */
 		shared_resource->nomem_poller = SPDK_POLLER_REGISTER(bdev_no_mem_degraded_poller,
 								     shared_resource,
