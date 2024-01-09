@@ -3422,6 +3422,77 @@ accel_mlx5_rdma_get_mlx5_dev(struct ibv_context **devices, int num_devs)
 }
 
 static int
+accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *dev,
+			struct spdk_mlx5_crypto_caps *crypto_caps)
+{
+	struct ibv_pd *pd;
+	int rc;
+
+	SPDK_NOTICELOG("Dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d, crc32c %d\n",
+		       dev->device->name,
+		       crypto_caps->single_block_le_tweak,
+		       crypto_caps->multi_block_be_tweak,
+		       crypto_caps->multi_block_le_tweak,
+		       crypto_caps->tweak_inc_64,
+		       g_accel_mlx5.crc_supported);
+
+	pd = spdk_rdma_utils_get_pd(dev);
+	if (!pd) {
+		SPDK_ERRLOG("Failed to get PD for context %p, dev %s\n", dev, dev->device->name);
+		return -EINVAL;
+	}
+	dev_ctx->context = dev;
+	dev_ctx->pd = pd;
+	dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
+	dev_ctx->crypto_mkey_flags = SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO;
+	rc = accel_mlx5_mkeys_create(dev_ctx, dev_ctx->crypto_mkey_flags);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create crypto mkeys pool, rc %d, dev %s\n", rc, dev->device->name);
+		dev_ctx->crypto_mkey_flags = 0;
+		return rc;
+	}
+	dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
+	if (!dev_ctx->domain) {
+		return -ENOMEM;
+	}
+	dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
+			IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
+	if (!dev_ctx->map) {
+		return -ENOMEM;
+	}
+	if (g_accel_mlx5.crc_supported) {
+		dev_ctx->sig_mkey_flags = SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE;
+		if (g_accel_mlx5.merge) {
+			dev_ctx->sig_mkey_flags |= SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO;
+		}
+		rc = accel_mlx5_mkeys_create(dev_ctx, dev_ctx->sig_mkey_flags);
+		if (rc) {
+			SPDK_ERRLOG("Failed to create sig mkeys pool, rc %d, flags %x, dev %s\n", rc,
+				    dev_ctx->sig_mkey_flags, dev->device->name);
+			dev_ctx->sig_mkey_flags = 0;
+			return rc;
+		}
+		rc = accel_mlx5_psvs_create(dev_ctx);
+		if (rc) {
+			SPDK_ERRLOG("Failed to create PSVs pool, rc %d, dev %s\n", rc, dev->device->name);
+			return rc;
+		}
+	}
+
+	/* Explicitly disabled by default */
+	dev_ctx->crypto_multi_block = false;
+	if (crypto_caps->multi_block_be_tweak) {
+		/* TODO: multi_block LE tweak will be checked later once LE BSF is fixed */
+		dev_ctx->crypto_multi_block = true;
+	} else if (g_accel_mlx5.split_mb_blocks) {
+		SPDK_WARNLOG("\"split_mb_block\" is set but dev %s doesn't support multi block crypto\n",
+			     dev->device->name);
+	}
+
+	return 0;
+}
+
+static int
 accel_mlx5_init_mem_op(void)
 {
 	struct accel_mlx5_dev_ctx *dev_ctx;
@@ -3487,9 +3558,7 @@ cleanup:
 static int
 accel_mlx5_init(void)
 {
-	struct accel_mlx5_dev_ctx *dev_ctx;
 	struct ibv_context **rdma_devs, *dev;
-	struct ibv_pd *pd;
 	struct spdk_mlx5_crypto_caps *crypto_caps = NULL;
 	int num_devs = 0, rc = 0, i;
 	int crc_dev = -1, first_dev = 0;
@@ -3562,68 +3631,10 @@ accel_mlx5_init(void)
 	}
 
 	for (i = first_dev; i < first_dev + num_devs; i++) {
-		dev_ctx = &g_accel_mlx5.devices[g_accel_mlx5.num_devs];
-		dev = rdma_devs[i];
-		SPDK_NOTICELOG("Crypto dev %s, aes_xts: single block %d, mb_be %d, mb_le %d, inc_64 %d, crc32c %d\n",
-			       dev->device->name,
-			       crypto_caps[i].single_block_le_tweak,
-			       crypto_caps[i].multi_block_be_tweak,
-			       crypto_caps[i].multi_block_le_tweak,
-			       crypto_caps[i].tweak_inc_64,
-			       g_accel_mlx5.crc_supported);
-
-		pd = spdk_rdma_utils_get_pd(dev);
-		if (!pd) {
-			SPDK_ERRLOG("Failed to get PD for context %p, dev %s\n", dev, dev->device->name);
-			rc = -EINVAL;
-			goto cleanup;
-		}
-		dev_ctx->context = dev;
-		dev_ctx->pd = pd;
-		dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
-		dev_ctx->crypto_mkey_flags = SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO;
-		rc = accel_mlx5_mkeys_create(dev_ctx, dev_ctx->crypto_mkey_flags);
+		rc = accel_mlx5_dev_ctx_init(&g_accel_mlx5.devices[g_accel_mlx5.num_devs], rdma_devs[i],
+					     &crypto_caps[i]);
 		if (rc) {
-			SPDK_ERRLOG("Failed to create crypto mkeys pool, rc %d, dev %s\n", rc, dev->device->name);
-			dev_ctx->crypto_mkey_flags = 0;
 			goto cleanup;
-		}
-		dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
-		if (!dev_ctx->domain) {
-			goto cleanup;
-		}
-		dev_ctx->map = spdk_rdma_utils_create_mem_map(pd, NULL,
-				IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
-		if (!dev_ctx->map) {
-			goto cleanup;
-		}
-		if (g_accel_mlx5.crc_supported) {
-			dev_ctx->sig_mkey_flags = SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE;
-			if (g_accel_mlx5.merge) {
-				dev_ctx->sig_mkey_flags |= SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO;
-			}
-			rc = accel_mlx5_mkeys_create(dev_ctx, dev_ctx->sig_mkey_flags);
-			if (rc) {
-				SPDK_ERRLOG("Failed to create sig mkeys pool, rc %d, flags %x, dev %s\n", rc,
-					    dev_ctx->sig_mkey_flags, dev->device->name);
-				dev_ctx->sig_mkey_flags = 0;
-				goto cleanup;
-			}
-			rc = accel_mlx5_psvs_create(dev_ctx);
-			if (rc) {
-				SPDK_ERRLOG("Failed to create PSVs pool, rc %d, dev %s\n", rc, dev->device->name);
-				goto cleanup;
-			}
-		}
-
-		/* Explicitly disabled by default */
-		dev_ctx->crypto_multi_block = false;
-		if (crypto_caps[i].multi_block_be_tweak) {
-			/* TODO: multi_block LE tweak will be checked later once LE BSF is fixed */
-			dev_ctx->crypto_multi_block = true;
-		} else if (g_accel_mlx5.split_mb_blocks) {
-			SPDK_WARNLOG("\"split_mb_block\" is set but dev %s doesn't support multi block crypto\n",
-				     dev->device->name);
 		}
 
 		g_accel_mlx5.num_devs++;
