@@ -95,9 +95,9 @@ struct accel_mlx5_module {
 	bool siglast;
 	bool qp_per_domain;
 	/* copy of user input to make dump config easier */
-	char *allowed_crypto_devs_str;
-	char **allowed_crypto_devs;
-	size_t allowed_crypto_devs_count;
+	char *allowed_devs_str;
+	char **allowed_devs;
+	size_t allowed_devs_count;
 	bool enabled;
 	bool crypto_supported;
 	bool crc_supported;
@@ -229,7 +229,7 @@ struct accel_mlx5_io_channel {
 	struct accel_mlx5_dev *devs;
 	struct spdk_poller *poller;
 	uint32_t num_devs;
-	/* Index in \b devs to be used for crypto in round-robin way */
+	/* Index in \b devs to be used for round-robin */
 	uint32_t dev_idx;
 };
 
@@ -3124,35 +3124,35 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 }
 
 static void
-accel_mlx5_allowed_crypto_devs_free(void)
+accel_mlx5_allowed_devs_free(void)
 {
 	size_t i;
 
-	if (!g_accel_mlx5.allowed_crypto_devs || !g_accel_mlx5.allowed_crypto_devs_count) {
+	if (!g_accel_mlx5.allowed_devs || !g_accel_mlx5.allowed_devs_count) {
 		return;
 	}
 
-	for (i = 0; i < g_accel_mlx5.allowed_crypto_devs_count; i++) {
-		free(g_accel_mlx5.allowed_crypto_devs[i]);
+	for (i = 0; i < g_accel_mlx5.allowed_devs_count; i++) {
+		free(g_accel_mlx5.allowed_devs[i]);
 	}
-	free(g_accel_mlx5.allowed_crypto_devs);
-	free(g_accel_mlx5.allowed_crypto_devs_str);
-	g_accel_mlx5.allowed_crypto_devs = NULL;
-	g_accel_mlx5.allowed_crypto_devs_count = 0;
+	free(g_accel_mlx5.allowed_devs);
+	free(g_accel_mlx5.allowed_devs_str);
+	g_accel_mlx5.allowed_devs = NULL;
+	g_accel_mlx5.allowed_devs_count = 0;
 }
 
 static int
-accel_mlx5_allowed_crypto_devs_parse(const char *allowed_crypto_devs)
+accel_mlx5_allowed_devs_parse(const char *allowed_devs)
 {
 	char *str, *tmp, *tok;
 	size_t devs_count = 0;
 
-	str = strdup(allowed_crypto_devs);
+	str = strdup(allowed_devs);
 	if (!str) {
 		return -ENOMEM;
 	}
 
-	accel_mlx5_allowed_crypto_devs_free();
+	accel_mlx5_allowed_devs_free();
 
 	tmp = str;
 	while ((tmp = strchr(tmp, ',')) != NULL) {
@@ -3161,8 +3161,8 @@ accel_mlx5_allowed_crypto_devs_parse(const char *allowed_crypto_devs)
 	}
 	devs_count++;
 
-	g_accel_mlx5.allowed_crypto_devs = calloc(devs_count, sizeof(char *));
-	if (!g_accel_mlx5.allowed_crypto_devs) {
+	g_accel_mlx5.allowed_devs = calloc(devs_count, sizeof(char *));
+	if (!g_accel_mlx5.allowed_devs) {
 		free(str);
 		return -ENOMEM;
 	}
@@ -3170,15 +3170,15 @@ accel_mlx5_allowed_crypto_devs_parse(const char *allowed_crypto_devs)
 	devs_count = 0;
 	tok = strtok(str, ",");
 	while (tok) {
-		g_accel_mlx5.allowed_crypto_devs[devs_count] = strdup(tok);
-		if (!g_accel_mlx5.allowed_crypto_devs[devs_count]) {
+		g_accel_mlx5.allowed_devs[devs_count] = strdup(tok);
+		if (!g_accel_mlx5.allowed_devs[devs_count]) {
 			free(str);
-			accel_mlx5_allowed_crypto_devs_free();
+			accel_mlx5_allowed_devs_free();
 			return -ENOMEM;
 		}
 		tok = strtok(NULL, ",");
 		devs_count++;
-		g_accel_mlx5.allowed_crypto_devs_count++;
+		g_accel_mlx5.allowed_devs_count++;
 	}
 
 	free(str);
@@ -3199,21 +3199,21 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 		g_accel_mlx5.merge = attr->merge;
 		g_accel_mlx5.qp_per_domain = attr->qp_per_domain;
 
-		if (attr->allowed_crypto_devs) {
+		if (attr->allowed_devs) {
 			int rc;
 
-			g_accel_mlx5.allowed_crypto_devs_str = strdup(attr->allowed_crypto_devs);
-			if (!g_accel_mlx5.allowed_crypto_devs_str) {
+			g_accel_mlx5.allowed_devs_str = strdup(attr->allowed_devs);
+			if (!g_accel_mlx5.allowed_devs_str) {
 				return -ENOMEM;
 			}
-			rc = accel_mlx5_allowed_crypto_devs_parse(attr->allowed_crypto_devs);
+			rc = accel_mlx5_allowed_devs_parse(attr->allowed_devs);
 			if (rc) {
 				return rc;
 			}
-			rc = spdk_mlx5_crypto_devs_allow((const char *const *)g_accel_mlx5.allowed_crypto_devs,
-							 g_accel_mlx5.allowed_crypto_devs_count);
+			rc = spdk_mlx5_crypto_devs_allow((const char *const *)g_accel_mlx5.allowed_devs,
+							 g_accel_mlx5.allowed_devs_count);
 			if (rc) {
-				accel_mlx5_allowed_crypto_devs_free();
+				accel_mlx5_allowed_devs_free();
 				return rc;
 			}
 		}
@@ -3300,8 +3300,8 @@ static void
 accel_mlx5_deinit(void *ctx)
 {
 	spdk_memory_domain_update_notification_unsubscribe(&g_accel_mlx5);
-	if (g_accel_mlx5.allowed_crypto_devs) {
-		accel_mlx5_allowed_crypto_devs_free();
+	if (g_accel_mlx5.allowed_devs) {
+		accel_mlx5_allowed_devs_free();
 		spdk_mlx5_crypto_devs_allow(NULL, 0);
 	}
 	spdk_spin_destroy(&g_accel_mlx5.lock);
@@ -3508,7 +3508,7 @@ accel_mlx5_init(void)
 
 	rdma_devs = spdk_mlx5_crypto_devs_get(&num_devs);
 	if (!rdma_devs || !num_devs) {
-		if (g_accel_mlx5.allowed_crypto_devs) {
+		if (g_accel_mlx5.allowed_devs) {
 			SPDK_WARNLOG("No crypto devs found, only memory operations will be supported\n");
 		} else {
 			SPDK_NOTICELOG("No crypto devs found, only memory operations will be supported\n");
@@ -3545,7 +3545,7 @@ accel_mlx5_init(void)
 		}
 	}
 
-	if (!g_accel_mlx5.allowed_crypto_devs) {
+	if (!g_accel_mlx5.allowed_devs) {
 		/* If allowed devices are not configured, use the first best device. */
 		num_devs = 1;
 		if (crc_dev != -1) {
@@ -3667,8 +3667,8 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
 		spdk_json_write_named_bool(w, "merge", g_accel_mlx5.merge);
 		spdk_json_write_named_uint32(w, "split_mb_blocks", g_accel_mlx5.split_mb_blocks);
-		if (g_accel_mlx5.allowed_crypto_devs_str) {
-			spdk_json_write_named_string(w, "allowed_crypto_devs", g_accel_mlx5.allowed_crypto_devs_str);
+		if (g_accel_mlx5.allowed_devs_str) {
+			spdk_json_write_named_string(w, "allowed_devs", g_accel_mlx5.allowed_devs_str);
 		}
 		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.siglast);
 		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.qp_per_domain);

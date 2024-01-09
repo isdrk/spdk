@@ -7,7 +7,7 @@
 
 struct accel_mlx5_attr {
 	/* Comma separated list of allowed crypto device names */
-	char *allowed_crypto_devs;
+	char *allowed_devs;
 	/* The number of entries in qp submission/receive queue */
 	uint16_t qp_size;
 	/* The number of entries in completion queue */
