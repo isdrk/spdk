@@ -3302,8 +3302,8 @@ accel_mlx5_deinit(void *ctx)
 	spdk_memory_domain_update_notification_unsubscribe(&g_accel_mlx5);
 	if (g_accel_mlx5.allowed_devs) {
 		accel_mlx5_allowed_devs_free();
-		spdk_mlx5_crypto_devs_allow(NULL, 0);
 	}
+	spdk_mlx5_crypto_devs_allow(NULL, 0);
 	spdk_spin_destroy(&g_accel_mlx5.lock);
 	if (g_accel_mlx5.initialized) {
 		spdk_io_device_unregister(&g_accel_mlx5, accel_mlx5_deinit_cb);
@@ -3623,6 +3623,11 @@ accel_mlx5_init(void)
 		g_accel_mlx5.crc_supported = crypto_caps[best_dev].crc32c;
 		first_dev = best_dev;
 		num_devs = 1;
+		if (supports_crypto) {
+			const char *const dev_name[] = { rdma_devs[best_dev]->device->name };
+
+			spdk_mlx5_crypto_devs_allow(dev_name, 1);
+		}
 	} else {
 		SPDK_NOTICELOG("Found %d devices, crypto %d, crc %d\n", num_devs, g_accel_mlx5.crypto_supported,
 			       g_accel_mlx5.crc_supported);
