@@ -3628,6 +3628,11 @@ accel_mlx5_init(void)
 			       g_accel_mlx5.crc_supported);
 	}
 
+	if (g_accel_mlx5.merge && !g_accel_mlx5.crypto_supported) {
+		SPDK_WARNLOG("Crypto is not supported, merge functionality is disabled\n");
+		g_accel_mlx5.merge = false;
+	}
+
 	g_accel_mlx5.devices = calloc(num_devs, sizeof(*g_accel_mlx5.devices));
 	if (!g_accel_mlx5.devices) {
 		SPDK_ERRLOG("Memory allocation failed\n");
