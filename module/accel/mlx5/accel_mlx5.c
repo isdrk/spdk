@@ -3508,7 +3508,7 @@ accel_mlx5_get_devices(int *_num_devs)
 			continue;
 		}
 		if (dev_attr.vendor_id != SPDK_MLX5_VENDOR_ID_MELLANOX) {
-			SPDK_DEBUGLOG(mlx5, "dev %s is not Mellanox device, skipping\n", dev->device->name);
+			SPDK_DEBUGLOG(accel_mlx5, "dev %s is not Mellanox device, skipping\n", dev->device->name);
 			continue;
 		}
 
