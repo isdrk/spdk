@@ -4,6 +4,9 @@
  *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include <doca_dev.h>
+#include <doca_sta.h>
+
 #include "spdk/stdinc.h"
 
 #include "spdk/config.h"
@@ -2691,6 +2694,37 @@ generate_poll_fds(struct spdk_nvmf_rdma_transport *rtransport)
 	return 0;
 }
 
+static void
+nvmf_doca_sta_print_devices(void)
+{
+	struct doca_devinfo	**dev_list;
+	uint32_t		nb_devs;
+	char			dev_name[DOCA_DEVINFO_IBDEV_NAME_SIZE];
+	doca_error_t		ret;
+	unsigned		i;
+	int			is_sta_supported;
+
+	ret = doca_devinfo_create_list(&dev_list, &nb_devs);
+	if (ret != DOCA_SUCCESS) {
+		SPDK_ERRLOG("doca_devinfo_create_list failed\n");
+		return;
+	}
+
+	for (i = 0; i < nb_devs; i++) {
+		ret = doca_devinfo_get_ibdev_name(dev_list[i], dev_name, DOCA_DEVINFO_IBDEV_NAME_SIZE);
+		if (ret != DOCA_SUCCESS) {
+			SPDK_ERRLOG("doca_devinfo_get_ibdev_name failed\n");
+			break;
+		}
+
+		ret = doca_sta_cap_is_supported(dev_list[i]);
+		is_sta_supported = (ret == DOCA_SUCCESS) ? 1 : 0;
+		SPDK_NOTICELOG("DOCA dev %s: is_sta_supported %d\n", dev_name, is_sta_supported);
+
+	}
+	doca_devinfo_destroy_list(dev_list);
+}
+
 static struct spdk_nvmf_transport *
 nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 {
@@ -2884,6 +2918,8 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
 		return NULL;
 	}
+
+	nvmf_doca_sta_print_devices();
 
 	return &rtransport->transport;
 }

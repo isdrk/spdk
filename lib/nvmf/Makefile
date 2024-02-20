@@ -12,7 +12,7 @@ SO_MINOR := 0
 C_SRCS = ctrlr.c ctrlr_discovery.c ctrlr_bdev.c \
 	 subsystem.c nvmf.c nvmf_rpc.c transport.c tcp.c
 
-C_SRCS-$(CONFIG_RDMA) += rdma.c rdma_offload.c
+C_SRCS-$(CONFIG_RDMA) += rdma.c
 LIBNAME = nvmf
 LOCAL_SYS_LIBS =
 ifeq ($(CONFIG_RDMA),y)
@@ -46,6 +46,13 @@ C_SRCS += fc.c fc_ls.c
 CFLAGS += -I$(CURDIR) $(ENV_CFLAGS)
 ifneq ($(strip $(CONFIG_FC_PATH)),)
 CFLAGS += -I$(CONFIG_FC_PATH)
+endif
+endif
+
+ifeq ($(CONFIG_RDMA),y)
+ifeq ($(CONFIG_DOCA_STA),y)
+C_SRCS += rdma_offload.c
+LOCAL_SYS_LIBS += -ldoca_sta -ldoca_common -ldoca_dpa -ldoca_comch -ldoca_rdma
 endif
 endif
 

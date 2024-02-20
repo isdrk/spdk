@@ -52,6 +52,9 @@ BLOCKDEV_MODULES_PRIVATE_LIBS += -libverbs -lrdmacm
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 BLOCKDEV_MODULES_PRIVATE_LIBS += -lmlx5
 endif
+ifeq ($(CONFIG_DOCA_STA),y)
+BLOCKDEV_MODULES_PRIVATE_LIBS += -ldoca_sta -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common
+endif
 endif
 
 ifeq ($(OS),Linux)

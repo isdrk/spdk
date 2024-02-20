@@ -494,6 +494,55 @@ for i in "$@"; do
 			CONFIG[FC]=n
 			CONFIG[FC_PATH]=
 			;;
+		--with-doca-sta=*)
+			doca_path=$(readlink -f ${i#*=})
+			if [ ! -d "$doca_path" ] ; then
+				echo "DOCA directory $doca_path not found, aborting"
+				exit 1
+			fi
+
+			doca_incdir=${doca_path}/include
+			if [ ! -d "$doca_incdir" ] ; then
+				echo "DOCA incdir $doca_incdir not found, aborting"
+				exit 1
+			fi
+
+			doca_libdir=${doca_path}/lib
+			if [ ! -d "$doca_libdir" ] ; then
+				echo "DOCA libdir $doca_libdir not found, aborting"
+				exit 1
+			fi
+			if [ -d "${doca_libdir}/${arch}" ] ; then
+				doca_libdir=${doca_libdir}/${arch}
+			fi
+
+			CONFIG[DOCA_STA]=y
+			CONFIG[DOCA_STA_LIB_DIR]=$doca_libdir
+			CONFIG[DOCA_STA_INC_DIR]=$doca_incdir
+			CFLAGS="${CFLAGS:+$CFLAGS }-DDOCA_ALLOW_EXPERIMENTAL_API -I$doca_incdir"
+			LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$doca_libdir"
+			;;
+		--with-doca-sta)
+			if command -v "pkg-config" > /dev/null 2>&1 && pkg-config --exists doca-common; then
+				doca_libdir=$(pkg-config --variable=libdir doca-sta)
+				doca_libdir=$(readlink -f $doca_libdir)
+				doca_incdir=$(pkg-config --variable=includedir doca-sta)
+				echo "Using DOCA lib dir $doca_libdir"
+				CONFIG[DOCA_STA]=y
+				CONFIG[DOCA_LIB_DIR]=$doca_libdir
+				CONFIG[DOCA_INC_DIR]=$doca_incdir
+				CFLAGS="${CFLAGS:+$CFLAGS }$(pkg-config --cflags doca-sta)"
+				LDFLAGS="${LDFLAGS:+$LDFLAGS }$(pkg-config --libs-only-L doca-sta)"
+			else
+				echo "doca-sta.pc not found, aborting"
+				exit 1
+			fi
+			;;
+		--without-doca)
+			CONFIG[DOCA_STA]=n
+			CONFIG[DOCA_STA_LIB_DIR]=
+			CONFIG[DOCA_STA_INC_DIR]=
+			;;
 		--with-daos)
 			CONFIG[DAOS]=y
 			CONFIG[DAOS_DIR]=""
@@ -954,6 +1003,15 @@ fi
 if [[ "${CONFIG[FC]}" = "y" ]]; then
 	if [[ -n "${CONFIG[FC_PATH]}" ]]; then
 		check_dir "${CONFIG[FC_PATH]}"
+	fi
+fi
+
+if [[ "${CONFIG[DOCA_STA]}" = "y" ]]; then
+	if [[ -n "${CONFIG[DOCA_STA_LIB_DIR]}" ]]; then
+		check_dir "${CONFIG[DOCA_STA_LIB_DIR]}"
+	fi
+	if [[ -n "${CONFIG[DOCA_STA_INC_DIR]}" ]]; then
+		check_dir "${CONFIG[DOCA_STA_INC_DIR]}"
 	fi
 fi
 
