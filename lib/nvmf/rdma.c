@@ -153,7 +153,7 @@ nvmf_trace(void)
 					TRACE_RDMA_REQUEST_STATE_EXECUTED,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
-	spdk_trace_register_description("RDMA_REQ_RDY_TO_COMPL_PEND",
+	spdk_trace_register_description("RDMA_REQ_RDY2COMPL_PEND",
 					TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
