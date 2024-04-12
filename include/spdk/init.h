@@ -99,6 +99,14 @@ void spdk_subsystem_fini(spdk_subsystem_fini_fn cb_fn, void *cb_arg);
 struct spdk_json_write_ctx;
 
 /**
+ * Check if the specified subsystem exists in the application.
+ *
+ * \param name Name of the subsystem to look for
+ * \return true if it exists, false if not
+ */
+bool spdk_subsystem_exists(const char *name);
+
+/**
  * Represents an SPDK subsystem.
  */
 struct spdk_subsystem {
