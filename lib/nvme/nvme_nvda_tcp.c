@@ -172,6 +172,8 @@ enum nvme_tcp_req_state {
 	NVME_TCP_REQ_ACTIVE_R2T,
 };
 
+#define MAX_RX_IOVS 128
+
 struct nvme_tcp_req {
 	struct nvme_request			req;
 	struct spdk_iobuf_entry			iobuf_entry;
@@ -217,7 +219,16 @@ struct nvme_tcp_req {
 	/* Used to hold a value received from subsequent R2T while we are still
 	 * waiting for H2C ack */
 	struct nvme_tcp_pdu			pdu;
+
+	/* For writes, this describes the source of the data. For reads, this describes the
+	 * destination. */
 	struct iovec				iovs[NVME_TCP_MAX_SGL_DESCRIPTORS];
+
+	/* For reads we need another set of iovs to describe the segments of the tcp
+	 * stream. */
+	uint32_t				recv_iovcnt;
+	struct iovec				*recv_iovs;
+	struct iovec				_recv_iovs[NVME_TCP_MAX_SGL_DESCRIPTORS];
 };
 
 struct xlio_shared_group {
@@ -232,6 +243,7 @@ static pthread_mutex_t g_xlio_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 static STAILQ_HEAD(, xlio_packets_pool) g_xlio_packets_pools = STAILQ_HEAD_INITIALIZER(
 			g_xlio_packets_pools);
 static struct spdk_mempool *g_xlio_nvme_buffers_pool;
+static struct spdk_mempool *g_iovec_pool = NULL;
 static pthread_mutex_t g_xlio_admin_group_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct spdk_spinlock g_xlio_admin_group_lock;
 static bool g_xlio_admin_group_lock_initialized = false;
@@ -261,6 +273,11 @@ xlio_sock_free_pools(void)
 	if (g_xlio_nvme_buffers_pool) {
 		spdk_mempool_free(g_xlio_nvme_buffers_pool);
 		g_xlio_nvme_buffers_pool = NULL;
+	}
+
+	if (g_iovec_pool) {
+		spdk_mempool_free(g_iovec_pool);
+		g_iovec_pool = NULL;
 	}
 }
 
@@ -310,6 +327,18 @@ xlio_sock_alloc_buffers_pool(uint32_t buffers_pool_size)
 				   SPDK_ENV_SOCKET_ID_ANY);
 	if (!g_xlio_nvme_buffers_pool) {
 		SPDK_ERRLOG("Failed to create xlio buffers pool\n");
+		pthread_mutex_unlock(&g_xlio_pool_mutex);
+		return -ENOMEM;
+	}
+
+	g_iovec_pool = spdk_mempool_create("nvda_iovec_pool",
+					   buffers_pool_size,
+					   sizeof(struct iovec) * MAX_RX_IOVS,
+					   SPDK_MEMPOOL_DEFAULT_CACHE_SIZE,
+					   SPDK_ENV_SOCKET_ID_ANY);
+	if (!g_iovec_pool) {
+		SPDK_ERRLOG("Failed to create iovec pool\n");
+		spdk_mempool_free(g_xlio_nvme_buffers_pool);
 		pthread_mutex_unlock(&g_xlio_pool_mutex);
 		return -ENOMEM;
 	}
@@ -1399,18 +1428,9 @@ static void nvme_tcp_icresp_handle(struct nvme_tcp_qpair *tqpair, struct nvme_tc
 static void nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qpair *tqpair,
 				  struct spdk_nvme_cpl *rsp, bool print_on_error);
 static struct nvme_tcp_req *get_nvme_active_req_by_cid(struct nvme_tcp_qpair *tqpair, uint32_t cid);
-static int nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 static int nvme_tcp_qpair_capsule_cmd_send(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_req *tcp_req);
 static bool nvme_tcp_memory_domain_enabled(void);
-
-static inline bool
-nvme_tcp_pdu_is_zcopy(struct nvme_tcp_pdu *pdu)
-{
-	struct nvme_tcp_req *tcp_req = pdu->req;
-	return (tcp_req &&
-		nvme_payload_type(&tcp_req->req.payload) == NVME_PAYLOAD_TYPE_ZCOPY);
-}
 
 static inline bool
 nvme_tcp_req_with_memory_domain(struct nvme_tcp_req *tcp_req)
@@ -1470,6 +1490,8 @@ nvme_tcp_req_get(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 	tcp_req->pdu.ddgst_enable = 0;
 	tcp_req->iobuf_iov.iov_base = NULL;
 	tcp_req->sock_buf = NULL;
+	tcp_req->recv_iovs = tcp_req->_recv_iovs;
+	tcp_req->recv_iovcnt = 0;
 
 	return 0;
 }
@@ -1490,6 +1512,11 @@ nvme_tcp_req_put(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 			       tcp_req->iobuf_iov.iov_len);
 
 		tcp_req->iobuf_iov.iov_base = NULL;
+	}
+
+	if (tcp_req->recv_iovs != tcp_req->_recv_iovs) {
+		spdk_mempool_put(g_iovec_pool, tcp_req->recv_iovs);
+		tcp_req->recv_iovs = NULL;
 	}
 
 	if (tqpair->flags.use_poll_group_req_pool) {
@@ -1687,14 +1714,14 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 
 	if (tqpair->zcopy_tx_pdus == 0) {
 		nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
-		if (qpair->outstanding_zcopy_reqs == 0 && tqpair->consumed_packets == 0) {
+		if (tqpair->consumed_packets == 0) {
 			nvme_qpair_disconnect_release_xlio_packets(tqpair);
 			xlio_sock_close(tqpair);
 		}
 	} else {
 		SPDK_DEBUGLOG(nvme,
-			      "qpair %p %u: defer close, %u zcopy reqs, consumed_packets %u, zcopy_tx_pdus %u\n",
-			      tqpair, qpair->id, qpair->outstanding_zcopy_reqs, tqpair->consumed_packets,
+			      "qpair %p %u: defer close, consumed_packets %u, zcopy_tx_pdus %u\n",
+			      tqpair, qpair->id, tqpair->consumed_packets,
 			      tqpair->zcopy_tx_pdus);
 	}
 
@@ -1948,20 +1975,6 @@ nvme_tcp_build_sgl_passthru_request(struct nvme_tcp_req *tcp_req)
 	return 0;
 }
 
-static inline int
-nvme_tcp_build_zcopy_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
-{
-	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
-#ifdef DEBUG
-	struct nvme_request *req = &tcp_req->req;
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
-#endif
-	pdu->iovs = tcp_req->iovs;
-	pdu->iovcnt = 0;
-	pdu->data_iovcnt = 0;
-	return 0;
-}
-
 static int
 nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 {
@@ -1992,9 +2005,6 @@ nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 		} else {
 			rc = nvme_tcp_build_sgl_request(tqpair, tcp_req);
 		}
-		break;
-	case NVME_PAYLOAD_TYPE_ZCOPY:
-		rc = nvme_tcp_build_zcopy_request(tqpair, tcp_req);
 		break;
 	default:
 		rc = -1;
@@ -2547,52 +2557,6 @@ nvme_tcp_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 }
 
 static int
-nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair,
-			    struct nvme_request *req)
-{
-	struct nvme_tcp_qpair *tqpair;
-	struct nvme_tcp_req *tcp_req;
-	int rc = 0;
-
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
-	assert(!nvme_qpair_is_admin_queue(qpair));
-
-	assert(qpair != NULL);
-	tqpair = nvme_tcp_qpair(qpair);
-	tcp_req = get_nvme_active_req_by_cid(tqpair, req->cmd.cid);
-	if (spdk_likely(tcp_req)) {
-		xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
-		tcp_req->pdu.iovcnt = 0;
-		tcp_req->pdu.data_iovcnt = 0;
-		tcp_req->pdu.data_len = 0;
-		tcp_req->sock_buf = NULL;
-		nvme_tcp_req_put(tqpair, tcp_req);
-	} else {
-		rc = -EINVAL;
-		SPDK_ERRLOG("Failed to find request to free: cid %u\n", req->cmd.cid);
-	}
-
-	req->zcopy.iovs = NULL;
-	req->zcopy.iovcnt = 0;
-	nvme_free_request(req);
-
-	/* Zcopy requests may be queued for waiting resources, so set pending_events
-	 * and increase async_complete to trigger a resubmission of queued requests.
-	 */
-	if (tqpair->qpair.poll_group && !STAILQ_EMPTY(&tqpair->qpair.queued_req) &&
-	    !tqpair->flags.pending_events) {
-		struct nvme_tcp_poll_group *pgroup;
-		pgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
-
-		TAILQ_INSERT_TAIL(&pgroup->pending_events, tqpair, link);
-		tqpair->flags.pending_events = true;
-	}
-	tqpair->async_complete++;
-
-	return rc;
-}
-
-static int
 nvme_tcp_qpair_reset(struct spdk_nvme_qpair *qpair)
 {
 	return 0;
@@ -2612,7 +2576,6 @@ _nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req,
 	req = &tcp_req->req;
 	qpair = req->qpair;
 
-	nvme_request_put_zcopy_iovs(&req->zcopy);
 	xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
 	tcp_req->sock_buf = NULL;
 
@@ -2629,15 +2592,11 @@ _nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req,
 	user_cb		= req->cb_fn;
 	user_cb_arg	= req->cb_arg;
 
-	if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
-		nvme_complete_request_zcopy(req->zcopy.zcopy_cb_fn, user_cb_arg, qpair, req, &cpl);
-	} else {
-		/* Accel sequence is either executed or aborted. Clean pointer since nvme transport expects it
-		 * to be NULL */
-		req->accel_sequence = NULL;
-		nvme_tcp_req_put(tqpair, tcp_req);
-		nvme_complete_request(user_cb, user_cb_arg, qpair, req, &cpl);
-	}
+	/* Accel sequence is either executed or aborted. Clean pointer since nvme transport expects it
+	 * to be NULL */
+	req->accel_sequence = NULL;
+	nvme_tcp_req_put(tqpair, tcp_req);
+	nvme_complete_request(user_cb, user_cb_arg, qpair, req, &cpl);
 }
 
 static void
@@ -2699,6 +2658,7 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 	struct spdk_accel_task	*task;
 	struct spdk_accel_sequence *accel_seq;
 	bool skip_copy = false;
+	uint32_t iovcnt;
 
 	req = &tcp_req->req;
 
@@ -2721,30 +2681,42 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 			goto out;
 		}
 
-		assert(req->zcopy.iovcnt == 0);
+		iovcnt = 0;
 		sock_buf = tcp_req->sock_buf;
 		while (sock_buf) {
-			req->zcopy.iovcnt++;
+			iovcnt++;
 			sock_buf = sock_buf->next;
 		}
 
-		rc = nvme_request_get_zcopy_iovs(&req->zcopy);
-		if (spdk_unlikely(rc)) {
-			SPDK_ERRLOG("Failed to allocate zcopy iovs count\n");
-			goto out;
+		if (iovcnt > NVME_TCP_MAX_SGL_DESCRIPTORS) {
+			if (iovcnt > MAX_RX_IOVS) {
+				rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+				rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+				SPDK_ERRLOG("HIGHLY SCATTERED RX RECEIVE. CANNOT HANDLE\n");
+				goto out;
+			}
+
+			tcp_req->recv_iovs = spdk_mempool_get(g_iovec_pool);
+			if (tcp_req->recv_iovs == NULL) {
+				/* TODO: Need to queue up and wait */
+				rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+				rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+				SPDK_ERRLOG("Ran out of iovec arrays in pool!\n");
+				goto out;
+			}
 		}
 
-		req->zcopy.iovcnt = 0;
+		tcp_req->recv_iovcnt = 0;
 		sock_buf = tcp_req->sock_buf;
 		while (sock_buf) {
-			req->zcopy.iovs[req->zcopy.iovcnt++] = sock_buf->iov;
+			tcp_req->recv_iovs[tcp_req->recv_iovcnt++] = sock_buf->iov;
 			sock_buf = sock_buf->next;
 		}
 
 		tqpair->stats->received_data_pdus++;
-		tqpair->stats->received_data_iovs += req->zcopy.iovcnt;
-		if (req->zcopy.iovcnt > (int)tqpair->stats->max_data_iovs_per_pdu) {
-			tqpair->stats->max_data_iovs_per_pdu = req->zcopy.iovcnt;
+		tqpair->stats->received_data_iovs += tcp_req->recv_iovcnt;
+		if (tcp_req->recv_iovcnt > tqpair->stats->max_data_iovs_per_pdu) {
+			tqpair->stats->max_data_iovs_per_pdu = tcp_req->recv_iovcnt;
 		}
 
 		accel_seq = req->accel_sequence;
@@ -2754,8 +2726,8 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 				skip_copy = true;
 				task->src_domain = NULL;
 				task->src_domain_ctx = NULL;
-				task->s.iovs = req->zcopy.iovs;
-				task->s.iovcnt = req->zcopy.iovcnt;
+				task->s.iovs = tcp_req->recv_iovs;
+				task->s.iovcnt = tcp_req->recv_iovcnt;
 			}
 		}
 		if (!skip_copy) {
@@ -2763,7 +2735,7 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 							       tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
 							       req->payload.opts->memory_domain,
 							       req->payload.opts->memory_domain_ctx,
-							       req->zcopy.iovs, req->zcopy.iovcnt,
+							       tcp_req->recv_iovs, tcp_req->recv_iovcnt,
 							       NULL, NULL, NULL, NULL);
 			if (spdk_unlikely(rc)) {
 				SPDK_ERRLOG("Failed to append copy accel task, rc %d\n", rc);
@@ -3153,22 +3125,22 @@ nvme_tcp_apply_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp
 			skip_copy = true;
 			task->src_domain = NULL;
 			task->src_domain_ctx = NULL;
-			task->s.iovs = req->zcopy.iovs;
-			task->s.iovcnt = req->zcopy.iovcnt;
+			task->s.iovs = tcp_req->recv_iovs;
+			task->s.iovcnt = tcp_req->recv_iovcnt;
 		}
 	}
 
 	if (skip_copy) {
 		rc = group->accel_fn_table.append_check_crc32c(group->ctx, (void **)&accel_seq,
-				&pdu->data_digest_crc32, req->zcopy.iovs,
-				req->zcopy.iovcnt, NULL, NULL, 0, NULL, NULL);
+				&pdu->data_digest_crc32, tcp_req->recv_iovs,
+				tcp_req->recv_iovcnt, NULL, NULL, 0, NULL, NULL);
 	} else {
 		rc = group->accel_fn_table.append_copy_check_crc32c(group->ctx, (void **)&accel_seq,
 				&pdu->data_digest_crc32,
 				tcp_req->pdu.iovs, tcp_req->pdu.data_iovcnt,
 				req->payload.opts->memory_domain,
 				req->payload.opts->memory_domain_ctx,
-				req->zcopy.iovs, req->zcopy.iovcnt, NULL, NULL,
+				tcp_req->recv_iovs, tcp_req->recv_iovcnt, NULL, NULL,
 				0, NULL, NULL);
 	}
 
@@ -3208,36 +3180,20 @@ static inline int
 nvme_tcp_prepare_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
-	struct nvme_request *req;
 	struct xlio_sock_buf *sock_buf;
 	int rc;
 
-	req = &tcp_req->req;
-
-	assert(req->zcopy.iovcnt == 0);
+	tcp_req->recv_iovcnt = 0;
 	sock_buf = tcp_req->sock_buf;
 	while (sock_buf) {
-		req->zcopy.iovcnt++;
-		sock_buf = sock_buf->next;
-	}
-
-	rc = nvme_request_get_zcopy_iovs(&req->zcopy);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("Failed to allocate zcopy iovs count\n");
-		return rc;
-	}
-
-	req->zcopy.iovcnt = 0;
-	sock_buf = tcp_req->sock_buf;
-	while (sock_buf) {
-		req->zcopy.iovs[req->zcopy.iovcnt++] = sock_buf->iov;
+		tcp_req->recv_iovs[tcp_req->recv_iovcnt++] = sock_buf->iov;
 		sock_buf = sock_buf->next;
 	}
 
 	tqpair->stats->received_data_pdus++;
-	tqpair->stats->received_data_iovs += req->zcopy.iovcnt;
-	if (req->zcopy.iovcnt > (int)tqpair->stats->max_data_iovs_per_pdu) {
-		tqpair->stats->max_data_iovs_per_pdu = req->zcopy.iovcnt;
+	tqpair->stats->received_data_iovs += tcp_req->recv_iovcnt;
+	if (tcp_req->recv_iovcnt > tqpair->stats->max_data_iovs_per_pdu) {
+		tqpair->stats->max_data_iovs_per_pdu = tcp_req->recv_iovcnt;
 	}
 
 	rc = nvme_tcp_apply_accel_sequence_c2h(tqpair, pdu);
@@ -3275,10 +3231,10 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 		assert(tcp_req != NULL);
 		tgroup = nvme_tcp_poll_group(tqpair->qpair.poll_group);
 		/* Only support this limitated case that the request has only one c2h pdu */
-		if ((nvme_qpair_get_state(&tqpair->qpair) >= NVME_QPAIR_CONNECTED) && tgroup != NULL &&
-		    spdk_likely(recv_pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0
-				&& tcp_req->req.payload_size == recv_pdu->data_len) &&
-		    !nvme_tcp_pdu_is_zcopy(recv_pdu)) {
+		if ((nvme_qpair_get_state(&tqpair->qpair) >= NVME_QPAIR_CONNECTED) &&
+		    tgroup != NULL &&
+		    recv_pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0 &&
+		    tcp_req->req.payload_size == recv_pdu->data_len) {
 			tcp_req->pdu.hdr = recv_pdu->hdr;
 			tcp_req->pdu.req = tcp_req;
 			memcpy(tcp_req->pdu.data_digest, recv_pdu->data_digest, sizeof(recv_pdu->data_digest));
@@ -3300,10 +3256,7 @@ nvme_tcp_pdu_payload_handle(struct nvme_tcp_qpair *tqpair,
 			}
 		}
 
-		if (nvme_tcp_pdu_is_zcopy(recv_pdu)) {
-			crc32c = nvme_tcp_pdu_calc_data_digest_with_iov(recv_pdu, tcp_req->req.zcopy.iovs,
-					tcp_req->pdu.data_iovcnt);
-		} else if (nvme_tcp_req_with_memory_domain(recv_pdu->req)) {
+		if (nvme_tcp_req_with_memory_domain(recv_pdu->req)) {
 			crc32c = nvme_tcp_pdu_calc_data_digest_with_sock_buf(recv_pdu);
 		} else {
 			crc32c = nvme_tcp_pdu_calc_data_digest_with_iov(recv_pdu, recv_pdu->iovs, recv_pdu->data_iovcnt);
@@ -4057,125 +4010,6 @@ nvme_tcp_read_digest(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, ui
 }
 
 static int
-nvme_tcp_read_payload_data_zcopy(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
-{
-	struct nvme_tcp_req *tcp_req = pdu->req;
-	struct xlio_sock_buf *sock_buf;
-	int ret = 0;
-
-	if (pdu->data_len > pdu->rw_offset) {
-		int rc = 0;
-		size_t len = pdu->data_len - pdu->rw_offset;
-
-		ret = xlio_sock_recv_zcopy(tqpair, len, &sock_buf);
-		if (spdk_unlikely(ret <= 0)) {
-			goto fail;
-		}
-
-		SPDK_DEBUGLOG(nvme, "tqpair %p, pdu %p: requested %zu, got %d bytes\n", tqpair, pdu, len, ret);
-		if (tcp_req->sock_buf) {
-			struct xlio_sock_buf *cur_buf = tcp_req->sock_buf;
-
-			while (cur_buf->next) {
-				cur_buf = cur_buf->next;
-			}
-			cur_buf->next = sock_buf;
-		} else {
-			tcp_req->sock_buf = sock_buf;
-		}
-
-		if ((size_t)ret != len) {
-			/* Part of data is not received, so return directly */
-			return ret;
-		}
-
-		/* We got all the data. Setup iovs */
-		sock_buf = tcp_req->sock_buf;
-
-		assert(tcp_req->req.zcopy.iovcnt == 0);
-		while (sock_buf) {
-			tcp_req->req.zcopy.iovcnt++;
-			sock_buf = sock_buf->next;
-		}
-
-		if (spdk_unlikely(tcp_req->req.zcopy.iovcnt > NVME_MAX_ZCOPY_IOVS)) {
-			/* fallback memcopy */
-			tcp_req->req.zcopy.iovcnt = 0;
-			rc = nvme_request_get_zcopy_buffers(&tcp_req->req, pdu->data_len);
-			if (rc == 0) {
-				size_t dst_offset = 0;
-
-				tcp_req->pdu.data_iovcnt = tcp_req->req.zcopy.iovcnt;
-				sock_buf = tcp_req->sock_buf;
-				while (sock_buf) {
-					dst_offset += copy_iov_with_offset(&sock_buf->iov, 1,
-									   tcp_req->req.zcopy.iovs,
-									   tcp_req->req.zcopy.iovcnt,
-									   dst_offset);
-
-					sock_buf = sock_buf->next;
-				}
-
-				xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
-				tcp_req->sock_buf = NULL;
-
-				SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->pdu.data_iovcnt);
-			}
-		} else {
-			if (tcp_req->req.zcopy.iovcnt <= NVME_TCP_MAX_SGL_DESCRIPTORS) {
-				tcp_req->req.zcopy.iovs = tcp_req->pdu.iovs;
-			} else {
-				rc = nvme_request_get_zcopy_iovs(&tcp_req->req.zcopy);
-			}
-			if (rc == 0) {
-				assert(tcp_req->pdu.data_iovcnt == 0);
-				sock_buf = tcp_req->sock_buf;
-				while (sock_buf) {
-					tcp_req->req.zcopy.iovs[tcp_req->pdu.data_iovcnt++] = sock_buf->iov;
-					sock_buf = sock_buf->next;
-				}
-				SPDK_DEBUGLOG(nvme, "Payload is split into %d iovs\n", tcp_req->pdu.data_iovcnt);
-			}
-		}
-
-		if (spdk_unlikely(rc != 0)) {
-			SPDK_ERRLOG("Failed to set zcopy iov\n");
-			xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
-			tcp_req->sock_buf = NULL;
-			tcp_req->req.cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-		}
-	}
-
-	if (pdu->ddgst_enable) {
-		int ret_dgst = nvme_tcp_read_digest(tqpair, pdu, SPDK_NVME_TCP_DIGEST_LEN +
-						    pdu->data_len - pdu->rw_offset - ret);
-		if (spdk_unlikely(ret_dgst < 0)) {
-			ret = ret_dgst;
-			goto fail;
-		}
-
-		ret += ret_dgst;
-	}
-	return ret;
-
-fail:
-	if (ret < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			return 0;
-		}
-
-		/* For connect reset issue, do not output error log */
-		if (errno != ECONNRESET) {
-			SPDK_ERRLOG("xlio_sock_readv() failed, errno %d: %s\n",
-				    errno, spdk_strerror(errno));
-		}
-	}
-
-	/* connection closed */
-	return NVME_TCP_CONNECTION_FATAL;
-}
-
-static int
 nvme_tcp_read_payload_data_memory_domain(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_pdu *recv_pdu)
 {
@@ -4402,9 +4236,7 @@ nvme_tcp_read_pdu(struct nvme_tcp_qpair *tqpair, uint32_t *reaped, uint32_t max_
 			data_len = pdu->data_len;
 			data_len += pdu->ddgst_enable * SPDK_NVME_TCP_DIGEST_LEN;
 
-			if (nvme_tcp_pdu_is_zcopy(pdu)) {
-				rc = nvme_tcp_read_payload_data_zcopy(tqpair, pdu);
-			} else if (nvme_tcp_req_with_memory_domain(pdu->req)) {
+			if (nvme_tcp_req_with_memory_domain(pdu->req)) {
 				rc = nvme_tcp_read_payload_data_memory_domain(tqpair, pdu);
 			} else {
 				rc = nvme_nvda_tcp_read_payload_data(tqpair, pdu);
@@ -5089,8 +4921,6 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 		return NULL;
 	}
 
-	tctrlr->ctrlr.flags |= SPDK_NVME_CTRLR_ZCOPY_SUPPORTED;
-
 	if (nvme_ctrlr_add_process(&tctrlr->ctrlr, 0) != 0) {
 		SPDK_ERRLOG("nvme_ctrlr_add_process() failed\n");
 		nvme_ctrlr_destruct(&tctrlr->ctrlr);
@@ -5273,10 +5103,10 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 
 		nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 
-		if (qpair->outstanding_zcopy_reqs > 0 || tqpair->consumed_packets > 0) {
+		if (tqpair->consumed_packets > 0) {
 			SPDK_DEBUGLOG(nvme,
-				      "qpair %p %u, sock 0x%lx: defer close, zcopy_reqs %u, consumed_packets %u\n",
-				      tqpair, qpair->id, tqpair->xlio_sock, qpair->outstanding_zcopy_reqs,
+				      "qpair %p %u, sock 0x%lx: defer close, consumed_packets %u\n",
+				      tqpair, qpair->id, tqpair->xlio_sock,
 				      tqpair->consumed_packets);
 			continue;
 		}
@@ -5437,8 +5267,6 @@ static const struct spdk_nvme_transport_ops tcp_ops = {
 	.poll_group_destroy = nvme_tcp_poll_group_destroy,
 	.poll_group_get_stats = nvme_tcp_poll_group_get_stats,
 	.poll_group_free_stats = nvme_tcp_poll_group_free_stats,
-
-	.qpair_free_request = nvme_tcp_qpair_free_request,
 };
 
 SPDK_NVME_TRANSPORT_REGISTER(tcp, &tcp_ops);

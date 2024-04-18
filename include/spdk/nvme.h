@@ -680,8 +680,7 @@ enum spdk_nvme_ctrlr_flags {
 	SPDK_NVME_CTRLR_ZONE_APPEND_SUPPORTED		= 1 << 5, /**< Zone Append is supported (within Zoned Namespaces) */
 	SPDK_NVME_CTRLR_DIRECTIVES_SUPPORTED		= 1 << 6, /**< The Directives is supported */
 	SPDK_NVME_CTRLR_MPTR_SGL_SUPPORTED		= 1 << 7, /**< MPTR containing SGL descriptor is supported */
-	SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED	= 1 << 8, /**< Support for sending I/O requests with accel sequence */
-	SPDK_NVME_CTRLR_ZCOPY_SUPPORTED			= 1 << 9, /**< Zero copy API is supported */
+	SPDK_NVME_CTRLR_ACCEL_SEQUENCE_SUPPORTED	= 1 << 8, /**< Support for sending I/O requests with accel sequnece */
 };
 
 struct spdk_accel_sequence;
@@ -1696,27 +1695,6 @@ bool spdk_nvme_ctrlr_is_feature_supported(struct spdk_nvme_ctrlr *ctrlr, uint8_t
  * \param cpl Completion queue entry that contains the completion status.
  */
 typedef void (*spdk_nvme_cmd_cb)(void *ctx, const struct spdk_nvme_cpl *cpl);
-
-struct spdk_nvme_zcopy_io;
-
-/**
- * Signature for callback function invoked when a command for zcopy is completed.
- *
- * \param spdk_nvme_cpl Completion queue entry that contains the completion status.
- * \param spdk_nvme_zcopy_buf Entry that contains allocated iovs and its context.
- */
-typedef void (*spdk_nvme_cmd_zcopy_cb)(void *, const struct spdk_nvme_cpl *,
-				       struct spdk_nvme_zcopy_io *);
-
-/**
- * Get the zcopy iovec describing the data buffer of a nvme_io.
- *
- * \param zcopy_io I/O to describe with iovec.
- * \param iovs Pointer to be filled with iovec.
- * \param iovcnt Pointer to be filled with number of iovec entries.
- */
-void spdk_nvme_zcopy_io_get_iovec(struct spdk_nvme_zcopy_io *zcopy_io,
-				  struct iovec **iovs, int *iovcnt);
 
 /**
  * Signature for callback function invoked when an asynchronous event request
@@ -3906,67 +3884,6 @@ int spdk_nvme_ns_cmd_read(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair
 			  void *cb_arg, uint32_t io_flags);
 
 /**
- * \brief Submits an I/O to the specified NVMe namespace with zero copy operation.
- *
- * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
- * The user must ensure that only one thread submits I/O on a given qpair at any
- * given time. Started zero copy IO operations must later be finalized with
- * spdk_nvme_ns_cmd_zcopy_end() function.
- *
- * Note, that this API can be used only if SPDK_NVME_CTRLR_ZCOPY_SUPPORTED flag is set
- * in spdk_nvme_ctrlr_get_flags().
- *
- * \param ns NVMe namespace to submit the read I/O.
- * \param qpair I/O queue pair to submit the request.
- * \param lba Starting LBA to read the data.
- * \param lba_count Length (in sectors) for the read operation.
- * \param cb_fn Callback function to invoke when the I/O is completed.
- * \param cb_arg Argument to pass to the callback function.
- * \param io_flags Set flags, defined in nvme_spec.h, for this I/O.
- * \param populate Whether the buffer should be populated with the real data.
- * \param apptag_mask application tag mask.
- * \param apptag application tag to use end-to-end protection information.
- *
- * \return 0 if successfully submitted, negated errnos on the following error conditions:
- * -EINVAL: The request is malformed.
- * -ENOMEM: The request cannot be allocated.
- * -ENXIO: The qpair is failed at the transport level.
- * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
- *          with error status including dnr=1 in this case.
- */
-int spdk_nvme_ns_cmd_zcopy_start(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
-				 uint64_t lba, uint32_t lba_count,
-				 spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
-				 uint32_t io_flags, bool populate,
-				 uint16_t apptag_mask, uint16_t apptag);
-
-/**
- * \brief Finalize zcopy IO operation started with spdk_nvme_ns_cmd_zcopy_start.
- *
- * This function finalizes zero copy IO operation previously started with
- * spdk_nvme_ns_cmd_zcopy_start() function. When commit is true this function will
- * write data from buffers to disk. When commit is false it will just release data
- * buffers and other resources. After call to this function data buffers can not be
- * accessed anymore. The used namespace and qpair have already been stored in
- * nvme_zcopy_io.
- *
- * \param cb_fn Callback function to invoke when the I/O is completed.
- * \param cb_arg Argument to pass to the callback function.
- * \param commit Whether the buffer should be committed back to disk.
- * \param nvme_zcopy_io Entry that contains zcopy buffer, flags. The buffer to be
- * released is allocated by calling spdk_nvme_ns_cmd_zcopy_start.
- *
- * \return 0 if successfully submitted, negated errnos on the following error conditions:
- * -EINVAL: The request is malformed.
- * -ENOMEM: The request cannot be allocated.
- * -ENXIO: The qpair is failed at the transport level.
- * -EFAULT: Invalid address was specified as part of payload.  cb_fn is also called
- *          with error status including dnr=1 in this case.
- */
-int spdk_nvme_ns_cmd_zcopy_end(spdk_nvme_cmd_zcopy_cb cb_fn, void *cb_arg,
-			       bool commit, struct spdk_nvme_zcopy_io *nvme_zcopy_io);
-
-/**
  * Submit a read I/O to the specified NVMe namespace.
  *
  * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
@@ -4906,8 +4823,6 @@ struct spdk_nvme_transport_ops {
 
 	/* Optional callback for transports to process removal events of attached controllers. */
 	int (*ctrlr_scan_attached)(struct spdk_nvme_probe_ctx *probe_ctx);
-
-	int (*qpair_free_request)(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
 
 	/* Optional callback for transports to process transport-specific events. E.g. poll RDMA_CM event channel */
 	int (*ctrlr_process_transport_events)(struct spdk_nvme_ctrlr *ctrlr);
