@@ -16,6 +16,7 @@
 #include "spdk/sock.h"
 #include "spdk/string.h"
 #include "spdk/queue.h"
+#include "spdk/md5.h"
 
 #include "iscsi/iscsi.h"
 #include "iscsi/param.h"
