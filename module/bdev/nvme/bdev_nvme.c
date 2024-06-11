@@ -1633,7 +1633,11 @@ bdev_nvme_reconnect_delay_timer_expired(void *ctx)
 
 	spdk_poller_unregister(&nvme_ctrlr->reconnect_delay_timer);
 
-	assert(nvme_ctrlr->reconnect_is_delayed == true);
+	if (!nvme_ctrlr->reconnect_is_delayed) {
+		pthread_mutex_unlock(&nvme_ctrlr->mutex);
+		return SPDK_POLLER_BUSY;
+	}
+
 	nvme_ctrlr->reconnect_is_delayed = false;
 
 	if (nvme_ctrlr->destruct) {
@@ -1850,6 +1854,21 @@ bdev_nvme_reset_destroy_qpairs(struct nvme_ctrlr *nvme_ctrlr)
 }
 
 static void
+_bdev_nvme_reconnect(void *ctx)
+{
+	struct nvme_ctrlr *nvme_ctrlr = ctx;
+
+	assert(nvme_ctrlr->resetting == true);
+	assert(nvme_ctrlr->thread == spdk_get_thread());
+
+	spdk_poller_unregister(&nvme_ctrlr->reconnect_delay_timer);
+
+	spdk_poller_resume(nvme_ctrlr->adminq_timer_poller);
+
+	bdev_nvme_reconnect_ctrlr(nvme_ctrlr);
+}
+
+static void
 _bdev_nvme_reset(void *ctx)
 {
 	struct nvme_ctrlr *nvme_ctrlr = ctx;
@@ -1867,6 +1886,8 @@ _bdev_nvme_reset(void *ctx)
 static int
 bdev_nvme_reset(struct nvme_ctrlr *nvme_ctrlr)
 {
+	spdk_msg_fn msg_fn;
+
 	pthread_mutex_lock(&nvme_ctrlr->mutex);
 	if (nvme_ctrlr->destruct) {
 		pthread_mutex_unlock(&nvme_ctrlr->mutex);
@@ -1879,20 +1900,22 @@ bdev_nvme_reset(struct nvme_ctrlr *nvme_ctrlr)
 		return -EBUSY;
 	}
 
-	if (nvme_ctrlr->reconnect_is_delayed) {
-		pthread_mutex_unlock(&nvme_ctrlr->mutex);
-		SPDK_NOTICELOG("Reconnect is already scheduled.\n");
-		return -EBUSY;
-	}
-
 	nvme_ctrlr->resetting = true;
 
-	assert(nvme_ctrlr->reset_start_tsc == 0);
+	if (nvme_ctrlr->reconnect_is_delayed) {
+		SPDK_DEBUGLOG(bdev_nvme, "Reconnect is already scheduled.\n");
+		msg_fn = _bdev_nvme_reconnect;
+		nvme_ctrlr->reconnect_is_delayed = false;
+	} else {
+		msg_fn = _bdev_nvme_reset;
+		assert(nvme_ctrlr->reset_start_tsc == 0);
+	}
+
 	nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
 
 	pthread_mutex_unlock(&nvme_ctrlr->mutex);
 
-	spdk_thread_send_msg(nvme_ctrlr->thread, _bdev_nvme_reset, nvme_ctrlr);
+	spdk_thread_send_msg(nvme_ctrlr->thread, msg_fn, nvme_ctrlr);
 	return 0;
 }
 
