@@ -32,6 +32,8 @@ static bool g_verbose;
 static uint8_t g_psk_key[SPDK_TLS_PSK_MAX_LEN];
 static uint32_t g_psk_key_size;
 static char *g_psk_identity;
+static char *g_local_addr;
+static int g_local_port;
 
 /*
  * We'll use this struct to gather housekeeping hello_context to pass between
@@ -48,6 +50,8 @@ struct hello_context_t {
 	uint8_t *psk_key;
 	uint32_t psk_key_size;
 	char *psk_identity;
+	char *local_addr;
+	int local_port;
 
 	bool verbose;
 	int bytes_in;
@@ -78,6 +82,8 @@ hello_sock_usage(void)
 	printf(" -N sock_impl  socket implementation, e.g., -N posix or -N uring\n");
 	printf(" -S            start in server mode\n");
 	printf(" -T tls_ver    TLS version, e.g., -T 12 or -T 13. If omitted, auto-negotiation will take place\n");
+	printf(" -a local_addr local address (only for client mode)\n");
+	printf(" -b local_port local port number (only for client mode)\n");
 	printf(" -k            disable KTLS for the given sock implementation (default)\n");
 	printf(" -K            enable KTLS for the given sock implementation\n");
 	printf(" -V            print out additional information\n");
@@ -94,6 +100,16 @@ hello_sock_parse_arg(int ch, char *arg)
 	char *unhexlified;
 
 	switch (ch) {
+	case 'a':
+		g_local_addr = arg;
+		break;
+	case 'b':
+		g_local_port = spdk_strtol(arg, 10);
+		if (g_local_port < 0) {
+			fprintf(stderr, "Invalid local port\n");
+			return g_local_port;
+		}
+		break;
 	case 'E':
 		g_psk_key_size = strlen(arg) / 2;
 		if (g_psk_key_size > SPDK_TLS_PSK_MAX_LEN) {
@@ -295,6 +311,8 @@ hello_sock_connect(struct hello_context_t *ctx)
 	opts.zcopy = ctx->zcopy;
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
+	opts.src_addr = ctx->local_addr;
+	opts.src_port = ctx->local_port;
 
 	SPDK_NOTICELOG("Connecting to the server on %s:%d with sock_impl(%s)\n", ctx->host, ctx->port,
 		       ctx->sock_impl_name);
@@ -532,7 +550,8 @@ main(int argc, char **argv)
 	opts.name = "hello_sock";
 	opts.shutdown_cb = hello_sock_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "E:H:I:kKN:P:ST:VzZ", NULL, hello_sock_parse_arg,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "a:b:E:H:I:kKN:P:ST:VzZ", NULL,
+				      hello_sock_parse_arg,
 				      hello_sock_usage)) != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
@@ -547,6 +566,8 @@ main(int argc, char **argv)
 	hello_context.psk_key_size = g_psk_key_size;
 	hello_context.psk_identity = g_psk_identity;
 	hello_context.verbose = g_verbose;
+	hello_context.local_addr = g_local_addr;
+	hello_context.local_port = g_local_port;
 
 	if (hello_context.sock_impl_name == NULL) {
 		hello_context.sock_impl_name = spdk_sock_get_default_impl();
