@@ -491,6 +491,61 @@ xlio_sock_set_nonblock(int fd)
 	return 0;
 }
 
+static inline const char *
+strip_ip(const char *ip, char *buf, size_t buf_size)
+{
+	char *p;
+
+	if (ip[0] == '[') {
+		snprintf(buf, buf_size, "%s", ip + 1);
+		p = strchr(buf, ']');
+		if (p != NULL) {
+			*p = '\0';
+		}
+		return buf;
+	}
+
+	return ip;
+}
+
+static inline int
+xlio_bind_client_socket(int fd, const char *addr, int port)
+{
+	char buf[256];
+	char portnum[32];
+	struct addrinfo hints, *res;
+	int rc;
+
+	assert(addr || port);
+
+	if (addr) {
+		addr = strip_ip(addr, buf, sizeof(buf));
+	}
+
+	snprintf(portnum, sizeof portnum, "%d", port);
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV | AI_NUMERICHOST;
+	rc = xlio_getaddrinfo(addr, portnum, &hints, &res);
+	if (rc != 0) {
+		SPDK_ERRLOG("Source getaddrinfo() failed %s (%d), address %s, port %d\n",
+			    xlio_gai_strerror(rc), rc, addr ? addr : "null", port);
+		return -1;
+	}
+
+	rc = xlio_bind(fd, res->ai_addr, res->ai_addrlen);
+	if (rc != 0) {
+		SPDK_ERRLOG("bind() failed at address %s port %d, errno = %d\n",
+			    addr ? addr : "null", port, errno);
+		xlio_freeaddrinfo(res);
+		return -1;
+	}
+
+	xlio_freeaddrinfo(res);
+	return 0;
+}
+
 static struct spdk_sock *
 xlio_sock_create(const char *ip, int port,
 		 enum xlio_sock_create_type type,
@@ -499,7 +554,8 @@ xlio_sock_create(const char *ip, int port,
 	struct spdk_xlio_sock *sock;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
-	char *p;
+	const char *src_addr;
+	uint16_t src_port;
 	struct addrinfo hints, *res, *res0;
 	int fd;
 	int val = 1;
@@ -512,15 +568,8 @@ xlio_sock_create(const char *ip, int port,
 	if (ip == NULL) {
 		return NULL;
 	}
-	if (ip[0] == '[') {
-		snprintf(buf, sizeof(buf), "%s", ip + 1);
-		p = strchr(buf, ']');
-		if (p != NULL) {
-			*p = '\0';
-		}
-		ip = (const char *) &buf[0];
-	}
 
+	ip = strip_ip(ip, buf, sizeof(buf));
 	snprintf(portnum, sizeof portnum, "%d", port);
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = PF_UNSPEC;
@@ -650,6 +699,17 @@ retry:
 				xlio_close(fd);
 				fd = -1;
 				break;
+			}
+
+			src_addr = SPDK_GET_FIELD(opts, src_addr, NULL, opts->opts_size);
+			src_port = SPDK_GET_FIELD(opts, src_port, 0, opts->opts_size);
+			if (src_addr != NULL || src_port != 0) {
+				rc = xlio_bind_client_socket(fd, src_addr, src_port);
+				if (rc != 0) {
+					xlio_close(fd);
+					fd = -1;
+					continue;
+				}
 			}
 
 			rc = xlio_connect(fd, res->ai_addr, res->ai_addrlen);
