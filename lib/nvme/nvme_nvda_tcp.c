@@ -408,6 +408,61 @@ xlio_sock_alloc(struct nvme_tcp_qpair *tqpair, struct spdk_sock_impl_opts *xlio_
 	return 0;
 }
 
+static inline const char *
+strip_ip(const char *ip, char *buf, size_t buf_size)
+{
+	char *p;
+
+	if (ip[0] == '[') {
+		snprintf(buf, buf_size, "%s", ip + 1);
+		p = strchr(buf, ']');
+		if (p != NULL) {
+			*p = '\0';
+		}
+		return buf;
+	}
+
+	return ip;
+}
+
+static inline int
+xlio_bind_client_socket(struct nvme_tcp_qpair *tqpair, const char *addr, int port)
+{
+	char buf[256];
+	char portnum[32];
+	struct addrinfo hints, *res;
+	int rc;
+
+	assert(addr || port);
+
+	if (addr) {
+		addr = strip_ip(addr, buf, sizeof(buf));
+	}
+
+	snprintf(portnum, sizeof portnum, "%d", port);
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_PASSIVE | AI_NUMERICSERV | AI_NUMERICHOST;
+	rc = xlio_getaddrinfo(addr, portnum, &hints, &res);
+	if (rc != 0) {
+		SPDK_ERRLOG("Source getaddrinfo() failed %s (%d), address %s, port %d\n",
+			    xlio_gai_strerror(rc), rc, addr ? addr : "null", port);
+		return -1;
+	}
+
+	rc = xlio_socket_bind(tqpair->xlio_sock, res->ai_addr, res->ai_addrlen);
+	if (rc != 0) {
+		SPDK_ERRLOG("bind() failed at address %s port %d, errno = %d\n",
+			    addr ? addr : "null", port, errno);
+		xlio_freeaddrinfo(res);
+		return -1;
+	}
+
+	xlio_freeaddrinfo(res);
+	return 0;
+}
+
 static int
 xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct spdk_sock_opts *opts,
 	       xlio_poll_group_t group, int vlan_tag)
@@ -415,7 +470,8 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 	struct spdk_sock_impl_opts *xlio_opts;
 	char buf[MAX_TMPBUF];
 	char portnum[PORTNUMLEN];
-	char *p;
+	const char *src_addr;
+	uint16_t src_port;
 	struct addrinfo hints, *res, *res0;
 	int val = 1;
 	int rc, sz;
@@ -428,15 +484,8 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 	if (ip == NULL) {
 		return -EINVAL;
 	}
-	if (ip[0] == '[') {
-		snprintf(buf, sizeof(buf), "%s", ip + 1);
-		p = strchr(buf, ']');
-		if (p != NULL) {
-			*p = '\0';
-		}
-		ip = (const char *) &buf[0];
-	}
 
+	ip = strip_ip(ip, buf, sizeof(buf));
 	snprintf(portnum, sizeof portnum, "%d", port);
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = PF_UNSPEC;
@@ -538,6 +587,18 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 						    sizeof vlan_tag);
 			if (rc != 0) {
 				/* error */
+				if (!xlio_socket_destroy(tqpair->xlio_sock)) {
+					assert(false);
+				}
+				continue;
+			}
+		}
+
+		src_addr = SPDK_GET_FIELD(opts, src_addr, NULL, opts->opts_size);
+		src_port = SPDK_GET_FIELD(opts, src_port, 0, opts->opts_size);
+		if (src_addr != NULL || src_port != 0) {
+			rc = xlio_bind_client_socket(tqpair, src_addr, src_port);
+			if (rc != 0) {
 				if (!xlio_socket_destroy(tqpair->xlio_sock)) {
 					assert(false);
 				}
@@ -4589,7 +4650,10 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 
 	if (ctrlr->opts.src_addr[0] || ctrlr->opts.src_svcid[0]) {
 		memset(&src_addr, 0, sizeof(src_addr));
-		rc = nvme_parse_addr(&src_addr, family, ctrlr->opts.src_addr, ctrlr->opts.src_svcid, &src_port);
+		rc = nvme_parse_addr(&src_addr, family,
+				     ctrlr->opts.src_addr[0] ? ctrlr->opts.src_addr : NULL,
+				     ctrlr->opts.src_svcid[0] ? ctrlr->opts.src_svcid : NULL,
+				     &src_port);
 		if (rc != 0) {
 			SPDK_ERRLOG("src_addr nvme_parse_addr() failed\n");
 			return rc;
@@ -4606,6 +4670,8 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	spdk_sock_get_default_opts(&opts);
 	opts.priority = ctrlr->trid.priority;
 	opts.zcopy = !nvme_qpair_is_admin_queue(qpair);
+	opts.src_addr = ctrlr->opts.src_addr[0] ? ctrlr->opts.src_addr : NULL;
+	opts.src_port = src_port;
 	if (ctrlr->opts.transport_ack_timeout) {
 		opts.ack_timeout = 1ULL << ctrlr->opts.transport_ack_timeout;
 	}
