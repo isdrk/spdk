@@ -16,6 +16,7 @@
 #include "spdk/sock.h"
 #include "spdk/util.h"
 #include "spdk/string.h"
+#include "spdk/net.h"
 #include "spdk_internal/sock.h"
 #include "spdk_internal/event.h"
 #include "spdk_internal/xlio.h"
@@ -131,35 +132,6 @@ xlio_sock_free_pools(void)
 	spdk_mempool_free(g_xlio_buffers_pool);
 }
 
-static int
-get_addr_str(struct sockaddr *sa, char *host, size_t hlen)
-{
-	const char *result = NULL;
-
-	if (sa == NULL || host == NULL) {
-		return -1;
-	}
-
-	switch (sa->sa_family) {
-	case AF_INET:
-		result = inet_ntop(AF_INET, &(((struct sockaddr_in *)sa)->sin_addr),
-				   host, hlen);
-		break;
-	case AF_INET6:
-		result = inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)sa)->sin6_addr),
-				   host, hlen);
-		break;
-	default:
-		break;
-	}
-
-	if (result != NULL) {
-		return 0;
-	} else {
-		return -1;
-	}
-}
-
 #define __xlio_sock(sock) (struct spdk_xlio_sock *)sock
 #define __xlio_group_impl(group) (struct spdk_xlio_sock_group_impl *)group
 
@@ -195,7 +167,7 @@ xlio_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *spor
 		return -1;
 	}
 
-	rc = get_addr_str((struct sockaddr *)&sa, saddr, slen);
+	rc = spdk_net_get_address_string((struct sockaddr *)&sa, saddr, slen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getnameinfo() failed (errno=%d)\n", errno);
 		return -1;
@@ -217,7 +189,7 @@ xlio_sock_getaddr(struct spdk_sock *_sock, char *saddr, int slen, uint16_t *spor
 		return -1;
 	}
 
-	rc = get_addr_str((struct sockaddr *)&sa, caddr, clen);
+	rc = spdk_net_get_address_string((struct sockaddr *)&sa, caddr, clen);
 	if (rc != 0) {
 		SPDK_ERRLOG("getnameinfo() failed (errno=%d)\n", errno);
 		return -1;
@@ -473,7 +445,7 @@ sock_is_loopback(int fd)
 	}
 
 	memset(ip_addr, 0, sizeof(ip_addr));
-	rc = get_addr_str((struct sockaddr *)&sa, ip_addr, sizeof(ip_addr));
+	rc = spdk_net_get_address_string((struct sockaddr *)&sa, ip_addr, sizeof(ip_addr));
 	if (rc != 0) {
 		return is_loopback;
 	}
@@ -483,7 +455,7 @@ sock_is_loopback(int fd)
 		if (tmp->ifa_addr && (tmp->ifa_flags & IFF_UP) &&
 		    (tmp->ifa_addr->sa_family == sa.ss_family)) {
 			memset(ip_addr_tmp, 0, sizeof(ip_addr_tmp));
-			rc = get_addr_str(tmp->ifa_addr, ip_addr_tmp, sizeof(ip_addr_tmp));
+			rc = spdk_net_get_address_string(tmp->ifa_addr, ip_addr_tmp, sizeof(ip_addr_tmp));
 			if (rc != 0) {
 				continue;
 			}
