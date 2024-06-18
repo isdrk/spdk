@@ -1603,6 +1603,7 @@ enum bdev_nvme_op_after_reset {
 	OP_COMPLETE_PENDING_DESTRUCT,
 	OP_DESTRUCT,
 	OP_DELAYED_RECONNECT,
+	OP_FAILOVER,
 };
 
 typedef enum bdev_nvme_op_after_reset _bdev_nvme_op_after_reset;
@@ -1613,6 +1614,10 @@ bdev_nvme_check_op_after_reset(struct nvme_ctrlr *nvme_ctrlr, bool success)
 	if (nvme_ctrlr_can_be_unregistered(nvme_ctrlr)) {
 		/* Complete pending destruct after reset completes. */
 		return OP_COMPLETE_PENDING_DESTRUCT;
+	} else if (nvme_ctrlr->pending_failover) {
+		nvme_ctrlr->pending_failover = false;
+		nvme_ctrlr->reset_start_tsc = 0;
+		return OP_FAILOVER;
 	} else if (success || nvme_ctrlr->opts.reconnect_delay_sec == 0) {
 		nvme_ctrlr->reset_start_tsc = 0;
 		return OP_NONE;
@@ -1700,6 +1705,7 @@ _bdev_nvme_reset_complete(struct spdk_io_channel_iter *i, int status)
 	pthread_mutex_lock(&nvme_ctrlr->mutex);
 	nvme_ctrlr->resetting = false;
 	nvme_ctrlr->dont_retry = false;
+	nvme_ctrlr->in_failover = false;
 
 	path_id = TAILQ_FIRST(&nvme_ctrlr->trids);
 	assert(path_id != NULL);
@@ -1724,6 +1730,9 @@ _bdev_nvme_reset_complete(struct spdk_io_channel_iter *i, int status)
 		break;
 	case OP_DELAYED_RECONNECT:
 		nvme_ctrlr_disconnect(nvme_ctrlr, bdev_nvme_start_reconnect_delay_timer);
+		break;
+	case OP_FAILOVER:
+		bdev_nvme_failover(nvme_ctrlr, false);
 		break;
 	default:
 		break;
@@ -2089,9 +2098,17 @@ bdev_nvme_failover(struct nvme_ctrlr *nvme_ctrlr, bool remove)
 	}
 
 	if (nvme_ctrlr->resetting) {
-		pthread_mutex_unlock(&nvme_ctrlr->mutex);
-		SPDK_NOTICELOG("Unable to perform reset, already in progress.\n");
-		return -EBUSY;
+		if (!nvme_ctrlr->in_failover) {
+			SPDK_NOTICELOG("Reset is already in progress. Defer failover until reset completes.\n");
+			/* Defer failover until reset completes. */
+			nvme_ctrlr->pending_failover = true;
+			pthread_mutex_unlock(&nvme_ctrlr->mutex);
+			return -EINPROGRESS;
+		} else {
+			SPDK_NOTICELOG("Unable to perform reset, already in progress.\n");
+			pthread_mutex_unlock(&nvme_ctrlr->mutex);
+			return -EBUSY;
+		}
 	}
 
 	bdev_nvme_failover_trid(nvme_ctrlr, remove);
@@ -2105,6 +2122,7 @@ bdev_nvme_failover(struct nvme_ctrlr *nvme_ctrlr, bool remove)
 	}
 
 	nvme_ctrlr->resetting = true;
+	nvme_ctrlr->in_failover = true;
 
 	assert(nvme_ctrlr->reset_start_tsc == 0);
 	nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
