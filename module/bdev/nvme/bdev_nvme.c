@@ -204,6 +204,7 @@ static int bdev_nvme_io_passthru_md(struct nvme_bdev_io *bio, struct spdk_nvme_c
 static void bdev_nvme_abort(struct nvme_bdev_channel *nbdev_ch,
 			    struct nvme_bdev_io *bio, struct nvme_bdev_io *bio_to_abort);
 static void bdev_nvme_reset_io(struct nvme_bdev_channel *nbdev_ch, struct nvme_bdev_io *bio);
+static void bdev_nvme_pause_bdev_channels(struct nvme_bdev_io *bio);
 static int bdev_nvme_reset(struct nvme_ctrlr *nvme_ctrlr);
 static int bdev_nvme_failover(struct nvme_ctrlr *nvme_ctrlr, bool remove);
 static void remove_cb(void *cb_ctx, struct spdk_nvme_ctrlr *ctrlr);
@@ -1056,12 +1057,12 @@ bdev_nvme_io_complete_nvme_status(struct nvme_bdev_io *bio,
 		goto complete;
 	}
 
-	if (cpl->status.dnr != 0 || (g_opts.bdev_retry_count != -1 &&
-				     bio->retry_count >= g_opts.bdev_retry_count)) {
+	nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
+
+	if (cpl->status.dnr != 0 || nbdev_ch->resetting ||
+	    (g_opts.bdev_retry_count != -1 && bio->retry_count >= g_opts.bdev_retry_count)) {
 		goto complete;
 	}
-
-	nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
 
 	assert(bio->io_path != NULL);
 	nvme_ctrlr = bio->io_path->qpair->ctrlr;
@@ -2026,6 +2027,7 @@ bdev_nvme_abort_bdev_channel(struct spdk_io_channel_iter *i)
 	struct nvme_bdev_channel *nbdev_ch = spdk_io_channel_get_ctx(_ch);
 
 	bdev_nvme_abort_retry_ios(nbdev_ch);
+	nbdev_ch->resetting = false;
 
 	spdk_for_each_channel_continue(i, 0);
 }
@@ -2135,6 +2137,43 @@ bdev_nvme_reset_io(struct nvme_bdev_channel *nbdev_ch, struct nvme_bdev_io *bio)
 	if (rc != 0) {
 		bdev_nvme_reset_io_continue(bio, false);
 	}
+}
+
+static void
+bdev_nvme_pause_bdev_channels_done(struct spdk_io_channel_iter *i, int status)
+{
+	struct nvme_bdev_io *bio = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	struct nvme_bdev_channel *nbdev_ch;
+
+	nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
+
+	bdev_nvme_reset_io(nbdev_ch, bio);
+}
+
+static void
+bdev_nvme_pause_bdev_channel(struct spdk_io_channel_iter *i)
+{
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct nvme_bdev_channel *nbdev_ch = spdk_io_channel_get_ctx(_ch);
+
+	nbdev_ch->resetting = true;
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+
+static void
+bdev_nvme_pause_bdev_channels(struct nvme_bdev_io *bio)
+{
+	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(bio);
+	struct nvme_bdev *nbdev = (struct nvme_bdev *)bdev_io->bdev->ctxt;
+
+	/* Abort all queued I/Os for retry. */
+	spdk_for_each_channel(nbdev,
+			      bdev_nvme_pause_bdev_channel,
+			      bio,
+			      bdev_nvme_pause_bdev_channels_done);
 }
 
 static int
@@ -2305,7 +2344,7 @@ bdev_nvme_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 		break;
 	case SPDK_BDEV_IO_TYPE_RESET:
 		nbdev_io->io_path = NULL;
-		bdev_nvme_reset_io(nbdev_ch, nbdev_io);
+		bdev_nvme_pause_bdev_channels(nbdev_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_FLUSH:
 		rc = bdev_nvme_flush(nbdev_io,
