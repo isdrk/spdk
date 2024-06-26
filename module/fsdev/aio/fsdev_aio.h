@@ -16,7 +16,7 @@ struct spdk_fsdev_aio_opts {
 	bool xattr_enabled;
 	bool writeback_cache_enabled;
 	uint32_t max_xfer_size;
-	bool skip_rw_enabled;
+	bool skip_rw;
 	uint32_t max_readahead;
 };
 

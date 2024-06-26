@@ -13479,7 +13479,7 @@ enable_xattr            | Optional | bool        | true to enable the extended a
 enable_writeback_cache  | Optional | bool        | true to enable the writeback cache, false otherwise
 max_xfer_size           | Optional | int         | The maximum size allowed for data transfers, in bytes
 max_readahead           | Optional | int         | The maximum size allowed for readahead, in bytes
-enable_skip_rw          | Optional | bool        | true to enbale skipping read/write IOs, false otherwise
+skip_rw                 | Optional | bool        | Skip processing read and write requests and complete them successfully immediately. This is useful for benchmarking.
 
 #### Example
 
@@ -13496,7 +13496,7 @@ Example request:
     "enable_writeback_cache": true,
     "max_xfer_size": 65535,
     "max_readahead": 65535,
-    "enable_skip_rw": true
+    "skip_rw": true
   }
 }
 ~~~

@@ -210,6 +210,7 @@ struct aio_io_channel {
 	struct spdk_poller *poller;
 	struct spdk_aio_mgr *mgr;
 	TAILQ_HEAD(, aio_fsdev_io) ios_in_progress;
+	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
 };
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
@@ -2285,15 +2286,18 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	if (vfsdev->opts.skip_rw_enabled) {
-		ssize_t bytes_read = 0;
-		for (int i = 0; i < (int)outcnt; i++, outvec++) {
-			bytes_read += outvec->iov_len;
+	if (vfsdev->opts.skip_rw) {
+		uint32_t i;
+
+		fsdev_io->u_out.read.data_size = 0;
+
+		for (i = 0; i < outcnt; i++, outvec++) {
+			fsdev_io->u_out.read.data_size += outvec->iov_len;
 		}
 
-		fsdev_io->u_out.read.data_size = bytes_read;
+		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
 
-		return 0;
+		return IO_STATUS_ASYNC;
 	}
 
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.read.fobject);
@@ -2364,16 +2368,17 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	if (vfsdev->opts.skip_rw_enabled) {
-		ssize_t bytes_written = 0;
+	if (vfsdev->opts.skip_rw) {
+		uint32_t i;
 
-		for (int i = 0; i < (int)incnt; i++, invec++) {
-			bytes_written += invec->iov_len;
+		fsdev_io->u_out.write.data_size = 0;
+		for (i = 0; i < incnt; i++, invec++) {
+			fsdev_io->u_out.write.data_size += invec->iov_len;
 		}
 
-		fsdev_io->u_out.write.data_size = bytes_written;
+		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
 
-		return 0;
+		return IO_STATUS_ASYNC;
 	}
 
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
@@ -3550,11 +3555,21 @@ lo_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static int
 aio_io_poll(void *arg)
 {
+	struct aio_fsdev_io *vfsdev_io, *tmp;
 	struct aio_io_channel *ch = arg;
+	uint32_t num_completions = 0;
 
 	spdk_aio_mgr_poll(ch->mgr);
 
-	return SPDK_POLLER_IDLE;
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_to_complete, link, tmp) {
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
+		TAILQ_REMOVE(&ch->ios_to_complete, vfsdev_io, link);
+		spdk_fsdev_io_complete(fsdev_io, 0);
+		num_completions++;
+	}
+
+	return num_completions ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
 }
 
 static int
@@ -3571,6 +3586,7 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 
 	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll, ch, 0);
 	TAILQ_INIT(&ch->ios_in_progress);
+	TAILQ_INIT(&ch->ios_to_complete);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio fsdev IO channel: thread %s, thread id %" PRIu64
 		      "\n",
@@ -3756,7 +3772,7 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 
-	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->opts.skip_rw_enabled);
+	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -3772,7 +3788,7 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 				   vfsdev->opts.writeback_cache_enabled);
 	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
-	spdk_json_write_named_bool(w, "enable_skip_rw", vfsdev->opts.skip_rw_enabled);
+	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 
 	return 0;
 }
@@ -4000,7 +4016,7 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 	opts->writeback_cache_enabled = DEFAULT_WRITEBACK_CACHE;
 	opts->max_xfer_size = DEFAULT_MAX_XFER_SIZE;
 	opts->max_readahead = DEFAULT_MAX_READAHEAD;
-	opts->skip_rw_enabled = DEFAULT_SKIP_RW;
+	opts->skip_rw = DEFAULT_SKIP_RW;
 }
 
 int
@@ -4075,7 +4091,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio filesystem %s (xattr_enabled=%" PRIu8 " writeback_cache=%"
 		      PRIu8 " max_xfer_size=%" PRIu32 " max_readahead=%" PRIu32 " skip_rw=%" PRIu8 ")\n",
 		      vfsdev->fsdev.name, vfsdev->opts.xattr_enabled, vfsdev->opts.writeback_cache_enabled,
-		      vfsdev->opts.max_xfer_size, vfsdev->opts.max_readahead, vfsdev->opts.skip_rw_enabled);
+		      vfsdev->opts.max_xfer_size, vfsdev->opts.max_readahead, vfsdev->opts.skip_rw);
 	return rc;
 }
 void
