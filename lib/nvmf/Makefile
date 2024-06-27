@@ -13,7 +13,7 @@ C_SRCS = ctrlr.c ctrlr_discovery.c ctrlr_bdev.c \
 	 subsystem.c nvmf.c nvmf_rpc.c transport.c tcp.c \
 	 stubs.c mdns_server.c
 
-C_SRCS-$(CONFIG_RDMA) += rdma.c
+C_SRCS-$(CONFIG_RDMA) += rdma.c rdma_offload.c
 C_SRCS-$(CONFIG_HAVE_EVP_MAC) += auth.c
 
 LIBNAME = nvmf
