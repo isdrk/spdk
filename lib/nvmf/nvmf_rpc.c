@@ -822,7 +822,7 @@ rpc_listen_address_to_trid(const struct rpc_listen_address *address,
 		return -EINVAL;
 	}
 
-	if (spdk_nvme_transport_id_parse_trtype(&trid->trtype, address->trtype)) {
+	if (spdk_nvmf_transport_id_parse_trtype(&trid->trtype, address->trtype)) {
 		SPDK_ERRLOG("Invalid trtype type: %s\n", address->trtype);
 		return -EINVAL;
 	}
