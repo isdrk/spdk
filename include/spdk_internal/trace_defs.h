@@ -28,6 +28,7 @@
 #define OBJECT_NVMF_TCP_IO	0x80
 #define OBJECT_NVMF_FC_IO	0xA0
 #define OBJECT_NVME_NVDA_TCP_REQ	0xF0
+#define OBJECT_NVMF_RDMA_OFFLOAD_IO	0xF1
 
 /* Trace group definitions */
 #define TRACE_GROUP_ISCSI	0x1
