@@ -145,7 +145,8 @@ SPDK_TRACE_REGISTER_FN(nvmf_rdma_offload_trace, "nvmf_rdma_offload", TRACE_GROUP
 	spdk_trace_register_description("RDMA_REQ_NEW", TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEW,
 					OWNER_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 1,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
-	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER", TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER,
+	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER",
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER,
 					OWNER_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
@@ -1586,7 +1587,8 @@ nvmf_rdma_fill_wr_sgl(struct spdk_nvmf_rdma_poll_group *rgroup,
 		sg_ele->lkey = lkey;
 		sg_ele->addr = (uintptr_t)iov->iov_base + rdma_req->offset;
 		sg_ele->length = remaining;
-		SPDK_DEBUGLOG(rdma_offload, "sge[%d] %p addr 0x%"PRIx64", len %u\n", wr->num_sge, sg_ele, sg_ele->addr,
+		SPDK_DEBUGLOG(rdma_offload, "sge[%d] %p addr 0x%"PRIx64", len %u\n", wr->num_sge, sg_ele,
+			      sg_ele->addr,
 			      sg_ele->length);
 		rdma_req->offset += sg_ele->length;
 		total_length -= sg_ele->length;
@@ -3303,7 +3305,8 @@ nvmf_rdma_all_pollers_management_done(void *c)
 	int				counter;
 
 	counter = __atomic_sub_fetch(ctx->inflight_op_counter, 1, __ATOMIC_SEQ_CST);
-	SPDK_DEBUGLOG(rdma_offload, "nvmf_rdma_all_pollers_management_done called. counter: %d, poller: %p\n",
+	SPDK_DEBUGLOG(rdma_offload,
+		      "nvmf_rdma_all_pollers_management_done called. counter: %d, poller: %p\n",
 		      counter, ctx->rpoller);
 
 	if (counter == 0) {
@@ -4217,7 +4220,8 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	STAILQ_INIT(&poller->qpairs_pending_recv);
 
 	TAILQ_INSERT_TAIL(&rgroup->pollers, poller, link);
-	SPDK_DEBUGLOG(rdma_offload, "Create poller %p on device %p in poll group %p.\n", poller, device, rgroup);
+	SPDK_DEBUGLOG(rdma_offload, "Create poller %p on device %p in poll group %p.\n", poller, device,
+		      rgroup);
 	if (rtransport->rdma_opts.no_srq == false && device->num_srq < device->attr.max_srq) {
 		if ((int)rtransport->rdma_opts.max_srq_depth > device->attr.max_srq_wr) {
 			SPDK_WARNLOG("Requested SRQ depth %u, max supported by dev %s is %d\n",

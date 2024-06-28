@@ -496,23 +496,23 @@ for i in "$@"; do
 			;;
 		--with-doca-sta=*)
 			doca_path=$(readlink -f ${i#*=})
-			if [ ! -d "$doca_path" ] ; then
+			if [ ! -d "$doca_path" ]; then
 				echo "DOCA directory $doca_path not found, aborting"
 				exit 1
 			fi
 
 			doca_incdir=${doca_path}/include
-			if [ ! -d "$doca_incdir" ] ; then
+			if [ ! -d "$doca_incdir" ]; then
 				echo "DOCA incdir $doca_incdir not found, aborting"
 				exit 1
 			fi
 
 			doca_libdir=${doca_path}/lib
-			if [ ! -d "$doca_libdir" ] ; then
+			if [ ! -d "$doca_libdir" ]; then
 				echo "DOCA libdir $doca_libdir not found, aborting"
 				exit 1
 			fi
-			if [ -d "${doca_libdir}/${arch}" ] ; then
+			if [ -d "${doca_libdir}/${arch}" ]; then
 				doca_libdir=${doca_libdir}/${arch}
 			fi
 
