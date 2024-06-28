@@ -4943,7 +4943,8 @@ nvmf_rdma_trid_from_cm_id(struct rdma_cm_id *id,
 	struct sockaddr *saddr;
 	uint16_t port;
 
-	spdk_nvme_trid_populate_transport(trid, SPDK_NVME_TRANSPORT_RDMA);
+	trid->trtype = spdk_nvmf_transport_rdma_offload.type;
+	snprintf(trid->trstring, SPDK_NVMF_TRSTRING_MAX_LEN, "%s", spdk_nvmf_transport_rdma_offload.name);
 
 	if (peer) {
 		saddr = rdma_get_peer_addr(id);
@@ -5193,7 +5194,7 @@ nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload = {
 	.name = "RDMA_OFFLOAD",
-	.type = SPDK_NVME_TRANSPORT_CUSTOM,
+	.type = SPDK_NVME_TRANSPORT_CUSTOM_FABRICS,
 	.opts_init = nvmf_rdma_opts_init,
 	.create = nvmf_rdma_create,
 	.dump_opts = nvmf_rdma_dump_opts,
