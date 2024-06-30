@@ -146,6 +146,70 @@ struct spdk_fsdev_io_opts {
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_io_opts) == 24, "Incorrect size");
 
 /**
+ * fsdev IO type
+ */
+enum spdk_fsdev_io_type {
+	SPDK_FSDEV_IO_MOUNT,
+	SPDK_FSDEV_IO_UMOUNT,
+	SPDK_FSDEV_IO_LOOKUP,
+	SPDK_FSDEV_IO_FORGET,
+	SPDK_FSDEV_IO_GETATTR,
+	SPDK_FSDEV_IO_SETATTR,
+	SPDK_FSDEV_IO_READLINK,
+	SPDK_FSDEV_IO_SYMLINK,
+	SPDK_FSDEV_IO_MKNOD,
+	SPDK_FSDEV_IO_MKDIR,
+	SPDK_FSDEV_IO_UNLINK,
+	SPDK_FSDEV_IO_RMDIR,
+	SPDK_FSDEV_IO_RENAME,
+	SPDK_FSDEV_IO_LINK,
+	SPDK_FSDEV_IO_OPEN,
+	SPDK_FSDEV_IO_READ,
+	SPDK_FSDEV_IO_WRITE,
+	SPDK_FSDEV_IO_STATFS,
+	SPDK_FSDEV_IO_RELEASE,
+	SPDK_FSDEV_IO_FSYNC,
+	SPDK_FSDEV_IO_SETXATTR,
+	SPDK_FSDEV_IO_GETXATTR,
+	SPDK_FSDEV_IO_LISTXATTR,
+	SPDK_FSDEV_IO_REMOVEXATTR,
+	SPDK_FSDEV_IO_FLUSH,
+	SPDK_FSDEV_IO_OPENDIR,
+	SPDK_FSDEV_IO_READDIR,
+	SPDK_FSDEV_IO_RELEASEDIR,
+	SPDK_FSDEV_IO_FSYNCDIR,
+	SPDK_FSDEV_IO_FLOCK,
+	SPDK_FSDEV_IO_CREATE,
+	SPDK_FSDEV_IO_ABORT,
+	SPDK_FSDEV_IO_FALLOCATE,
+	SPDK_FSDEV_IO_COPY_FILE_RANGE,
+	SPDK_FSDEV_IO_SYNCFS,
+	SPDK_FSDEV_IO_ACCESS,
+	SPDK_FSDEV_IO_LSEEK,
+	SPDK_FSDEV_IO_POLL,
+	SPDK_FSDEV_IO_IOCTL,
+	SPDK_FSDEV_IO_GETLK,
+	SPDK_FSDEV_IO_SETLK,
+	__SPDK_FSDEV_IO_LAST
+};
+
+/**
+ * fsdev IO statistics
+ */
+struct spdk_fsdev_io_stat {
+	/** Number of handled IOs by IO type */
+	uint64_t num_ios[__SPDK_FSDEV_IO_LAST];
+	/** Number of bytes read */
+	uint64_t bytes_read;
+	/** Number of bytes written */
+	uint64_t bytes_written;
+	/** Number of IOs which couldn't be handled due to lack of the IO objects */
+	uint64_t num_out_of_io;
+	/** Number of IOs completed with an error */
+	uint64_t num_errors;
+};
+
+/**
  * \brief Handle to an opened SPDK filesystem device.
  */
 struct spdk_fsdev_desc;
@@ -244,6 +308,15 @@ typedef int (*spdk_for_each_fsdev_fn)(void *ctx, struct spdk_fsdev *fsdev);
  * callback returned otherwise.
  */
 int spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn);
+
+/**
+ * Get spdk_fsdev_io_type name
+ *
+ * \param type IO type
+ *
+ * \return non-NULL IO type name if operation is successful, or NULL otherwise.
+ */
+const char *spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type);
 
 /**
  * Get filesystem device name.
@@ -398,6 +471,59 @@ typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, boo
  * negated errno on failure, in which case the callback will not be called.
  */
 int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
+
+/**
+ * Return I/O statistics for this channel.
+ *
+ * \param fsdev Filesystem device.
+ * \param ch I/O channel. Obtained by calling spdk_fsdev_get_io_channel().
+ * \param stat The per-channel statistics.
+ *
+ */
+void spdk_fsdev_get_io_stat(struct spdk_fsdev *fsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_io_stat *stat);
+
+/**
+ * Get fsdev statistics completion callback.
+ *
+ * \param fsdev Filesystem device.
+ * \param stat Pointer received in the spdk_fsdev_get_device_stat call
+ * \param cb_arg Callback argument specified upon get stat.
+ * \param rc Statistics collection operation result. 0 if succeeded, a negative error code otherwise.
+ */
+typedef void (*spdk_fsdev_get_device_stat_cb)(struct spdk_fsdev *fsdev,
+		struct spdk_fsdev_io_stat *stat, void *cb_arg, int rc);
+
+/**
+ * Get fsdev statistics.
+ *
+ * \param fsdev Filesystem device.
+ * \param stat Pointer to the structure where the stats should be stored.
+ * \param cb Called when stats are ready to be consumed.
+ * \param cb_arg Argument passed to cb.
+ */
+void spdk_fsdev_get_device_stat(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat,
+				spdk_fsdev_get_device_stat_cb cb, void *cb_arg);
+
+/**
+ * Reset fsdev statistics completion callback.
+ *
+ * \param fsdev Filesystem device.
+ * \param cb_arg Callback argument specified upon get stat.
+ * \param rc Statistics collection operation result. 0 if succeeded, a negative error code otherwise.
+ */
+typedef void (*spdk_fsdev_reset_device_stat_cb)(struct spdk_fsdev *fsdev,
+		void *cb_arg, int rc);
+
+/**
+ * Reset fsdev statistics.
+ *
+ * \param fsdev Filesystem device.
+ * \param cb Called when reset is done.
+ * \param cb_arg Argument passed to cb.
+ */
+void spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev,  spdk_fsdev_reset_device_stat_cb cb,
+				  void *cb_arg);
 
 /**
  * Check whether the Filesystem device supports reset.

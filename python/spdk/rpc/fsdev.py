@@ -88,3 +88,35 @@ def fsdev_aio_delete(client, name):
         'name': name
     }
     return client.call('fsdev_aio_delete', params)
+
+
+def fsdev_get_iostat(client, name: str = None, per_channel: bool = False):
+    """Get fsdev device stats.
+
+    Args:
+        name: filesystem name
+        per_channel: show per-channel statistics
+    """
+    params = {}
+
+    if name is not None:
+        params['name'] = name
+
+    if per_channel is not None:
+        params['per_channel'] = per_channel
+
+    return client.call('fsdev_get_iostat', params)
+
+
+def fsdev_reset_iostat(client, name: str = None):
+    """Reset fsdev device stats.
+
+    Args:
+        name: filesystem name
+    """
+    params = {}
+
+    if name is not None:
+        params['name'] = name
+
+    return client.call('fsdev_reset_iostat', params)

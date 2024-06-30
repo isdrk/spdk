@@ -3492,6 +3492,23 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
     p.set_defaults(func=fsdev_get_fsdevs)
 
+    def fsdev_get_iostat(args):
+        print_json(rpc.fsdev.fsdev_get_iostat(args.client, name=args.name, per_channel=args.per_channel))
+
+    p = subparsers.add_parser('fsdev_get_iostat',
+                              help='Display current I/O statistics of all the fsdevs or specified fsdev.')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.add_argument('-c', '--per-channel', default=False, dest='per_channel', help='Display per channel IO stats for specified device',
+                   action='store_true', required=False)
+    p.set_defaults(func=fsdev_get_iostat)
+
+    def fsdev_reset_iostat(args):
+        print(rpc.fsdev.fsdev_reset_iostat(args.client, name=args.name))
+
+    p = subparsers.add_parser('fsdev_reset_iostat', help='Reset the I/O statictics for all the fsdevs or specified fsdev')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.set_defaults(func=fsdev_reset_iostat)
+
     def fsdev_aio_create(args):
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,

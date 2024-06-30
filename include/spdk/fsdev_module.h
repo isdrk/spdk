@@ -144,9 +144,6 @@ struct spdk_fsdev_name {
 	RB_ENTRY(spdk_fsdev_name) node;
 };
 
-typedef TAILQ_HEAD(, spdk_fsdev_io) fsdev_io_tailq_t;
-typedef STAILQ_HEAD(, spdk_fsdev_io) fsdev_io_stailq_t;
-
 struct spdk_fsdev_file_handle;
 struct spdk_fsdev_file_object;
 
@@ -195,52 +192,10 @@ struct spdk_fsdev {
 
 		/** true if fsdev reset is in progress */
 		bool reset_in_progress;
-	} internal;
-};
 
-enum spdk_fsdev_io_type {
-	SPDK_FSDEV_IO_MOUNT,
-	SPDK_FSDEV_IO_UMOUNT,
-	SPDK_FSDEV_IO_LOOKUP,
-	SPDK_FSDEV_IO_FORGET,
-	SPDK_FSDEV_IO_GETATTR,
-	SPDK_FSDEV_IO_SETATTR,
-	SPDK_FSDEV_IO_READLINK,
-	SPDK_FSDEV_IO_SYMLINK,
-	SPDK_FSDEV_IO_MKNOD,
-	SPDK_FSDEV_IO_MKDIR,
-	SPDK_FSDEV_IO_UNLINK,
-	SPDK_FSDEV_IO_RMDIR,
-	SPDK_FSDEV_IO_RENAME,
-	SPDK_FSDEV_IO_LINK,
-	SPDK_FSDEV_IO_OPEN,
-	SPDK_FSDEV_IO_READ,
-	SPDK_FSDEV_IO_WRITE,
-	SPDK_FSDEV_IO_STATFS,
-	SPDK_FSDEV_IO_RELEASE,
-	SPDK_FSDEV_IO_FSYNC,
-	SPDK_FSDEV_IO_SETXATTR,
-	SPDK_FSDEV_IO_GETXATTR,
-	SPDK_FSDEV_IO_LISTXATTR,
-	SPDK_FSDEV_IO_REMOVEXATTR,
-	SPDK_FSDEV_IO_FLUSH,
-	SPDK_FSDEV_IO_OPENDIR,
-	SPDK_FSDEV_IO_READDIR,
-	SPDK_FSDEV_IO_RELEASEDIR,
-	SPDK_FSDEV_IO_FSYNCDIR,
-	SPDK_FSDEV_IO_FLOCK,
-	SPDK_FSDEV_IO_CREATE,
-	SPDK_FSDEV_IO_ABORT,
-	SPDK_FSDEV_IO_FALLOCATE,
-	SPDK_FSDEV_IO_COPY_FILE_RANGE,
-	SPDK_FSDEV_IO_SYNCFS,
-	SPDK_FSDEV_IO_ACCESS,
-	SPDK_FSDEV_IO_LSEEK,
-	SPDK_FSDEV_IO_POLL,
-	SPDK_FSDEV_IO_IOCTL,
-	SPDK_FSDEV_IO_GETLK,
-	SPDK_FSDEV_IO_SETLK,
-	__SPDK_FSDEV_IO_LAST
+		/** accumulated I/O statistics for previously deleted channels of this fsdev */
+		struct spdk_fsdev_io_stat *hist_stat;
+	} internal;
 };
 
 struct spdk_fsdev_io {

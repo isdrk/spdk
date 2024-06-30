@@ -13267,6 +13267,141 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Optional | string      | fsdev name
 
+### fsdev_get_iostat {#rpc_fsdev_get_iostat}
+
+Get I/O statistics of filesystem devices (fsdevs).
+
+#### Parameters
+
+The user may specify no parameters in order to list all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+per_channel             | Optional | bool        | Display per channel data.
+
+#### Response
+
+The response is an array of objects containing I/O statistics of the requested fsdevs.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fsdev_get_iostat",
+  "id": 1,
+  "params": {
+    "name": "aio0",
+    "per_channel": false
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "fsdevs": [
+      {
+        "name": "aio0",
+        "num_ios": {
+          "mount": 1,
+          "umount": 0,
+          "lookup": 20,
+          "forget": 11,
+          "getattr": 46,
+          "setattr": 0,
+          "readlink": 0,
+          "symlink": 0,
+          "mknod": 0,
+          "mkdir": 0,
+          "unlink": 0,
+          "rmdir": 0,
+          "rename": 0,
+          "link": 0,
+          "open": 9,
+          "read": 526466,
+          "write": 527031,
+          "statfs": 0,
+          "release": 0,
+          "fsync": 0,
+          "setxattr": 0,
+          "getxattr": 0,
+          "listxattr": 0,
+          "removexattr": 0,
+          "flush": 0,
+          "opendir": 0,
+          "readdir": 0,
+          "releasedir": 0,
+          "fsyncdir": 0,
+          "flock": 0,
+          "create": 0,
+          "abort": 0,
+          "fallocate": 0,
+          "copy_file_range": 0,
+          "syncfs": 0,
+          "access": 0,
+          "lseek": 0,
+          "poll": 0,
+          "ioctl": 0,
+          "getlk": 0,
+          "setlk": 0
+        },
+        "bytes_read": 2156335104,
+        "bytes_written": 2158678016,
+        "num_out_of_io": 0,
+        "num_errors": 0
+      }
+    ]
+  }
+}
+~~~
+
+### fsdev_reset_iostat {#rpc_fsdev_reset_iostat}
+
+Reset fsdev statistics.
+
+#### Parameters
+
+The user may specify no parameters in order to reset all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fsdev_reset_iostat",
+  "id": 1,
+  "params": {
+    "name": "aio0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### fsdev_aio_create {#fsdev_aio_create}
 
 Create an AIO fsdev.

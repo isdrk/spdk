@@ -8,6 +8,7 @@
 #include "spdk/env.h"
 #include "spdk/likely.h"
 #include "spdk/queue.h"
+#include "spdk/thread.h"
 #include "spdk/util.h"
 #include "spdk/notify.h"
 #include "spdk/fsdev_module.h"
@@ -72,6 +73,53 @@ static spdk_fsdev_fini_cb	g_fini_cb_fn = NULL;
 static void			*g_fini_cb_arg = NULL;
 static struct spdk_thread	*g_fini_thread = NULL;
 
+typedef STAILQ_HEAD(, spdk_fsdev_io) fsdev_io_stailq_t;
+
+static const char *fsdev_io_type_names[] = {
+	"mount",
+	"umount",
+	"lookup",
+	"forget",
+	"getattr",
+	"setattr",
+	"readlink",
+	"symlink",
+	"mknod",
+	"mkdir",
+	"unlink",
+	"rmdir",
+	"rename",
+	"link",
+	"open",
+	"read",
+	"write",
+	"statfs",
+	"release",
+	"fsync",
+	"setxattr",
+	"getxattr",
+	"listxattr",
+	"removexattr",
+	"flush",
+	"opendir",
+	"readdir",
+	"releasedir",
+	"fsyncdir",
+	"flock",
+	"create",
+	"abort",
+	"fallocate",
+	"copy_file_range",
+	"syncfs",
+	"access",
+	"lseek",
+	"poll",
+	"ioctl",
+	"getlk",
+	"setlk",
+};
+SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_io_type_names) == __SPDK_FSDEV_IO_LAST, "Incorrect size");
+
 struct spdk_fsdev_mgmt_channel {
 	/*
 	 * Each thread keeps a cache of fsdev_io - this allows
@@ -112,30 +160,6 @@ struct spdk_fsdev_shared_resource {
 };
 
 #define FSDEV_CH_RESET_IN_PROGRESS	(1 << 0)
-
-struct spdk_fsdev_channel {
-	struct spdk_fsdev	*fsdev;
-
-	/* The channel for the underlying device */
-	struct spdk_io_channel	*channel;
-
-	/* Per io_device per thread data */
-	struct spdk_fsdev_shared_resource *shared_resource;
-
-	/*
-	 * Count of I/O submitted to the underlying dev module through this channel
-	 * and waiting for completion.
-	 */
-	uint64_t		io_outstanding;
-
-	/*
-	 * List of all submitted I/Os.
-	 */
-	fsdev_io_tailq_t	io_submitted;
-
-	/* Channel flags */
-	uint32_t		flags;
-};
 
 struct spdk_fsdev_desc {
 	struct spdk_fsdev		*fsdev;
@@ -545,14 +569,22 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 	struct spdk_fsdev_shared_resource *shared_resource;
 
 	ch->fsdev = fsdev;
+
+	ch->stat = calloc(1, sizeof(*ch->stat));
+	if (!ch->stat) {
+		return -1;
+	}
+
 	ch->channel = fsdev->fn_table->get_io_channel(fsdev->ctxt);
 	if (!ch->channel) {
+		free(ch->stat);
 		return -1;
 	}
 
 	mgmt_io_ch = spdk_get_io_channel(&g_fsdev_mgr);
 	if (!mgmt_io_ch) {
 		spdk_put_io_channel(ch->channel);
+		free(ch->stat);
 		return -1;
 	}
 
@@ -587,13 +619,34 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 }
 
 static void
+fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io_stat *from_stat)
+{
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(from_stat->num_ios); i++) {
+		to_stat->num_ios[i] += from_stat->num_ios[i];
+	}
+
+	to_stat->bytes_read += from_stat->bytes_read;
+	to_stat->bytes_written += from_stat->bytes_written;
+	to_stat->num_out_of_io += from_stat->num_out_of_io;
+	to_stat->num_errors += from_stat->num_errors;
+}
+
+static void
 fsdev_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_fsdev_channel *ch = ctx_buf;
+	struct spdk_fsdev *fsdev = ch->fsdev;
 
 	SPDK_DEBUGLOG(fsdev, "Destroying channel %p for fsdev %s on thread %p\n",
-		      ch, ch->fsdev->name,
-		      spdk_get_thread());
+		      ch, fsdev->name, spdk_get_thread());
+
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	fsdev_add_io_stat(fsdev->internal.hist_stat, ch->stat);
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+
+	free(ch->stat);
 	fsdev_channel_destroy_resource(ch);
 }
 
@@ -977,6 +1030,133 @@ spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev)
 	return fsdev->fn_table->reset ? true : false;
 }
 
+void
+spdk_fsdev_get_io_stat(struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch,
+		       struct spdk_fsdev_io_stat *stat)
+{
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	memset(stat, 0, sizeof(*stat));
+
+	fsdev_add_io_stat(stat, ch->stat);
+}
+
+struct spdk_fsdev_get_stat_ctx {
+	struct spdk_fsdev_io_stat *stat;
+	spdk_fsdev_get_device_stat_cb cb;
+	void *cb_arg;
+};
+
+static void
+fsdev_get_channel_stat(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *fsdev,
+		       struct spdk_io_channel *_ch, void *_ctx)
+{
+	struct spdk_fsdev_get_stat_ctx *ctx = _ctx;
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	fsdev_add_io_stat(ctx->stat, ch->stat);
+
+	spdk_fsdev_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_get_device_stat_done(struct spdk_fsdev *fsdev, void *_ctx, int status)
+{
+	struct spdk_fsdev_get_stat_ctx *ctx = _ctx;
+
+	ctx->cb(fsdev, ctx->stat, ctx->cb_arg, status);
+
+	free(ctx);
+}
+
+void
+spdk_fsdev_get_device_stat(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat,
+			   spdk_fsdev_get_device_stat_cb cb, void *cb_arg)
+{
+	struct spdk_fsdev_get_stat_ctx *ctx;
+
+	assert(fsdev != NULL);
+	assert(stat != NULL);
+	assert(cb != NULL);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Unable to allocate context\n");
+		cb(fsdev, stat, cb_arg, -ENOMEM);
+		return;
+	}
+
+	memset(stat, 0, sizeof(*stat));
+
+	/* Start with the statistics from previously deleted channels. */
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	fsdev_add_io_stat(stat, fsdev->internal.hist_stat);
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+
+	ctx->stat = stat;
+	ctx->cb = cb;
+	ctx->cb_arg = cb_arg;
+
+	/* Then iterate and add the statistics from each existing channel. */
+	spdk_fsdev_for_each_channel(fsdev, fsdev_get_channel_stat, ctx,
+				    fsdev_get_device_stat_done);
+}
+
+struct spdk_fsdev_reset_stat_ctx {
+	spdk_fsdev_reset_device_stat_cb cb;
+	void *cb_arg;
+};
+
+static void
+fsdev_reset_channel_stat(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *fsdev,
+			 struct spdk_io_channel *_ch, void *_ctx)
+{
+	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
+
+	memset(ch->stat, 0, sizeof(*ch->stat));
+
+	spdk_fsdev_for_each_channel_continue(i, 0);
+}
+
+static void
+fsdev_reset_device_stat_done(struct spdk_fsdev *fsdev, void *_ctx, int status)
+{
+	struct spdk_fsdev_reset_stat_ctx *ctx = _ctx;
+
+	ctx->cb(fsdev, ctx->cb_arg, status);
+
+	free(ctx);
+}
+
+void
+spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev, spdk_fsdev_reset_device_stat_cb cb,
+			     void *cb_arg)
+{
+	struct spdk_fsdev_reset_stat_ctx *ctx;
+
+	assert(fsdev != NULL);
+	assert(cb != NULL);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Unable to allocate context\n");
+		cb(fsdev, cb_arg, -ENOMEM);
+		return;
+	}
+
+	/* Start with the statistics from previously deleted channels. */
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	memset(fsdev->internal.hist_stat, 0, sizeof(*fsdev->internal.hist_stat));
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+
+	ctx->cb = cb;
+	ctx->cb_arg = cb_arg;
+
+	/* Then iterate and add the statistics from each existing channel. */
+	spdk_fsdev_for_each_channel(fsdev, fsdev_reset_channel_stat, ctx,
+				    fsdev_reset_device_stat_done);
+}
+
 const char *
 spdk_fsdev_get_module_name(const struct spdk_fsdev *fsdev)
 {
@@ -1066,12 +1246,20 @@ fsdev_register(struct spdk_fsdev *fsdev)
 		return -ENOMEM;
 	}
 
+	fsdev->internal.hist_stat = calloc(1, sizeof(*fsdev->internal.hist_stat));
+	if (!fsdev->internal.hist_stat) {
+		SPDK_ERRLOG("Unable to allocate memory for the stats history.\n");
+		free(fsdev_name);
+		return -ENOMEM;
+	}
+
 	fsdev->internal.status = SPDK_FSDEV_STATUS_READY;
 	TAILQ_INIT(&fsdev->internal.open_descs);
 
 	ret = fsdev_name_add(&fsdev->internal.fsdev_name, fsdev, fsdev->name);
 	if (ret != 0) {
 		free(fsdev_name);
+		free(fsdev->internal.hist_stat);
 		return ret;
 	}
 
@@ -1101,6 +1289,7 @@ fsdev_destroy_cb(void *io_device)
 	cb_fn = fsdev->internal.unregister_cb;
 	cb_arg = fsdev->internal.unregister_ctx;
 
+	free(fsdev->internal.hist_stat);
 	spdk_spin_destroy(&fsdev->internal.spinlock);
 
 	rc = fsdev->fn_table->destruct(fsdev->ctxt);
@@ -1472,6 +1661,12 @@ spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn)
 	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 
 	return rc;
+}
+
+const char *
+spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type)
+{
+	return (type < SPDK_COUNTOF(fsdev_io_type_names)) ? fsdev_io_type_names[type] : NULL;
 }
 
 int
