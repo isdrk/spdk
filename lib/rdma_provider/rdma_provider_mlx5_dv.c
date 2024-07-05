@@ -11,6 +11,7 @@
 #include "spdk/string.h"
 #include "spdk/likely.h"
 #include "spdk/accel_module.h"
+#include "spdk/dma.h"
 
 #include "spdk_internal/mlx5.h"
 #include "spdk_internal/rdma_provider.h"
@@ -24,6 +25,7 @@ struct spdk_rdma_mlx5_dv_qp {
 	int recv_err;
 	void *mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_COUNT + 1];
 	bool supports_accel;
+	struct spdk_memory_domain_rdma_ctx domain_ctx;
 };
 
 struct rdma_mlx5_dv_accel_seq_context {
@@ -48,6 +50,7 @@ spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 	assert(cm_id);
 	assert(qp_attr);
 
+	struct spdk_memory_domain_ctx ctx = {};
 	struct spdk_rdma_mlx5_dv_qp *dv_qp;
 	struct mlx5_dv_srq *dv_srq;
 	struct spdk_mlx5_qp_attr mlx5_qp_attr = {
@@ -113,6 +116,18 @@ spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 		dv_qp->supports_accel = dv_qp->supports_accel ||
 					dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] != NULL;
 		SPDK_DEBUGLOG(rdma_mlx5_dv, "mlx5 driver enabled, accel support %d\n", dv_qp->supports_accel);
+	}
+	dv_qp->domain_ctx.size = sizeof(dv_qp->domain_ctx);
+	dv_qp->domain_ctx.ibv_pd = qp_attr->pd;
+	ctx.size = sizeof(ctx);
+	ctx.user_ctx = &dv_qp->domain_ctx;
+	ctx.user_ctx_size = dv_qp->domain_ctx.size;
+	rc = spdk_memory_domain_create(&dv_qp->common.domain, SPDK_DMA_DEVICE_TYPE_RDMA, &ctx,
+				       SPDK_RDMA_DMA_DEVICE);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create memory domain\n");
+		spdk_rdma_provider_qp_destroy(&dv_qp->common);
+		return NULL;
 	}
 
 	return &dv_qp->common;
@@ -187,6 +202,9 @@ spdk_rdma_provider_qp_destroy(struct spdk_rdma_provider_qp *spdk_rdma_qp)
 			spdk_mlx5_mkey_pool_put_ref(dv_qp->mkey_pool_ch[i]);
 			dv_qp->mkey_pool_ch[i] = NULL;
 		}
+	}
+	if (spdk_rdma_qp->domain) {
+		spdk_memory_domain_destroy(spdk_rdma_qp->domain);
 	}
 
 	if (dv_qp->mlx5_qp) {

@@ -38,7 +38,7 @@ DEPDIRS-json := log util
 DEPDIRS-rdma_utils := log util
 DEPDIRS-rdma_provider := log util
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-rdma_provider += accel mlx5
+DEPDIRS-rdma_provider += accel mlx5 dma
 endif
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace

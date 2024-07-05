@@ -958,11 +958,11 @@ static void
 test_nvme_rdma_qpair_init(void)
 {
 	struct nvme_rdma_qpair		rqpair = {};
-	struct rdma_cm_id		 cm_id = {};
-	struct ibv_pd				*pd = (struct ibv_pd *)0xfeedbeef;
-	struct ibv_qp				qp = { .pd = pd };
-	struct nvme_rdma_ctrlr	rctrlr = {};
-	int rc = 0;
+	struct rdma_cm_id		cm_id = {};
+	struct ibv_pd			*pd = (struct ibv_pd *)0xfeedbeef;
+	struct ibv_qp			qp = { .pd = pd };
+	struct nvme_rdma_ctrlr		rctrlr = {};
+	int				rc = 0;
 
 	rctrlr.ctrlr.trid.trtype = SPDK_NVME_TRANSPORT_RDMA;
 	rqpair.cm_id = &cm_id;
@@ -980,7 +980,6 @@ test_nvme_rdma_qpair_init(void)
 	CU_ASSERT(rqpair.max_recv_sge == NVME_RDMA_DEFAULT_RX_SGE);
 	CU_ASSERT(rqpair.current_num_sends == 0);
 	CU_ASSERT(rqpair.cq == (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
-	CU_ASSERT(rqpair.memory_domain != NULL);
 
 	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
@@ -1032,10 +1031,12 @@ test_rdma_ctrlr_get_memory_domains(void)
 {
 	struct nvme_rdma_ctrlr rctrlr = {};
 	struct nvme_rdma_qpair rqpair = {};
+	struct spdk_rdma_provider_qp rdma_qp = {};
 	struct spdk_memory_domain *domain = (struct spdk_memory_domain *)0xbaadbeef;
 	struct spdk_memory_domain *domains[1] = {NULL};
 
-	rqpair.memory_domain = domain;
+	rdma_qp.domain = domain;
+	rqpair.rdma_qp = &rdma_qp;
 	rqpair.qpair.trtype = SPDK_NVME_TRANSPORT_RDMA;
 	rctrlr.ctrlr.adminq = &rqpair.qpair;
 
@@ -1057,12 +1058,11 @@ test_rdma_ctrlr_get_memory_domains(void)
 static void
 test_rdma_get_memory_translation(void)
 {
+	struct spdk_memory_domain *domain = (struct spdk_memory_domain *) 0xfeedbeef;
 	struct ibv_qp qp = {.pd = (struct ibv_pd *) 0xfeedbeef};
-	struct spdk_rdma_provider_qp rdma_qp = {.qp = &qp};
+	struct spdk_rdma_provider_qp rdma_qp = {.qp = &qp, .domain = domain};
 	struct nvme_rdma_qpair rqpair = {.rdma_qp = &rdma_qp};
-	struct spdk_nvme_ns_cmd_ext_io_opts io_opts = {
-		.memory_domain = (struct spdk_memory_domain *) 0xdeaddead
-	};
+	struct spdk_nvme_ns_cmd_ext_io_opts io_opts = {.memory_domain = domain};
 	struct nvme_request req = {.payload = {.opts = &io_opts}};
 	struct spdk_nvme_rdma_req rdma_req = {.req = &req };
 	struct spdk_rdma_provider_memory_translation_ctx ctx = {
@@ -1070,10 +1070,6 @@ test_rdma_get_memory_translation(void)
 		.length = 0x100
 	};
 	int rc;
-
-	rqpair.memory_domain = spdk_rdma_utils_get_memory_domain(rqpair.rdma_qp->qp->pd,
-			       SPDK_DMA_DEVICE_TYPE_RDMA);
-	SPDK_CU_ASSERT_FATAL(rqpair.memory_domain != NULL);
 
 	/* case 1, using extended IO opts with DMA device.
 	 * Test 1 - spdk_dma_translate_data error, expect fail */
@@ -1109,9 +1105,6 @@ test_rdma_get_memory_translation(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ctx.lkey == RDMA_UT_LKEY);
 	CU_ASSERT(ctx.rkey == RDMA_UT_RKEY);
-
-	/* Cleanup */
-	spdk_rdma_utils_put_memory_domain(rqpair.memory_domain);
 }
 
 static void
