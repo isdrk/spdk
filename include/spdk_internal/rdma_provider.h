@@ -9,6 +9,7 @@
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
+#include "spdk/dma.h"
 
 #include "spdk/dma.h"
 
@@ -36,6 +37,7 @@ struct spdk_rdma_provider_qp_init_attr {
 	struct ibv_qp_cap		cap;
 	struct ibv_pd			*pd;
 	struct spdk_rdma_provider_qp_stats *stats;
+	spdk_memory_domain_transfer_data_cb domain_transfer;
 };
 
 struct spdk_rdma_provider_send_wr_list {
