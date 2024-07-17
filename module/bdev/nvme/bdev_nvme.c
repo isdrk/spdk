@@ -1449,10 +1449,10 @@ bdev_nvme_update_io_path_stat(struct nvme_bdev_io *bio)
 }
 
 static bool
-bdev_nvme_check_retry_io(struct nvme_bdev_io *bio,
-			 const struct spdk_nvme_cpl *cpl,
-			 struct nvme_bdev_channel *nbdev_ch,
-			 uint64_t *_delay_ms)
+bdev_nvme_check_retry_io_nvme_status(struct nvme_bdev_io *bio,
+				     const struct spdk_nvme_cpl *cpl,
+				     struct nvme_bdev_channel *nbdev_ch,
+				     uint64_t *_delay_ms)
 {
 	struct nvme_io_path *io_path = bio->io_path;
 	struct nvme_ctrlr *nvme_ctrlr = io_path->qpair->ctrlr;
@@ -1521,7 +1521,7 @@ bdev_nvme_io_complete_nvme_status(struct nvme_bdev_io *bio,
 
 	nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
 
-	if (bdev_nvme_check_retry_io(bio, cpl, nbdev_ch, &delay_ms)) {
+	if (bdev_nvme_check_retry_io_nvme_status(bio, cpl, nbdev_ch, &delay_ms)) {
 		bdev_nvme_queue_retry_io(nbdev_ch, bio, delay_ms);
 		return;
 	}
@@ -1531,6 +1531,16 @@ complete:
 	bio->submit_tsc = 0;
 	bdev_io->u.bdev.accel_sequence = NULL;
 	__bdev_nvme_io_complete(bdev_io, 0, cpl);
+}
+
+static bool
+bdev_nvme_check_retry_io(struct nvme_bdev_io *bio,
+			 struct nvme_bdev_channel *nbdev_ch)
+{
+	bdev_nvme_clear_current_io_path(nbdev_ch);
+	bio->io_path = NULL;
+
+	return any_io_path_may_become_available(nbdev_ch);
 }
 
 static inline void
@@ -1553,10 +1563,7 @@ bdev_nvme_io_complete(struct nvme_bdev_io *bio, int rc)
 		if (g_opts.bdev_retry_count == -1 || bio->retry_count < g_opts.bdev_retry_count) {
 			nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
 
-			bdev_nvme_clear_current_io_path(nbdev_ch);
-			bio->io_path = NULL;
-
-			if (any_io_path_may_become_available(nbdev_ch)) {
+			if (bdev_nvme_check_retry_io(bio, nbdev_ch)) {
 				bdev_nvme_queue_retry_io(nbdev_ch, bio, 1000ULL);
 				return;
 			}
