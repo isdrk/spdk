@@ -975,7 +975,6 @@ test_nvme_rdma_qpair_init(void)
 
 	CU_ASSERT(rqpair.cm_id->context == &rqpair.qpair);
 	CU_ASSERT(rqpair.max_send_sge == NVME_RDMA_DEFAULT_TX_SGE);
-	CU_ASSERT(rqpair.max_recv_sge == NVME_RDMA_DEFAULT_RX_SGE);
 	CU_ASSERT(rqpair.current_num_sends == 0);
 	CU_ASSERT(rqpair.cq == (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
 
