@@ -413,7 +413,7 @@ struct spdk_rdma_utils_memory_domain *
 spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd, enum spdk_dma_device_type type)
 {
 	struct spdk_rdma_utils_memory_domain *domain = NULL;
-	struct spdk_memory_domain_ctx ctx;
+	struct spdk_memory_domain_ctx ctx = {};
 	int rc;
 
 	pthread_mutex_lock(&g_memory_domains_lock);
@@ -437,6 +437,7 @@ spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd, enum spdk_dma_device_type t
 	domain->rdma_ctx.ibv_pd = pd;
 	ctx.size = sizeof(ctx);
 	ctx.user_ctx = &domain->rdma_ctx;
+	ctx.user_ctx_size = domain->rdma_ctx.size;
 
 	rc = spdk_memory_domain_create(&domain->domain, type, &ctx, SPDK_RDMA_DMA_DEVICE);
 	if (rc) {
