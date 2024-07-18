@@ -321,23 +321,6 @@ void spdk_accel_sequence_continue(struct spdk_accel_sequence *seq);
 
 void spdk_accel_driver_register(struct spdk_accel_driver *driver);
 
-/**
- * Set a driver-specific context for accel sequence. This context is completely opaque to the Accel framework,
- * it is meant to be used by the driver.
- *
- * \param seq Accel sequence
- * \param ctx Driver context
- */
-void spdk_accel_sequence_set_driver_ctx(struct spdk_accel_sequence *seq, void *ctx);
-
-/**
- * Get an optional driver-specific context of the accel sequence. May return NULL
- *
- * \param seq Accel sequence
- * \return Opaque context attached by \ref spdk_accel_sequence_set_driver_ctx or NULL
- */
-void *spdk_accel_sequence_get_driver_ctx(struct spdk_accel_sequence *seq);
-
 const char *spdk_accel_driver_get_name(void);
 
 #define SPDK_ACCEL_DRIVER_REGISTER(name, driver) \

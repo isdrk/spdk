@@ -93,6 +93,7 @@ DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_bulk, (struct spdk_mlx5_mkey_pool *pool,
 		uint32_t mkeys_count));
 DEFINE_STUB(spdk_mlx5_mkey_pool_find_mkey_by_id, struct spdk_mlx5_mkey_pool_obj *, (void *ch,
 		uint32_t mkey_id), NULL);
+DEFINE_STUB_V(spdk_mlx5_umr_implementer_register, (bool registered));
 DEFINE_STUB(spdk_mempool_create_ctor, struct spdk_mempool *, (const char *name, size_t count,
 		size_t ele_size, size_t cache_size, int socket_id, spdk_mempool_obj_cb_t *obj_init,
 		void *obj_init_arg), NULL);
@@ -100,7 +101,6 @@ DEFINE_STUB(spdk_mempool_obj_iter, uint32_t, (struct spdk_mempool *mp, spdk_memp
 		void *obj_cb_arg), 0);
 DEFINE_STUB_V(spdk_accel_module_list_add, (struct spdk_accel_module_if *accel_module));
 DEFINE_STUB_V(spdk_accel_task_complete, (struct spdk_accel_task *accel_task, int status));
-DEFINE_STUB(spdk_accel_sequence_get_driver_ctx, void *, (struct spdk_accel_sequence *seq), NULL);
 DEFINE_STUB(spdk_accel_sequence_next_task, struct spdk_accel_task *, (struct spdk_accel_task *task),
 	    NULL);
 DEFINE_STUB_V(spdk_accel_sequence_continue, (struct spdk_accel_sequence *seq));

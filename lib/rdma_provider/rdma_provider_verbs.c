@@ -329,36 +329,10 @@ spdk_rdma_provider_qp_flush_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
 	return rc;
 }
 
-size_t
-spdk_rdma_provider_get_io_context_size(void)
-{
-	return 0;
-}
-
 bool
-spdk_rdma_provider_accel_sequence_supported(struct spdk_rdma_provider_qp *qp)
+spdk_rdma_provider_accel_sequence_supported(void)
 {
 	return false;
-}
-
-int
-spdk_rdma_provider_accel_sequence_finish(struct spdk_rdma_provider_qp *qp, void *rdma_io_ctx,
-		struct spdk_accel_sequence *seq, spdk_rdma_provider_accel_seq_cb cb_fn, void *cb_ctx)
-{
-	return -ENOTSUP;
-}
-
-int
-spdk_rdma_provider_accel_seq_get_translation(void *rdma_io_ctx,
-		struct  spdk_rdma_provider_memory_translation_ctx *translation)
-{
-	return -ENOTSUP;
-}
-
-int
-spdk_rdma_provider_accel_sequence_release(struct spdk_rdma_provider_qp *qp, void *_rdma_io_ctx)
-{
-	return -ENOTSUP;
 }
 
 struct spdk_rdma_provider_cq *

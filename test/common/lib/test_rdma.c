@@ -54,17 +54,7 @@ struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
 }
 
 DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_memory_domain *domain));
-
-DEFINE_STUB(spdk_rdma_provider_accel_sequence_supported, bool, (struct spdk_rdma_provider_qp *qp),
-	    false);
-DEFINE_STUB(spdk_rdma_provider_get_io_context_size, size_t, (void), 0);
-DEFINE_STUB(spdk_rdma_provider_accel_sequence_finish, int, (struct spdk_rdma_provider_qp *qp,
-		void *rdma_io_ctx,
-		struct spdk_accel_sequence *seq, spdk_rdma_provider_accel_seq_cb cb_fn, void *cb_ctx), 0);
-DEFINE_STUB(spdk_rdma_provider_accel_seq_get_translation, int, (void *rdma_io_ctx,
-		struct  spdk_rdma_provider_memory_translation_ctx *translation), 0);
-DEFINE_STUB(spdk_rdma_provider_accel_sequence_release, int, (struct spdk_rdma_provider_qp *qp,
-		void *rdma_io_ctx), 0);
+DEFINE_STUB(spdk_rdma_provider_accel_sequence_supported, bool, (void), false);
 
 /* used to mock out having to split an SGL over a memory region */
 size_t g_mr_size;

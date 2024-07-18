@@ -73,8 +73,6 @@ enum accel_mlx5_opcode {
 	ACCEL_MLX5_OPC_COPY,
 	ACCEL_MLX5_OPC_CRYPTO,
 	ACCEL_MLX5_OPC_CRYPTO_MKEY,
-	ACCEL_MLX5_OPC_ENCRYPT_MKEY,
-	ACCEL_MLX5_OPC_DECRYPT_MKEY,
 	ACCEL_MLX5_OPC_CRC32C,
 	ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C,
 	ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT,
@@ -174,8 +172,6 @@ struct accel_mlx5_task {
 			uint8_t inplace : 1;
 			/* This task is handled by mlx5 driver */
 			uint8_t driver_seq : 1;
-			/* The user requesteed to register mkey, without DMA operation */
-			uint8_t driver_mkey : 1;
 			/* The task need memory domain data_transfer function to be completed */
 			uint16_t needs_data_transfer : 1;
 			/* If set, memory data will be encrypted during TX and wire data will be
@@ -366,6 +362,9 @@ static inline void
 accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 {
 	struct accel_mlx5_dev *dev = task->qp->dev;
+	struct spdk_accel_task *next;
+	struct spdk_accel_sequence *seq;
+	bool driver_seq;
 
 	assert(rc);
 	SPDK_DEBUGLOG(accel_mlx5, "Fail task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
@@ -382,7 +381,20 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
 		}
 	}
+	next = spdk_accel_sequence_next_task(&task->base);
+	seq = task->base.seq;
+	driver_seq = task->driver_seq;
+
 	spdk_accel_task_complete(&task->base, rc);
+	if (driver_seq) {
+		struct spdk_io_channel *ch = task->qp->dev->ch;
+		assert(seq);
+		if (next) {
+			accel_mlx5_execute_sequence(ch, seq);
+		} else {
+			spdk_accel_sequence_continue(seq);
+		}
+	}
 }
 
 static int
@@ -738,17 +750,14 @@ accel_mlx5_crypto_task_complete(struct accel_mlx5_task *mlx5_task)
 static inline void
 accel_mlx5_crypto_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 {
-	struct spdk_mlx5_driver_io_context *driver_ctx;
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
 
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	assert(mlx5_task->num_processed_blocks == mlx5_task->num_blocks);
 	assert(mlx5_task->base.seq);
-	driver_ctx = spdk_accel_sequence_get_driver_ctx(mlx5_task->base.seq);
-	assert(driver_ctx);
-	driver_ctx->mkey = mlx5_task->mkeys[0];
-	mlx5_task->driver_mkey = 0;
 
+	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
 	spdk_accel_task_complete(&mlx5_task->base, 0);
 }
 
@@ -1120,88 +1129,6 @@ accel_mlx5_crypto_task_process(struct accel_mlx5_task *mlx5_task)
 			      mlx5_task->num_processed_blocks, mlx5_task->num_blocks);
 		mlx5_task->num_reqs++;
 	}
-
-	SPDK_DEBUGLOG(accel_mlx5, "end, task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
-		      mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
-
-	return 0;
-}
-
-static inline int
-accel_mlx5_encrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
-{
-	struct accel_mlx5_sge sgl;
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_qp *qp = mlx5_task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	uint32_t src_lkey = 0;
-	int rc;
-
-	if (spdk_unlikely(!mlx5_task->num_ops)) {
-		return -EINVAL;
-	}
-
-	mlx5_task->num_wrs = 0;
-	if (task->s.iovcnt == 1) {
-		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task, mlx5_task->qp, &task->s.iovs[0],
-				task->src_domain, task->src_domain_ctx, &src_lkey);
-	}
-
-	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
-		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
-	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &sgl, mlx5_task->mkeys[0]->mkey,
-					     src_lkey, 0, mlx5_task->blocks_per_req,
-					     (uint64_t)mlx5_task, SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
-		return rc;
-	}
-	dev->stats.crypto_umrs++;
-	mlx5_task->num_submitted_reqs++;
-	ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED_SIGNALED(dev, qp, mlx5_task);
-	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
-
-	SPDK_DEBUGLOG(accel_mlx5, "end, task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
-		      mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
-
-	return 0;
-}
-
-static inline int
-accel_mlx5_decrypt_mkey_task_process(struct accel_mlx5_task *mlx5_task)
-{
-	struct accel_mlx5_sge sgl;
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_qp *qp = mlx5_task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	uint32_t dst_lkey = 0;
-	int rc;
-
-	if (spdk_unlikely(!mlx5_task->num_ops)) {
-		return -EINVAL;
-	}
-
-	mlx5_task->num_wrs = 0;
-	if (task->d.iovcnt == 1) {
-		rc = accel_mlx5_task_pretranslate_single_mkey(mlx5_task, mlx5_task->qp, &task->d.iovs[0],
-				task->dst_domain, task->dst_domain_ctx, &dst_lkey);
-	}
-
-	SPDK_DEBUGLOG(accel_mlx5, "begin, task, %p, reqs: total %u, submitted %u, completed %u\n",
-		      mlx5_task, mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
-	/* This is inplace task where mlx5_task::src poinst to task::d.iovs. dst_lkey describes mlx5_task::src,
-	 * so it is passed to the function below as src_lkey parameter */
-	rc = accel_mlx5_configure_crypto_umr(mlx5_task, qp, &sgl, mlx5_task->mkeys[0]->mkey,
-					     dst_lkey, 0, mlx5_task->blocks_per_req,
-					     (uint64_t)mlx5_task, SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
-		return rc;
-	}
-	dev->stats.crypto_umrs++;
-	mlx5_task->num_submitted_reqs++;
-	ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED_SIGNALED(dev, qp, mlx5_task);
-	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
 
 	SPDK_DEBUGLOG(accel_mlx5, "end, task, %p, reqs: total %u, submitted %u, completed %u\n", mlx5_task,
 		      mlx5_task->num_reqs, mlx5_task->num_submitted_reqs, mlx5_task->num_completed_reqs);
@@ -2157,50 +2084,6 @@ accel_mlx5_crypto_task_continue(struct accel_mlx5_task *task)
 }
 
 static inline int
-accel_mlx5_encrypt_mkey_task_continue(struct accel_mlx5_task *task)
-{
-	struct accel_mlx5_qp *qp = task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
-	int rc;
-
-	if (task->num_ops == 0) {
-		rc = accel_mlx5_task_alloc_mkeys(task, dev->crypto_mkeys);
-		if (spdk_unlikely(rc != 0)) {
-			return rc;
-		}
-	}
-	if (spdk_unlikely(qp_slot == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
-		return -ENOMEM;
-	}
-	return accel_mlx5_encrypt_mkey_task_process(task);
-}
-
-static inline int
-accel_mlx5_decrypt_mkey_task_continue(struct accel_mlx5_task *task)
-{
-	struct accel_mlx5_qp *qp = task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	int rc;
-	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
-
-	if (task->num_ops == 0) {
-		rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, task->mkeys, 1);
-		if (spdk_unlikely(rc)) {
-			accel_mlx5_dev_nomem_task_mkey(dev, task);
-			return -ENOMEM;
-		}
-		task->num_ops = 1;
-	}
-	if (spdk_unlikely(qp_slot == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
-		return -ENOMEM;
-	}
-	return accel_mlx5_decrypt_mkey_task_process(task);
-}
-
-static inline int
 accel_mlx5_crc_task_continue(struct accel_mlx5_task *task)
 {
 	struct accel_mlx5_qp *qp = task->qp;
@@ -2607,38 +2490,9 @@ accel_mlx5_ch_get_dev(struct accel_mlx5_io_channel *ch)
 static inline int
 accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *ch)
 {
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct spdk_mlx5_driver_io_context *driver_ctx;
 	struct accel_mlx5_dev *dev = NULL;
-	uint16_t i;
 
-	if (task->seq && (driver_ctx = spdk_accel_sequence_get_driver_ctx(task->seq)) != NULL) {
-		if (spdk_unlikely(task->op_code != SPDK_ACCEL_OPC_ENCRYPT &&
-				  task->op_code != SPDK_ACCEL_OPC_DECRYPT)) {
-			SPDK_ERRLOG("Mkey registartion is only supported for encrypt\n");
-			return -ENOTSUP;
-		}
-		if (spdk_unlikely(driver_ctx->mkey != NULL)) {
-			SPDK_ERRLOG("driver IO ctx already has an mkey\n");
-			return -ENOTSUP;
-		}
-		dev = NULL;
-		for (i = 0; i < ch->num_devs; i++) {
-			if (ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
-				dev = &ch->devs[i];
-				break;
-			}
-		}
-		if (spdk_unlikely(!dev)) {
-			SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
-				    driver_ctx->qp->pd->context->device->name);
-			return -ENODEV;
-		}
-
-		mlx5_task->driver_mkey = 1;
-	} else {
-		dev = accel_mlx5_ch_get_dev(ch);
-	}
+	dev = accel_mlx5_ch_get_dev(ch);
 	assert(dev);
 
 	if (!g_accel_mlx5.attr.qp_per_domain || (!mlx5_task->base.src_domain &&
@@ -2652,16 +2506,8 @@ accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_i
 	 * depends on the opcode */
 	switch (mlx5_task->mlx5_opcode) {
 	case ACCEL_MLX5_OPC_CRYPTO:
-	case ACCEL_MLX5_OPC_ENCRYPT_MKEY:
 		if (mlx5_task->base.src_domain) {
 			mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
-		} else {
-			mlx5_task->qp = &dev->mlx5_qp;
-		}
-		break;
-	case ACCEL_MLX5_OPC_DECRYPT_MKEY:
-		if (mlx5_task->base.dst_domain) {
-			mlx5_task->qp =  accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
 		} else {
 			mlx5_task->qp = &dev->mlx5_qp;
 		}
@@ -2697,13 +2543,6 @@ accel_mlx5_copy_task_init(struct accel_mlx5_task *mlx5_task)
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(qp->dev, qp);
-
-	if (spdk_unlikely(mlx5_task->driver_seq &&
-			  (mlx5_task->base.src_domain == spdk_accel_get_memory_domain() ||
-			   mlx5_task->base.dst_domain == spdk_accel_get_memory_domain()))) {
-		SPDK_ERRLOG("Can't handle driver seq with accel memory domain\n");
-		return -ENOTSUP;
-	}
 
 	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
 		if (task->d.iovcnt == 1) {
@@ -2742,13 +2581,6 @@ accel_mlx5_crypto_task_init(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_blocks;
 	int rc;
 	bool crypto_key_ok;
-
-	if (spdk_unlikely(mlx5_task->driver_seq &&
-			  (mlx5_task->base.src_domain == spdk_accel_get_memory_domain() ||
-			   mlx5_task->base.dst_domain == spdk_accel_get_memory_domain()))) {
-		SPDK_ERRLOG("Can't handle driver seq with accel memory domain\n");
-		return -ENOTSUP;
-	}
 
 	crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
 			 task->crypto_key->priv);
@@ -2832,184 +2664,12 @@ accel_mlx5_crypto_task_init(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_encrypt_mkey_task_init(struct accel_mlx5_task *mlx5_task)
-{
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_qp *qp = mlx5_task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	struct spdk_mlx5_crypto_dek_data dek_data;
-	uint32_t num_blocks;
-	int rc;
-	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
-	bool crypto_key_ok;
-
-	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
-		/* With `external mkey` we can't split task or register several UMRs */
-		SPDK_ERRLOG("src buffer is too fragmented\n");
-		return -EINVAL;
-	}
-	if (spdk_unlikely(task->src_domain == spdk_accel_get_memory_domain())) {
-		SPDK_ERRLOG("accel domain is not supported\n");
-		return -EINVAL;
-	}
-	if (spdk_unlikely(spdk_accel_sequence_next_task(task) != NULL)) {
-		SPDK_ERRLOG("Mkey registartion is only supported for single task\n");
-		return -ENOTSUP;
-	}
-
-	crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
-			 task->crypto_key->priv);
-	if (spdk_unlikely((task->nbytes % mlx5_task->base.block_size != 0) || !crypto_key_ok)) {
-		if (crypto_key_ok) {
-			SPDK_ERRLOG("src length %"PRIu64" is not a multiple of the block size %u\n", task->nbytes,
-				    mlx5_task->base.block_size);
-		} else {
-			SPDK_ERRLOG("Wrong crypto key provided\n");
-		}
-		return -EINVAL;
-	}
-
-	rc = spdk_mlx5_crypto_get_dek_data(task->crypto_key->priv, dev->dev_ctx->pd, &dek_data);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("failed to get DEK data, rc %d\n", rc);
-		return rc;
-	}
-	mlx5_task->dek_obj_id = dek_data.dek_obj_id;
-	mlx5_task->tweak_mode = dek_data.tweak_mode;
-
-	num_blocks = task->nbytes / mlx5_task->base.block_size;
-	if (dev->crypto_multi_block) {
-		if (spdk_unlikely(g_accel_mlx5.attr.crypto_split_blocks &&
-				  num_blocks > g_accel_mlx5.attr.crypto_split_blocks)) {
-			SPDK_ERRLOG("Number of blocks in task %u exceeds split threshold %u, can't handle\n",
-				    num_blocks, g_accel_mlx5.attr.crypto_split_blocks);
-			return -E2BIG;
-		}
-	} else if (num_blocks != 1) {
-		SPDK_ERRLOG("Task contains more than 1 block, can't handle\n");
-		return -E2BIG;
-	}
-
-	accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
-	mlx5_task->num_blocks = num_blocks;
-	mlx5_task->num_processed_blocks = 0;
-	mlx5_task->inplace = 1;
-	mlx5_task->num_reqs = 1;
-	mlx5_task->blocks_per_req = num_blocks;
-
-	rc = accel_mlx5_task_alloc_mkeys(mlx5_task, dev->crypto_mkeys);
-	if (spdk_unlikely(rc)) {
-		return rc;
-	}
-	if (spdk_unlikely(qp_slot == 0)) {
-		mlx5_task->num_ops = 0;
-		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
-		return -ENOMEM;
-	}
-
-	SPDK_DEBUGLOG(accel_mlx5, "crypto task num_reqs %u, num_ops %u, num_blocks %u, src_len %zu\n",
-		      mlx5_task->num_reqs, mlx5_task->num_ops, mlx5_task->num_blocks, task->nbytes);
-
-	return 0;
-}
-
-static inline int
-accel_mlx5_decrypt_mkey_task_init(struct accel_mlx5_task *mlx5_task)
-{
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_qp *qp = mlx5_task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
-	struct spdk_mlx5_crypto_dek_data dek_data;
-	uint32_t num_blocks;
-	int rc;
-	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
-	bool crypto_key_ok;
-
-	if (spdk_unlikely(task->d.iovcnt > ACCEL_MLX5_MAX_SGE)) {
-		/* With `external mkey` we can't split task or register several UMRs */
-		SPDK_ERRLOG("dst buffer is too fragmented\n");
-		return -EINVAL;
-	}
-	if (spdk_unlikely(task->dst_domain == spdk_accel_get_memory_domain())) {
-		SPDK_ERRLOG("accel domain is not supported\n");
-		return -EINVAL;
-	}
-	if (spdk_unlikely(spdk_accel_sequence_next_task(task) != NULL)) {
-		SPDK_ERRLOG("Mkey registartion is only supported for single task\n");
-		return -ENOTSUP;
-	}
-
-	crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
-			 task->crypto_key->priv);
-	if (spdk_unlikely((task->nbytes % mlx5_task->base.block_size != 0) || !crypto_key_ok)) {
-		if (crypto_key_ok) {
-			SPDK_ERRLOG("dst length %"PRIu64" is not a multiple of the block size %u\n", task->nbytes,
-				    mlx5_task->base.block_size);
-		} else {
-			SPDK_ERRLOG("Wrong crypto key provided\n");
-		}
-		return -EINVAL;
-	}
-
-	rc = spdk_mlx5_crypto_get_dek_data(task->crypto_key->priv, dev->dev_ctx->pd, &dek_data);
-	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("failed to get DEK data, rc %d\n", rc);
-		return rc;
-	}
-	mlx5_task->dek_obj_id = dek_data.dek_obj_id;
-	mlx5_task->tweak_mode = dek_data.tweak_mode;
-
-	num_blocks = task->nbytes / mlx5_task->base.block_size;
-	if (dev->crypto_multi_block) {
-		if (spdk_unlikely(g_accel_mlx5.attr.crypto_split_blocks &&
-				  num_blocks > g_accel_mlx5.attr.crypto_split_blocks)) {
-			SPDK_ERRLOG("Number of blocks in task %u exceeds split threshold %u, can't handle\n",
-				    num_blocks, g_accel_mlx5.attr.crypto_split_blocks);
-			return -E2BIG;
-		}
-	} else if (num_blocks != 1) {
-		SPDK_ERRLOG("Task contains more than 1 block, can't handle\n");
-		return -E2BIG;
-	}
-
-	/* Initialize src iov_sgl using dst iov to reuse existing UMR configuration path */
-	accel_mlx5_iov_sgl_init(&mlx5_task->src, task->d.iovs, task->d.iovcnt);
-	mlx5_task->num_blocks = num_blocks;
-	mlx5_task->num_processed_blocks = 0;
-	mlx5_task->inplace = 1;
-	mlx5_task->num_reqs = 1;
-	mlx5_task->blocks_per_req = num_blocks;
-
-	rc = accel_mlx5_task_alloc_mkeys(mlx5_task, dev->crypto_mkeys);
-	if (spdk_unlikely(rc)) {
-		return rc;
-	}
-	if (spdk_unlikely(qp_slot == 0)) {
-		mlx5_task->num_ops = 0;
-		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
-		return -ENOMEM;
-	}
-
-	SPDK_DEBUGLOG(accel_mlx5, "crypto task num_reqs %u, num_ops %u, num_blocks %u, dst_len %zu\n",
-		      mlx5_task->num_reqs, mlx5_task->num_ops, mlx5_task->num_blocks, task->nbytes);
-
-	return 0;
-}
-
-static inline int
 accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
 	uint32_t qp_slot = accel_mlx5_dev_get_available_slots(dev, mlx5_task->qp);
 	int rc;
-
-	if (spdk_unlikely(mlx5_task->driver_seq &&
-			  (mlx5_task->base.src_domain == spdk_accel_get_memory_domain() ||
-			   mlx5_task->base.dst_domain == spdk_accel_get_memory_domain()))) {
-		SPDK_ERRLOG("Can't handle driver seq with accel memory domain\n");
-		return -ENOTSUP;
-	}
 
 	accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
 	if (mlx5_task->inplace) {
@@ -3053,13 +2713,6 @@ accel_mlx5_encrypt_and_crc_task_init(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_blocks;
 	int rc;
 	bool crypto_key_ok;
-
-	if (spdk_unlikely(mlx5_task->driver_seq &&
-			  (mlx5_task->base.src_domain == spdk_accel_get_memory_domain() ||
-			   mlx5_task->base.dst_domain == spdk_accel_get_memory_domain()))) {
-		SPDK_ERRLOG("Can't handle driver seq with accel memory domain\n");
-		return -ENOTSUP;
-	}
 
 	crypto_key_ok = (task->crypto_key && task->crypto_key->module_if == &g_accel_mlx5.module &&
 			 task->crypto_key->priv);
@@ -3144,13 +2797,6 @@ accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 	uint32_t num_blocks;
 	int rc;
 	bool crypto_key_ok;
-
-	if (spdk_unlikely(mlx5_task->driver_seq &&
-			  (mlx5_task->base.src_domain == spdk_accel_get_memory_domain() ||
-			   mlx5_task->base.dst_domain == spdk_accel_get_memory_domain()))) {
-		SPDK_ERRLOG("Can't handle driver seq with accel memory domain\n");
-		return -ENOTSUP;
-	}
 
 	task_crypto = TAILQ_NEXT(task, seq_link);
 	assert(task_crypto);
@@ -3303,18 +2949,16 @@ accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 	mlx5_task->num_reqs = 1;
 	mlx5_task->blocks_per_req = num_blocks;
 
-	if (spdk_unlikely(qp_slot == 0)) {
-		mlx5_task->num_ops = 0;
-		dev->stats.nomem_qdepth++;
-		return -ENOMEM;
-	}
 	rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
 	if (spdk_unlikely(rc)) {
-		mlx5_task->num_ops = 0;
-		dev->stats.nomem_mkey++;
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
 		return -ENOMEM;
 	}
 	mlx5_task->num_ops = 1;
+	if (spdk_unlikely(qp_slot == 0)) {
+		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
+		return -ENOMEM;
+	}
 
 	SPDK_DEBUGLOG(accel_mlx5, "crypto_mkey task num_blocks %u, src_len %zu\n", mlx5_task->num_reqs,
 		      task->nbytes);
@@ -3365,33 +3009,17 @@ accel_mlx5_crypto_mkey_task_continue(struct accel_mlx5_task *task)
 	if (task->num_ops == 0) {
 		rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, task->mkeys, 1);
 		if (spdk_unlikely(rc)) {
-			dev->stats.nomem_mkey++;
-			STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+			accel_mlx5_dev_nomem_task_mkey(qp->dev, task);
 			return -ENOMEM;
 		}
 		task->num_ops = 1;
 	}
 	if (spdk_unlikely(qp_slot == 0)) {
-		dev->stats.nomem_qdepth++;
-		STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+		accel_mlx5_dev_nomem_task_qdepth(dev, task);
 		return -ENOMEM;
 	}
 	return accel_mlx5_crypto_mkey_task_process(task);
 }
-
-static inline void
-_accel_mlx5_crypto_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
-{
-	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
-
-	assert(mlx5_task->num_ops);
-	assert(mlx5_task->num_processed_blocks == mlx5_task->num_blocks);
-	assert(mlx5_task->base.seq);
-
-	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
-	spdk_accel_task_complete(&mlx5_task->base, 0);
-}
-
 
 /**
  * Used to set mlx5 opcode for a regular task
@@ -3476,18 +3104,6 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 		.init = accel_mlx5_crypto_mkey_task_init,
 		.process = accel_mlx5_crypto_mkey_task_process,
 		.cont = accel_mlx5_crypto_mkey_task_continue,
-		.complete = accel_mlx5_crypto_mkey_task_complete,
-	},
-	[ACCEL_MLX5_OPC_ENCRYPT_MKEY] = {
-		.init = accel_mlx5_encrypt_mkey_task_init,
-		.process = accel_mlx5_encrypt_mkey_task_process,
-		.cont = accel_mlx5_encrypt_mkey_task_continue,
-		.complete = accel_mlx5_crypto_mkey_task_complete,
-	},
-	[ACCEL_MLX5_OPC_DECRYPT_MKEY] = {
-		.init = accel_mlx5_decrypt_mkey_task_init,
-		.process = accel_mlx5_decrypt_mkey_task_process,
-		.cont = accel_mlx5_decrypt_mkey_task_continue,
 		.complete = accel_mlx5_crypto_mkey_task_complete,
 	},
 	[ACCEL_MLX5_OPC_CRC32C] = {
@@ -4300,6 +3916,7 @@ accel_mlx5_deinit_cb(void *ctx)
 		       stats->rdma_writes, stats->rdma_reads, stats->rdma_writes + stats->rdma_reads,
 		       stats->polls, stats->idle_polls, stats->completions);
 
+	spdk_mlx5_umr_implementer_register(false);
 	accel_mlx5_free_resources();
 	spdk_spin_destroy(&g_accel_mlx5.lock);
 	spdk_accel_module_finish();
@@ -4700,6 +4317,7 @@ accel_mlx5_init(void)
 		SPDK_NOTICELOG("Enabling mlx5 platform driver\n");
 		spdk_accel_driver_register(&g_accel_mlx5_driver);
 		spdk_accel_set_driver(g_accel_mlx5_driver.name);
+		spdk_mlx5_umr_implementer_register(true);
 	}
 
 	return rc;
@@ -4837,8 +4455,6 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 	spdk_json_write_named_uint64(w, "copy", stats->opcodes[ACCEL_MLX5_OPC_COPY]);
 	spdk_json_write_named_uint64(w, "crypto", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO]);
 	spdk_json_write_named_uint64(w, "crypto_mkey", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_MKEY]);
-	spdk_json_write_named_uint64(w, "encrypt_mkey", stats->opcodes[ACCEL_MLX5_OPC_ENCRYPT_MKEY]);
-	spdk_json_write_named_uint64(w, "decrypt_mkey", stats->opcodes[ACCEL_MLX5_OPC_DECRYPT_MKEY]);
 	spdk_json_write_named_uint64(w, "crc32c", stats->opcodes[ACCEL_MLX5_OPC_CRC32C]);
 	spdk_json_write_named_uint64(w, "encrypt_crc", stats->opcodes[ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C]);
 	spdk_json_write_named_uint64(w, "crc_decrypt", stats->opcodes[ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT]);
@@ -5051,7 +4667,6 @@ accel_mlx5_task_merge_encrypt_and_crc(struct accel_mlx5_task *mlx5_task,
 		return false;
 	}
 
-	assert(!mlx5_task->driver_mkey);
 	accel_mlx5_task_reset(mlx5_task);
 	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C;
 	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
@@ -5113,80 +4728,6 @@ accel_mlx5_task_merge_crc_and_decrypt(struct accel_mlx5_task *mlx5_task,
 	}
 
 	return true;
-}
-
-static inline int
-accel_mlx5_driver_encrypt_mkey_configure(struct spdk_mlx5_driver_io_context *driver_ctx,
-		struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *accel_ch)
-{
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_dev *dev = NULL;
-	uint32_t i;
-
-	for (i = 0; i < accel_ch->num_devs; i++) {
-		if (accel_ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
-			dev = &accel_ch->devs[i];
-			break;
-		}
-	}
-	if (spdk_unlikely(!dev)) {
-		SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
-			    driver_ctx->qp->pd->context->device->name);
-		return -ENODEV;
-	}
-
-	if (!g_accel_mlx5.attr.qp_per_domain || !task->src_domain) {
-		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
-	} else {
-		mlx5_task->qp = &dev->mlx5_qp;
-	}
-	if (spdk_unlikely(!mlx5_task->qp || mlx5_task->qp->recovering)) {
-		return -ENODEV;
-	}
-
-	accel_mlx5_task_reset(mlx5_task);
-	mlx5_task->driver_mkey = 1;
-	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
-	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_MKEY;
-
-	return 0;
-}
-
-static inline int
-accel_mlx5_driver_decrypt_mkey_configure(struct spdk_mlx5_driver_io_context *driver_ctx,
-		struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *accel_ch)
-{
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_dev *dev = NULL;
-	uint32_t i;
-
-	for (i = 0; i < accel_ch->num_devs; i++) {
-		if (accel_ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
-			dev = &accel_ch->devs[i];
-			break;
-		}
-	}
-	if (spdk_unlikely(!dev)) {
-		SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
-			    driver_ctx->qp->pd->context->device->name);
-		return -ENODEV;
-	}
-
-	if (!g_accel_mlx5.attr.qp_per_domain || !task->dst_domain) {
-		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
-	} else {
-		mlx5_task->qp = &dev->mlx5_qp;
-	}
-	if (spdk_unlikely(!mlx5_task->qp || mlx5_task->qp->recovering)) {
-		return -ENODEV;
-	}
-
-	accel_mlx5_task_reset(mlx5_task);
-	mlx5_task->driver_mkey = 1;
-	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
-	mlx5_task->mlx5_opcode =  ACCEL_MLX5_OPC_DECRYPT_MKEY;
-
-	return 0;
 }
 
 static inline struct accel_mlx5_dev *
@@ -5251,24 +4792,14 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 	struct accel_mlx5_task *first = SPDK_CONTAINEROF(first_base, struct accel_mlx5_task, base);
 	struct spdk_accel_task *next_base = TAILQ_NEXT(first_base, seq_link);
 	struct accel_mlx5_task *next;
-	struct spdk_mlx5_driver_io_context *driver_ctx;
 	int rc;
-
-	driver_ctx = spdk_accel_sequence_get_driver_ctx(seq);
 
 	/* Handle tasks which require special processing, e.g. merge */
 	switch (first_base->op_code) {
 	case SPDK_ACCEL_OPC_ENCRYPT:
 		assert(g_accel_mlx5.crypto_supported);
-		if (driver_ctx) {
-			if (spdk_unlikely(driver_ctx->mkey != NULL)) {
-				SPDK_ERRLOG("driver IO ctx already has an mkey\n");
-				return -ENOTSUP;
-			}
-			return accel_mlx5_driver_encrypt_mkey_configure(driver_ctx, first, accel_ch);
-		}
 
-		if (next_base->op_code == SPDK_ACCEL_OPC_COPY &&
+		if (next_base && next_base->op_code == SPDK_ACCEL_OPC_COPY &&
 		    next_base->dst_domain && spdk_memory_domain_get_dma_device_type(next_base->dst_domain) ==
 		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
 			rc = accel_mlx5_task_assign_qp_by_domain_pd(first, accel_ch, next_base->dst_domain);
@@ -5282,6 +4813,7 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 						       struct accel_mlx5_task, base), first);
 			first_base->dst_domain = next_base->dst_domain;
 			first_base->dst_domain_ctx = next_base->dst_domain_ctx;
+			accel_mlx5_task_reset(first);
 			first->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_MKEY;
 			first->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
 			first->needs_data_transfer = 1;
@@ -5297,16 +4829,6 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 			return 0;
 		}
 		break;
-	case SPDK_ACCEL_OPC_DECRYPT:
-		assert(g_accel_mlx5.crypto_supported);
-		if (driver_ctx) {
-			if (spdk_unlikely(driver_ctx->mkey != NULL)) {
-				SPDK_ERRLOG("driver IO ctx already has an mkey\n");
-				return -ENOTSUP;
-			}
-			return accel_mlx5_driver_decrypt_mkey_configure(driver_ctx, first, accel_ch);
-		}
-		break;
 	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		if (g_accel_mlx5.merge && accel_mlx5_task_merge_crc_and_decrypt(first, accel_ch)) {
 			if (spdk_unlikely(!first->qp || first->qp->recovering)) {
@@ -5316,7 +4838,7 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		}
 		break;
 	case SPDK_ACCEL_OPC_COPY:
-		if (next_base->op_code == SPDK_ACCEL_OPC_DECRYPT &&
+		if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DECRYPT &&
 		    first_base->dst_domain &&  spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
 		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
 			next = SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base);

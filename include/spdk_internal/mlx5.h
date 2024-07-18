@@ -26,14 +26,8 @@
  * DEK - Data Encryption Key
  */
 
-/* TODO: to be removed */
 #define SPDK_MLX5_DRIVER_NAME "mlx5"
 #define SPDK_MLX5_VENDOR_ID_MELLANOX 0x2c9
-
-struct spdk_mlx5_driver_io_context {
-	struct ibv_qp *qp;
-	struct spdk_mlx5_mkey_pool_obj *mkey;
-};
 
 struct spdk_mlx5_crypto_keytag;
 

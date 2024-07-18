@@ -251,69 +251,11 @@ int spdk_rdma_provider_cq_resize(struct spdk_rdma_provider_cq *rdma_cq, int cqe)
 int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entries,
 			       struct ibv_wc *wc);
 
-struct spdk_accel_sequence;
-
 /**
- * Check whether qpair's PD and RDMA provider support accel sequences
+ * Check whether RDMA provider supports accel sequences
  *
- * \param qp Qpair object
  * return true if accel sequence is supported
  */
-bool spdk_rdma_provider_accel_sequence_supported(struct spdk_rdma_provider_qp *qp);
-
-/**
- * Get a size of per IO context to be used by rdma library
- *
- * \return number of bytes per IO context
- */
-size_t spdk_rdma_provider_get_io_context_size(void);
-
-/**
- * Prototype of a function to be called when accel sequence completes.
- *
- * \param cb_arg User context
- * \param status Status of accel sequence execution
- */
-typedef void (*spdk_rdma_provider_accel_seq_cb)(void *cb_arg, int status);
-
-/**
- * Execute accel sequence. Result is a memory key which is stored in the \b rdma_io_ctx and can later be retrieved
- * with \ref spdk_rdma_provider_accel_seq_get_translation. Result is always a single memory key, so the whole payload is
- * virtually contiguous.
- *
- * Note: \ref spdk_rdma_provider_accel_sequence_supported must return true to work with accel sequence
- *
- * \param qp Qpair object
- * \param rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size
- * \param seq Accel sequence to execute
- * \param cb_fn Function to call on completion
- * \param cb_ctx Context to be passed to cb_fn
- * \return 0 on success, negated errno on failure
- */
-int spdk_rdma_provider_accel_sequence_finish(struct spdk_rdma_provider_qp *qp, void *rdma_io_ctx,
-		struct spdk_accel_sequence *seq, spdk_rdma_provider_accel_seq_cb cb_fn, void *cb_ctx);
-
-/**
- * Get memory keys which are result of accel sequence. \b addr parameter might be changed.
- *
- * Note: \ref spdk_rdma_provider_accel_sequence_finish must be successfully completed before calling this function
- *
- * \param rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size
- * \param[in/out] translation Memory translation. The caller must fill \b addr and \b length fields before calling
- * this function. This function may update these values.
- * \return 0 on success, negated errno on failure
- */
-int spdk_rdma_provider_accel_seq_get_translation(void *rdma_io_ctx,
-		struct  spdk_rdma_provider_memory_translation_ctx *translation);
-
-/**
- * Release resources (e.g. memory key) acquired during accel sequence execution.
- *
- * Note: must be caled only when \ref spdk_rdma_provider_accel_sequence_finish returns 0.
- *
- * \param _rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size which was used in \ref spdk_rdma_provider_accel_sequence_finish
- * \return 0 on success, negated errno on failure
- */
-int spdk_rdma_provider_accel_sequence_release(struct spdk_rdma_provider_qp *qp, void *_rdma_io_ctx);
+bool spdk_rdma_provider_accel_sequence_supported(void);
 
 #endif /* SPDK_RDMA_H */

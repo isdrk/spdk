@@ -167,10 +167,9 @@ struct spdk_accel_sequence {
 	bool					in_process_sequence;
 	spdk_accel_completion_cb		cb_fn;
 	void					*cb_arg;
-	void					*driver_ctx;
 	SLIST_ENTRY(spdk_accel_sequence)	link;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_accel_sequence) == 72, "invalid size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_accel_sequence) == 64, "invalid size");
 
 #define accel_update_stats(ch, event, v) \
 	do { \
@@ -1100,7 +1099,6 @@ accel_sequence_get(struct accel_io_channel *ch)
 	seq->status = 0;
 	seq->state = ACCEL_SEQUENCE_STATE_INIT;
 	seq->in_process_sequence = false;
-	seq->driver_ctx = NULL;
 
 	return seq;
 }
@@ -3607,22 +3605,6 @@ spdk_accel_driver_get_name(void)
 		return g_accel_driver->name;
 	}
 	return NULL;
-}
-
-void
-spdk_accel_sequence_set_driver_ctx(struct spdk_accel_sequence *seq, void *ctx)
-{
-	assert(seq);
-
-	seq->driver_ctx = ctx;
-}
-
-void *
-spdk_accel_sequence_get_driver_ctx(struct spdk_accel_sequence *seq)
-{
-	assert(seq);
-
-	return seq->driver_ctx;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(accel)

@@ -41,8 +41,6 @@
 	spdk_accel_sequence_finish;
 	spdk_accel_sequence_abort;
 	spdk_accel_sequence_reverse;
-	spdk_accel_sequence_set_driver_ctx;
-	spdk_accel_sequence_get_driver_ctx;
 	spdk_accel_get_buf;
 	spdk_accel_put_buf;
 	spdk_accel_crypto_key_create;
