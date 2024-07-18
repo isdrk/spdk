@@ -481,6 +481,7 @@ struct spdk_nvmf_rdma_conn_sched {
 struct spdk_nvmf_rdma_device {
 	struct ibv_device_attr			attr;
 	struct ibv_context			*context;
+	struct doca_dev				*doca_dev;
 
 	struct spdk_rdma_utils_mem_map		*map;
 	struct ibv_pd				*pd;
@@ -2570,6 +2571,56 @@ static bool nvmf_rdma_retry_listen_port(struct spdk_nvmf_rdma_transport *rtransp
 static void destroy_ib_device(struct spdk_nvmf_rdma_transport *rtransport,
 			      struct spdk_nvmf_rdma_device *device);
 
+static struct doca_dev *
+open_doca_sta_dev(const char *ibdev_name)
+{
+	struct doca_devinfo **dev_list;
+	uint32_t nb_devs;
+	struct doca_devinfo *devinfo = NULL;
+	char devinfo_ibvdev_name[DOCA_DEVINFO_IBDEV_NAME_SIZE];
+	struct doca_dev *dev = NULL;
+	doca_error_t ret;
+	uint32_t i;
+
+	ret = doca_devinfo_create_list(&dev_list, &nb_devs);
+	if (DOCA_IS_ERROR(ret)) {
+		SPDK_ERRLOG("doca_devinfo_create_list(): %s\n", doca_error_get_descr(ret));
+		return NULL;
+	}
+
+	for (i = 0; i < nb_devs; i++) {
+		ret = doca_devinfo_get_ibdev_name(dev_list[i], devinfo_ibvdev_name,
+						  DOCA_DEVINFO_IBDEV_NAME_SIZE);
+		if (DOCA_IS_ERROR(ret)) {
+			SPDK_ERRLOG("doca_devinfo_get_ibdev_name(): %s\n", doca_error_get_descr(ret));
+			goto destroy_list_and_exit;
+		}
+		if (strncmp(ibdev_name, devinfo_ibvdev_name, DOCA_DEVINFO_IBDEV_NAME_SIZE) == 0) {
+			devinfo = dev_list[i];
+			break;
+		}
+	}
+	if (!devinfo) {
+		SPDK_ERRLOG("DOCA device %s is not found\n", ibdev_name);
+		goto destroy_list_and_exit;
+	}
+
+	ret = doca_sta_cap_is_supported(devinfo);
+	if (DOCA_IS_ERROR(ret)) {
+		SPDK_NOTICELOG("DOCA device %s does not support STA capabilties\n", ibdev_name);
+		goto destroy_list_and_exit;
+	}
+
+	ret = doca_dev_open(devinfo, &dev);
+	if (DOCA_IS_ERROR(ret)) {
+		SPDK_ERRLOG("doca_dev_open(): %s\n", doca_error_get_descr(ret));
+	}
+
+destroy_list_and_exit:
+	doca_devinfo_destroy_list(dev_list);
+	return dev;
+}
+
 static int
 create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context *context,
 		 struct spdk_nvmf_rdma_device **new_device)
@@ -2610,6 +2661,12 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 		device->attr.device_cap_flags &= ~(IBV_DEVICE_MEM_MGT_EXTENSIONS);
 	}
 #endif
+
+	device->doca_dev = open_doca_sta_dev(ibv_get_device_name(context->device));
+	if (!device->doca_dev) {
+		free(device);
+		return -EINVAL;
+	}
 
 	/* set up device context async ev fd as NON_BLOCKING */
 	flag = fcntl(device->context->async_fd, F_GETFL);
@@ -2849,12 +2906,11 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	rc = 0;
 	while (contexts[i] != NULL) {
 		rc = create_ib_device(rtransport, contexts[i], &device);
-		if (rc < 0) {
-			break;
+		if (rc == 0) {
+			max_device_sge = spdk_min(max_device_sge, device->attr.max_sge);
+			device->is_ready = true;
 		}
 		i++;
-		max_device_sge = spdk_min(max_device_sge, device->attr.max_sge);
-		device->is_ready = true;
 	}
 	rdma_free_devices(contexts);
 
@@ -2899,6 +2955,9 @@ destroy_ib_device(struct spdk_nvmf_rdma_transport *rtransport,
 	spdk_rdma_utils_free_mem_map(&device->map);
 	if (device->pd) {
 		ibv_dealloc_pd(device->pd);
+	}
+	if (device->doca_dev) {
+		doca_dev_close(device->doca_dev);
 	}
 	SPDK_DEBUGLOG(rdma_offload, "IB device [%p] is destroyed.\n", device);
 	free(device);
