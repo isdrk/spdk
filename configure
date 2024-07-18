@@ -138,6 +138,8 @@ function usage() {
 	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
 	echo " --with-aio-fsdev          Build aio FSDEV component."
 	echo " --without-aio-fsdev       No path required."
+	echo " --with-doca-sta[=DIR]     Path to doca_sta. Required for nvmf target offload."
+	echo " --without-xlio            Path to custom doca_sta installation directory may be specified."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -538,7 +540,7 @@ for i in "$@"; do
 				exit 1
 			fi
 			;;
-		--without-doca)
+		--without-doca-sta)
 			CONFIG[DOCA_STA]=n
 			CONFIG[DOCA_STA_LIB_DIR]=
 			CONFIG[DOCA_STA_INC_DIR]=
