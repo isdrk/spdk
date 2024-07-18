@@ -2680,6 +2680,9 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('--data-wr-pool-size', help='RDMA data WR pool size. Relevant only for RDMA transport', type=int)
     p.add_argument('--disable-command-passthru', help='Disallow command passthru', action='store_true')
     p.add_argument('--msdbd', help='Set MSDBD value to be used by transport. Some transports may ignore this config', type=int)
+    p.add_argument('-D', '--doca-device', help='DOCA device with STA capabilities. Relevant only for RDMA_OFFLOAD transport', type=str)
+    p.add_argument('-R', '--rdma-device-list', help='Allowed list of RDMA devices. Relevant only for RDMA_OFFLOAD transport', type=str)
+    p.add_argument('-L', '--doca-log-level', help='Set log level for DOCA internal libs (disable, critical, error, warning, info, debug, trace). Relevant only for RDMA_OFFLOAD transport', type=str)
     p.set_defaults(func=nvmf_create_transport)
 
     def nvmf_get_transports(args):
@@ -3043,6 +3046,75 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                               help='Stop publishing pull registration request through mdns')
     p.add_argument('-t', '--tgt-name', help='The name of the NVMe-oF target (optional)', type=str)
     p.set_defaults(func=nvmf_stop_mdns_prr)
+
+    # Target offload
+    def tgt_ofld_event_handler_list(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_event_handler_list(args.client,
+                                                            type=args.type))
+
+    p = subparsers.add_parser('tgt_ofld_event_handler_list', help='List of OFFLOAD event handlers')
+    p.add_argument('--type', help='Event handler type', type=str, required=False,
+                   choices=['comp', 'tx', 'beq'])
+    p.set_defaults(func=tgt_ofld_event_handler_list)
+
+    def tgt_ofld_event_handler_counter(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_event_handler_counter(args.client,
+                                                               type=args.type,
+                                                               name=args.name))
+
+    p = subparsers.add_parser('tgt_ofld_event_handler_counter', help='Get counters of event handlers')
+    p.add_argument('--type', help='Event handler type', type=str, required=False,
+                   choices=['comp', 'tx', 'beq'])
+    p.add_argument('--name', help='Event handler name', type=str, required=False)
+    p.set_defaults(func=tgt_ofld_event_handler_counter)
+
+    def tgt_ofld_event_handler_counter_reset(args):
+        rpc.tgt_ofld.tgt_ofld_event_handler_counter_reset(args.client,
+                                                          type=args.type,
+                                                          name=args.name)
+
+    p = subparsers.add_parser('tgt_ofld_event_handler_counter_reset',
+                              help='Reset the counters of the specified event handler(s)')
+    p.add_argument('--type', help='Event handler type', type=str, required=False,
+                   choices=['comp', 'tx', 'beq'])
+    p.add_argument('--name', help='Event handler name', type=str, required=False)
+    p.set_defaults(func=tgt_ofld_event_handler_counter_reset)
+
+    def tgt_ofld_connect_qp_list(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_connect_qp_list(args.client,
+                                                         group=args.group))
+
+    p = subparsers.add_parser('tgt_ofld_connect_qp_list', help='List of the connected QPs')
+    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups.',
+                   type=int, required=False)
+    p.set_defaults(func=tgt_ofld_connect_qp_list)
+
+    def tgt_ofld_connect_qp_count(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_connect_qp_count(args.client,
+                                                          group=args.group))
+
+    p = subparsers.add_parser('tgt_ofld_connect_qp_count', help='Total number of the connected QPs')
+    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups.',
+                   type=int, required=False)
+    p.set_defaults(func=tgt_ofld_connect_qp_count)
+
+    def tgt_ofld_get_backend_ctrl_stat(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_get_backend_ctrl_stat(args.client,
+                                                               name=args.name))
+
+    p = subparsers.add_parser('tgt_ofld_get_backend_ctrl_stat',
+                              help='Display statistics of all the offload backend controllers or specified conroller.')
+    p.add_argument('-b', '--name', help='Name of the offload backend controller. Example: Nvme0', required=False)
+    p.set_defaults(func=tgt_ofld_get_backend_ctrl_stat)
+
+    def tgt_ofld_get_bdev_stat(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_get_bdev_stat(args.client,
+                                                       name=args.name))
+
+    p = subparsers.add_parser('tgt_ofld_get_bdev_stat',
+                              help='Display statistics of all the offload bdevs or specified bdev.')
+    p.add_argument('-b', '--name', help='Name of the offload bdev. Example: Nvme0n1', required=False)
+    p.set_defaults(func=tgt_ofld_get_bdev_stat)
 
     # subsystem
     def framework_get_subsystems(args):

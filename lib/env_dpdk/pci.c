@@ -396,6 +396,7 @@ pci_device_init(struct rte_pci_driver *_drv,
 
 	dev->internal.driver = driver;
 	dev->internal.claim_fd = -1;
+	dev->internal.vfio_dev_fd = -1;
 
 	if (driver->cb_fn != NULL) {
 		rc = driver->cb_fn(driver->cb_arg, dev);
@@ -486,6 +487,11 @@ spdk_pci_device_detach(struct spdk_pci_device *dev)
 	struct spdk_pci_device_provider *provider;
 
 	assert(dev->internal.attached);
+
+	if (dev->internal.vfio_dev_fd >= 0) {
+		close(dev->internal.vfio_dev_fd);
+		dev->internal.vfio_dev_fd = -1;
+	}
 
 	if (dev->internal.claim_fd >= 0) {
 		spdk_pci_device_unclaim(dev);

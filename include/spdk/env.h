@@ -788,6 +788,7 @@ struct spdk_pci_device {
 		bool				attached;
 		/* optional fd for exclusive access to this device on this process */
 		int				claim_fd;
+		int				vfio_dev_fd;
 		bool				pending_removal;
 		/* The device was successfully removed on a DPDK interrupt thread,
 		 * but to prevent data races we couldn't remove it from the global
@@ -925,35 +926,29 @@ int spdk_pci_device_map_bar(struct spdk_pci_device *dev, uint32_t bar,
 int spdk_pci_device_unmap_bar(struct spdk_pci_device *dev, uint32_t bar,
 			      void *mapped_addr);
 
-/**
- * Create a dma-buf for the BAR of the given PCI device.
- *
- * \param dev PCI device.
- * \param bar BAR number.
- *
- * \return 0 on success.
- */
-int spdk_pci_device_create_dmabuf(struct spdk_pci_device *dev, int bar);
-
-/**
- * Destroy a dma-buf for the BAR of the given PCI device.
- *
- * \param dev PCI device.
- * \param bar BAR number.
- *
- * \return 0 on success.
- */
-int spdk_pci_device_destroy_dmabuf(struct spdk_pci_device *dev, int bar);
-
 struct spdk_dmabuf {
 	void *addr;
 	uint64_t length;
 	int fd;
 };
 
-struct spdk_dmabuf *spdk_dmabuf_get(void *addr, uint64_t size);
-void spdk_dmabuf_put(struct spdk_dmabuf *dmabuf);
-int spdk_dmabuf_pci_device_removed(struct spdk_pci_device *spdk_dev);
+/**
+ * Create a dma-buf for the BAR of the given PCI device.
+ *
+ * \param dev PCI device.
+ * \param bar BAR number.
+ *
+ * \return a pointer to dma-buf.
+ */
+struct spdk_dmabuf *spdk_pci_device_create_dmabuf(struct spdk_pci_device *dev, int bar);
+
+/**
+ * Destroy a dma-buf for the BAR of the given PCI device.
+ *
+ * \param dev PCI device.
+ * \param bar BAR number.
+ */
+void spdk_pci_device_destroy_dmabuf(struct spdk_pci_device *dev, struct spdk_dmabuf *dmabuf);
 
 /**
  * Enable PCI device interrupts. (Experimental)

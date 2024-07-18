@@ -13,7 +13,7 @@ C_SRCS = ctrlr.c ctrlr_discovery.c ctrlr_bdev.c \
 	 subsystem.c nvmf.c nvmf_rpc.c transport.c tcp.c \
 	 stubs.c mdns_server.c
 
-C_SRCS-$(CONFIG_RDMA) += rdma.c rdma_offload.c
+C_SRCS-$(CONFIG_RDMA) += rdma.c
 C_SRCS-$(CONFIG_HAVE_EVP_MAC) += auth.c
 
 LIBNAME = nvmf
@@ -49,6 +49,15 @@ C_SRCS += fc.c fc_ls.c
 CFLAGS += -I$(CURDIR) $(ENV_CFLAGS)
 ifneq ($(strip $(CONFIG_FC_PATH)),)
 CFLAGS += -I$(CONFIG_FC_PATH)
+endif
+endif
+
+ifeq ($(CONFIG_RDMA),y)
+ifeq ($(CONFIG_DOCA),y)
+ifeq ($(CONFIG_FLEXIO),y)
+C_SRCS += rdma_offload.c
+LOCAL_SYS_LIBS += -ldoca_sta -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common
+endif
 endif
 endif
 
