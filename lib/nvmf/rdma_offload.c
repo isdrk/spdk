@@ -2149,6 +2149,7 @@ nvmf_rdma_create_doca_mmap(struct doca_dev *dev, void *addr, size_t len, int dma
 			   size_t dmabuf_offset)
 {
 	struct doca_mmap *mmap;
+	uint32_t access_mask = DOCA_ACCESS_FLAG_LOCAL_READ_WRITE;
 	doca_error_t drc;
 
 	drc = doca_mmap_create(&mmap);
@@ -2170,6 +2171,7 @@ nvmf_rdma_create_doca_mmap(struct doca_dev *dev, void *addr, size_t len, int dma
 			goto err;
 		}
 	} else {
+		access_mask |= DOCA_ACCESS_FLAG_PCI_RELAXED_ORDERING;
 		drc = doca_mmap_set_dmabuf_memrange(mmap, dmabuf_fd, addr, dmabuf_offset, len);
 		if (drc) {
 			SPDK_ERRLOG("Failed to set dmabuf memrange for doca_mmap, drc %d\n", drc);
@@ -2177,7 +2179,7 @@ nvmf_rdma_create_doca_mmap(struct doca_dev *dev, void *addr, size_t len, int dma
 		}
 	}
 
-	drc = doca_mmap_set_permissions(mmap, DOCA_ACCESS_FLAG_LOCAL_READ_WRITE);
+	drc = doca_mmap_set_permissions(mmap, access_mask);
 	if (drc) {
 		SPDK_ERRLOG("Failed to set premissions for doca_mmap, drc %d\n", drc);
 		goto err;
@@ -2383,27 +2385,6 @@ nvmf_rdma_offload_create_ns_backend_nvme(struct spdk_nvmf_rdma_qpair *rqpair,
 
 	SPDK_NOTICELOG("Nvme doorbells dmabuf: addr %p, len %lu, fd %d\n",
 		       be->db_dmabuf->addr, be->db_dmabuf->length, be->db_dmabuf->fd);
-
-	/* @todo: when dmabuf doca_mmap works */
-	struct ibv_mr *mr = ibv_reg_dmabuf_mr(rqpair->device->pd, 0, be->db_dmabuf->length,
-					      (uint64_t)be->db_dmabuf->addr, be->db_dmabuf->fd,
-					      IBV_ACCESS_LOCAL_WRITE);
-	if (!mr) {
-		SPDK_ERRLOG("Failed to create SQDB dmabuf MR, errno %d\n", errno);
-	}
-
-	struct mlx5dv_devx_umem_in umem_in = {
-		.addr = be->db_dmabuf->addr,
-		.size = be->db_dmabuf->length,
-		.access = IBV_ACCESS_LOCAL_WRITE,
-		.pgsz_bitmap = 4096,
-		.comp_mask = MLX5DV_UMEM_MASK_DMABUF,
-		.dmabuf_fd = be->db_dmabuf->fd
-	};
-	struct mlx5dv_devx_umem *umem = mlx5dv_devx_umem_reg_ex(rqpair->device->context, &umem_in);
-	if (!umem) {
-		SPDK_ERRLOG("Failed to create SQDB dmabuf umem, errno %d\n", errno);
-	}
 
 	/* @todo: can we create mmap for doorbell size only */
 	be->sqdb_mmap = nvmf_rdma_create_doca_mmap(rqpair->device->doca_dev,
