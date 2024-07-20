@@ -785,6 +785,12 @@ nvme_pcie_ctrlr_allocate_bars(struct nvme_pcie_ctrlr *pctrlr)
 	nvme_pcie_ctrlr_map_cmb(pctrlr);
 	nvme_pcie_ctrlr_map_pmr(pctrlr);
 
+	rc = spdk_pci_device_create_dmabuf(pctrlr->devhandle, 0);
+	if (rc) {
+		SPDK_ERRLOG("Failed to create dmabuf, rc %d\n", rc);
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -796,6 +802,12 @@ nvme_pcie_ctrlr_free_bars(struct nvme_pcie_ctrlr *pctrlr)
 
 	if (pctrlr->ctrlr.is_removed) {
 		return rc;
+	}
+
+	rc = spdk_pci_device_destroy_dmabuf(pctrlr->devhandle, 0);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy dmabuf, rc %d\n", rc);
+		return -1;
 	}
 
 	rc = nvme_pcie_ctrlr_unmap_pmr(pctrlr);

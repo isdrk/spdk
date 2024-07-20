@@ -50,6 +50,8 @@ DEFINE_STUB_V(spdk_pci_unregister_error_handler, (spdk_pci_error_handler sighand
 DEFINE_STUB(spdk_pci_enumerate, int,
 	    (struct spdk_pci_driver *driver, spdk_pci_enum_cb enum_cb, void *enum_ctx),
 	    -1);
+DEFINE_STUB(spdk_pci_device_create_dmabuf, int, (struct spdk_pci_device *spdk_dev, int bar), 0);
+DEFINE_STUB(spdk_pci_device_destroy_dmabuf, int, (struct spdk_pci_device *spdk_dev, int bar), 0);
 
 SPDK_LOG_REGISTER_COMPONENT(nvme)
 
