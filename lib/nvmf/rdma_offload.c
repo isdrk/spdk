@@ -2445,6 +2445,170 @@ nvmf_rdma_offload_create_ns_backend_nvme(struct spdk_nvmf_rdma_qpair *rqpair,
 }
 
 static int
+nvmf_rdma_offload_destroy_ns_backend_null(struct spdk_nvmf_ns *ns)
+{
+	struct spdk_nvmf_ns_offload_be_null *be = ns->offload_be.null;
+	doca_error_t drc;
+
+	if (!be) {
+		return 0;
+	}
+
+	assert(be->refs > 0);
+	be->refs--;
+	if (be->refs != 0) {
+		return 0;
+	}
+
+	SPDK_NOTICELOG("Destroy DOCA STA null backend %lu, queue %lu\n", be->doca_be, be->doca_be_queue);
+	if (be->doca_be) {
+		drc = doca_sta_be_destroy(be->doca_be);
+		if (drc) {
+			SPDK_ERRLOG("Failed to destroy doca_sta_be, drc %d\n", drc);
+			return -1;
+		}
+	}
+
+	if (be->sq_mmap) {
+		drc = doca_mmap_destroy(be->sq_mmap);
+		if (drc) {
+			SPDK_ERRLOG("Failed to destroy SQ doca_mmap, drc %d\n", drc);
+			return -1;
+		}
+	}
+
+	if (be->cq_mmap) {
+		drc = doca_mmap_destroy(be->cq_mmap);
+		if (drc) {
+			SPDK_ERRLOG("Failed to destroy CQ doca_mmap, drc %d\n", drc);
+			return -1;
+		}
+	}
+
+	if (be->sqdb_mmap) {
+		drc = doca_mmap_destroy(be->sqdb_mmap);
+		if (drc) {
+			SPDK_ERRLOG("Failed to destroy SQDB doca_mmap, drc %d\n", drc);
+			return -1;
+		}
+	}
+
+	if (be->cqdb_mmap) {
+		drc = doca_mmap_destroy(be->cqdb_mmap);
+		if (drc) {
+			SPDK_ERRLOG("Failed to destroy CQDB doca_mmap, drc %d\n", drc);
+			return -1;
+		}
+	}
+
+	spdk_free(be->sq);
+	spdk_free(be->cq);
+	spdk_free(be->sqdb);
+	free(be);
+	ns->offload_be.null = NULL;
+	return 0;
+}
+
+static int
+nvmf_rdma_offload_create_ns_backend_null(struct spdk_nvmf_rdma_qpair *rqpair,
+		struct spdk_nvmf_ns *ns)
+{
+	const size_t QUEUE_SIZE = 128;
+	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
+			struct spdk_nvmf_rdma_transport, transport);
+	struct spdk_nvmf_ns_offload_be_null *be;
+	doca_error_t drc;
+
+	if (ns->offload_be.null) {
+		ns->offload_be.null->refs++;
+		return 0;
+	}
+
+	be = (struct spdk_nvmf_ns_offload_be_null *)calloc(1, sizeof(struct spdk_nvmf_ns_offload_be_null));
+	if (!be) {
+		SPDK_ERRLOG("Failed to allocate null BE\n");
+		return -ENOMEM;
+	}
+
+	ns->offload_be.null = be;
+	be->refs++;
+
+	be->sq = spdk_zmalloc(QUEUE_SIZE * sizeof(struct spdk_nvme_cmd),
+			      0x1000, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+	if (!be->sq) {
+		SPDK_ERRLOG("Failed to allocate null SQ\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -ENOMEM;
+	}
+
+	be->cq = spdk_zmalloc(QUEUE_SIZE * sizeof(struct spdk_nvme_cmd),
+			      0x1000, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+	if (!be->cq) {
+		SPDK_ERRLOG("Failed to allocate null CQ\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -ENOMEM;
+	}
+
+	be->sqdb = (uint64_t *)spdk_zmalloc(4096, 0x1000, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+	if (!be->sqdb) {
+		SPDK_ERRLOG("Failed to allocate null doorbells\n");
+		return -ENOMEM;
+	}
+
+	be->cqdb = be->sqdb + 1;
+
+	be->sq_mmap = nvmf_rdma_create_doca_mmap(rqpair->device->doca_dev, be->sq,
+			QUEUE_SIZE * sizeof(struct spdk_nvme_cmd), -1, 0);
+	if (!be->sq_mmap) {
+		SPDK_ERRLOG("Failed to create SQ mmap\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	be->cq_mmap = nvmf_rdma_create_doca_mmap(rqpair->device->doca_dev, be->cq,
+			QUEUE_SIZE * sizeof(struct spdk_nvme_cpl), -1, 0);
+	if (!be->cq_mmap) {
+		SPDK_ERRLOG("Failed to create CQ mmap\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	be->sqdb_mmap = nvmf_rdma_create_doca_mmap(rqpair->device->doca_dev, be->sqdb, sizeof(*be->sqdb),
+			-1, 0);
+	if (!be->sqdb_mmap) {
+		SPDK_ERRLOG("Failed to create SQDB mmap\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	be->cqdb_mmap = nvmf_rdma_create_doca_mmap(rqpair->device->doca_dev, be->cqdb, sizeof(*be->cqdb),
+			-1, 0);
+	if (!be->cqdb_mmap) {
+		SPDK_ERRLOG("Failed to create CQDB mmap\n");
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	drc = doca_sta_be_create(rtransport->sta.sta, &be->doca_be);
+	if (drc) {
+		SPDK_ERRLOG("Failed to create doca_sta_be, drc %d\n", drc);
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	drc = doca_sta_be_add_queue(be->doca_be, be->sq_mmap, be->sqdb_mmap, be->cq_mmap, be->cqdb_mmap,
+				    &be->doca_be_queue);
+	if (drc) {
+		SPDK_ERRLOG("Failed to add queue to doca_sta_be, drc %d\n", drc);
+		nvmf_rdma_offload_destroy_ns_backend_null(ns);
+		return -1;
+	}
+
+	SPDK_NOTICELOG("Created DOCA STA null backend %lu, queue %lu\n", be->doca_be, be->doca_be_queue);
+	return 0;
+}
+
+static int
 nvmf_rdma_offload_create_qpair_backends(struct spdk_nvmf_rdma_qpair *rqpair)
 {
 	struct spdk_nvmf_ctrlr *ctrlr = rqpair->qpair.ctrlr;
@@ -2472,6 +2636,12 @@ nvmf_rdma_offload_create_qpair_backends(struct spdk_nvmf_rdma_qpair *rqpair)
 				rc = nvmf_rdma_offload_create_ns_backend_nvme(rqpair, ns);
 				if (rc) {
 					SPDK_ERRLOG("Failed to create nvme offload backend for bdev %s, rc %d\n",
+						    spdk_bdev_get_name(bdev), rc);
+				}
+			} else if (strcmp(module_name, "null") == 0) {
+				rc = nvmf_rdma_offload_create_ns_backend_null(rqpair, ns);
+				if (rc) {
+					SPDK_ERRLOG("Failed to create null offload backend for bdev %s, rc %d\n",
 						    spdk_bdev_get_name(bdev), rc);
 				}
 			}
@@ -2503,6 +2673,12 @@ nvmf_rdma_offload_destroy_qpair_backends(struct spdk_nvmf_rdma_qpair *rqpair)
 				rc = nvmf_rdma_offload_destroy_ns_backend_nvme(ns);
 				if (rc) {
 					SPDK_ERRLOG("Failed to destroy nvme offload backend for bdev %s, rc %d\n",
+						    spdk_bdev_get_name(bdev), rc);
+				}
+			} else if (strcmp(module_name, "null") == 0) {
+				rc = nvmf_rdma_offload_destroy_ns_backend_null(ns);
+				if (rc) {
+					SPDK_ERRLOG("Failed to destroy null offload backend for bdev %s, rc %d\n",
 						    spdk_bdev_get_name(bdev), rc);
 				}
 			}
