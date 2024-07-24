@@ -493,6 +493,16 @@ uint32_t spdk_env_get_next_core(uint32_t prev_core);
 	     i = spdk_env_get_next_core(i))
 
 /**
+ * Get the index of the core starting from zero.
+ *
+ * \param core_id ID of core.
+ *
+ * \return  the index of the specified core ID, or UINT32_MAX if the core_id doesn't match a
+ *          core allocated for the application.
+ */
+uint32_t spdk_env_get_core_index(uint32_t core_id);
+
+/**
  * Get the socket ID for the given core.
  *
  * \param core CPU core to query.

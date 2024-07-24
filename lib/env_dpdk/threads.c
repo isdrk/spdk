@@ -62,6 +62,12 @@ spdk_env_get_next_core(uint32_t prev_core)
 }
 
 uint32_t
+spdk_env_get_core_index(uint32_t core_id)
+{
+	return (uint32_t)rte_lcore_index(core_id);
+}
+
+uint32_t
 spdk_env_get_socket_id(uint32_t core)
 {
 	if (core >= RTE_MAX_LCORE) {
