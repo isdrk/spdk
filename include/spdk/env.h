@@ -445,45 +445,45 @@ struct spdk_mempool *spdk_mempool_lookup(const char *name);
 uint32_t spdk_env_get_core_count(void);
 
 /**
- * Get the CPU core index of the current thread.
+ * Get the CPU core ID of the current thread.
  *
  * This will only function when called from threads set up by
  * this environment abstraction. For any other threads \c SPDK_ENV_LCORE_ID_ANY
  * will be returned.
  *
- * \return the CPU core index of the current thread.
+ * \return the CPU core ID of the current thread.
  */
 uint32_t spdk_env_get_current_core(void);
 
 /**
- * Get the index of the main dedicated CPU core for this application.
+ * Get the ID of the main dedicated CPU core for this application.
  *
- * \return the index of the main dedicated CPU core.
+ * \return the ID of the main dedicated CPU core.
  */
 uint32_t spdk_env_get_main_core(void);
 
 /**
- * Get the index of the first dedicated CPU core for this application.
+ * Get the ID of the first dedicated CPU core for this application.
  *
- * \return the index of the first dedicated CPU core.
+ * \return the ID of the first dedicated CPU core.
  */
 uint32_t spdk_env_get_first_core(void);
 
 /**
- * Get the index of the last dedicated CPU core for this application.
+ * Get the ID of the last dedicated CPU core for this application.
  *
- * \return the index of the last dedicated CPU core.
+ * \return the ID of the last dedicated CPU core.
  */
 uint32_t spdk_env_get_last_core(void);
 
 /**
- * Get the index of the next dedicated CPU core for this application.
+ * Get the ID of the next dedicated CPU core for this application.
  *
  * If there is no next core, return UINT32_MAX.
  *
- * \param prev_core Index of previous core.
+ * \param prev_core ID of previous core.
  *
- * \return the index of the next dedicated CPU core.
+ * \return the ID of the next dedicated CPU core.
  */
 uint32_t spdk_env_get_next_core(uint32_t prev_core);
 
