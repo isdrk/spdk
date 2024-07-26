@@ -6,6 +6,7 @@
 
 #include <doca_dev.h>
 #include <doca_pe.h>
+#include <doca_ctx.h>
 #include <doca_sta.h>
 #include <doca_sta_be.h>
 #include <infiniband/mlx5dv.h>
@@ -516,8 +517,10 @@ struct rdma_transport_opts {
 };
 
 struct spdk_nvmf_rdma_sta {
-	struct doca_pe	*pe;
-	struct doca_sta	*sta;
+	struct doca_pe		*pe;
+	struct doca_sta		*sta;
+	struct doca_ctx		*ctx;
+	enum doca_ctx_states	state;
 };
 
 struct spdk_nvmf_rdma_transport {
@@ -3304,10 +3307,39 @@ generate_poll_fds(struct spdk_nvmf_rdma_transport *rtransport)
 	return 0;
 }
 
+static const char *
+nvmf_rdma_sta_state_to_str(enum doca_ctx_states state)
+{
+	static const char *state_str[DOCA_CTX_STATE_STOPPING + 1] = {
+		[DOCA_CTX_STATE_IDLE] = "IDLE",
+		[DOCA_CTX_STATE_STARTING] = "STARTING",
+		[DOCA_CTX_STATE_RUNNING] = "RUNNING",
+		[DOCA_CTX_STATE_STOPPING] = "STOPPING"
+	};
+
+	return (state <= DOCA_CTX_STATE_STOPPING) ? state_str[state] : "UNKNOWN";
+}
+
+static void
+nvmf_rdma_sta_state_changed_cb(const union doca_data user_data,
+			       struct doca_ctx *ctx,
+			       enum doca_ctx_states prev_state,
+			       enum doca_ctx_states next_state)
+{
+	struct spdk_nvmf_rdma_transport *rtransport = user_data.ptr;
+
+	SPDK_DEBUGLOG(rdma_offload, "DOCA STA Context state is chnaged %s -> %s\n",
+		      nvmf_rdma_sta_state_to_str(prev_state),
+		      nvmf_rdma_sta_state_to_str(next_state));
+
+	rtransport->sta.state = next_state;
+}
+
 static int
 nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 {
 	struct spdk_nvmf_rdma_device *device;
+	union doca_data udata;
 	doca_error_t rc;
 
 	if (TAILQ_EMPTY(&rtransport->devices)) {
@@ -3344,6 +3376,43 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 			}
 			SPDK_NOTICELOG("Add ibdev %s to DOCA STA Context\n",
 				       ibv_get_device_name(device->context->device));
+		}
+	}
+
+	rtransport->sta.ctx = doca_sta_as_doca_ctx(rtransport->sta.sta);
+	if (!rtransport->sta.ctx) {
+		SPDK_ERRLOG("Unable to get context for DOCA STA\n");
+		return -EINVAL;
+	}
+	rtransport->sta.state = DOCA_CTX_STATE_IDLE;
+	udata.ptr = rtransport;
+
+	rc = doca_ctx_set_user_data(rtransport->sta.ctx, udata);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("Unable to set user data for DOCA STA: %s\n", doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+
+	rc = doca_ctx_set_state_changed_cb(rtransport->sta.ctx, nvmf_rdma_sta_state_changed_cb);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("Unable to set state changed callback for DOCA STA: %s\n", doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+
+	rc = doca_ctx_start(rtransport->sta.ctx);
+	if (DOCA_IS_ERROR(rc)) {
+		if (rc != DOCA_ERROR_IN_PROGRESS) {
+			SPDK_ERRLOG("Unable to start DOCA STA: %s\n", doca_error_get_descr(rc));
+			return -EINVAL;
+		}
+
+		assert(rtransport->sta.state == DOCA_CTX_STATE_STARTING);
+		while (rtransport->sta.state == DOCA_CTX_STATE_STARTING) {
+			doca_pe_progress(rtransport->sta.pe);
+		}
+		if (rtransport->sta.state != DOCA_CTX_STATE_RUNNING) {
+			SPDK_NOTICELOG("Wrong DOCA STA state %s\n", nvmf_rdma_sta_state_to_str(rtransport->sta.state));
+			return -EINVAL;
 		}
 	}
 
@@ -3591,6 +3660,19 @@ nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
 	doca_error_t rc;
 
 	if (rtransport->sta.sta) {
+		if (rtransport->sta.state == DOCA_CTX_STATE_RUNNING) {
+			rc = doca_ctx_stop(rtransport->sta.ctx);
+			if (DOCA_IS_ERROR(rc)) {
+				if (rc != DOCA_ERROR_IN_PROGRESS) {
+					SPDK_ERRLOG("Unable to stop DOCA STA: %s\n", doca_error_get_descr(rc));
+				}
+				assert(rtransport->sta.state == DOCA_CTX_STATE_STOPPING);
+				while (rtransport->sta.state == DOCA_CTX_STATE_STOPPING) {
+					doca_pe_progress(rtransport->sta.pe);
+				}
+				assert(rtransport->sta.state == DOCA_CTX_STATE_IDLE);
+			}
+		}
 		rc = doca_sta_destroy(rtransport->sta.sta);
 		if (DOCA_IS_ERROR(rc)) {
 			SPDK_ERRLOG("doca_sta_destroy: %s\n", doca_error_get_descr(rc));
