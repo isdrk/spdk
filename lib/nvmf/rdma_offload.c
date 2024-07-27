@@ -3353,6 +3353,7 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 		return -EINVAL;
 	}
 
+#if 0
 	TAILQ_FOREACH(device, &rtransport->devices, link) {
 		if (!rtransport->sta.sta) {
 			/* Create a new DOCA STA Context */
@@ -3378,7 +3379,40 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 				       ibv_get_device_name(device->context->device));
 		}
 	}
-
+#else
+	/*
+	 * It is a workaround. The doca_sta behavior is weird. For the most operations, you cannot
+	 * use the device given to doca_sta_create(). Only devices added via doca_sta_add_dev() are
+	 * functional. Since onlu port 1 is connected on my setup, I use the second device to
+	 * create an STA context and add the fisrt device to make it fuctional.
+	 */
+	device = TAILQ_FIRST(&rtransport->devices);
+	assert(device);
+	device = TAILQ_NEXT(device, link);
+	assert(device);
+	/* Create a new DOCA STA Context */
+	rc = doca_sta_create(device->doca_dev, rtransport->sta.pe, &rtransport->sta.sta);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("Unable to create DOCA STA Context for ibdev %s: %s\n",
+			    ibv_get_device_name(device->context->device),
+			    doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+	SPDK_NOTICELOG("Create DOCA STA Context for ibdev %s\n",
+		       ibv_get_device_name(device->context->device));
+	device = TAILQ_FIRST(&rtransport->devices);
+	assert(device);
+	/* Add device to the existing DOCA STA Context */
+	rc = doca_sta_add_dev(rtransport->sta.sta, device->doca_dev);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("Unable to add ibdev %s to DOCA STA Context: %s\n",
+			    ibv_get_device_name(device->context->device),
+			    doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+	SPDK_NOTICELOG("Add ibdev %s to DOCA STA Context\n",
+		       ibv_get_device_name(device->context->device));
+#endif
 	rtransport->sta.ctx = doca_sta_as_doca_ctx(rtransport->sta.sta);
 	if (!rtransport->sta.ctx) {
 		SPDK_ERRLOG("Unable to get context for DOCA STA\n");
