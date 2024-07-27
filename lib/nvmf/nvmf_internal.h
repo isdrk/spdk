@@ -349,7 +349,8 @@ struct spdk_nvmf_subsystem {
 };
 
 static int
-subsystem_cmp(struct spdk_nvmf_subsystem *subsystem1, struct spdk_nvmf_subsystem *subsystem2)
+subsystem_cmp(const struct spdk_nvmf_subsystem *subsystem1,
+	      const struct spdk_nvmf_subsystem *subsystem2)
 {
 	return strncmp(subsystem1->subnqn, subsystem2->subnqn, sizeof(subsystem1->subnqn));
 }
