@@ -9,6 +9,7 @@
 #include <doca_ctx.h>
 #include <doca_sta.h>
 #include <doca_sta_be.h>
+#include <doca_sta_subsystem.h>
 #include <infiniband/mlx5dv.h>
 
 #include "spdk/stdinc.h"
@@ -508,6 +509,19 @@ struct spdk_nvmf_rdma_port {
 	TAILQ_ENTRY(spdk_nvmf_rdma_port)	link;
 };
 
+struct spdk_nvmf_sta_subsystem {
+	struct doca_dev				*doca_dev;
+	doca_sta_subs_handle_t			handle;
+	bool					is_ready;
+	TAILQ_ENTRY(spdk_nvmf_sta_subsystem)	link;
+};
+
+struct spdk_nvmf_rdma_subsystem {
+	const struct spdk_nvmf_subsystem	*subsystem;
+	TAILQ_HEAD(, spdk_nvmf_sta_subsystem)	sta_subsystems;
+	TAILQ_ENTRY(spdk_nvmf_rdma_subsystem)	link;
+};
+
 struct rdma_transport_opts {
 	int		num_cqe;
 	uint32_t	max_srq_depth;
@@ -547,6 +561,8 @@ struct spdk_nvmf_rdma_transport {
 
 	/* ports that are removed unexpectedly and need retry listen */
 	TAILQ_HEAD(, spdk_nvmf_rdma_port)		retry_ports;
+
+	TAILQ_HEAD(, spdk_nvmf_rdma_subsystem)	subsystems;
 };
 
 struct poller_manage_ctx {
@@ -3477,6 +3493,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	TAILQ_INIT(&rtransport->ports);
 	TAILQ_INIT(&rtransport->poll_groups);
 	TAILQ_INIT(&rtransport->retry_ports);
+	TAILQ_INIT(&rtransport->subsystems);
 
 	rtransport->transport.ops = &spdk_nvmf_transport_rdma_offload;
 	rtransport->rdma_opts.num_cqe = DEFAULT_NVMF_RDMA_CQ_SIZE;
@@ -3689,9 +3706,18 @@ nvmf_rdma_dump_opts(struct spdk_nvmf_transport *transport, struct spdk_json_writ
 }
 
 static void
+nvmf_rdma_destroy_subsystem(struct spdk_nvmf_rdma_subsystem *rsubsystem);
+
+static void
 nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
 {
+	struct spdk_nvmf_rdma_subsystem *rsubsystem, *rsubsystem_tmp;
 	doca_error_t rc;
+
+	TAILQ_FOREACH_SAFE(rsubsystem, &rtransport->subsystems, link, rsubsystem_tmp) {
+		TAILQ_REMOVE(&rtransport->subsystems, rsubsystem, link);
+		nvmf_rdma_destroy_subsystem(rsubsystem);
+	}
 
 	if (rtransport->sta.sta) {
 		if (rtransport->sta.state == DOCA_CTX_STATE_RUNNING) {
@@ -6021,6 +6047,179 @@ nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 	spdk_json_write_array_end(w);
 }
 
+static void
+nvmf_rdma_destroy_sta_subsystem(struct spdk_nvmf_sta_subsystem *ssubsystem)
+{
+	doca_error_t ret;
+
+	if (ssubsystem->is_ready) {
+		ret = doca_sta_subsystem_destroy(ssubsystem->handle);
+		if (DOCA_IS_ERROR(ret)) {
+			SPDK_ERRLOG("Unable to destroy DOCA STA subsystem: %s\n",
+				    doca_error_get_descr(ret));
+		}
+	}
+	free(ssubsystem);
+}
+
+static int
+nvmf_rdma_init_sta_subsystem(struct spdk_nvmf_rdma_transport *rtransport,
+			     const char *nqn,
+			     struct spdk_nvmf_sta_subsystem *ssubsystem)
+{
+	doca_error_t ret;
+
+	ret = doca_sta_subsystem_create(rtransport->sta.sta, ssubsystem->doca_dev,
+					nqn,
+					&ssubsystem->handle);
+	if (DOCA_IS_ERROR(ret)) {
+		SPDK_ERRLOG("Unable to create DOCA STA subsystem: %s\n", doca_error_get_descr(ret));
+		return -EINVAL;
+	}
+	ssubsystem->is_ready = true;
+
+	return 0;
+}
+
+static struct spdk_nvmf_sta_subsystem *
+nvmf_rdma_get_sta_subsystem(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct doca_dev *doca_dev)
+{
+	struct spdk_nvmf_sta_subsystem *ssubsystem;
+
+	TAILQ_FOREACH(ssubsystem, &rsubsystem->sta_subsystems, link) {
+		if (ssubsystem->doca_dev == doca_dev) {
+			break;
+		}
+	}
+
+	if (!ssubsystem) {
+		ssubsystem = calloc(1, sizeof(*ssubsystem));
+		if (!ssubsystem) {
+			SPDK_ERRLOG("Cannot allocate memory for DOCA STA subsystem context\n");
+			return NULL;
+		}
+		ssubsystem->doca_dev = doca_dev;
+		TAILQ_INSERT_TAIL(&rsubsystem->sta_subsystems, ssubsystem, link);
+	}
+
+	return ssubsystem;
+}
+
+static void
+nvmf_rdma_destroy_subsystem(struct spdk_nvmf_rdma_subsystem *rsubsystem)
+{
+	struct spdk_nvmf_sta_subsystem *ssubsystem, *ssubsystem_tmp;
+
+	TAILQ_FOREACH_SAFE(ssubsystem, &rsubsystem->sta_subsystems, link, ssubsystem_tmp) {
+		TAILQ_REMOVE(&rsubsystem->sta_subsystems, ssubsystem, link);
+		nvmf_rdma_destroy_sta_subsystem(ssubsystem);
+	}
+
+	free(rsubsystem);
+}
+
+static struct spdk_nvmf_rdma_subsystem *
+nvmf_rdma_create_subsystem(struct spdk_nvmf_rdma_transport *rtransport,
+			   const struct spdk_nvmf_subsystem *subsystem)
+{
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+
+	rsubsystem = calloc(1, sizeof(*rsubsystem));
+	if (!rsubsystem) {
+		SPDK_ERRLOG("Cannot allocate memory for subsystem context\n");
+		return NULL;
+	}
+	
+	TAILQ_INIT(&rsubsystem->sta_subsystems);
+	rsubsystem->subsystem = subsystem;
+
+	return rsubsystem;
+}
+
+static struct spdk_nvmf_rdma_subsystem *
+nvmf_rdma_get_subsystem(struct spdk_nvmf_rdma_transport *rtransport,
+			const struct spdk_nvmf_subsystem *subsystem)
+{
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+
+	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+		if (subsystem_cmp(rsubsystem->subsystem, subsystem) == 0) {
+			break;
+		}
+	}
+
+	if (!rsubsystem) {
+		rsubsystem = nvmf_rdma_create_subsystem(rtransport, subsystem);
+		if (rsubsystem) {
+			TAILQ_INSERT_TAIL(&rtransport->subsystems, rsubsystem, link);
+		}
+	}
+
+	return rsubsystem;
+}
+
+static int
+nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
+		           const struct spdk_nvmf_subsystem *subsystem,
+			   const struct spdk_nvme_transport_id *trid)
+{
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_port *port;
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	struct spdk_nvmf_sta_subsystem *ssubsystem;
+	int ret;
+
+	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
+
+	TAILQ_FOREACH(port, &rtransport->ports, link) {
+		if (spdk_nvme_transport_id_compare(port->trid, trid) == 0) {
+			break;
+		}
+	}
+
+	if (!port) {
+		SPDK_ERRLOG("Port is not found for trid\n");
+		return -EINVAL;
+	}
+
+	rsubsystem = nvmf_rdma_get_subsystem(rtransport, subsystem);
+	if (!rsubsystem) {
+		SPDK_ERRLOG("Cannot get subsystem\n");
+		return -EINVAL;
+	}
+
+	ssubsystem = nvmf_rdma_get_sta_subsystem(rsubsystem, port->device->doca_dev);
+	if (!ssubsystem) {
+		SPDK_ERRLOG("Cannot get DOCA STA subsystem\n");
+		return -EINVAL;
+	}
+
+	if (!ssubsystem->is_ready) {
+		ret = nvmf_rdma_init_sta_subsystem(rtransport, rsubsystem->subsystem->subnqn,
+						   ssubsystem);
+		if (ret) {
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int
+nvmf_rdma_subsystem_add_ns(struct spdk_nvmf_transport *transport,
+			   const struct spdk_nvmf_subsystem *subsystem,
+			   struct spdk_nvmf_ns *ns)
+{
+	return 0;
+}
+
+static void
+nvmf_rdma_subsystem_remove_ns(struct spdk_nvmf_transport *transport,
+		              const struct spdk_nvmf_subsystem *subsystem,
+			      uint32_t nsid)
+{
+}
+
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload = {
 	.name = "RDMA_OFFLOAD",
 	.type = SPDK_NVME_TRANSPORT_CUSTOM_FABRICS,
@@ -6032,6 +6231,10 @@ const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload = {
 	.listen = nvmf_rdma_listen,
 	.stop_listen = nvmf_rdma_stop_listen,
 	.cdata_init = nvmf_rdma_cdata_init,
+
+	.listen_associate = nvmf_rdma_listen_associate,
+	.subsystem_add_ns = nvmf_rdma_subsystem_add_ns,
+	.subsystem_remove_ns = nvmf_rdma_subsystem_remove_ns,
 
 	.listener_discover = nvmf_rdma_discover,
 
