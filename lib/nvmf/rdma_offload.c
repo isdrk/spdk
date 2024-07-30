@@ -532,6 +532,7 @@ struct rdma_transport_opts {
 
 struct spdk_nvmf_rdma_sta {
 	struct doca_pe		*pe;
+	struct doca_dev		*dev;
 	struct doca_sta		*sta;
 	struct doca_ctx		*ctx;
 	enum doca_ctx_states	state;
@@ -3407,7 +3408,8 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 	device = TAILQ_NEXT(device, link);
 	assert(device);
 	/* Create a new DOCA STA Context */
-	rc = doca_sta_create(device->doca_dev, rtransport->sta.pe, &rtransport->sta.sta);
+	rtransport->sta.dev = device->doca_dev;
+	rc = doca_sta_create(rtransport->sta.dev, rtransport->sta.pe, &rtransport->sta.sta);
 	if (DOCA_IS_ERROR(rc)) {
 		SPDK_ERRLOG("Unable to create DOCA STA Context for ibdev %s: %s\n",
 			    ibv_get_device_name(device->context->device),
