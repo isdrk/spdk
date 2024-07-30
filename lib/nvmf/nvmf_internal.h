@@ -148,32 +148,6 @@ struct spdk_nvmf_registrant {
 	uint64_t rkey;
 };
 
-struct spdk_nvmf_ns_offload_be_nvme {
-	int refs;
-	struct spdk_nvme_qpair *nvme_qpair;
-	struct spdk_dmabuf *db_dmabuf;
-	doca_sta_be_handle_t doca_be;
-	doca_sta_be_q_handle_t doca_be_queue;
-	struct doca_mmap *sq_mmap;
-	struct doca_mmap *cq_mmap;
-	struct doca_mmap *sqdb_mmap;
-	struct doca_mmap *cqdb_mmap;
-};
-
-struct spdk_nvmf_ns_offload_be_null {
-	int refs;
-	void *sq;
-	void *cq;
-	uint64_t *sqdb;
-	uint64_t *cqdb;
-	doca_sta_be_handle_t doca_be;
-	doca_sta_be_q_handle_t doca_be_queue;
-	struct doca_mmap *sq_mmap;
-	struct doca_mmap *cq_mmap;
-	struct doca_mmap *sqdb_mmap;
-	struct doca_mmap *cqdb_mmap;
-};
-
 struct spdk_nvmf_ns {
 	uint32_t nsid;
 	uint32_t anagrpid;
@@ -201,11 +175,6 @@ struct spdk_nvmf_ns {
 	bool zcopy;
 	/* Command Set Identifier */
 	enum spdk_nvme_csi csi;
-	/* Offload backend */
-	union {
-		struct spdk_nvmf_ns_offload_be_nvme *nvme;
-		struct spdk_nvmf_ns_offload_be_null *null;
-	} offload_be;
 };
 
 /*
