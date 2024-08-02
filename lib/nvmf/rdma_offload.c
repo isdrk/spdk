@@ -720,8 +720,7 @@ static void _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 
 static void _nvmf_rdma_remove_destroyed_device(void *c);
 
-static void
-nvmf_rdma_subsystem_dev_put(struct spdk_nvmf_rdma_subsystem_dev *sdev);
+static void nvmf_rdma_subsystem_dev_put(struct spdk_nvmf_rdma_subsystem_dev *sdev);
 
 static int nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev);
 
@@ -3332,8 +3331,7 @@ nvmf_rdma_dump_opts(struct spdk_nvmf_transport *transport, struct spdk_json_writ
 	spdk_json_write_named_bool(w, "no_wr_batching", rtransport->rdma_opts.no_wr_batching);
 }
 
-static int
-nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem);
+static int nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem);
 
 static void
 nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
@@ -5721,7 +5719,7 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 		SPDK_ERRLOG("Cannot allocate memory for DOCA STA subsystem context\n");
 		return NULL;
 	}
-	
+
 	TAILQ_INIT(&rsubsystem->namespaces);
 	TAILQ_INIT(&rsubsystem->devices);
 	rsubsystem->subsystem = subsystem;
@@ -5789,7 +5787,8 @@ nvmf_rdma_subsystem_dev_get(struct spdk_nvmf_rdma_subsystem_dev *sdev)
 }
 
 static struct spdk_nvmf_rdma_subsystem_dev *
-nvmf_rdma_subsystem_dev_create(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct spdk_nvmf_rdma_device *device)
+nvmf_rdma_subsystem_dev_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
+			       struct spdk_nvmf_rdma_device *device)
 {
 	struct spdk_nvmf_rdma_subsystem_dev *sdev;
 	doca_error_t drc;
@@ -5820,7 +5819,8 @@ nvmf_rdma_subsystem_dev_create(struct spdk_nvmf_rdma_subsystem *rsubsystem, stru
 }
 
 static struct spdk_nvmf_rdma_subsystem_dev *
-nvmf_rdma_subsystem_dev_find(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct spdk_nvmf_rdma_device *device)
+nvmf_rdma_subsystem_dev_find(struct spdk_nvmf_rdma_subsystem *rsubsystem,
+			     struct spdk_nvmf_rdma_device *device)
 {
 	struct spdk_nvmf_rdma_subsystem_dev *sdev;
 
@@ -5834,7 +5834,8 @@ nvmf_rdma_subsystem_dev_find(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct
 }
 
 static int
-nvmf_rdma_subsystem_add_port(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct spdk_nvmf_rdma_port *port)
+nvmf_rdma_subsystem_add_port(struct spdk_nvmf_rdma_subsystem *rsubsystem,
+			     struct spdk_nvmf_rdma_port *port)
 {
 	struct spdk_nvmf_rdma_subsystem_dev *sdev;
 
@@ -5872,7 +5873,7 @@ nvmf_rdma_subsystem_del_dev(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct 
 
 static int
 nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
-		           const struct spdk_nvmf_subsystem *subsystem,
+			   const struct spdk_nvmf_subsystem *subsystem,
 			   const struct spdk_nvme_transport_id *trid)
 {
 	struct spdk_nvmf_rdma_transport *rtransport;
@@ -6014,9 +6015,9 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		       (void *)nvme_pqpair->cpl_bus_addr);
 
 	queue->sq_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			nvme_pqpair->cmd,
-			nvme_pqpair->num_entries * sizeof(struct spdk_nvme_cmd),
-			-1, 0);
+			 nvme_pqpair->cmd,
+			 nvme_pqpair->num_entries * sizeof(struct spdk_nvme_cmd),
+			 -1, 0);
 	if (!queue->sq_mmap) {
 		SPDK_ERRLOG("Failed to create SQ mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(queue);
@@ -6024,9 +6025,9 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	}
 
 	queue->cq_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			nvme_pqpair->cpl,
-			nvme_pqpair->num_entries * sizeof(struct spdk_nvme_cpl),
-			-1, 0);
+			 nvme_pqpair->cpl,
+			 nvme_pqpair->num_entries * sizeof(struct spdk_nvme_cpl),
+			 -1, 0);
 	if (!queue->cq_mmap) {
 		SPDK_ERRLOG("Failed to create CQ mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(queue);
@@ -6045,8 +6046,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	/* @todo: can we create mmap for doorbell size only */
 	queue->sqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			queue->db_dmabuf->addr, queue->db_dmabuf->length,
-			queue->db_dmabuf->fd, 0);
+			   queue->db_dmabuf->addr, queue->db_dmabuf->length,
+			   queue->db_dmabuf->fd, 0);
 	if (!queue->sqdb_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(queue);
@@ -6055,8 +6056,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	/* @todo: can we create mmap for doorbell size only */
 	queue->cqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			queue->db_dmabuf->addr, queue->db_dmabuf->length,
-			queue->db_dmabuf->fd, 0);
+			   queue->db_dmabuf->addr, queue->db_dmabuf->length,
+			   queue->db_dmabuf->fd, 0);
 	if (!queue->cqdb_mmap) {
 		SPDK_ERRLOG("Failed to create CQDB mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(queue);
@@ -6071,7 +6072,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	SPDK_NOTICELOG("Add DOCA STA nvme backend queue 0x%lx to backend 0x%lx\n", queue->handle, rbdev->handle);
+	SPDK_NOTICELOG("Add DOCA STA nvme backend queue 0x%lx to backend 0x%lx\n", queue->handle,
+		       rbdev->handle);
 	return 0;
 }
 
@@ -6159,7 +6161,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	queue->cqdb = queue->sqdb + 1;
 
 	queue->sq_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sq,
-			QUEUE_SIZE * sizeof(struct spdk_nvme_cmd), -1, 0);
+			 QUEUE_SIZE * sizeof(struct spdk_nvme_cmd), -1, 0);
 	if (!queue->sq_mmap) {
 		SPDK_ERRLOG("Failed to create SQ mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(queue);
@@ -6167,7 +6169,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	}
 
 	queue->cq_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->cq,
-			QUEUE_SIZE * sizeof(struct spdk_nvme_cpl), -1, 0);
+			 QUEUE_SIZE * sizeof(struct spdk_nvme_cpl), -1, 0);
 	if (!queue->cq_mmap) {
 		SPDK_ERRLOG("Failed to create CQ mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(queue);
@@ -6175,7 +6177,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	}
 
 	queue->sqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sqdb, sizeof(*queue->sqdb),
-			-1, 0);
+			   -1, 0);
 	if (!queue->sqdb_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(queue);
@@ -6183,7 +6185,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	}
 
 	queue->cqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->cqdb, sizeof(*queue->cqdb),
-			-1, 0);
+			   -1, 0);
 	if (!queue->cqdb_mmap) {
 		SPDK_ERRLOG("Failed to create CQDB mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(queue);
@@ -6489,7 +6491,7 @@ nvmf_rdma_subsystem_add_ns(struct spdk_nvmf_transport *transport,
 
 static void
 nvmf_rdma_subsystem_remove_ns(struct spdk_nvmf_transport *transport,
-		              const struct spdk_nvmf_subsystem *subsystem,
+			      const struct spdk_nvmf_subsystem *subsystem,
 			      uint32_t nsid)
 {
 	struct spdk_nvmf_rdma_transport *rtransport;
