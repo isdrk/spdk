@@ -2644,30 +2644,28 @@ bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 	struct spdk_bdev_group_channel *group_ch;
 	struct spdk_bdev_qos_cache *group_qos_cache = NULL, *qos_cache;
 
-	if (bdev_qos_io_to_limit(bdev_io) == true) {
-		if (ch->flags & BDEV_CH_QOS_GROUP_ENABLED) {
-			/* check level QoS limits first if applicable */
-			group_ch = ch->group_ch;
-			assert(group_ch != NULL);
+	if (ch->flags & BDEV_CH_QOS_GROUP_ENABLED) {
+		/* check level QoS limits first if applicable */
+		group_ch = ch->group_ch;
+		assert(group_ch != NULL);
 
-			group_qos_cache = group_ch->qos_cache;
-			if (group_qos_cache) {
-				res = _bdev_qos_cache_queue_io(group_qos_cache, bdev_io);
-			}
+		group_qos_cache = group_ch->qos_cache;
+		if (group_qos_cache) {
+			res = _bdev_qos_cache_queue_io(group_qos_cache, bdev_io);
 		}
+	}
 
-		if (!res && (ch->flags & BDEV_CH_QOS_ENABLED)) {
-			/* check bdev limits if necessary */
-			qos_cache = ch->qos_cache;
-			assert(qos_cache != NULL);
+	if (!res && (ch->flags & BDEV_CH_QOS_ENABLED)) {
+		/* check bdev limits if necessary */
+		qos_cache = ch->qos_cache;
+		assert(qos_cache != NULL);
 
-			res = _bdev_qos_cache_queue_io(qos_cache, bdev_io);
-			if (group_qos_cache && res) {
-				/* if limited by bdev QoS and group QoS limits are enabled ->
-				 * rewind the group level QoS limits
-				 */
-				_bdev_qos_cache_rewind(group_qos_cache, bdev_io);
-			}
+		res = _bdev_qos_cache_queue_io(qos_cache, bdev_io);
+		if (group_qos_cache && res) {
+			/* if limited by bdev QoS and group QoS limits are enabled ->
+			 * rewind the group level QoS limits
+			 */
+			_bdev_qos_cache_rewind(group_qos_cache, bdev_io);
 		}
 	}
 
@@ -2677,15 +2675,22 @@ bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 static void
 bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
 {
-	if (!bdev_qos_queue_io(bdev_ch, bdev_io)) {
-		/* For each limit type, it is ensured that there is no preceding
-		 * queued I/Os. Hence, call submit function directly to avoid
-		 * extra overhead.
-		 */
-		bdev_io_do_submit(bdev_ch, bdev_io);
-	} else {
-		TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
+	if (!bdev_qos_io_to_limit(bdev_io)) {
+		goto submit;
 	}
+
+	if (bdev_qos_queue_io(bdev_ch, bdev_io)) {
+		TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
+		return;
+	}
+
+	/* For each limit type, it is ensured that there is no preceding
+	 * queued I/Os. Hence, call submit function directly to avoid
+	 * extra overhead.
+	 */
+
+submit:
+	bdev_io_do_submit(bdev_ch, bdev_io);
 }
 
 static int
