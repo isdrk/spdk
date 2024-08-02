@@ -583,6 +583,8 @@ struct spdk_nvmf_rdma_bdev_null_queue {
 };
 
 struct spdk_nvmf_rdma_bdev {
+	struct spdk_bdev		*bdev;
+	int				refs;
 	doca_sta_be_handle_t		handle;
 	enum spdk_nvmf_rdma_bdev_type	type;
 	uint32_t			null_ns_id; // is not relevant for SPDK_NVMF_RDMA_NS_BE_TYPE_NVME
@@ -591,6 +593,7 @@ struct spdk_nvmf_rdma_bdev {
 		struct spdk_nvmf_rdma_bdev_nvme_queue *nvme_queue;
 		struct spdk_nvmf_rdma_bdev_null_queue *null_queue;
 	};
+	TAILQ_ENTRY(spdk_nvmf_rdma_bdev)  link;
 };
 
 struct spdk_nvmf_rdma_ns {
@@ -628,11 +631,12 @@ struct rdma_transport_opts {
 };
 
 struct spdk_nvmf_rdma_sta {
-	struct doca_pe		*pe;
-	struct doca_dev		*dev;
-	struct doca_sta		*sta;
-	struct doca_ctx		*ctx;
-	enum doca_ctx_states	state;
+	struct doca_pe				*pe;
+	struct doca_dev				*dev;
+	struct doca_sta				*sta;
+	struct doca_ctx				*ctx;
+	enum doca_ctx_states			state;
+	TAILQ_HEAD(, spdk_nvmf_rdma_bdev)	bdevs;
 };
 
 struct spdk_nvmf_rdma_transport {
@@ -661,6 +665,7 @@ struct spdk_nvmf_rdma_transport {
 	TAILQ_HEAD(, spdk_nvmf_rdma_port)		retry_ports;
 
 	TAILQ_HEAD(, spdk_nvmf_rdma_subsystem)	subsystems;
+	TAILQ_HEAD(, spdk_nvmf_rdma_bdev)	bdevs;
 };
 
 struct poller_manage_ctx {
@@ -717,6 +722,8 @@ static void _nvmf_rdma_remove_destroyed_device(void *c);
 
 static void
 nvmf_rdma_subsystem_dev_put(struct spdk_nvmf_rdma_subsystem_dev *sdev);
+
+static int nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev);
 
 static inline int
 nvmf_rdma_check_ibv_state(enum ibv_qp_state state)
@@ -2974,6 +2981,8 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 	union doca_data udata;
 	doca_error_t rc;
 
+	TAILQ_INIT(&rtransport->sta.bdevs);
+
 	if (TAILQ_EMPTY(&rtransport->devices)) {
 		SPDK_ERRLOG("No device found\n");
 		return -EINVAL;
@@ -3111,6 +3120,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	TAILQ_INIT(&rtransport->poll_groups);
 	TAILQ_INIT(&rtransport->retry_ports);
 	TAILQ_INIT(&rtransport->subsystems);
+	TAILQ_INIT(&rtransport->bdevs);
 
 	rtransport->transport.ops = &spdk_nvmf_transport_rdma_offload;
 	rtransport->rdma_opts.num_cqe = DEFAULT_NVMF_RDMA_CQ_SIZE;
@@ -3365,6 +3375,7 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	struct spdk_nvmf_rdma_transport	*rtransport;
 	struct spdk_nvmf_rdma_port	*port, *port_tmp;
 	struct spdk_nvmf_rdma_device	*device, *device_tmp;
+	struct spdk_nvmf_rdma_bdev	*rbdev, *rbdev_tmp;
 	struct spdk_nvmf_rdma_subsystem *rsubsystem, *rsubsystem_tmp;
 
 	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
@@ -3385,6 +3396,11 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 
 	if (rtransport->event_channel != NULL) {
 		rdma_destroy_event_channel(rtransport->event_channel);
+	}
+
+	TAILQ_FOREACH_SAFE(rbdev, &rtransport->bdevs, link, rbdev_tmp) {
+		TAILQ_REMOVE(&rtransport->bdevs, rbdev, link);
+		nvmf_rdma_bdev_destroy(rbdev);
 	}
 
 	TAILQ_FOREACH_SAFE(rsubsystem, &rtransport->subsystems, link, rsubsystem_tmp) {
@@ -5957,12 +5973,10 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 
 static int
 nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
-			       struct spdk_nvmf_ns *ns,
+			       struct spdk_nvme_ctrlr *nvme_ctrlr,
 			       struct spdk_nvmf_rdma_bdev *rbdev,
 			       struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 {
-	struct spdk_nvme_ns *nvme_ns = spdk_bdev_get_module_ctx(ns->desc);
-	struct spdk_nvme_ctrlr *nvme_ctrlr = spdk_nvme_ns_get_ctrlr(nvme_ns);
 	const struct spdk_nvme_transport_id *trid;
 	struct spdk_nvme_io_qpair_opts opts;
 	struct nvme_pcie_qpair *nvme_pqpair;
@@ -5971,11 +5985,9 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	trid = spdk_nvme_ctrlr_get_transport_id(nvme_ctrlr);
 	if (trid->trtype != SPDK_NVME_TRANSPORT_PCIE) {
-		return 0;
+		return -EINVAL;
 	}
 
-	SPDK_NOTICELOG("NVMe namespace %p, nsid %u, ctrlr %p\n",
-		       nvme_ns, spdk_nvme_ns_get_id(nvme_ns), nvme_ctrlr);
 	spdk_nvme_ctrlr_get_default_io_qpair_opts(nvme_ctrlr, &opts, sizeof(opts));
 	opts.create_only = true;
 	queue->nvme_qpair = spdk_nvme_ctrlr_alloc_io_qpair(nvme_ctrlr, &opts, sizeof(opts));
@@ -6116,7 +6128,7 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
 
 static int
 nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
-			       struct spdk_nvmf_rdma_bdev *be,
+			       struct spdk_nvmf_rdma_bdev *bdev,
 			       struct spdk_nvmf_rdma_bdev_null_queue *queue)
 {
 	const size_t QUEUE_SIZE = 128;
@@ -6178,7 +6190,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	drc = doca_sta_be_add_queue(be->handle, queue->sq_mmap, queue->sqdb_mmap, queue->cq_mmap,
+	drc = doca_sta_be_add_queue(bdev->handle, queue->sq_mmap, queue->sqdb_mmap, queue->cq_mmap,
 				    queue->cqdb_mmap, &queue->handle);
 	if (drc) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
@@ -6186,7 +6198,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	SPDK_NOTICELOG("Add DOCA STA null queue 0x%lx to backend 0x%lx\n", queue->handle, be->handle);
+	SPDK_NOTICELOG("Add DOCA STA null queue 0x%lx to backend 0x%lx\n", queue->handle, bdev->handle);
 	return 0;
 }
 
@@ -6237,14 +6249,12 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 
 static struct spdk_nvmf_rdma_bdev *
 nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
-		      struct spdk_nvmf_ns *ns,
-		      uint32_t *be_ns_id)
+		      struct spdk_nvme_ctrlr *nvme_ctrlr,
+		      struct spdk_bdev *bdev)
 {
 	// TODO: Make num_bdev_queues configurable
 	const int num_bdev_queues = 1;
 	struct spdk_nvmf_rdma_bdev *rbdev;
-	struct spdk_bdev *bdev = ns->bdev;
-	const char *module_name = spdk_bdev_get_module_name(bdev);
 	doca_error_t drc;
 	int rc, i;
 
@@ -6253,6 +6263,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		SPDK_ERRLOG("Cannot allocate memory for backend device context\n");
 		return NULL;
 	}
+	rbdev->bdev = bdev;
 	rbdev->num_queues = num_bdev_queues;
 	rbdev->null_ns_id = 1;
 
@@ -6264,12 +6275,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, handle %lu\n", rbdev, rbdev->handle);
 
-	SPDK_NOTICELOG("NVMf namespace %u, bdev %s, module %s\n",
-		       ns->nsid, spdk_bdev_get_name(bdev), module_name);
-	if (strcmp(module_name, "nvme") == 0) {
-		struct spdk_nvme_ns *nvme_ns = spdk_bdev_get_module_ctx(ns->desc);
-
-		*be_ns_id = nvme_ns->id;
+	if (nvme_ctrlr) {
 		rbdev->type = SPDK_NVMF_RDMA_BDEV_TYPE_NVME;
 
 		rbdev->nvme_queue = calloc(rbdev->num_queues, sizeof(struct spdk_nvmf_rdma_bdev_nvme_queue));
@@ -6280,7 +6286,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 
 		for (i = 0; i < rbdev->num_queues; i++) {
-			rc = nvmf_rdma_bdev_nvme_queue_init(&rtransport->sta, ns, rbdev, &rbdev->nvme_queue[i]);
+			rc = nvmf_rdma_bdev_nvme_queue_init(&rtransport->sta, nvme_ctrlr, rbdev, &rbdev->nvme_queue[i]);
 			if (rc) {
 				SPDK_ERRLOG("Failed to create nvme offload backend for bdev %s, rc %d\n",
 					    spdk_bdev_get_name(bdev), rc);
@@ -6288,8 +6294,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 				return NULL;
 			}
 		}
-	} else if (strcmp(module_name, "null") == 0) {
-		*be_ns_id = rbdev->null_ns_id;
+	} else {
 		rbdev->type = SPDK_NVMF_RDMA_BDEV_TYPE_NULL;
 
 		rbdev->null_queue = calloc(rbdev->num_queues, sizeof(struct spdk_nvmf_rdma_bdev_null_queue));
@@ -6308,13 +6313,61 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 				return NULL;
 			}
 		}
-	} else {
-		SPDK_ERRLOG("%s is unsupported\n", module_name);
-		nvmf_rdma_bdev_destroy(rbdev);
-		return NULL;
 	}
 
 	return rbdev;
+}
+
+static struct spdk_nvmf_rdma_bdev *
+nvmf_rdma_find_bdev(struct spdk_nvmf_rdma_transport *rtransport,
+		    struct spdk_bdev *bdev)
+{
+	struct spdk_nvmf_rdma_bdev *rbdev;
+
+	TAILQ_FOREACH(rbdev, &rtransport->bdevs, link) {
+		if (bdev == rbdev->bdev) {
+			break;
+		}
+	}
+
+	return rbdev;
+}
+
+static struct spdk_nvmf_rdma_bdev *
+nvmf_rdma_add_bdev(struct spdk_nvmf_rdma_transport *rtransport,
+		   struct spdk_nvme_ctrlr *nvme_ctrlr,
+		   struct spdk_bdev *bdev)
+{
+	struct spdk_nvmf_rdma_bdev *rbdev;
+
+	rbdev = nvmf_rdma_find_bdev(rtransport, bdev);
+	if (rbdev) {
+		rbdev->refs++;
+		return rbdev;
+	}
+
+	rbdev = nvmf_rdma_bdev_create(rtransport, nvme_ctrlr, bdev);
+	if (!rbdev) {
+		SPDK_ERRLOG("Failed to create bdev\n");
+	} else {
+		TAILQ_INSERT_TAIL(&rtransport->bdevs, rbdev, link);
+	}
+
+	return rbdev;
+}
+
+static int
+nvmf_rdma_rm_bdev(struct spdk_nvmf_rdma_transport *rtransport, struct spdk_nvmf_rdma_bdev *rbdev)
+{
+	int rc;
+
+	TAILQ_REMOVE(&rtransport->bdevs, rbdev, link);
+	rc = nvmf_rdma_bdev_destroy(rbdev);
+	if (rc) {
+		TAILQ_INSERT_TAIL(&rtransport->bdevs, rbdev, link);
+	}
+
+	return rc;
 }
 
 static int
@@ -6330,14 +6383,16 @@ spdk_nvmf_rdma_ns_destroy(struct spdk_nvmf_rdma_ns *rns)
 				    doca_error_get_descr(drc));
 			return -1;
 		}
+		rns->handle = 0;
 	}
 
 	if (rns->rbdev) {
-		rc = nvmf_rdma_bdev_destroy(rns->rbdev);
+		rc = nvmf_rdma_rm_bdev(rns->rsubsystem->rtransport, rns->rbdev);
 		if (rc) {
 			SPDK_ERRLOG("Failed to destroy backend device\n");
 			return rc;
 		}
+		rns->rbdev = NULL;
 	}
 
 	free(rns);
@@ -6349,6 +6404,8 @@ spdk_nvmf_rdma_ns_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 			 struct spdk_nvmf_ns *ns)
 {
 	struct spdk_nvmf_rdma_transport *rtransport = rsubsystem->rtransport;
+	struct spdk_bdev *bdev = ns->bdev;
+	const char *module_name = spdk_bdev_get_module_name(bdev);
 	struct spdk_nvmf_rdma_ns *rns;
 	doca_error_t drc;
 
@@ -6359,9 +6416,27 @@ spdk_nvmf_rdma_ns_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 	}
 	rns->ns = ns;
 	rns->fe_ns_id = ns->nsid;
-	rns->rbdev = nvmf_rdma_bdev_create(rtransport, ns, &rns->be_ns_id);
-	if (!rns->rbdev) {
-		SPDK_ERRLOG("Failed to create DOCA STA backend\n");
+
+	SPDK_NOTICELOG("NVMf namespace %u, bdev %s, module %s\n",
+		       ns->nsid, spdk_bdev_get_name(bdev), module_name);
+	if (strcmp(module_name, "nvme") == 0) {
+		struct spdk_nvme_ns *nvme_ns = spdk_bdev_get_module_ctx(ns->desc);
+
+		rns->be_ns_id = spdk_nvme_ns_get_id(nvme_ns);
+		rns->rbdev = nvmf_rdma_add_bdev(rtransport, spdk_nvme_ns_get_ctrlr(nvme_ns), bdev);
+		if (!rns->rbdev) {
+			spdk_nvmf_rdma_ns_destroy(rns);
+			return NULL;
+		}
+	} else if (strcmp(module_name, "null") == 0) {
+		rns->rbdev = nvmf_rdma_add_bdev(rtransport, NULL, bdev);
+		if (!rns->rbdev) {
+			spdk_nvmf_rdma_ns_destroy(rns);
+			return NULL;
+		}
+		rns->be_ns_id = rns->rbdev->null_ns_id++;
+	} else {
+		SPDK_ERRLOG("%s is unsupported\n", module_name);
 		spdk_nvmf_rdma_ns_destroy(rns);
 		return NULL;
 	}
