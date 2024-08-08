@@ -46,10 +46,10 @@ DEFINE_STUB(spdk_accel_append_copy, int,
 	     void *src_domain_ctx, spdk_accel_step_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), NULL);
 
-DEFINE_STUB(bdev_qos_limits_queue_io, bool, (struct bdev_qos_limits_cache *caches,
+DEFINE_STUB(bdev_qos_limits_cache_queue_io, bool, (struct bdev_qos_limits_cache *caches,
 		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io), true);
-DEFINE_STUB_V(bdev_qos_limits_rewind, (struct bdev_qos_limits_cache *caches,
-				       struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io));
+DEFINE_STUB_V(bdev_qos_limits_cache_rewind, (struct bdev_qos_limits_cache *caches,
+		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io));
 DEFINE_STUB_V(bdev_qos_limits_reset_quota, (struct bdev_qos_limits *limits,
 		uint64_t now,
 		uint64_t timeslice_size,

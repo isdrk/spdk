@@ -2625,7 +2625,7 @@ _bdev_qos_cache_queue_io(struct spdk_bdev_qos_cache *qos_cache, struct spdk_bdev
 	assert(qos_cache != NULL);
 	assert(qos_cache->qos != NULL);
 
-	return bdev_qos_limits_queue_io(&qos_cache->limits, &qos_cache->qos->limits, bdev_io);
+	return bdev_qos_limits_cache_queue_io(&qos_cache->limits, &qos_cache->qos->limits, bdev_io);
 }
 
 static inline void
@@ -2634,7 +2634,7 @@ _bdev_qos_cache_rewind(struct spdk_bdev_qos_cache *qos_cache, struct spdk_bdev_i
 	assert(qos_cache != NULL);
 	assert(qos_cache->qos != NULL);
 
-	bdev_qos_limits_rewind(&qos_cache->limits, &qos_cache->qos->limits, bdev_io);
+	bdev_qos_limits_cache_rewind(&qos_cache->limits, &qos_cache->qos->limits, bdev_io);
 }
 
 static inline bool
