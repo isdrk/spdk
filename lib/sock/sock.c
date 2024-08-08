@@ -1041,12 +1041,6 @@ spdk_sock_group_get_buf(struct spdk_sock_group *group, void **buf, void **ctx)
 	return provided->len;
 }
 
-int
-spdk_sock_group_poll(struct spdk_sock_group *group)
-{
-	return spdk_sock_group_poll_count(group, MAX_EVENTS_PER_POLL);
-}
-
 static int
 sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
 			   struct spdk_sock_group *group,
@@ -1073,8 +1067,8 @@ sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
 	return num_events;
 }
 
-int
-spdk_sock_group_poll_count(struct spdk_sock_group *group, int max_events)
+static int
+sock_group_poll_count(struct spdk_sock_group *group, int max_events)
 {
 	struct spdk_sock_group_impl *group_impl = NULL;
 	int rc, num_events = 0;
@@ -1104,6 +1098,12 @@ spdk_sock_group_poll_count(struct spdk_sock_group *group, int max_events)
 	}
 
 	return num_events;
+}
+
+int
+spdk_sock_group_poll(struct spdk_sock_group *group)
+{
+	return sock_group_poll_count(group, MAX_EVENTS_PER_POLL);
 }
 
 int
