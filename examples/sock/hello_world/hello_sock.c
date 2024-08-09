@@ -349,6 +349,7 @@ hello_sock_connect(struct hello_context_t *ctx)
 	opts.opts_size = sizeof(opts);
 	spdk_sock_get_default_opts(&opts);
 	opts.zcopy = ctx->zcopy;
+	opts.impl_name = ctx->sock_impl_name;
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
 	opts.src_addr = ctx->local_addr;
@@ -357,7 +358,7 @@ hello_sock_connect(struct hello_context_t *ctx)
 	SPDK_NOTICELOG("Connecting to the server on %s:%d with sock_impl(%s)\n", ctx->host, ctx->port,
 		       ctx->sock_impl_name);
 
-	ctx->sock = spdk_sock_connect(ctx->host, ctx->port, ctx->sock_impl_name, &opts);
+	ctx->sock = spdk_sock_connect(ctx->host, ctx->port, &opts);
 	if (ctx->sock == NULL) {
 		SPDK_ERRLOG("connect error(%d): %s\n", errno, spdk_strerror(errno));
 		return -1;
@@ -495,10 +496,11 @@ hello_sock_listen(struct hello_context_t *ctx)
 	opts.opts_size = sizeof(opts);
 	spdk_sock_get_default_opts(&opts);
 	opts.zcopy = ctx->zcopy;
+	opts.impl_name = ctx->sock_impl_name;
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
 
-	ctx->sock = spdk_sock_listen(ctx->host, ctx->port, ctx->sock_impl_name, &opts);
+	ctx->sock = spdk_sock_listen(ctx->host, ctx->port, &opts);
 	if (ctx->sock == NULL) {
 		SPDK_ERRLOG("Cannot create server socket\n");
 		spdk_sock_group_close(&ctx->group);
