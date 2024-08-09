@@ -681,8 +681,12 @@ iscsi_fuzz_sock_connect(struct spdk_iscsi_conn *conn, struct spdk_sock_group *gr
 	char saddr[INET6_ADDRSTRLEN], caddr[INET6_ADDRSTRLEN];
 	uint16_t cport, sport;
 	int rc = 0;
+	struct spdk_sock_opts opts;
 
-	conn->sock = spdk_sock_connect(host, spdk_strtol(port, 10), NULL);
+	opts.opts_size = sizeof(opts);
+	spdk_sock_get_default_opts(&opts);
+
+	conn->sock = spdk_sock_connect(host, spdk_strtol(port, 10), NULL, &opts);
 	if (conn->sock == NULL) {
 		fprintf(stderr, "connect error(%d): %s\n", errno, spdk_strerror(errno));
 		spdk_sock_close(&conn->sock);
