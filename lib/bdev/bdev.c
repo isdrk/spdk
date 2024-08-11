@@ -2653,7 +2653,6 @@ static inline bool
 _bdev_group_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 {
 	if (ch->flags & BDEV_CH_QOS_GROUP_ENABLED) {
-		/* check level QoS limits first if applicable */
 		assert(ch->group_ch != NULL);
 		assert(ch->group_ch->qos_cache != NULL);
 
@@ -2664,28 +2663,24 @@ _bdev_group_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev
 }
 
 static inline void
-_bdev_group_qos_rewind(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
+_bdev_qos_rewind(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 {
-	if (ch->flags & BDEV_CH_QOS_GROUP_ENABLED) {
-		assert(ch->group_ch != NULL);
-		assert(ch->group_ch->qos_cache != NULL);
+	if (ch->flags & BDEV_CH_QOS_ENABLED) {
+		assert(ch->qos_cache != NULL);
 
-		/* if limited by bdev QoS and group QoS limits are enabled ->
-		 * rewind the group level QoS limits
-		 */
-		_bdev_qos_cache_rewind(ch->group_ch->qos_cache, bdev_io);
+		_bdev_qos_cache_rewind(ch->qos_cache, bdev_io);
 	}
 }
 
 static bool
 bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 {
-	if (_bdev_group_qos_queue_io(ch, bdev_io)) {
+	if (_bdev_qos_queue_io(ch, bdev_io)) {
 		return true;
 	}
 
-	if (_bdev_qos_queue_io(ch, bdev_io)) {
-		_bdev_group_qos_rewind(ch, bdev_io);
+	if (_bdev_group_qos_queue_io(ch, bdev_io)) {
+		_bdev_qos_rewind(ch, bdev_io);
 		return true;
 	}
 
