@@ -2638,7 +2638,7 @@ _bdev_qos_cache_rewind(struct spdk_bdev_qos_cache *qos_cache, struct spdk_bdev_i
 }
 
 static inline bool
-_bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
+bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 {
 	if (ch->flags & BDEV_CH_QOS_ENABLED) {
 		assert(ch->qos_cache != NULL);
@@ -2650,7 +2650,7 @@ _bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 }
 
 static inline bool
-_bdev_group_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
+bdev_group_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 {
 	if (ch->flags & BDEV_CH_QOS_GROUP_ENABLED) {
 		assert(ch->group_ch != NULL);
@@ -2672,21 +2672,6 @@ _bdev_qos_rewind(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 	}
 }
 
-static bool
-bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
-{
-	if (_bdev_qos_queue_io(ch, bdev_io)) {
-		return true;
-	}
-
-	if (_bdev_group_qos_queue_io(ch, bdev_io)) {
-		_bdev_qos_rewind(ch, bdev_io);
-		return true;
-	}
-
-	return false;
-}
-
 static void
 bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
 {
@@ -2695,6 +2680,12 @@ bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_
 	}
 
 	if (bdev_qos_queue_io(bdev_ch, bdev_io)) {
+		TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
+		return;
+	}
+
+	if (bdev_group_qos_queue_io(bdev_ch, bdev_io)) {
+		_bdev_qos_rewind(bdev_ch, bdev_io);
 		TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
 		return;
 	}
