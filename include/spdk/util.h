@@ -25,6 +25,8 @@ extern "C" {
 #define spdk_min(a,b) (((a)<(b))?(a):(b))
 #define spdk_max(a,b) (((a)>(b))?(a):(b))
 
+#define SPDK_UNUSED(x) (void)(x)
+
 #define SPDK_COUNTOF(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 #define SPDK_CONTAINEROF(ptr, type, member) ((type *)((uintptr_t)ptr - offsetof(type, member)))
