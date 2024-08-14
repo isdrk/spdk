@@ -227,6 +227,10 @@ spdk_nvme_poll_group_add(struct spdk_nvme_poll_group *group, struct spdk_nvme_qp
 int
 spdk_nvme_poll_group_remove(struct spdk_nvme_poll_group *group, struct spdk_nvme_qpair *qpair)
 {
+	if (nvme_qpair_get_state(qpair) > NVME_QPAIR_DISCONNECTING) {
+		return -EINVAL;
+	}
+
 	struct spdk_nvme_transport_poll_group *tgroup;
 
 	STAILQ_FOREACH(tgroup, &group->tgroups, link) {
