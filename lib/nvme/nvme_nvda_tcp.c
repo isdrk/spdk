@@ -5222,20 +5222,6 @@ fail:
 	return NULL;
 }
 
-static int
-nvme_tcp_poll_group_add(struct spdk_nvme_transport_poll_group *tgroup,
-			struct spdk_nvme_qpair *qpair)
-{
-	return 0;
-}
-
-static int
-nvme_tcp_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
-			   struct spdk_nvme_qpair *qpair)
-{
-	return 0;
-}
-
 static int64_t
 nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *tgroup,
 					uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb)
@@ -5409,8 +5395,6 @@ static const struct spdk_nvme_transport_ops tcp_ops = {
 	.admin_qpair_abort_aers = nvme_tcp_admin_qpair_abort_aers,
 
 	.poll_group_create = nvme_tcp_poll_group_create,
-	.poll_group_add = nvme_tcp_poll_group_add,
-	.poll_group_remove = nvme_tcp_poll_group_remove,
 	.poll_group_process_completions = nvme_tcp_poll_group_process_completions,
 	.poll_group_destroy = nvme_tcp_poll_group_destroy,
 	.poll_group_get_stats = nvme_tcp_poll_group_get_stats,
