@@ -2674,6 +2674,20 @@ bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
 	return res;
 }
 
+static void
+bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
+{
+	if (!bdev_qos_queue_io(bdev_ch, bdev_io)) {
+		/* For each limit type, it is ensured that there is no preceding
+		 * queued I/Os. Hence, call submit function directly to avoid
+		 * extra overhead.
+		 */
+		bdev_io_do_submit(bdev_ch, bdev_io);
+	} else {
+		TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
+	}
+}
+
 static int
 bdev_ch_submit_qos_queued_io(struct spdk_bdev_channel *ch)
 {
@@ -3367,15 +3381,7 @@ _bdev_io_submit(void *ctx)
 		    bdev_abort_queued_io(&bdev_ch->qos_queued_io, bdev_ch, bdev_io->u.abort.bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 		} else {
-			if (!bdev_qos_queue_io(bdev_ch, bdev_io)) {
-				/* For each limit type, it is ensured that there is no preceding
-				 * queued I/Os. Hence, call submit function directly to avoid
-				 * extra overhead.
-				 */
-				bdev_io_do_submit(bdev_ch, bdev_io);
-			} else {
-				TAILQ_INSERT_TAIL(&bdev_ch->qos_queued_io, bdev_io, internal.link);
-			}
+			bdev_qos_io_submit(bdev_ch, bdev_io);
 		}
 	} else {
 		SPDK_ERRLOG("unknown bdev_ch flag %x found\n", bdev_ch->flags);
