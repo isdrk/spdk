@@ -347,14 +347,20 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	int rc;
 	struct nvme_tcp_poll_group *group;
 
-	if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+	if (qpair->poll_group) {
 		group = nvme_tcp_poll_group(qpair->poll_group);
-		TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
-	}
 
-	if (tqpair->sock && qpair->poll_group) {
-		group = nvme_tcp_poll_group(qpair->poll_group);
-		if (group->sock_group) {
+		if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+			TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
+		}
+		if (TAILQ_ENTRY_ENQUEUED(tqpair, link_timeout)) {
+			TAILQ_REMOVE_CLEAR(&group->timeout_enabled, tqpair, link_timeout);
+		}
+
+		assert(tqpair->shared_stats == true);
+		tqpair->stats = &g_dummy_stats;
+
+		if (tqpair->sock && group->sock_group) {
 			if (spdk_sock_group_remove_sock(group->sock_group, tqpair->sock)) {
 				SPDK_ERRLOG("Failed to remove socket from group!");
 				assert(false);
@@ -2787,24 +2793,6 @@ static int
 nvme_tcp_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 			   struct spdk_nvme_qpair *qpair)
 {
-	struct nvme_tcp_qpair *tqpair;
-	struct nvme_tcp_poll_group *group;
-
-	assert(qpair->poll_group_tailq_head == &tgroup->disconnected_qpairs);
-
-	tqpair = nvme_tcp_qpair(qpair);
-	group = nvme_tcp_poll_group(tgroup);
-
-	assert(tqpair->shared_stats == true);
-	tqpair->stats = &g_dummy_stats;
-
-	if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
-		TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
-	}
-	if (TAILQ_ENTRY_ENQUEUED(tqpair, link_timeout)) {
-		TAILQ_REMOVE_CLEAR(&group->timeout_enabled, tqpair, link_timeout);
-	}
-
 	return 0;
 }
 

@@ -2205,6 +2205,14 @@ lingering:
 	}
 
 quiet:
+	if (rqpair->qpair.poll_group) {
+		struct nvme_rdma_poll_group *group = nvme_rdma_poll_group(rqpair->qpair.poll_group);
+
+		if (rqpair->link_active.tqe_prev) {
+			TAILQ_REMOVE(&group->active_qpairs, rqpair, link_active);
+			rqpair->link_active.tqe_prev = NULL;
+		}
+	}
 	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
 
 	nvme_rdma_qpair_abort_reqs(&rqpair->qpair, rqpair->qpair.abort_dnr);
@@ -2225,6 +2233,15 @@ nvme_rdma_qpair_wait_until_quiet(struct nvme_rdma_qpair *rqpair)
 	     rqpair->num_active_accel_reqs != 0 ||
 	     (!rqpair->srq && rqpair->rsps->current_num_recvs != 0))) {
 		return -EAGAIN;
+	}
+
+	if (rqpair->qpair.poll_group) {
+		struct nvme_rdma_poll_group *group = nvme_rdma_poll_group(rqpair->qpair.poll_group);
+
+		if (rqpair->link_active.tqe_prev) {
+			TAILQ_REMOVE(&group->active_qpairs, rqpair, link_active);
+			rqpair->link_active.tqe_prev = NULL;
+		}
 	}
 
 	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
