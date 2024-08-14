@@ -4918,11 +4918,7 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 	}
 
 	if (qpair->poll_group) {
-		rc = nvme_poll_group_connect_qpair(qpair);
-		if (rc) {
-			SPDK_ERRLOG("Unable to activate the tcp qpair.\n");
-			return rc;
-		}
+		tqpair->group = nvme_tcp_poll_group(qpair->poll_group);
 	} else if (!tqpair->stats) {
 		tqpair->stats = calloc(1, sizeof(*tqpair->stats));
 		if (!tqpair->stats) {
@@ -5212,30 +5208,6 @@ fail:
 }
 
 static int
-nvme_tcp_poll_group_connect_qpair(struct spdk_nvme_qpair *qpair)
-{
-	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
-	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
-
-	tqpair->group = group;
-	return 0;
-}
-
-static int
-nvme_tcp_poll_group_disconnect_qpair(struct spdk_nvme_qpair *qpair)
-{
-	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(qpair->poll_group);
-	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
-
-	if (tqpair->flags.pending_events) {
-		TAILQ_REMOVE(&group->pending_events, tqpair, link);
-		tqpair->flags.pending_events = false;
-	}
-
-	return 0;
-}
-
-static int
 nvme_tcp_poll_group_add(struct spdk_nvme_transport_poll_group *tgroup,
 			struct spdk_nvme_qpair *qpair)
 {
@@ -5452,8 +5424,6 @@ static const struct spdk_nvme_transport_ops tcp_ops = {
 	.admin_qpair_abort_aers = nvme_tcp_admin_qpair_abort_aers,
 
 	.poll_group_create = nvme_tcp_poll_group_create,
-	.poll_group_connect_qpair = nvme_tcp_poll_group_connect_qpair,
-	.poll_group_disconnect_qpair = nvme_tcp_poll_group_disconnect_qpair,
 	.poll_group_add = nvme_tcp_poll_group_add,
 	.poll_group_remove = nvme_tcp_poll_group_remove,
 	.poll_group_process_completions = nvme_tcp_poll_group_process_completions,
