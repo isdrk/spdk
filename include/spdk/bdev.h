@@ -216,8 +216,10 @@ struct spdk_bdev_opts {
 	/* QoS slice of quota allocated from global pool to local cache */
 	uint32_t qos_io_slice;
 	uint32_t qos_byte_slice;
+	/* QoS timeslice in microseconds */
+	uint32_t qos_timeslice_us;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 40, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 44, "Incorrect size");
 
 /**
  * Structure with optional IO request parameters

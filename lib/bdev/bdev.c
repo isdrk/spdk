@@ -158,6 +158,7 @@ static struct spdk_bdev_opts	g_bdev_opts = {
 	.iobuf_large_cache_size = BUF_LARGE_CACHE_SIZE,
 	.qos_io_slice = SPDK_BDEV_QOS_IO_SLICE,
 	.qos_byte_slice = SPDK_BDEV_QOS_BYTE_SLICE,
+	.qos_timeslice_us = SPDK_BDEV_QOS_TIMESLICE_IN_USEC,
 };
 
 static spdk_bdev_init_cb	g_init_cb_fn = NULL;
@@ -494,10 +495,11 @@ spdk_bdev_get_opts(struct spdk_bdev_opts *opts, size_t opts_size)
 	SET_FIELD(iobuf_large_cache_size);
 	SET_FIELD(qos_io_slice);
 	SET_FIELD(qos_byte_slice);
+	SET_FIELD(qos_timeslice_us);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 40, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 44, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -536,6 +538,11 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 		return -1;
 	}
 
+	if (opts->qos_timeslice_us == 0) {
+		SPDK_ERRLOG("0 is not allowed for qos_timeslice_us\n");
+		return -1;
+	}
+
 #define SET_FIELD(field) \
         if (offsetof(struct spdk_bdev_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
                 g_bdev_opts.field = opts->field; \
@@ -548,6 +555,7 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 	SET_FIELD(iobuf_large_cache_size);
 	SET_FIELD(qos_io_slice);
 	SET_FIELD(qos_byte_slice);
+	SET_FIELD(qos_timeslice_us);
 
 	g_bdev_opts.opts_size = opts->opts_size;
 
@@ -1966,6 +1974,9 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_bool(w, "bdev_auto_examine", g_bdev_opts.bdev_auto_examine);
 	spdk_json_write_named_uint32(w, "iobuf_small_cache_size", g_bdev_opts.iobuf_small_cache_size);
 	spdk_json_write_named_uint32(w, "iobuf_large_cache_size", g_bdev_opts.iobuf_large_cache_size);
+	spdk_json_write_named_uint32(w, "qos_io_slice", g_bdev_opts.qos_io_slice);
+	spdk_json_write_named_uint32(w, "qos_byte_slice", g_bdev_opts.qos_byte_slice);
+	spdk_json_write_named_uint32(w, "qos_timeslice_us", g_bdev_opts.qos_timeslice_us);
 	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 
@@ -4167,11 +4178,11 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 
 			bdev_qos_limits_update_max_quota_per_timeslice(&qos->limits);
 			qos->timeslice_size =
-				SPDK_BDEV_QOS_TIMESLICE_IN_USEC * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
+				g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 			qos->last_timeslice = spdk_get_ticks();
 			qos->poller = SPDK_POLLER_REGISTER(bdev_channel_poll_qos,
 							   bdev,
-							   SPDK_BDEV_QOS_TIMESLICE_IN_USEC);
+							   g_bdev_opts.qos_timeslice_us);
 		}
 
 		if (!(ch->flags & BDEV_CH_QOS_ENABLED)) {
@@ -10835,11 +10846,11 @@ bdev_group_ch_enable_qos(struct spdk_bdev_group_channel *group_ch)
 	assert(qos->ch != NULL);
 
 	qos->timeslice_size =
-		SPDK_BDEV_QOS_TIMESLICE_IN_USEC * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
+		g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 	qos->last_timeslice = spdk_get_ticks();
 	qos->poller = SPDK_POLLER_REGISTER(bdev_group_poll_qos,
 					   group,
-					   SPDK_BDEV_QOS_TIMESLICE_IN_USEC);
+					   g_bdev_opts.qos_timeslice_us);
 }
 
 static void

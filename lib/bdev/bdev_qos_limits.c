@@ -463,7 +463,10 @@ static void
 bdev_qos_limit_update_max_quota_per_timeslice(struct bdev_qos_limit *limit,
 		enum spdk_bdev_qos_rate_limit_type type)
 {
+	struct spdk_bdev_opts opts;
 	uint64_t max_per_timeslice;
+
+	spdk_bdev_get_opts(&opts, sizeof(opts));
 
 	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
 		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_IO_PER_TIMESLICE;
@@ -476,7 +479,7 @@ bdev_qos_limit_update_max_quota_per_timeslice(struct bdev_qos_limit *limit,
 		return;
 	}
 
-	max_per_timeslice = limit->limit * SPDK_BDEV_QOS_TIMESLICE_IN_USEC / SPDK_SEC_TO_USEC;
+	max_per_timeslice = limit->limit * opts.qos_timeslice_us / SPDK_SEC_TO_USEC;
 
 	limit->max_per_timeslice = spdk_max(max_per_timeslice, limit->min_per_timeslice);
 

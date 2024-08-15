@@ -7,7 +7,8 @@
 
 def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
                      bdev_auto_examine=None, iobuf_small_cache_size=None,
-                     iobuf_large_cache_size=None, qos_io_slice=None, qos_byte_slice=None):
+                     iobuf_large_cache_size=None, qos_io_slice=None, qos_byte_slice=None,
+                     qos_timeslice_us=None):
     """Set parameters for the bdev subsystem.
 
     Args:
@@ -18,6 +19,7 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         iobuf_large_cache_size: size of the large iobuf per thread cache
         qos_io_slice: QoS IO slice allocated from global pool to local cache (optional)
         qos_byte_slice: QoS byte slice allocated from global pool to local cache (optional)
+        qos_timeslice_us: QoS timeslice in microseconds (optional)
     """
     params = {}
 
@@ -35,6 +37,8 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         params["qos_io_slice"] = qos_io_slice
     if qos_byte_slice is not None:
         params["qos_byte_slice"] = qos_byte_slice
+    if qos_timeslice_us is not None:
+        params["qos_timeslice_us"] = qos_timeslice_us
     return client.call('bdev_set_options', params)
 
 

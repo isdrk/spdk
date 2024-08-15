@@ -1067,7 +1067,7 @@ basic_qos(void)
 	CU_ASSERT(status == SPDK_BDEV_IO_STATUS_SUCCESS);
 
 	/* Reset rate limit for the next test cases. */
-	spdk_delay_us(SPDK_BDEV_QOS_TIMESLICE_IN_USEC);
+	spdk_delay_us(g_bdev_opts.qos_timeslice_us);
 	poll_threads();
 
 	/*
