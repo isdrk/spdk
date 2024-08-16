@@ -53,6 +53,8 @@ DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
 DEFINE_STUB(rdma_reject, int, (struct rdma_cm_id *id,
 			       const void *private_data, uint8_t private_data_len), 0);
 DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_req_notify_cq, int, (struct spdk_rdma_provider_cq *cq,
+		int solicited_only), 0);
 DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
 		int num_entries,
 		struct ibv_wc *wc), 0);

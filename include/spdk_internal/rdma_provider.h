@@ -261,6 +261,14 @@ int spdk_rdma_provider_cq_resize(struct spdk_rdma_provider_cq *rdma_cq, int cqe)
  */
 int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entries,
 			       struct ibv_wc *wc);
+/**
+ * Request completion notification on Completion Queue
+ *
+ * \param cq Completion Queue
+ * \param solicited_only Notify on solicited CQE only
+ * \return 0 on success, errno on failure
+ */
+int spdk_rdma_provider_req_notify_cq(struct spdk_rdma_provider_cq *rdma_cq, int solicited_only);
 
 /**
  * Check whether RDMA provider supports accel sequences

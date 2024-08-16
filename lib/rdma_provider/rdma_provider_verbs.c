@@ -416,3 +416,11 @@ spdk_rdma_provider_memory_key_put_ref(void *mkey)
 {
 
 }
+
+int
+spdk_rdma_provider_req_notify_cq(struct spdk_rdma_provider_cq *rdma_cq, int solicited_only)
+{
+	assert(rdma_cq);
+
+	return ibv_req_notify_cq(rdma_cq->cq, solicited_only);
+}

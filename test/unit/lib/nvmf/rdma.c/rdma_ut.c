@@ -54,6 +54,8 @@ DEFINE_STUB(spdk_rdma_provider_cq_create, struct spdk_rdma_provider_cq *,
 	    NULL);
 DEFINE_STUB_V(spdk_rdma_provider_cq_destroy, (struct spdk_rdma_provider_cq *cq));
 DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_req_notify_cq, int, (struct spdk_rdma_provider_cq *cq,
+		int solicited_only), 0);
 DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
 		int num_entries,
 		struct ibv_wc *wc), 0);
