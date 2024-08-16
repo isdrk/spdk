@@ -542,10 +542,21 @@ static void
 poller_reset(struct spdk_nvmf_rdma_poller *poller,
 	     struct spdk_nvmf_rdma_poll_group *group)
 {
+	struct spdk_thread *thread = spdk_get_thread();
+
 	memset(poller, 0, sizeof(*poller));
 	STAILQ_INIT(&poller->qpairs_pending_recv);
 	STAILQ_INIT(&poller->qpairs_pending_send);
 	poller->group = group;
+	spdk_thread_exit(thread);
+	while (!spdk_thread_is_exited(thread)) {
+		spdk_thread_poll(thread, 0, 0);
+	}
+	spdk_thread_destroy(thread);
+
+	thread = spdk_thread_create(NULL, NULL);
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+	spdk_set_thread(thread);
 }
 
 static void
@@ -562,7 +573,12 @@ test_spdk_nvmf_rdma_request_process(void)
 	struct spdk_nvmf_rdma_request *rdma_req;
 	union nvmf_h2c_msg *cmd;
 	struct spdk_iobuf_channel ch = {};
+	struct spdk_thread *thread;
 	bool progress;
+
+	thread = spdk_thread_create(NULL, NULL);
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+	spdk_set_thread(thread);
 
 	group.group.buf_cache = &ch;
 
@@ -826,6 +842,13 @@ test_spdk_nvmf_rdma_request_process(void)
 	}
 
 	spdk_mempool_free(rtransport.data_wr_pool);
+
+	thread = spdk_get_thread();
+	spdk_thread_exit(thread);
+	while (!spdk_thread_is_exited(thread)) {
+		spdk_thread_poll(thread, 0, 0);
+	}
+	spdk_thread_destroy(thread);
 }
 
 #define TEST_GROUPS_COUNT 5
