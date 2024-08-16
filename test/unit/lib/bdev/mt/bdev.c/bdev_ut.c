@@ -2673,6 +2673,185 @@ event_notify_and_close(void)
 	teardown_test();
 }
 
+static struct spdk_bdev_node *
+ut_bdev_group_get_node_by_name(struct spdk_bdev_group *group,
+			       const char *bdev_name)
+{
+	struct spdk_bdev_node *node;
+	struct spdk_bdev *bdev;
+
+	TAILQ_FOREACH(node, &group->bdevs, link) {
+		bdev = spdk_bdev_desc_get_bdev(node->desc);
+		if (!strcmp(spdk_bdev_get_name(bdev), bdev_name)) {
+			return node;
+		}
+	}
+
+	return NULL;
+}
+
+static void
+ut_group_op_done(void *cb_arg, int status)
+{
+	int *_status = cb_arg;
+
+	*_status = status;
+}
+
+static void
+basic_bdev_group(void)
+{
+	struct spdk_io_channel *io_ch[2], *io_ch2;
+	struct spdk_bdev_channel *bdev_ch[2], *bdev_ch2;
+	struct spdk_bdev_group *group;
+	int status, status2;
+
+	setup_test();
+
+	setup_bdev2(g_bdev.io_target);
+
+	/*
+	 * Check if group is created and delete successfully.
+	 */
+	group = spdk_bdev_group_create("ut_group");
+	SPDK_CU_ASSERT_FATAL(group != NULL);
+	CU_ASSERT(spdk_bdev_group_get_by_name("ut_group") == group);
+
+	status = -1;
+	spdk_bdev_group_destroy(group, ut_group_op_done, &status);
+	status2 = 0;
+	spdk_bdev_group_destroy(group, ut_group_op_done, &status2);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(status2 == -EAGAIN);
+	CU_ASSERT(spdk_bdev_group_get_by_name("ut_group") == NULL);
+
+	/*
+	 * Check if bdev channel has group channel.
+	 */
+	group = spdk_bdev_group_create("ut_group");
+	SPDK_CU_ASSERT_FATAL(group != NULL);
+
+	set_thread(0);
+
+	/* Get a bdev channel before the bdev is not added to a group. */
+	io_ch[0] = spdk_bdev_get_io_channel(g_desc);
+	SPDK_CU_ASSERT_FATAL(io_ch[0] != NULL);
+
+	bdev_ch[0] = spdk_io_channel_get_ctx(io_ch[0]);
+	CU_ASSERT(bdev_ch[0]->group_ch == NULL);
+
+	status = -1;
+	spdk_bdev_group_add_bdev(group, "ut_bdev", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(bdev_ch[0]->group_ch != NULL);
+	CU_ASSERT(bdev_ch[0]->group_ch->qos_cache == NULL);
+	CU_ASSERT(!(bdev_ch[0]->flags & BDEV_CH_QOS_GROUP_ENABLED));
+
+	/* Get bdev channel after the bdev is added to a group. */
+	set_thread(1);
+
+	io_ch[1] = spdk_bdev_get_io_channel(g_desc);
+	SPDK_CU_ASSERT_FATAL(io_ch[1] != NULL);
+
+	bdev_ch[1] = spdk_io_channel_get_ctx(io_ch[1]);
+	CU_ASSERT(bdev_ch[1]->group_ch != NULL);
+	CU_ASSERT(bdev_ch[1]->group_ch->qos_cache == NULL);
+	CU_ASSERT(!(bdev_ch[1]->flags & BDEV_CH_QOS_GROUP_ENABLED));
+
+	/*
+	 * Check if two bdevs share the same group channel.
+	 */
+	status = -1;
+	spdk_bdev_group_add_bdev(group, "ut_bdev2", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	io_ch2 = spdk_bdev_get_io_channel(g_desc2);
+	SPDK_CU_ASSERT_FATAL(io_ch2 != NULL);
+
+	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
+	CU_ASSERT(bdev_ch2->group_ch == bdev_ch[1]->group_ch);
+
+	spdk_put_io_channel(io_ch2);
+
+	/*
+	 * Check if a bdev is removed from a bdev.
+	 */
+	status = -1;
+	spdk_bdev_group_remove_bdev(group, "ut_bdev2", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(ut_bdev_group_get_node_by_name(group, "ut_bdev2") == NULL);
+	CU_ASSERT(ut_bdev_group_get_node_by_name(group, "ut_bdev") != NULL);
+
+	/*
+	 * Check if a group can be deleted when the group has a bdev.
+	 * Then, check if group channels were deleted correctly.
+	 */
+	status = -1;
+	spdk_bdev_group_destroy(group, ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(spdk_bdev_group_get_by_name("ut_group") == NULL);
+	CU_ASSERT(bdev_ch[0]->group_ch == NULL);
+	CU_ASSERT(bdev_ch[1]->group_ch == NULL);
+
+	/*
+	 * Check if a bdev is removed from a group automatically when the
+	 * bdev is unregistered.
+	 */
+	group = spdk_bdev_group_create("ut_group");
+	SPDK_CU_ASSERT_FATAL(group != NULL);
+
+	status = -1;
+	spdk_bdev_group_add_bdev(group, "ut_bdev", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	set_thread(0);
+
+	spdk_put_io_channel(io_ch[0]);
+
+	set_thread(1);
+
+	spdk_put_io_channel(io_ch[1]);
+
+	poll_threads();
+
+	set_thread(0);
+
+	spdk_bdev_close(g_desc);
+	unregister_bdev(&g_bdev);
+
+	poll_threads();
+
+	CU_ASSERT(ut_bdev_group_get_node_by_name(group, "ut_bdev") == NULL);
+
+	status = -1;
+	spdk_bdev_group_destroy(group, ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(spdk_bdev_group_get_by_name("ut_group") == NULL);
+
+	set_thread(0);
+
+	teardown_bdev2();
+
+	/* Restore the original g_bdev so that we can use teardown_test(). */
+	register_bdev(&g_bdev, "ut_bdev", &g_io_device);
+	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	teardown_test();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2708,6 +2887,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite_wt, spdk_bdev_register_wt);
 	CU_ADD_TEST(suite_wt, spdk_bdev_examine_wt);
 	CU_ADD_TEST(suite, event_notify_and_close);
+	CU_ADD_TEST(suite, basic_bdev_group);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();
