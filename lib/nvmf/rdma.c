@@ -440,7 +440,7 @@ struct spdk_nvmf_rdma_poller {
 	STAILQ_HEAD(, spdk_nvmf_rdma_qpair)	qpairs_pending_recv;
 
 	STAILQ_HEAD(, spdk_nvmf_rdma_qpair)	qpairs_pending_send;
-
+	bool					pp_handler_registered;
 	TAILQ_ENTRY(spdk_nvmf_rdma_poller)	link;
 };
 
@@ -1085,6 +1085,18 @@ error:
 	return -1;
 }
 
+static void
+nvmf_rdma_pp_handler(void *fn_arg)
+{
+	struct spdk_nvmf_rdma_poller *rpoller = fn_arg;
+	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rpoller->group->group.transport,
+			struct spdk_nvmf_rdma_transport, transport);
+
+	rpoller->pp_handler_registered = false;
+	_poller_submit_recvs(rtransport, rpoller);
+	_poller_submit_sends(rtransport, rpoller);
+}
+
 /* Append the given recv wr structure to the resource structs outstanding recvs list. */
 /* This function accepts either a single wr or the first wr in a linked list. */
 static void
@@ -1103,6 +1115,9 @@ nvmf_rdma_qpair_queue_recv_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_r
 
 	if (rtransport->rdma_opts.no_wr_batching) {
 		_poller_submit_recvs(rtransport, rqpair->poller);
+	} else if (!rqpair->poller->pp_handler_registered) {
+		spdk_thread_register_post_poller_handler(nvmf_rdma_pp_handler, rqpair->poller);
+		rqpair->poller->pp_handler_registered = true;
 	}
 }
 
@@ -1128,6 +1143,9 @@ request_transfer_in(struct spdk_nvmf_request *req)
 	}
 	if (rtransport->rdma_opts.no_wr_batching) {
 		_poller_submit_sends(rtransport, rqpair->poller);
+	} else if (!rqpair->poller->pp_handler_registered) {
+		spdk_thread_register_post_poller_handler(nvmf_rdma_pp_handler, rqpair->poller);
+		rqpair->poller->pp_handler_registered = true;
 	}
 
 	assert(rqpair->current_read_depth + rdma_req->num_outstanding_data_wr <= rqpair->max_read_depth);
@@ -1233,6 +1251,9 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	}
 	if (rtransport->rdma_opts.no_wr_batching) {
 		_poller_submit_sends(rtransport, rqpair->poller);
+	} else if (!rqpair->poller->pp_handler_registered) {
+		spdk_thread_register_post_poller_handler(nvmf_rdma_pp_handler, rqpair->poller);
+		rqpair->poller->pp_handler_registered = true;
 	}
 
 	SPDK_DEBUGLOG(rdma, "sent req %p, data_posted %d, outstanding_wrs %u\n", rdma_req, *data_posted,
@@ -5279,10 +5300,6 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 		 * We need to start processing of such requests if no CQE reaped */
 		nvmf_rdma_poller_process_pending_buf_queue(rtransport, rpoller);
 	}
-
-	/* submit outstanding work requests. */
-	_poller_submit_recvs(rtransport, rpoller);
-	_poller_submit_sends(rtransport, rpoller);
 
 	return count;
 }
