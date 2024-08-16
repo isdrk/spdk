@@ -747,6 +747,12 @@ spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe)
 }
 
 int
+spdk_mlx5_req_notify_cq(struct spdk_mlx5_cq *cq, int solicited_only)
+{
+	return ibv_req_notify_cq(cq->verbs_cq, solicited_only);
+}
+
+int
 spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr,
 		    struct spdk_mlx5_qp **qp_out)
 {
