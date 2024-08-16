@@ -85,6 +85,8 @@ struct ut_bdev_channel {
 int g_io_device;
 struct ut_bdev g_bdev;
 struct spdk_bdev_desc *g_desc;
+struct ut_bdev *g_bdev2;
+struct spdk_bdev_desc *g_desc2;
 bool g_teardown_done = false;
 bool g_get_io_channel = true;
 bool g_create_ch = true;
@@ -338,6 +340,30 @@ _bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev,
 		CU_ASSERT(false);
 		break;
 	}
+}
+
+static void
+setup_bdev2(void *io_device)
+{
+	int rc;
+
+	g_bdev2 = calloc(1, sizeof(*g_bdev2));
+	SPDK_CU_ASSERT_FATAL(g_bdev2 != NULL);
+
+	register_bdev(g_bdev2, "ut_bdev2", io_device);
+	rc = spdk_bdev_open_ext("ut_bdev2", true, _bdev_event_cb, NULL, &g_desc2);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(g_desc2 != NULL);
+}
+
+static void
+teardown_bdev2(void)
+{
+	spdk_bdev_close(g_desc2);
+	g_desc2 = NULL;
+	unregister_bdev(g_bdev2);
+	free(g_bdev2);
+	g_bdev2 = NULL;
 }
 
 static void
@@ -1472,20 +1498,14 @@ enomem_multi_bdev(void)
 	const uint32_t AVAIL = 20;
 	enum spdk_bdev_io_status status[IO_ARRAY_SIZE];
 	uint32_t i;
-	struct ut_bdev *second_bdev;
-	struct spdk_bdev_desc *second_desc = NULL;
-	struct spdk_bdev_channel *second_bdev_ch;
-	struct spdk_io_channel *second_ch;
+	struct spdk_bdev_channel *bdev_ch2;
+	struct spdk_io_channel *io_ch2;
 	int rc;
 
 	setup_test();
 
 	/* Register second bdev with the same io_target  */
-	second_bdev = calloc(1, sizeof(*second_bdev));
-	SPDK_CU_ASSERT_FATAL(second_bdev != NULL);
-	register_bdev(second_bdev, "ut_bdev2", g_bdev.io_target);
-	spdk_bdev_open_ext("ut_bdev2", true, _bdev_event_cb, NULL, &second_desc);
-	SPDK_CU_ASSERT_FATAL(second_desc != NULL);
+	setup_bdev2(g_bdev.io_target);
 
 	set_thread(0);
 	io_ch = spdk_bdev_get_io_channel(g_desc);
@@ -1494,9 +1514,9 @@ enomem_multi_bdev(void)
 	ut_ch = spdk_io_channel_get_ctx(bdev_ch->channel);
 	ut_ch->avail_cnt = AVAIL;
 
-	second_ch = spdk_bdev_get_io_channel(second_desc);
-	second_bdev_ch = spdk_io_channel_get_ctx(second_ch);
-	SPDK_CU_ASSERT_FATAL(shared_resource == second_bdev_ch->shared_resource);
+	io_ch2 = spdk_bdev_get_io_channel(g_desc2);
+	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
+	SPDK_CU_ASSERT_FATAL(shared_resource == bdev_ch2->shared_resource);
 
 	/* Saturate io_target through bdev A. */
 	for (i = 0; i < AVAIL; i++) {
@@ -1511,7 +1531,7 @@ enomem_multi_bdev(void)
 	 * and then go onto the nomem_io list.
 	 */
 	status[AVAIL] = SPDK_BDEV_IO_STATUS_PENDING;
-	rc = spdk_bdev_read_blocks(second_desc, second_ch, NULL, 0, 1, enomem_done, &status[AVAIL]);
+	rc = spdk_bdev_read_blocks(g_desc2, io_ch2, NULL, 0, 1, enomem_done, &status[AVAIL]);
 	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(!TAILQ_EMPTY(&shared_resource->nomem_io));
 
@@ -1526,11 +1546,9 @@ enomem_multi_bdev(void)
 	SPDK_CU_ASSERT_FATAL(shared_resource->io_outstanding == 0);
 
 	spdk_put_io_channel(io_ch);
-	spdk_put_io_channel(second_ch);
-	spdk_bdev_close(second_desc);
-	unregister_bdev(second_bdev);
+	spdk_put_io_channel(io_ch2);
+	teardown_bdev2();
 	poll_threads();
-	free(second_bdev);
 	teardown_test();
 }
 
@@ -1599,10 +1617,8 @@ enomem_multi_io_target(void)
 	enum spdk_bdev_io_status status[IO_ARRAY_SIZE];
 	uint32_t i;
 	int new_io_device;
-	struct ut_bdev *second_bdev;
-	struct spdk_bdev_desc *second_desc = NULL;
-	struct spdk_bdev_channel *second_bdev_ch;
-	struct spdk_io_channel *second_ch;
+	struct spdk_bdev_channel *bdev_ch2;
+	struct spdk_io_channel *io_ch2;
 	int rc;
 
 	setup_test();
@@ -1610,11 +1626,7 @@ enomem_multi_io_target(void)
 	/* Create new io_target and a second bdev using it */
 	spdk_io_device_register(&new_io_device, stub_create_ch, stub_destroy_ch,
 				sizeof(struct ut_bdev_channel), NULL);
-	second_bdev = calloc(1, sizeof(*second_bdev));
-	SPDK_CU_ASSERT_FATAL(second_bdev != NULL);
-	register_bdev(second_bdev, "ut_bdev2", &new_io_device);
-	spdk_bdev_open_ext("ut_bdev2", true, _bdev_event_cb, NULL, &second_desc);
-	SPDK_CU_ASSERT_FATAL(second_desc != NULL);
+	setup_bdev2(&new_io_device);
 
 	set_thread(0);
 	io_ch = spdk_bdev_get_io_channel(g_desc);
@@ -1623,9 +1635,9 @@ enomem_multi_io_target(void)
 	ut_ch->avail_cnt = AVAIL;
 
 	/* Different io_target should imply a different shared_resource */
-	second_ch = spdk_bdev_get_io_channel(second_desc);
-	second_bdev_ch = spdk_io_channel_get_ctx(second_ch);
-	SPDK_CU_ASSERT_FATAL(bdev_ch->shared_resource != second_bdev_ch->shared_resource);
+	io_ch2 = spdk_bdev_get_io_channel(g_desc2);
+	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
+	SPDK_CU_ASSERT_FATAL(bdev_ch->shared_resource != bdev_ch2->shared_resource);
 
 	/* Saturate io_target through bdev A. */
 	for (i = 0; i < AVAIL; i++) {
@@ -1646,10 +1658,10 @@ enomem_multi_io_target(void)
 	 * successfully because we're using a different io_device underneath.
 	 */
 	status[AVAIL] = SPDK_BDEV_IO_STATUS_PENDING;
-	rc = spdk_bdev_read_blocks(second_desc, second_ch, NULL, 0, 1, enomem_done, &status[AVAIL]);
+	rc = spdk_bdev_read_blocks(g_desc2, io_ch2, NULL, 0, 1, enomem_done, &status[AVAIL]);
 	CU_ASSERT(rc == 0);
-	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&second_bdev_ch->shared_resource->nomem_io));
-	stub_complete_io(second_bdev->io_target, 1);
+	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&bdev_ch2->shared_resource->nomem_io));
+	stub_complete_io(g_bdev2->io_target, 1);
 
 	/* Cleanup; Complete outstanding I/O. */
 	stub_complete_io(g_bdev.io_target, AVAIL);
@@ -1661,12 +1673,10 @@ enomem_multi_io_target(void)
 	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&bdev_ch->shared_resource->nomem_io));
 	CU_ASSERT(bdev_ch->shared_resource->io_outstanding == 0);
 	spdk_put_io_channel(io_ch);
-	spdk_put_io_channel(second_ch);
-	spdk_bdev_close(second_desc);
-	unregister_bdev(second_bdev);
+	spdk_put_io_channel(io_ch2);
+	teardown_bdev2();
 	spdk_io_device_unregister(&new_io_device, NULL);
 	poll_threads();
-	free(second_bdev);
 	teardown_test();
 }
 
