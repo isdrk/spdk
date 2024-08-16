@@ -399,7 +399,6 @@ struct spdk_bdev_group {
 	uint64_t qos_limits_usr_cfg[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	bool qos_mod_in_progress;
 	bool qos_reset_limits_in_progress;
-	uint32_t ref;
 	char *name;
 	TAILQ_HEAD(, spdk_bdev_node) bdevs;
 	struct spdk_spinlock spinlock;
@@ -8147,24 +8146,6 @@ bdev_group_start_qos(struct spdk_bdev_group *group)
 }
 
 static void
-bdev_group_open(struct spdk_bdev_group *group)
-{
-	int rc;
-
-	spdk_spin_lock(&group->spinlock);
-
-	rc = bdev_group_start_qos(group);
-	if (rc) {
-		SPDK_WARNLOG("Failed to start group QoS for %s\n", group->name);
-		/* TODO: Error processing for this case. */
-	}
-
-	group->ref++;
-
-	spdk_spin_unlock(&group->spinlock);
-}
-
-static void
 log_already_claimed(enum spdk_log_level level, const int line, const char *func, const char *detail,
 		    struct spdk_bdev *bdev)
 {
@@ -8240,10 +8221,6 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 		SPDK_ERRLOG("Failed to start QoS on bdev %s\n", bdev->name);
 		spdk_spin_unlock(&bdev->internal.spinlock);
 		return rc;
-	}
-
-	if (bdev->internal.group != NULL) {
-		bdev_group_open(bdev->internal.group);
 	}
 
 	TAILQ_INSERT_TAIL(&bdev->internal.open_descs, desc, link);
@@ -8574,24 +8551,6 @@ spdk_bdev_open_async(const char *bdev_name, bool write, spdk_bdev_event_cb_t eve
 }
 
 static void
-bdev_group_close(struct spdk_bdev_group *group)
-{
-	spdk_spin_lock(&group->spinlock);
-
-	assert(group->ref > 0);
-	group->ref--;
-
-	if (group->qos != NULL && group->ref == 0) {
-		SPDK_DEBUGLOG(bdev, "Released last ref for group %s. Stopping QoS.\n",
-			      group->name);
-		bdev_qos_destroy(group->qos);
-		group->qos = NULL;
-	}
-
-	spdk_spin_unlock(&group->spinlock);
-}
-
-static void
 bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 {
 	int rc;
@@ -8621,10 +8580,6 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 
 		bdev_qos_destroy(bdev->internal.qos);
 		bdev->internal.qos = NULL;
-	}
-
-	if (bdev->internal.group != NULL) {
-		bdev_group_close(bdev->internal.group);
 	}
 
 	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING && TAILQ_EMPTY(&bdev->internal.open_descs)) {
@@ -10898,6 +10853,12 @@ spdk_bdev_group_add_bdev(struct spdk_bdev_group *group, const char *bdev_name,
 	ctx->cb_arg = cb_arg;
 	ctx->node->desc = desc;
 
+	rc = bdev_group_start_qos(group);
+	if (rc) {
+		SPDK_WARNLOG("Failed to start group QoS for %s\n", group->name);
+		/* TODO: Error processing for this case. */
+	}
+
 	spdk_bdev_for_each_channel(bdev, bdev_group_add_bdev_msg, ctx,
 				   bdev_group_add_bdev_msg_done);
 }
@@ -10905,15 +10866,21 @@ spdk_bdev_group_add_bdev(struct spdk_bdev_group *group, const char *bdev_name,
 static void
 bdev_group_remove_node(struct spdk_bdev_group *group, struct spdk_bdev_node *node)
 {
-	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(node->desc);
+	struct spdk_bdev_desc *desc = node->desc;
+	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
 
 	bdev->internal.group = NULL;
 
-	spdk_bdev_close(node->desc);
-
 	TAILQ_REMOVE(&group->bdevs, node, link);
 
-	free(node);
+	if (group->qos != NULL && TAILQ_EMPTY(&group->bdevs)) {
+		SPDK_DEBUGLOG(bdev, "Released last ref for group %s. Stopping QoS.\n",
+			      group->name);
+		bdev_qos_destroy(group->qos);
+		group->qos = NULL;
+	}
+
+	spdk_thread_send_msg(node->desc->thread, bdev_node_delete, node);
 }
 
 struct bdev_group_remove_cb_ctx {
@@ -11208,6 +11175,8 @@ static void
 bdev_group_unregister_cb(void *io_device)
 {
 	struct spdk_bdev_group *group = io_device;
+
+	assert(TAILQ_EMPTY(&group->bdevs));
 
 	spdk_spin_destroy(&group->spinlock);
 	free(group->name);
