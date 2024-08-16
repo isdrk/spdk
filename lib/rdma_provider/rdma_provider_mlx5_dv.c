@@ -683,6 +683,15 @@ spdk_rdma_provider_memory_key_put_ref(void *mkey)
 {
 	spdk_mlx5_mkey_pool_obj_put_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
 }
+int
+spdk_rdma_provider_req_notify_cq(struct spdk_rdma_provider_cq *rdma_cq, int solicited_only)
+{
+	assert(rdma_cq);
+
+	struct mlx5_dv_cq *dv_cq = SPDK_CONTAINEROF(rdma_cq, struct mlx5_dv_cq, rdma_cq);
+
+	return spdk_mlx5_req_notify_cq(dv_cq->mlx5_cq, solicited_only);
+}
 
 uint32_t
 spdk_rdma_provider_memory_key_get_key(void *_mkey)
