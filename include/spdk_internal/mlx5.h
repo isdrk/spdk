@@ -449,6 +449,15 @@ int spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc
 int spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe);
 
 /**
+ * Request completion notification on Completion Queue
+ *
+ * \param cq Completion Queue
+ * \param solicited_only Notify on solicited CQE only
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_req_notify_cq(struct spdk_mlx5_cq *cq, int solicited_only);
+
+/**
  * Ring Send Queue doorbell, submits all previously posted WQEs to HW
  *
  * \param qp qpair pointer

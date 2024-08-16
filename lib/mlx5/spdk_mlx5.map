@@ -7,6 +7,7 @@
     spdk_mlx5_cq_poll_completions;
     spdk_mlx5_cq_poll_wc;
     spdk_mlx5_cq_resize;
+    spdk_mlx5_req_notify_cq;
 
 	spdk_mlx5_srq_create;
 	spdk_mlx5_srq_destroy;
