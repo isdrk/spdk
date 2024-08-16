@@ -136,6 +136,7 @@ struct spdk_thread {
 	struct spdk_ring		*messages;
 	uint8_t				num_pp_handlers;
 	int				msg_fd;
+	int				pp_fd;
 	SLIST_HEAD(, spdk_msg)		msg_cache;
 	size_t				msg_cache_count;
 	spdk_msg_fn			critical_msg;
@@ -2882,16 +2883,22 @@ thread_interrupt_destroy(struct spdk_thread *thread)
 
 	SPDK_INFOLOG(thread, "destroy fgrp for thread (%s)\n", thread->name);
 
-	if (thread->msg_fd < 0) {
-		return;
+	if (thread->msg_fd >= 0) {
+		spdk_fd_group_remove(fgrp, thread->msg_fd);
+		close(thread->msg_fd);
+		thread->msg_fd = -1;
 	}
 
-	spdk_fd_group_remove(fgrp, thread->msg_fd);
-	close(thread->msg_fd);
-	thread->msg_fd = -1;
+	if (thread->pp_fd >= 0) {
+		spdk_fd_group_remove(fgrp, thread->pp_fd);
+		close(thread->pp_fd);
+		thread->pp_fd = -1;
+	}
 
-	spdk_fd_group_destroy(fgrp);
-	thread->fgrp = NULL;
+	if (fgrp) {
+		spdk_fd_group_destroy(fgrp);
+		thread->fgrp = NULL;
+	}
 }
 
 #ifdef __linux__
@@ -2938,6 +2945,32 @@ thread_interrupt_msg_process(void *arg)
 }
 
 static int
+thread_interrupt_pp_process(void *arg)
+{
+	struct spdk_thread *thread = arg;
+	struct spdk_thread *orig_thread;
+	int rc = 0;
+	uint64_t notify = 1;
+
+	assert(spdk_interrupt_mode_is_enabled());
+
+	orig_thread = spdk_get_thread();
+	spdk_set_thread(thread);
+
+	rc = read(thread->pp_fd, &notify, sizeof(notify));
+	if (rc < 0 && errno != EAGAIN) {
+		SPDK_ERRLOG("failed to acknowledge pp event: %s.\n", spdk_strerror(errno));
+	}
+
+	if (thread->num_pp_handlers) {
+		thread_run_pp_handlers(thread);
+	}
+
+	spdk_set_thread(orig_thread);
+	return rc;
+}
+
+static int
 thread_interrupt_create(struct spdk_thread *thread)
 {
 	struct spdk_event_handler_opts opts = {};
@@ -2953,18 +2986,43 @@ thread_interrupt_create(struct spdk_thread *thread)
 
 	thread->msg_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 	if (thread->msg_fd < 0) {
-		rc = -errno;
-		spdk_fd_group_destroy(thread->fgrp);
-		thread->fgrp = NULL;
+		goto err_fgrp_destroy;
+	}
 
-		return rc;
+	thread->pp_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (thread->pp_fd < 0) {
+		goto err_msg_fd_close;
 	}
 
 	spdk_fd_group_get_default_event_handler_opts(&opts, sizeof(opts));
 	opts.fd_type = SPDK_FD_TYPE_EVENTFD;
 
-	return SPDK_FD_GROUP_ADD_EXT(thread->fgrp, thread->msg_fd,
-				     thread_interrupt_msg_process, thread, &opts);
+	rc = SPDK_FD_GROUP_ADD_EXT(thread->fgrp, thread->msg_fd,
+				   thread_interrupt_msg_process, thread, &opts);
+	if (rc) {
+		goto err_pp_fd_close;
+	}
+
+	rc = SPDK_FD_GROUP_ADD_EXT(thread->fgrp, thread->pp_fd,
+				   thread_interrupt_pp_process, thread, &opts);
+	if (rc) {
+		goto err_msg_fd_remove;
+	}
+
+	return 0;
+
+err_msg_fd_remove:
+	spdk_fd_group_remove(thread->fgrp, thread->msg_fd);
+err_pp_fd_close:
+	close(thread->pp_fd);
+	thread->pp_fd = -1;
+err_msg_fd_close:
+	close(thread->msg_fd);
+	thread->msg_fd = -1;
+err_fgrp_destroy:
+	spdk_fd_group_destroy(thread->fgrp);
+	thread->fgrp = NULL;
+	return rc;
 }
 #else
 static int
@@ -3417,6 +3475,22 @@ spdk_spin_held(struct spdk_spinlock *sspin)
 	return sspin->thread == thread;
 }
 
+static inline void
+thread_send_pp_notification(const struct spdk_thread *thread)
+{
+	uint64_t notify = 1;
+	int rc;
+
+	if (spdk_unlikely(spdk_interrupt_mode_is_enabled() && thread->in_interrupt)) {
+		rc = write(thread->pp_fd, &notify, sizeof(notify));
+		if (rc < 0) {
+			SPDK_ERRLOG("failed to notify pp handler: %s.\n", spdk_strerror(errno));
+			assert(false);
+			return;
+		}
+	}
+}
+
 void
 spdk_thread_register_post_poller_handler(spdk_post_poller_fn fn, void *fn_arg)
 {
@@ -3432,6 +3506,7 @@ spdk_thread_register_post_poller_handler(spdk_post_poller_fn fn, void *fn_arg)
 	thr->pp_handlers[thr->num_pp_handlers].fn = fn;
 	thr->pp_handlers[thr->num_pp_handlers].fn_arg = fn_arg;
 	thr->num_pp_handlers++;
+	thread_send_pp_notification(thr);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(thread)
