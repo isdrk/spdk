@@ -3363,6 +3363,219 @@ basic_bdev_group_qos_queue_io(void)
 	teardown_test();
 }
 
+static void
+ut_bdev_op_done(void *cb_arg, int status)
+{
+	int *_status = cb_arg;
+
+	*_status = status;
+}
+
+static void
+basic_two_level_qos_queue_io(void)
+{
+	struct spdk_io_channel *io_ch, *io_ch2;
+	struct spdk_bdev_channel *bdev_ch, *bdev_ch2;
+	struct spdk_bdev *bdev, *bdev2;
+	struct spdk_bdev_group *group;
+	struct bdev_qos_limits *bdev_limits, *bdev2_limits, *group_limits;
+	uint32_t qos_io_slice;
+	uint64_t limits_value[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+	int status, status2, status3;
+	int rc;
+
+	setup_test();
+
+	setup_bdev2(g_bdev.io_target);
+
+	bdev = &g_bdev.bdev;
+	bdev2 = spdk_bdev_desc_get_bdev(g_desc2);
+	SPDK_CU_ASSERT_FATAL(bdev2 != NULL);
+
+	qos_io_slice = g_bdev_opts.qos_io_slice;
+	g_bdev_opts.qos_io_slice = 1;
+
+	group = spdk_bdev_group_create("ut_group");
+	SPDK_CU_ASSERT_FATAL(group != NULL);
+
+	status = -1;
+	spdk_bdev_group_add_bdev(group, "ut_bdev", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	status = -1;
+	spdk_bdev_group_add_bdev(group, "ut_bdev2", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	/* 2000 read/write I/O per second */
+	limits_value[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
+	limits_value[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 0;
+	limits_value[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 0;
+	limits_value[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 0;
+
+	status = -1;
+	spdk_bdev_group_set_qos_rate_limits(group, limits_value, ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	SPDK_CU_ASSERT_FATAL(group->qos != NULL);
+
+	group_limits = &group->qos->limits;
+
+	status = -1;
+	spdk_bdev_set_qos_rate_limits(bdev, limits_value, ut_bdev_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
+
+	bdev_limits = &bdev->internal.qos->limits;
+
+	status = -1;
+	spdk_bdev_set_qos_rate_limits(bdev2, limits_value, ut_bdev_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	SPDK_CU_ASSERT_FATAL(bdev2->internal.qos != NULL);
+
+	bdev2_limits = &bdev2->internal.qos->limits;
+
+	set_thread(0);
+
+	io_ch = spdk_bdev_get_io_channel(g_desc);
+	SPDK_CU_ASSERT_FATAL(io_ch != NULL);
+
+	bdev_ch = spdk_io_channel_get_ctx(io_ch);
+	CU_ASSERT(bdev_ch->flags == (BDEV_CH_QOS_ENABLED | BDEV_CH_QOS_GROUP_ENABLED));
+
+	set_thread(1);
+
+	io_ch2 = spdk_bdev_get_io_channel(g_desc2);
+	SPDK_CU_ASSERT_FATAL(io_ch2 != NULL);
+
+	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
+	CU_ASSERT(bdev_ch2->flags == (BDEV_CH_QOS_ENABLED | BDEV_CH_QOS_GROUP_ENABLED));
+
+	/*
+	 * Reduce the limit of ut_bdev to -1 to queue I/O forcefully.
+	 *
+	 * Then, check if I/O to ut_bdev2 is not queued.
+	 */
+	bdev_limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice = 0;
+
+	status = SPDK_BDEV_IO_STATUS_PENDING;
+	rc = spdk_bdev_read_blocks(g_desc, io_ch, NULL, 0, 1, io_during_io_done, &status);
+	CU_ASSERT(rc == 0);
+
+	set_thread(0);
+	stub_complete_io(g_bdev.io_target, 1);
+	poll_threads();
+
+	/* I/O to ut_bdev should be queued. */
+	CU_ASSERT(status == SPDK_BDEV_IO_STATUS_PENDING);
+	CU_ASSERT(!TAILQ_EMPTY(&bdev->internal.qos->queued_io));
+
+	status2 = SPDK_BDEV_IO_STATUS_PENDING;
+	rc = spdk_bdev_read_blocks(g_desc2, io_ch2, NULL, 0, 1, io_during_io_done, &status2);
+	CU_ASSERT(rc == 0);
+
+	set_thread(1);
+	stub_complete_io(g_bdev.io_target, 1);
+	poll_threads();
+
+	/* I/O to ut_bdev2 should complete successfully. */
+	CU_ASSERT(status2 == SPDK_BDEV_IO_STATUS_SUCCESS);
+	CU_ASSERT(TAILQ_EMPTY(&bdev2->internal.qos->queued_io));
+
+	/* Advance to the next timeslice. */
+	spdk_delay_us(g_bdev_opts.qos_timeslice_us);
+
+	poll_thread_times(0, 1);
+
+	/* I/O to ut_bdev should move to the originating thread. */
+	CU_ASSERT(TAILQ_EMPTY(&bdev->internal.qos->queued_io));
+	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->qos_allowed_io));
+
+	poll_threads();
+
+	set_thread(0);
+	stub_complete_io(g_bdev.io_target, 1);
+	poll_threads();
+
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->qos_allowed_io));
+	CU_ASSERT(status == SPDK_BDEV_IO_STATUS_SUCCESS);
+
+	/*
+	 * If bdev QoS is passed but group QoS is blocked, the I/O should be in
+	 * the group QoS queue. In this case, quota rewind should not happend.
+	 */
+	bdev2_limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice = 1;
+	group_limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice = 0;
+
+	status3 = SPDK_BDEV_IO_STATUS_PENDING;
+	rc = spdk_bdev_read_blocks(g_desc2, io_ch2, NULL, 0, 1, io_during_io_done, &status3);
+	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(TAILQ_EMPTY(&bdev2->internal.qos->queued_io));
+	CU_ASSERT(!TAILQ_EMPTY(&group->qos->queued_io));
+	CU_ASSERT(bdev2_limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice ==
+		  0);
+	CU_ASSERT(group_limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice ==
+		  0);
+
+	/* Advance to the next timeslice. */
+	spdk_delay_us(g_bdev_opts.qos_timeslice_us);
+
+	poll_threads();
+
+	set_thread(1);
+	stub_complete_io(g_bdev.io_target, 1);
+	poll_threads();
+
+	CU_ASSERT(TAILQ_EMPTY(&group->qos->queued_io));
+	CU_ASSERT(status3 == SPDK_BDEV_IO_STATUS_SUCCESS);
+
+	/* Tear down the channels */
+	set_thread(0);
+	spdk_put_io_channel(io_ch);
+	set_thread(1);
+	spdk_put_io_channel(io_ch2);
+	poll_threads();
+
+	/* Remove two bdevs from the group. */
+	status = -1;
+	spdk_bdev_group_remove_bdev(group, "ut_bdev", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	status = -1;
+	spdk_bdev_group_remove_bdev(group, "ut_bdev2", ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	/* QoS should be deleted. */
+	CU_ASSERT(group->qos == NULL);
+
+	status = -1;
+	spdk_bdev_group_destroy(group, ut_group_op_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	set_thread(0);
+
+	g_bdev_opts.qos_io_slice = qos_io_slice;
+
+	teardown_bdev2();
+	poll_threads();
+	teardown_test();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3401,6 +3614,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, basic_bdev_group);
 	CU_ADD_TEST(suite, basic_bdev_group_qos);
 	CU_ADD_TEST(suite, basic_bdev_group_qos_queue_io);
+	CU_ADD_TEST(suite, basic_two_level_qos_queue_io);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();
