@@ -446,7 +446,8 @@ static int bdev_unlock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_cha
 				 uint64_t offset, uint64_t length,
 				 lock_range_cb cb_fn, void *cb_arg);
 
-static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort);
+static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
+				 struct spdk_bdev_io *bio_to_abort);
 static bool bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *ch, struct spdk_bdev_io *bio_to_abort);
 
 static bool claim_type_is_v2(enum spdk_bdev_claim_type type);
@@ -2587,7 +2588,7 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 		struct spdk_bdev_mgmt_channel *mgmt_channel = shared_resource->mgmt_ch;
 		struct spdk_bdev_io *bio_to_abort = bdev_io->u.abort.bio_to_abort;
 
-		if (bdev_abort_queued_io(&shared_resource->nomem_io, bio_to_abort) ||
+		if (bdev_abort_queued_io(&shared_resource->nomem_io, bdev_ch, bio_to_abort) ||
 		    bdev_abort_buf_io(mgmt_channel, bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io,
 						    SPDK_BDEV_IO_STATUS_SUCCESS);
@@ -3364,7 +3365,7 @@ _bdev_io_submit(void *ctx)
 		_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_ABORTED);
 	} else if (bdev_ch->flags & (BDEV_CH_QOS_ENABLED | BDEV_CH_QOS_GROUP_ENABLED)) {
 		if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_ABORT) &&
-		    bdev_abort_queued_io(&bdev_ch->qos_queued_io, bdev_io->u.abort.bio_to_abort)) {
+		    bdev_abort_queued_io(&bdev_ch->qos_queued_io, bdev_ch, bdev_io->u.abort.bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 		} else {
 			if (!bdev_qos_queue_io(bdev_ch, bdev_io)) {
@@ -4338,13 +4339,23 @@ bdev_abort_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
 }
 
 static bool
-bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort)
+bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
+		     struct spdk_bdev_io *bio_to_abort)
 {
 	struct spdk_bdev_io *bdev_io;
 
 	TAILQ_FOREACH(bdev_io, queue, internal.link) {
 		if (bdev_io == bio_to_abort) {
 			TAILQ_REMOVE(queue, bio_to_abort, internal.link);
+			/*
+			 * spdk_bdev_io_complete() assumes that the completed I/O had
+			 *  been submitted to the bdev module.  Since in this case it
+			 *  hadn't, bump io_outstanding to account for the decrement
+			 *  that spdk_bdev_io_complete() will do.
+			 */
+			if (bdev_io->type != SPDK_BDEV_IO_TYPE_RESET) {
+				bdev_io_increment_outstanding(ch, ch->shared_resource);
+			}
 			spdk_bdev_io_complete(bio_to_abort, SPDK_BDEV_IO_STATUS_ABORTED);
 			return true;
 		}
