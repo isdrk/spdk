@@ -114,7 +114,7 @@ iscsi_poll_group_add_conn(struct spdk_iscsi_poll_group *pg, struct spdk_iscsi_co
 {
 	int rc;
 
-	rc = spdk_sock_group_add_sock(pg->sock_group, conn->sock, conn);
+	rc = spdk_sock_group_add_sock(pg->sock_group, conn->sock);
 	if (rc < 0) {
 		SPDK_ERRLOG("Failed to add sock=%p of conn=%p\n", conn->sock, conn);
 		return;
@@ -219,6 +219,8 @@ iscsi_conn_construct(struct spdk_iscsi_portal *portal,
 	TAILQ_INIT(&conn->active_r2t_tasks);
 	TAILQ_INIT(&conn->queued_datain_tasks);
 	TAILQ_INIT(&conn->luns);
+
+	spdk_sock_set_user_ctx(sock, conn);
 
 	rc = spdk_sock_getaddr(sock, conn->target_addr, sizeof conn->target_addr, NULL,
 			       conn->initiator_addr, sizeof conn->initiator_addr, NULL);

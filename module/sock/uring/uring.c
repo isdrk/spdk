@@ -570,13 +570,15 @@ retry:
 }
 
 static struct spdk_sock *
-uring_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
+uring_sock_listen(const char *ip, int port,  struct spdk_sock_group_impl *group,
+		  struct spdk_sock_opts *opts)
 {
 	return uring_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts);
 }
 
 static struct spdk_sock *
-uring_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
+uring_sock_connect(const char *ip, int port,  struct spdk_sock_group_impl *group,
+		   struct spdk_sock_opts *opts)
 {
 	return uring_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts);
 }
@@ -629,7 +631,7 @@ uring_sock_accept(struct spdk_sock *_sock)
 }
 
 static int
-uring_sock_close(struct spdk_sock *_sock)
+uring_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock)
 {
 	struct spdk_uring_sock *sock = __uring_sock(_sock);
 
