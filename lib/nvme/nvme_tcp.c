@@ -2445,7 +2445,7 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 	if (qpair->poll_group) {
 		tgroup = nvme_tcp_poll_group(qpair->poll_group);
 
-		rc = spdk_sock_group_add_sock(tgroup->sock_group, tqpair->sock, nvme_tcp_qpair_sock_cb, qpair);
+		rc = spdk_sock_group_add_sock(tgroup->sock_group, tqpair->sock, qpair);
 		if (rc) {
 			SPDK_ERRLOG("Unable to activate the tcp qpair.\n");
 			return rc;
@@ -2759,7 +2759,8 @@ nvme_tcp_poll_group_create(void)
 	struct spdk_sock_group_opts opts = {
 		.size = sizeof(opts),
 		.ctx = group,
-		.interrupt = false
+		.interrupt = false,
+		.rx_cb = nvme_tcp_qpair_sock_cb
 	};
 	int rc;
 

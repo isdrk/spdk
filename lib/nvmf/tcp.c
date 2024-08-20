@@ -1057,8 +1057,9 @@ nvmf_tcp_create(struct spdk_nvmf_transport_opts *opts)
 
 	spdk_poller_register_interrupt(ttransport->accept_poller, NULL, NULL);
 
-	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, interrupt);
+	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, rx_cb);
 	sgroup_opts.interrupt = spdk_interrupt_mode_is_enabled();
+	sgroup_opts.rx_cb = nvmf_tcp_accept_cb;
 	ttransport->listen_sock_group = spdk_sock_group_create(&sgroup_opts);
 	if (ttransport->listen_sock_group == NULL) {
 		SPDK_ERRLOG("Failed to create socket group for listen sockets\n");
@@ -1296,8 +1297,7 @@ nvmf_tcp_listen(struct spdk_nvmf_transport *transport, const struct spdk_nvme_tr
 		return -EINVAL;
 	}
 
-	rc = spdk_sock_group_add_sock(ttransport->listen_sock_group, port->listen_sock, nvmf_tcp_accept_cb,
-				      port);
+	rc = spdk_sock_group_add_sock(ttransport->listen_sock_group, port->listen_sock, port);
 	if (rc < 0) {
 		SPDK_ERRLOG("Failed to add socket to the listen socket group\n");
 		spdk_sock_close(&port->listen_sock);
@@ -1928,6 +1928,8 @@ nvmf_tcp_control_msg_list_free(struct spdk_nvmf_tcp_control_msg_list *list)
 	free(list);
 }
 
+static void nvmf_tcp_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock);
+
 static struct spdk_nvmf_transport_poll_group *
 nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 			   struct spdk_nvmf_poll_group *group)
@@ -1941,9 +1943,10 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 		return NULL;
 	}
 
-	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, interrupt);
+	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, rx_cb);
 	sgroup_opts.ctx = &tgroup->group;
 	sgroup_opts.interrupt = spdk_interrupt_mode_is_enabled();
+	sgroup_opts.rx_cb = nvmf_tcp_sock_cb;
 	tgroup->sock_group = spdk_sock_group_create(&sgroup_opts);
 	if (!tgroup->sock_group) {
 		goto cleanup;
@@ -3636,8 +3639,7 @@ nvmf_tcp_poll_group_add(struct spdk_nvmf_transport_poll_group *group,
 		return -1;
 	}
 
-	rc = spdk_sock_group_add_sock(tgroup->sock_group, tqpair->sock,
-				      nvmf_tcp_sock_cb, tqpair);
+	rc = spdk_sock_group_add_sock(tgroup->sock_group, tqpair->sock, tqpair);
 	if (rc != 0) {
 		SPDK_ERRLOG("Could not add sock to sock_group: %s (%d)\n",
 			    spdk_strerror(errno), errno);

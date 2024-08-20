@@ -666,7 +666,7 @@ iscsi_fuzz_conn_reset(struct spdk_iscsi_conn *conn, struct spdk_iscsi_sess *sess
 }
 
 static void
-iscsi_conn_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
+iscsi_fuzz_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
 {
 	struct spdk_iscsi_conn *conn = arg;
 
@@ -701,7 +701,7 @@ iscsi_fuzz_sock_connect(struct spdk_iscsi_conn *conn, struct spdk_sock_group *gr
 		return;
 	}
 
-	rc = spdk_sock_group_add_sock(group, conn->sock, iscsi_conn_sock_cb, conn);
+	rc = spdk_sock_group_add_sock(group, conn->sock, conn);
 	if (rc < 0) {
 		fprintf(stderr, "Cannot add socket to group\n");
 		spdk_sock_close(&conn->sock);
@@ -936,7 +936,8 @@ start_io(void *ctx)
 	struct spdk_sock_group_opts opts = {
 		.size = sizeof(opts),
 		.ctx = dev_ctx,
-		.interrupt = false
+		.interrupt = false,
+		.rx_cb = iscsi_fuzz_sock_cb
 	};
 
 	dev_ctx->sess.ExpCmdSN = 0;
