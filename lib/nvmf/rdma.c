@@ -425,6 +425,8 @@ struct spdk_nvmf_rdma_poller {
 	int					num_cqe;
 	int					required_num_wr;
 	struct spdk_rdma_provider_cq		*cq;
+	struct ibv_comp_channel			*comp_channel;
+	struct spdk_interrupt			*interrupt;
 
 	/* The maximum number of I/O outstanding on the shared receive queue at one time */
 	uint16_t				max_srq_depth;
@@ -587,6 +589,9 @@ static int nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_
 		spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg);
 
 static int nvmf_rdma_request_free(struct spdk_nvmf_request *req);
+
+static int nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
+				 struct spdk_nvmf_rdma_poller *rpoller);
 
 static inline enum spdk_nvme_media_error_status_code
 nvmf_rdma_dif_error_to_compl_status(uint8_t err_type) {
@@ -4549,6 +4554,31 @@ nvmf_rdma_discover(struct spdk_nvmf_transport *transport,
 }
 
 static int
+nvmf_rdma_poller_interrupt(void *ctx)
+{
+	struct spdk_nvmf_rdma_poller *poller = ctx;
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct ibv_cq *ev_cq;
+	void *ev_ctx;
+
+	if (ibv_get_cq_event(poller->comp_channel, &ev_cq, &ev_ctx)) {
+		SPDK_ERRLOG("Failed to get cq_event\n");
+		return 0;
+	}
+
+	SPDK_DEBUGLOG(rdma, "Received CQ event\n");
+	ibv_ack_cq_events(ev_cq, 1);
+	if (spdk_rdma_provider_req_notify_cq(poller->cq, 0)) {
+		SPDK_ERRLOG("Couldn't request CQ notification\n");
+		return -1;
+	}
+
+	rtransport = SPDK_CONTAINEROF(poller->group->group.transport, struct spdk_nvmf_rdma_transport,
+				      transport);
+	return nvmf_rdma_poller_poll(rtransport, poller);
+}
+
+static int
 nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 			struct spdk_nvmf_rdma_poll_group *rgroup, struct spdk_nvmf_rdma_device *device,
 			struct spdk_nvmf_rdma_poller **out_poller)
@@ -4558,6 +4588,8 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	struct spdk_nvmf_rdma_resource_opts	opts;
 	int					num_cqe;
 	struct spdk_rdma_provider_cq_init_attr	cq_init_attr;
+	int					flags;
+	int					rc;
 
 	poller = calloc(1, sizeof(*poller));
 	if (!poller) {
@@ -4609,6 +4641,30 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 	}
 
+	if (spdk_interrupt_mode_is_enabled()) {
+		poller->comp_channel = ibv_create_comp_channel(device->context);
+		if (!poller->comp_channel) {
+			SPDK_ERRLOG("Unable to create completion channel\n");
+			return -1;
+		}
+
+		flags = fcntl(poller->comp_channel->fd, F_GETFL);
+		rc = fcntl(poller->comp_channel->fd, F_SETFL, flags | O_NONBLOCK);
+		if (rc < 0) {
+			SPDK_ERRLOG("Failed to change completion channel fd to NONBLOCK mode\n");
+			return -1;
+		}
+
+		SPDK_NOTICELOG("Created comp channel %p, fd %d, max number of comp vectors %d\n",
+			       poller->comp_channel, poller->comp_channel->fd, device->context->num_comp_vectors);
+		poller->interrupt = SPDK_INTERRUPT_REGISTER(poller->comp_channel->fd,
+				    nvmf_rdma_poller_interrupt, poller);
+		if (!poller->interrupt) {
+			SPDK_ERRLOG("Failed to regiter interrupt\n");
+			return -1;
+		}
+	}
+
 	/*
 	 * When using an srq, we can limit the completion queue at startup.
 	 * The following formula represents the calculation:
@@ -4624,7 +4680,7 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	cq_init_attr.cqe		= num_cqe;
 	cq_init_attr.comp_vector	= 0;
 	cq_init_attr.cq_context		= poller;
-	cq_init_attr.comp_channel	= NULL;
+	cq_init_attr.comp_channel	= poller->comp_channel;
 	cq_init_attr.pd			= device->pd;
 
 	poller->cq = spdk_rdma_provider_cq_create(&cq_init_attr);
@@ -4633,6 +4689,13 @@ nvmf_rdma_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		return -1;
 	}
 	poller->num_cqe = num_cqe;
+	if (spdk_interrupt_mode_is_enabled()) {
+		if (spdk_rdma_provider_req_notify_cq(poller->cq, 0)) {
+			SPDK_ERRLOG("Couldn't request CQ notification\n");
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
@@ -4666,11 +4729,6 @@ nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport,
 	struct spdk_nvmf_rdma_poller		*poller;
 	struct spdk_nvmf_rdma_device		*device;
 	int					rc;
-
-	if (spdk_interrupt_mode_is_enabled()) {
-		SPDK_ERRLOG("RDMA transport does not support interrupt mode\n");
-		return NULL;
-	}
 
 	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
 
@@ -4784,6 +4842,7 @@ static void
 nvmf_rdma_poller_destroy(struct spdk_nvmf_rdma_poller *poller)
 {
 	struct spdk_nvmf_rdma_qpair	*qpair, *tmp_qpair;
+	int rc;
 
 	TAILQ_REMOVE(&poller->group->pollers, poller, link);
 	RB_FOREACH_SAFE(qpair, qpairs_tree, &poller->qpairs, tmp_qpair) {
@@ -4800,6 +4859,14 @@ nvmf_rdma_poller_destroy(struct spdk_nvmf_rdma_poller *poller)
 
 	if (poller->cq) {
 		spdk_rdma_provider_cq_destroy(poller->cq);
+	}
+
+	spdk_interrupt_unregister(&poller->interrupt);
+	if (poller->comp_channel) {
+		rc = ibv_destroy_comp_channel(poller->comp_channel);
+		if (rc != 0) {
+			SPDK_ERRLOG("Destroy comp channel return %d, error: %s\n", rc, strerror(errno));
+		}
 	}
 
 	if (poller->destroy_cb) {
