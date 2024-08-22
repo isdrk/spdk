@@ -3689,6 +3689,23 @@ spdk_bdev_dump_info_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w)
 }
 
 static void
+bdev_qos_for_each_cache(struct spdk_bdev_qos *qos, void *io_device,
+			spdk_channel_msg_fn msg_fn)
+{
+	struct spdk_bdev_qos_cache *qos_cache;
+
+	TAILQ_FOREACH(qos_cache, &qos->cache_list, tailq) {
+		spdk_io_channel_send_msg(qos_cache->thread, io_device, msg_fn, NULL);
+	}
+
+	qos_cache = TAILQ_LAST(&qos->cache_list, qos_cache_list);
+	if (qos_cache != NULL) {
+		TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
+		TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
+	}
+}
+
+static void
 bdev_ch_retry_qos_queued_io(struct spdk_io_channel *ch, void *ctx)
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
@@ -3704,21 +3721,9 @@ static void
 bdev_retry_qos_queued_io(struct spdk_bdev *bdev)
 {
 	struct spdk_bdev_qos *qos = bdev->internal.qos;
-	struct spdk_bdev_qos_cache *qos_cache;
 
 	spdk_spin_lock(&bdev->internal.spinlock);
-
-	TAILQ_FOREACH(qos_cache, &qos->cache_list, tailq) {
-		spdk_io_channel_send_msg(qos_cache->thread, __bdev_to_io_dev(bdev),
-					 bdev_ch_retry_qos_queued_io, NULL);
-	}
-
-	qos_cache = TAILQ_LAST(&qos->cache_list, qos_cache_list);
-	if (qos_cache != NULL) {
-		TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
-		TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
-	}
-
+	bdev_qos_for_each_cache(qos, __bdev_to_io_dev(bdev), bdev_ch_retry_qos_queued_io);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 }
 
@@ -3741,21 +3746,9 @@ static void
 bdev_group_retry_qos_queued_io(struct spdk_bdev_group *group)
 {
 	struct spdk_bdev_qos *qos = group->qos;
-	struct spdk_bdev_qos_cache *qos_cache;
 
 	spdk_spin_lock(&group->spinlock);
-
-	TAILQ_FOREACH(qos_cache, &qos->cache_list, tailq) {
-		spdk_io_channel_send_msg(qos_cache->thread, group,
-					 bdev_group_ch_retry_qos_queued_io, NULL);
-	}
-
-	qos_cache = TAILQ_LAST(&qos->cache_list, qos_cache_list);
-	if (qos_cache != NULL) {
-		TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
-		TAILQ_INSERT_HEAD(&qos->cache_list, qos_cache, tailq);
-	}
-
+	bdev_qos_for_each_cache(qos, group, bdev_group_ch_retry_qos_queued_io);
 	spdk_spin_unlock(&group->spinlock);
 }
 
