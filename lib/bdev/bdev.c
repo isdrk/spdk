@@ -9432,10 +9432,23 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 }
 
 static void
-bdev_update_qos_rate_limit_msg(void *cb_arg)
+bdev_update_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
+		    struct spdk_io_channel *ch, void *_ctx)
 {
-	struct set_qos_limit_ctx *ctx = cb_arg;
-	struct spdk_bdev *bdev = ctx->bdev;
+	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+
+	if (bdev_ch->qos_cache != NULL) {
+		bdev_qos_limits_cache_init(&bdev_ch->qos_cache->limits,
+					   &bdev_ch->qos_cache->qos->limits);
+	}
+
+	spdk_bdev_for_each_channel_continue(i, 0);
+}
+
+static void
+bdev_update_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
+{
+	struct set_qos_limit_ctx *ctx = _ctx;
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	bdev_qos_limits_update_max_quota_per_timeslice(&bdev->internal.qos->limits);
@@ -9523,8 +9536,8 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 						   bdev_enable_qos_done);
 		} else {
 			/* Updating the limits */
-			spdk_thread_send_msg(spdk_io_channel_get_thread(bdev->internal.qos->ch),
-					     bdev_update_qos_rate_limit_msg, ctx);
+			spdk_bdev_for_each_channel(bdev, bdev_update_qos_msg, ctx,
+						   bdev_update_qos_msg_done);
 		}
 	}  else	if (bdev->internal.qos != NULL) {
 		bdev_update_qos_rate_limits(bdev, new_limits);
