@@ -37,6 +37,17 @@ struct bdev_qos_limit {
 
 	/** Slice of IOs or bytes allocated from the global pool. */
 	uint32_t slice_per_borrow;
+
+	/** Function to check whether to queue the IO.
+	 * If The IO is allowed to pass, the quota will be reduced correspondingly.
+	 */
+	bool (*queue_io)(struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
+
+	/** Function to rewind the quota once the IO was allowed to be sent by this
+	 * limit but queued due to one of the further limits.
+	 */
+	void (*rewind_quota)(struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
+
 };
 
 struct bdev_qos_limit_cache {
@@ -79,13 +90,12 @@ void bdev_qos_limits_update_max_quota_per_timeslice(
 bool bdev_qos_limits_cache_queue_io(struct bdev_qos_limits_cache *cache,
 				    struct bdev_qos_limits *limits,
 				    struct spdk_bdev_io *bdev_io);
+bool bdev_qos_limits_queue_io(struct bdev_qos_limits *limits,
+			      struct spdk_bdev_io *bdev_io);
 void bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits,
 				 uint64_t now,
 				 uint64_t timeslice_size,
 				 uint64_t *last_timeslice);
-void bdev_qos_limits_cache_rewind(struct bdev_qos_limits_cache *caches,
-				  struct bdev_qos_limits *limits,
-				  struct spdk_bdev_io *bdev_io);
 bool bdev_qos_limits_check_disabled(const uint64_t *limits);
 
 #endif /* SPDK_BDEV_QOS_LIMIT_H */
