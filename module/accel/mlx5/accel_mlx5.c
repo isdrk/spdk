@@ -73,6 +73,7 @@ enum accel_mlx5_opcode {
 	ACCEL_MLX5_OPC_COPY,
 	ACCEL_MLX5_OPC_CRYPTO,
 	ACCEL_MLX5_OPC_CRYPTO_MKEY,
+	ACCEL_MLX5_OPC_MKEY,
 	ACCEL_MLX5_OPC_CRC32C,
 	ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C,
 	ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT,
@@ -80,6 +81,7 @@ enum accel_mlx5_opcode {
 };
 
 struct accel_mlx5_stats {
+	uint64_t umrs;
 	uint64_t crypto_umrs;
 	uint64_t sig_umrs;
 	uint64_t sig_crypto_umrs;
@@ -379,6 +381,8 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 			   task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, task->mkeys, task->num_ops);
 			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
+		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_MKEY) {
+			spdk_mlx5_mkey_pool_put_bulk(dev->mkeys, task->mkeys, task->num_ops);
 		}
 	}
 	next = spdk_accel_sequence_next_task(&task->base);
@@ -3065,6 +3069,132 @@ accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 	}
 }
 
+static inline int
+accel_mlx5_mkey_task_init(struct accel_mlx5_task *mlx5_task)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
+
+	assert(g_accel_mlx5.attr.enable_driver);
+
+	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
+		/* With `external mkey` we can't split task or register several UMRs */
+		SPDK_ERRLOG("src buffer is too fragmented\n");
+		return -EINVAL;
+	}
+	if (spdk_unlikely(task->src_domain == spdk_accel_get_memory_domain())) {
+		SPDK_ERRLOG("accel domain is not supported\n");
+		return -EINVAL;
+	}
+	if (spdk_unlikely(spdk_accel_sequence_next_task(task) != NULL)) {
+		SPDK_ERRLOG("Mkey registartion is only supported for single task\n");
+		return -ENOTSUP;
+	}
+
+	accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
+	mlx5_task->num_reqs = 1;
+
+	rc = spdk_mlx5_mkey_pool_get_bulk(dev->mkeys, mlx5_task->mkeys, 1);
+	if (spdk_unlikely(rc)) {
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		return -ENOMEM;
+	}
+	mlx5_task->num_ops = 1;
+	if (spdk_unlikely(qp_slot == 0)) {
+		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
+		return -ENOMEM;
+	}
+
+	SPDK_DEBUGLOG(accel_mlx5, "mkey task num_blocks %u, src_len %zu\n", mlx5_task->num_reqs,
+		      task->nbytes);
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
+{
+	struct spdk_mlx5_umr_attr umr_attr;
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	uint32_t remaining = 0;
+	int rc;
+
+	if (spdk_unlikely(!mlx5_task->num_ops)) {
+		return -EINVAL;
+	}
+	SPDK_DEBUGLOG(accel_mlx5, "begin, task %p, dst_domain_ctx %p\n", mlx5_task, task->dst_domain_ctx);
+
+	mlx5_task->num_wrs = 0;
+
+	rc = accel_mlx5_fill_block_sge(qp, src_sge, &mlx5_task->src, task->src_domain, task->src_domain_ctx,
+				       0, task->nbytes, &remaining);
+	if (spdk_unlikely(rc <= 0 || remaining)) {
+		rc = rc ? rc : -EINVAL;
+		SPDK_ERRLOG("Failed to set src sge, rc %d, remaining %u\n", rc, remaining);
+		return rc;
+	}
+	umr_attr.mkey = mlx5_task->mkeys[0]->mkey;
+	umr_attr.sge = src_sge;
+	umr_attr.sge_count = rc;
+	umr_attr.umr_len = task->nbytes;
+
+	rc = spdk_mlx5_umr_configure(qp->qp, &umr_attr, (uint64_t)mlx5_task,
+				     SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
+	if (spdk_unlikely(rc)) {
+		SPDK_ERRLOG("UMR configure failed with %d\n", rc);
+		return rc;
+	}
+	dev->stats.umrs++;
+	mlx5_task->num_submitted_reqs++;
+	ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED_SIGNALED(dev, qp, mlx5_task);
+	STAILQ_INSERT_TAIL(&qp->in_hw, mlx5_task, link);
+
+	SPDK_DEBUGLOG(accel_mlx5, "end, task %p, dst_domain_ctx %p\n", mlx5_task, task->dst_domain_ctx);
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_mkey_task_continue(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
+
+	if (mlx5_task->num_ops == 0) {
+		rc = spdk_mlx5_mkey_pool_get_bulk(dev->mkeys, mlx5_task->mkeys, 1);
+		if (spdk_unlikely(rc)) {
+			accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+			return -ENOMEM;
+		}
+		mlx5_task->num_ops = 1;
+	}
+	if (spdk_unlikely(qp_slot == 0)) {
+		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
+		return -ENOMEM;
+	}
+	return accel_mlx5_mkey_task_process(mlx5_task);
+}
+
+static inline void
+accel_mlx5_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+
+	assert(mlx5_task->num_ops);
+	assert(mlx5_task->base.seq);
+
+	spdk_mlx5_mkey_pool_put_bulk(dev->mkeys, mlx5_task->mkeys, 1);
+	spdk_accel_task_complete(&mlx5_task->base, 0);
+}
+
 static int
 accel_mlx5_task_op_not_implemented(struct accel_mlx5_task *mlx5_task)
 {
@@ -3105,6 +3235,12 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 		.process = accel_mlx5_crypto_mkey_task_process,
 		.cont = accel_mlx5_crypto_mkey_task_continue,
 		.complete = accel_mlx5_crypto_mkey_task_complete,
+	},
+	[ACCEL_MLX5_OPC_MKEY] = {
+		.init = accel_mlx5_mkey_task_init,
+		.process = accel_mlx5_mkey_task_process,
+		.cont = accel_mlx5_mkey_task_continue,
+		.complete = accel_mlx5_mkey_task_complete,
 	},
 	[ACCEL_MLX5_OPC_CRC32C] = {
 		.init = accel_mlx5_crc_task_init,
@@ -3529,6 +3665,7 @@ accel_mlx5_add_stats(struct accel_mlx5_stats *stats, const struct accel_mlx5_sta
 {
 	int i;
 
+	stats->umrs += to_add->umrs;
 	stats->crypto_umrs += to_add->crypto_umrs;
 	stats->sig_umrs += to_add->sig_umrs;
 	stats->sig_crypto_umrs += to_add->sig_crypto_umrs;
@@ -4428,11 +4565,12 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 	spdk_json_write_named_object_begin(w, header);
 
 	spdk_json_write_named_object_begin(w, "UMRs");
+	spdk_json_write_named_uint64(w, "umrs", stats->umrs);
 	spdk_json_write_named_uint64(w, "crypto_umrs", stats->crypto_umrs);
 	spdk_json_write_named_uint64(w, "sig_umrs", stats->sig_umrs);
 	spdk_json_write_named_uint64(w, "sig_crypto_umrs", stats->sig_crypto_umrs);
 	spdk_json_write_named_uint64(w, "total",
-				     stats->crypto_umrs + stats->sig_umrs + stats->sig_crypto_umrs);
+				     stats->crypto_umrs + stats->sig_umrs + stats->sig_crypto_umrs + stats->umrs);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_named_object_begin(w, "RDMA");
@@ -4455,6 +4593,7 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 	spdk_json_write_named_uint64(w, "copy", stats->opcodes[ACCEL_MLX5_OPC_COPY]);
 	spdk_json_write_named_uint64(w, "crypto", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO]);
 	spdk_json_write_named_uint64(w, "crypto_mkey", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_MKEY]);
+	spdk_json_write_named_uint64(w, "mkey", stats->opcodes[ACCEL_MLX5_OPC_MKEY]);
 	spdk_json_write_named_uint64(w, "crc32c", stats->opcodes[ACCEL_MLX5_OPC_CRC32C]);
 	spdk_json_write_named_uint64(w, "encrypt_crc", stats->opcodes[ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C]);
 	spdk_json_write_named_uint64(w, "crc_decrypt", stats->opcodes[ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT]);
@@ -4795,6 +4934,24 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 	int rc;
 
 	/* Handle tasks which require special processing, e.g. merge */
+	if (!next_base) {
+		if (first_base->op_code == SPDK_ACCEL_OPC_COPY && first_base->dst_domain &&
+		    spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
+		    SPDK_DMA_DEVICE_TYPE_RDMA &&
+		    accel_mlx5_compare_iovs(first_base->d.iovs, first_base->s.iovs, first_base->s.iovcnt)) {
+			SPDK_DEBUGLOG(accel_mlx5, "MKEY task %p\n", first);
+			rc = accel_mlx5_task_assign_qp_by_domain_pd(first, accel_ch, first_base->dst_domain);
+			if (spdk_unlikely(rc)) {
+				return rc;
+			}
+			accel_mlx5_task_reset(first);
+			first->mlx5_opcode = ACCEL_MLX5_OPC_MKEY;
+			first->needs_data_transfer = 1;
+			first->inplace = 1;
+			return 0;
+		}
+	}
+
 	switch (first_base->op_code) {
 	case SPDK_ACCEL_OPC_ENCRYPT:
 		assert(g_accel_mlx5.crypto_supported);
