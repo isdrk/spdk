@@ -4557,6 +4557,13 @@ struct spdk_nvme_transport_opts {
 	 * It is zero, which means unlimited, by default.
 	 */
 	uint32_t rdma_max_cq_size;
+
+	/**
+	 * It is used for RDMA transport.
+	 *
+	 * Configure UMR per IO request if supported by the system
+	 */
+	bool rdma_umr_per_io;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_transport_opts) == 32, "Incorrect size");
 

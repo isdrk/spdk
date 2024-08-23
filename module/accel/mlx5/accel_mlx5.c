@@ -839,7 +839,7 @@ accel_mlx5_memory_domain_transfer(struct accel_mlx5_task *task)
 	struct accel_mlx5_dev *dev = task->qp->dev;
 	int rc;
 
-	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY);
+	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY || task->mlx5_opcode == ACCEL_MLX5_OPC_MKEY);
 	/* UMR is an offset in the addess space, so the start address is 0 */
 	translation.iov.iov_base = NULL;
 	translation.iov.iov_len = base->nbytes;

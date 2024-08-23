@@ -585,7 +585,8 @@ if __name__ == "__main__":
                                        poll_group_requests=args.poll_group_requests,
                                        small_cache_size=args.small_cache_size,
                                        large_cache_size=args.large_cache_size,
-                                       rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms)
+                                       rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms,
+                                       rdma_umr_per_io=args.rdma_umr_per_io)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
                               help='Set options for the bdev nvme type. This is startup command.')
@@ -677,6 +678,12 @@ if __name__ == "__main__":
     p.add_argument('--large-cache-size', help='The number of large iobuf elements in cache. Default: 128', type=int)
     p.add_argument('--rdma-cm-event-timeout-ms',
                    help='Time to wait for RDMA CM event. Only applicable for RDMA transports.', type=int)
+    p.add_argument('--enable-rdma-umr-per-io',
+                   help='''Enable scatter-gather RDMA Memory Region per IO if supported by the system.''',
+                   action='store_true', dest='rdma_umr_per_io')
+    p.add_argument('--disable-rdma-umr-per-io',
+                   help='''Disable scatter-gather RDMA Memory Region per IO.''',
+                   action='store_false', dest='rdma_umr_per_io')
 
     p.set_defaults(func=bdev_nvme_set_options)
 

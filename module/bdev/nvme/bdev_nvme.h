@@ -349,6 +349,7 @@ struct spdk_bdev_nvme_opts {
 	uint32_t small_cache_size;
 	uint32_t large_cache_size;
 	uint16_t rdma_cm_event_timeout_ms;
+	bool rdma_umr_per_io;
 };
 
 struct spdk_nvme_qpair *bdev_nvme_get_io_qpair(struct spdk_io_channel *ctrlr_io_ch);

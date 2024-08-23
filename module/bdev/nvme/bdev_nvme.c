@@ -140,6 +140,7 @@ static struct spdk_bdev_nvme_opts g_opts = {
 	.poll_group_requests = 0,
 	.small_cache_size = BDEV_NVME_IOBUF_SMALL_CACHE_SIZE,
 	.large_cache_size = BDEV_NVME_IOBUF_LARGE_CACHE_SIZE,
+	.rdma_umr_per_io = false,
 };
 
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
@@ -6235,6 +6236,9 @@ bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts)
 		drv_opts.rdma_cm_event_timeout_ms = opts->rdma_cm_event_timeout_ms;
 	}
 
+	if (drv_opts.rdma_umr_per_io != opts->rdma_umr_per_io) {
+		drv_opts.rdma_umr_per_io = opts->rdma_umr_per_io;
+	}
 	ret = spdk_nvme_transport_set_opts(&drv_opts, sizeof(drv_opts));
 	if (ret) {
 		SPDK_ERRLOG("Failed to set NVMe transport opts.\n");
@@ -8856,6 +8860,7 @@ bdev_nvme_opts_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "large_cache_size", g_opts.large_cache_size);
 	spdk_json_write_named_uint32(w, "rdma_srq_size", g_opts.rdma_srq_size);
 	spdk_json_write_named_uint16(w, "rdma_cm_event_timeout_ms", g_opts.rdma_cm_event_timeout_ms);
+	spdk_json_write_named_bool(w, "rdma_umr_per_io", g_opts.rdma_umr_per_io);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);

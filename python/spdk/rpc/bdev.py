@@ -618,7 +618,7 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
                           transport_tos=None, nvme_error_stat=None, rdma_srq_size=None, io_path_stat=None,
                           allow_accel_sequence=None, rdma_max_cq_size=None,
                           poll_group_requests=None, small_cache_size=None, large_cache_size=None,
-                          rdma_cm_event_timeout_ms=None):
+                          rdma_cm_event_timeout_ms=None, rdma_umr_per_io=None):
     """Set options for the bdev nvme. This is startup command.
 
     Args:
@@ -670,6 +670,7 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         small_cache_size: The number of small iobuf elements in cache. Default: 128
         large_cache_size: The number of large iobuf elements in cache. Default: 128
         rdma_cm_event_timeout_ms: Time to wait for RDMA CM event. Only applicable for RDMA transports.
+        rdma_umr_per_io: Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system (optional).
 
     """
     params = {}
@@ -768,6 +769,8 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
     if rdma_cm_event_timeout_ms is not None:
         params['rdma_cm_event_timeout_ms'] = rdma_cm_event_timeout_ms
 
+    if rdma_umr_per_io is not None:
+        params['rdma_umr_per_io'] = rdma_umr_per_io
     return client.call('bdev_nvme_set_options', params)
 
 

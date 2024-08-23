@@ -4455,6 +4455,7 @@ allow_accel_sequence       | Optional | boolean     | Allow NVMe bdevs to advert
 disallow_accel_sequence    | Optional | boolean     | Disallow NVMe bdevs to advertise support for accel sequences even if the controller supports them. Default: `false`.
 rdma_max_cq_size           | Optional | number      | Set the maximum size of a rdma completion queue. Default: 0 (unlimited)
 poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
+rdma_umr_per_io            | Optional | boolean     | Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system
 
 #### Example
 
@@ -4475,7 +4476,8 @@ request:
     "keep_alive_timeout_ms": 600000,
     "action_on_timeout": "reset",
     "io_queue_requests" : 2048,
-    "delay_cmd_submit": true
+    "delay_cmd_submit": true,
+    "rdma_umr_per_io": false
   },
   "jsonrpc": "2.0",
   "method": "bdev_nvme_set_options",
