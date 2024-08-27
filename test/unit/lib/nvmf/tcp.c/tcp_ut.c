@@ -420,13 +420,10 @@ test_nvmf_tcp_create(void)
 	struct spdk_nvmf_transport *transport;
 	struct spdk_nvmf_tcp_transport *ttransport;
 	struct spdk_nvmf_transport_opts opts;
-	struct spdk_sock_group grp = {};
 
 	thread = spdk_thread_create(NULL, NULL);
 	SPDK_CU_ASSERT_FATAL(thread != NULL);
 	spdk_set_thread(thread);
-
-	MOCK_SET(spdk_sock_group_create_ext, &grp);
 
 	/* case 1 */
 	memset(&opts, 0, sizeof(opts));
@@ -484,8 +481,6 @@ test_nvmf_tcp_create(void)
 	transport = nvmf_tcp_create(&opts);
 	CU_ASSERT_PTR_NULL(transport);
 
-	MOCK_CLEAR_P(spdk_sock_group_create_ext);
-
 	spdk_thread_exit(thread);
 	while (!spdk_thread_is_exited(thread)) {
 		spdk_thread_poll(thread, 0, 0);
@@ -499,7 +494,6 @@ test_nvmf_tcp_destroy(void)
 	struct spdk_thread *thread;
 	struct spdk_nvmf_transport *transport;
 	struct spdk_nvmf_transport_opts opts;
-	struct spdk_sock_group grp = {};
 
 	thread = spdk_thread_create(NULL, NULL);
 	SPDK_CU_ASSERT_FATAL(thread != NULL);
@@ -514,9 +508,7 @@ test_nvmf_tcp_destroy(void)
 	opts.io_unit_size = UT_IO_UNIT_SIZE;
 	opts.max_aq_depth = UT_MAX_AQ_DEPTH;
 	opts.num_shared_buffers = UT_NUM_SHARED_BUFFERS;
-	MOCK_SET(spdk_sock_group_create_ext, &grp);
 	transport = nvmf_tcp_create(&opts);
-	MOCK_CLEAR_P(spdk_sock_group_create_ext);
 	CU_ASSERT_PTR_NOT_NULL(transport);
 	transport->opts = opts;
 	/* destroy transport */
@@ -550,7 +542,6 @@ test_nvmf_tcp_poll_group_create(void)
 	struct spdk_nvmf_tcp_poll_group *tgroup;
 	struct spdk_thread *thread;
 	struct spdk_nvmf_transport_opts opts;
-	struct spdk_sock_group grp = {};
 
 	thread = spdk_thread_create(NULL, NULL);
 	SPDK_CU_ASSERT_FATAL(thread != NULL);
@@ -566,14 +557,10 @@ test_nvmf_tcp_poll_group_create(void)
 	opts.io_unit_size = UT_IO_UNIT_SIZE;
 	opts.max_aq_depth = UT_MAX_AQ_DEPTH;
 	opts.num_shared_buffers = UT_NUM_SHARED_BUFFERS;
-	MOCK_SET(spdk_sock_group_create_ext, &grp);
 	transport = nvmf_tcp_create(&opts);
-	MOCK_CLEAR_P(spdk_sock_group_create_ext);
 	CU_ASSERT_PTR_NOT_NULL(transport);
 	transport->opts = opts;
-	MOCK_SET(spdk_sock_group_create_ext, &grp);
 	group = nvmf_tcp_poll_group_create(transport, NULL);
-	MOCK_CLEAR_P(spdk_sock_group_create_ext);
 	SPDK_CU_ASSERT_FATAL(group);
 	if (opts.in_capsule_data_size < SPDK_NVME_TCP_IN_CAPSULE_DATA_MAX_SIZE) {
 		tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
@@ -1334,7 +1321,6 @@ test_nvmf_tcp_tls_add_remove_credentials(void)
 	struct spdk_nvmf_transport_opts opts;
 	struct spdk_nvmf_subsystem subsystem;
 	struct tcp_psk_entry *entry;
-	struct spdk_sock_group grp = {};
 	const char subnqn[] = {"nqn.2016-06.io.spdk:cnode1"};
 	const char hostnqn[] = {"nqn.2016-06.io.spdk:host1"};
 	const char *psk = "NVMeTLSkey-1:01:VRLbtnN9AQb2WXW3c9+wEf/DRLz0QuLdbYvEhwtdWwNf9LrZ:";
@@ -1352,9 +1338,7 @@ test_nvmf_tcp_tls_add_remove_credentials(void)
 	opts.io_unit_size = UT_IO_UNIT_SIZE;
 	opts.max_aq_depth = UT_MAX_AQ_DEPTH;
 	opts.num_shared_buffers = UT_NUM_SHARED_BUFFERS;
-	MOCK_SET(spdk_sock_group_create_ext, &grp);
 	transport = nvmf_tcp_create(&opts);
-	MOCK_CLEAR_P(spdk_sock_group_create_ext);
 
 	memset(&subsystem, 0, sizeof(subsystem));
 	snprintf(subsystem.subnqn, sizeof(subsystem.subnqn), "%s", subnqn);
