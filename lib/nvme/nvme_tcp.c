@@ -64,8 +64,6 @@ struct nvme_tcp_ctrlr {
 struct nvme_tcp_poll_group {
 	struct spdk_nvme_transport_poll_group group;
 	struct spdk_sock_group *sock_group;
-	uint32_t completions_per_qpair;
-	int64_t num_completions;
 
 	TAILQ_HEAD(, nvme_tcp_qpair) needs_poll;
 	TAILQ_HEAD(, nvme_tcp_qpair) timeout_enabled;
@@ -2122,10 +2120,26 @@ static int
 nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
+	struct nvme_tcp_poll_group *group;
 	uint32_t reaped;
 	int rc;
 
-	if (qpair->poll_group == NULL) {
+	/* Poll the group if there aren't any events already pending. That means someone polled this qpair directly instead of via a poll group. */
+	if (qpair->poll_group != NULL) {
+		group = nvme_tcp_poll_group(qpair->poll_group);
+
+		/* If the qpair has not been flagged that events are pending, then we are here because of a direct call to process completions
+		 * just for this qpair. We need to poll the sock group to ensure forward progress is made. */
+		if (!TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+			spdk_sock_group_poll(group->sock_group);
+		}
+
+		/* If the qpair has been flagged that there are events pending, remove the flag because we're going to process
+		 * the events now. */
+		if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+			TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
+		}
+	} else {
 		rc = spdk_sock_flush(tqpair->sock);
 		if (rc < 0 && errno != EAGAIN) {
 			SPDK_ERRLOG("Failed to flush tqpair=%p (%d): %s\n", tqpair,
@@ -2206,20 +2220,10 @@ nvme_tcp_qpair_sock_cb(void *ctx, struct spdk_sock_group *group, struct spdk_soc
 {
 	struct spdk_nvme_qpair *qpair = ctx;
 	struct nvme_tcp_poll_group *pgroup = nvme_tcp_poll_group(qpair->poll_group);
-	int32_t num_completions;
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 
-	if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
-		TAILQ_REMOVE_CLEAR(&pgroup->needs_poll, tqpair, link_poll);
-	}
-
-	num_completions = spdk_nvme_qpair_process_completions(qpair, pgroup->completions_per_qpair);
-
-	if (pgroup->num_completions >= 0 && num_completions >= 0) {
-		pgroup->num_completions += num_completions;
-		pgroup->stats.nvme_completions += num_completions;
-	} else {
-		pgroup->num_completions = -ENXIO;
+	if (!TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+		TAILQ_INSERT_TAIL(&pgroup->needs_poll, tqpair, link_poll);
 	}
 }
 
@@ -2786,10 +2790,9 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tgroup);
 	struct spdk_nvme_qpair *qpair, *tmp_qpair;
 	struct nvme_tcp_qpair *tqpair, *tmp_tqpair;
-	int num_events;
+	int num_events, num_completions, rc;
 
-	group->completions_per_qpair = completions_per_qpair;
-	group->num_completions = 0;
+	num_completions = 0;
 	group->stats.polls++;
 
 	num_events = spdk_sock_group_poll(group->sock_group);
@@ -2809,10 +2812,17 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 		}
 	}
 
-	/* If any qpairs were marked as needing to be polled due to an asynchronous write completion
-	 * and they weren't polled as a consequence of calling spdk_sock_group_poll above, poll them now. */
+	/* Polling the sock group above simply marks the qpairs as needing to be individually
+	 * polled. Do that polling here. */
 	TAILQ_FOREACH_SAFE(tqpair, &group->needs_poll, link_poll, tmp_tqpair) {
-		nvme_tcp_qpair_sock_cb(&tqpair->qpair, group->sock_group, tqpair->sock);
+		rc = spdk_nvme_qpair_process_completions(&tqpair->qpair, completions_per_qpair);
+
+		if (rc >= 0 && num_events >= 0) {
+			num_completions += rc;
+			group->stats.nvme_completions += rc;
+		} else {
+			num_events = -ENXIO;
+		}
 	}
 
 	TAILQ_FOREACH_SAFE(tqpair, &group->timeout_enabled, link_timeout, tmp_tqpair) {
@@ -2828,7 +2838,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 	group->stats.idle_polls += !num_events;
 	group->stats.socket_completions += num_events;
 
-	return group->num_completions;
+	return num_completions;
 }
 
 /*
