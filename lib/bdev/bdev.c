@@ -11611,6 +11611,81 @@ spdk_bdev_group_destroy(struct spdk_bdev_group *group,
 }
 
 void
+spdk_bdev_group_get_io_stat(struct spdk_bdev_group *group, struct spdk_io_channel *ch,
+			    struct spdk_bdev_io_stat *stat)
+{
+	struct spdk_bdev_group_channel *group_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_bdev_channel *bdev_ch;
+
+	spdk_bdev_reset_io_stat(stat, SPDK_BDEV_RESET_STAT_ALL);
+
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+		spdk_bdev_add_io_stat(stat, bdev_ch->stat);
+	}
+}
+
+struct spdk_bdev_group_iostat_ctx {
+	struct spdk_bdev_io_stat *stat;
+	spdk_bdev_group_get_device_stat_cb cb;
+	void *cb_arg;
+};
+
+static void
+bdev_group_get_device_stat_done(struct spdk_io_channel_iter *i, int status)
+{
+	struct spdk_bdev_group_iostat_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_bdev_group *group = spdk_io_channel_iter_get_io_device(i);
+
+	ctx->cb(group, ctx->stat, ctx->cb_arg, 0);
+
+	free(ctx);
+}
+
+static void
+bdev_group_get_channel_stat(struct spdk_io_channel_iter *i)
+{
+	struct spdk_bdev_group_iostat_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_io_channel *ch = spdk_io_channel_iter_get_channel(i);
+	struct spdk_bdev_group_channel *group_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_bdev_channel *bdev_ch;
+
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+		spdk_bdev_add_io_stat(ctx->stat, bdev_ch->stat);
+	}
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+void
+spdk_bdev_group_get_device_stat(struct spdk_bdev_group *group,
+				struct spdk_bdev_io_stat *stat,
+				spdk_bdev_group_get_device_stat_cb cb,
+				void *cb_arg)
+{
+	struct spdk_bdev_group_iostat_ctx *ctx;
+
+	assert(group != NULL);
+	assert(stat != NULL);
+	assert(cb != NULL);
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Unable to allocate memory for iostat_ctx\n");
+		cb(group, stat, cb_arg, -ENOMEM);
+		return;
+	}
+
+	ctx->stat = stat;
+	ctx->cb = cb;
+	ctx->cb_arg = cb_arg;
+
+	spdk_for_each_channel(group,
+			      bdev_group_get_channel_stat,
+			      ctx,
+			      bdev_group_get_device_stat_done);
+}
+
+void
 spdk_bdev_group_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
 	struct spdk_bdev_group *group;

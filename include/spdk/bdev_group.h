@@ -174,6 +174,35 @@ int spdk_for_each_bdev_group(void *cb_arg, int (*cb_fn)(void *cb_arg,
 void
 spdk_bdev_group_subsystem_config_json(struct spdk_json_write_ctx *w);
 
+struct spdk_bdev_io_stat;
+
+typedef void (*spdk_bdev_group_get_device_stat_cb)(struct spdk_bdev_group *group,
+		struct spdk_bdev_io_stat *stat, void *cb_arg, int rc);
+
+/**
+ * Return I/O statistics for this bdev group. All the required information
+ * will be passed via the callback function.
+ *
+ * \param group Group to query.
+ * \param stat Structure for aggregating collected statistics.  Passed argument to cb.
+ * \param cb Called when this operation completes.
+ * \param cb_arg Argument passed to callback function.
+ */
+void spdk_bdev_group_get_device_stat(struct spdk_bdev_group *group,
+				     struct spdk_bdev_io_stat *stat,
+				     spdk_bdev_group_get_device_stat_cb cb,
+				     void *cb_arg);
+
+/**
+ * Return I/O statistics for this channel.
+ *
+ * \param group Group to query.
+ * \param ch I/O channel.
+ * \param stat The per-channel statistics.
+ */
+void spdk_bdev_group_get_io_stat(struct spdk_bdev_group *group, struct spdk_io_channel *ch,
+				 struct spdk_bdev_io_stat *stat);
+
 #ifdef __cplusplus
 }
 #endif

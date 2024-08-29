@@ -218,6 +218,8 @@
 	spdk_bdev_group_close;
 	spdk_bdev_group_desc_get_bdev_group;
 	spdk_for_each_bdev_group;
+	spdk_bdev_group_get_device_stat;
+	spdk_bdev_group_get_io_stat;
 	spdk_bdev_group_subsystem_config_json;
 
 	# Everything else
