@@ -2046,6 +2046,21 @@ def bdev_groups_get(client, name):
     return client.call('bdev_groups_get', params)
 
 
+def bdev_group_get_iostat(client, name=None):
+    """Get I/O statistics for bdev groups.
+
+    Args:
+        name: bdev group name to query (optional; if omitted, query all bdev groups)
+
+    Returns:
+        I/O statistics for the requested bdev groups.
+    """
+    params = {}
+    if name:
+        params['name'] = name
+    return client.call('bdev_group_get_iostat', params)
+
+
 def bdev_set_ro(client, name):
     """Set a bdev in a read-only state.
 

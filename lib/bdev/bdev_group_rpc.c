@@ -13,6 +13,8 @@
 
 #include "spdk/log.h"
 
+#include "bdev_internal.h"
+
 struct group_bdev_opts {
 	char *name;
 	char *bdev;
@@ -368,3 +370,295 @@ rpc_spdk_bdev_groups_get(struct spdk_jsonrpc_request *request, const struct spdk
 	free(ctx.name);
 }
 SPDK_RPC_REGISTER("bdev_groups_get", rpc_spdk_bdev_groups_get, SPDK_RPC_RUNTIME)
+
+struct rpc_get_iostat_ctx {
+	int group_count;
+	int rc;
+	struct spdk_jsonrpc_request *request;
+	struct spdk_json_write_ctx *w;
+	bool per_channel;
+};
+
+struct group_get_iostat_ctx {
+	struct spdk_bdev_io_stat *stat;
+	struct rpc_get_iostat_ctx *rpc_ctx;
+	struct spdk_bdev_group_desc *desc;
+};
+
+static void
+rpc_get_iostat_started(struct rpc_get_iostat_ctx *rpc_ctx)
+{
+	rpc_ctx->w = spdk_jsonrpc_begin_result(rpc_ctx->request);
+
+	spdk_json_write_object_begin(rpc_ctx->w);
+	spdk_json_write_named_uint64(rpc_ctx->w, "tick_rate", spdk_get_ticks_hz());
+	spdk_json_write_named_uint64(rpc_ctx->w, "ticks", spdk_get_ticks());
+}
+
+static void
+rpc_get_iostat_done(struct rpc_get_iostat_ctx *rpc_ctx)
+{
+	if (--rpc_ctx->group_count != 0) {
+		return;
+	}
+
+	if (rpc_ctx->rc == 0) {
+		spdk_json_write_array_end(rpc_ctx->w);
+		spdk_json_write_object_end(rpc_ctx->w);
+		spdk_jsonrpc_end_result(rpc_ctx->request, rpc_ctx->w);
+	} else {
+		/* Return error response after processing all specified bdevs
+		 * completed or failed.
+		 */
+		spdk_jsonrpc_send_error_response(rpc_ctx->request, rpc_ctx->rc,
+						 spdk_strerror(-rpc_ctx->rc));
+	}
+
+	free(rpc_ctx);
+}
+
+static struct group_get_iostat_ctx *
+group_iostat_ctx_alloc(void)
+{
+	struct group_get_iostat_ctx *ctx;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		return NULL;
+	}
+
+	ctx->stat = bdev_alloc_io_stat(false);
+	if (ctx->stat == NULL) {
+		free(ctx);
+		return NULL;
+	}
+
+	return ctx;
+}
+
+static void
+group_iostat_ctx_free(struct group_get_iostat_ctx *ctx)
+{
+	bdev_free_io_stat(ctx->stat);
+	free(ctx);
+}
+
+static void
+group_get_iostat_done(struct spdk_bdev_group *group, struct spdk_bdev_io_stat *stat,
+		      void *cb_arg, int rc)
+{
+	struct group_get_iostat_ctx *group_ctx = cb_arg;
+	struct rpc_get_iostat_ctx *rpc_ctx = group_ctx->rpc_ctx;
+	struct spdk_json_write_ctx *w = rpc_ctx->w;
+
+	if (rc != 0 || rpc_ctx->rc != 0) {
+		if (rpc_ctx->rc == 0) {
+			rpc_ctx->rc = rc;
+		}
+		goto done;
+	}
+
+	assert(stat == group_ctx->stat);
+
+	spdk_json_write_object_begin(w);
+
+	spdk_json_write_named_string(w, "name", spdk_bdev_group_get_name(group));
+
+	spdk_bdev_dump_io_stat_json(stat, w);
+
+	spdk_json_write_object_end(w);
+
+done:
+	rpc_get_iostat_done(rpc_ctx);
+
+	spdk_bdev_group_close(group_ctx->desc);
+	group_iostat_ctx_free(group_ctx);
+}
+
+static int
+group_get_iostat(void *ctx, struct spdk_bdev_group *group)
+{
+	struct rpc_get_iostat_ctx *rpc_ctx = ctx;
+	struct group_get_iostat_ctx *group_ctx;
+	int rc;
+
+	group_ctx = group_iostat_ctx_alloc();
+	if (group_ctx == NULL) {
+		SPDK_ERRLOG("Failed to allocate group_iostat_ctx struct\n");
+		return -ENOMEM;
+	}
+
+	rc = spdk_bdev_group_open(spdk_bdev_group_get_name(group), &group_ctx->desc);
+	if (rc != 0) {
+		group_iostat_ctx_free(group_ctx);
+		return rc;
+	}
+
+	rpc_ctx->group_count++;
+	group_ctx->rpc_ctx = rpc_ctx;
+	spdk_bdev_group_get_device_stat(group, group_ctx->stat,
+					group_get_iostat_done, group_ctx);
+
+	return 0;
+}
+
+static void
+group_get_per_channel_stat_done(struct spdk_io_channel_iter *i, int status)
+{
+	struct group_get_iostat_ctx *group_ctx = spdk_io_channel_iter_get_ctx(i);
+
+	rpc_get_iostat_done(group_ctx->rpc_ctx);
+
+	spdk_bdev_group_close(group_ctx->desc);
+
+	group_iostat_ctx_free(group_ctx);
+}
+
+static void
+group_get_per_channel_stat(struct spdk_io_channel_iter *i)
+{
+	struct group_get_iostat_ctx *group_ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_bdev_group *group = spdk_io_channel_iter_get_io_device(i);
+	struct spdk_io_channel *ch = spdk_io_channel_iter_get_channel(i);
+	struct spdk_json_write_ctx *w = group_ctx->rpc_ctx->w;
+
+	spdk_bdev_group_get_io_stat(group, ch, group_ctx->stat);
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_uint64(w, "thread_id", spdk_thread_get_id(spdk_get_thread()));
+	spdk_bdev_dump_io_stat_json(group_ctx->stat, w);
+	spdk_json_write_object_end(w);
+
+	spdk_for_each_channel_continue(i, 0);
+}
+
+struct rpc_group_get_iostat {
+	char *name;
+	bool per_channel;
+};
+
+static void
+free_rpc_group_get_iostat(struct rpc_group_get_iostat *r)
+{
+	free(r->name);
+}
+
+static const struct spdk_json_object_decoder rpc_group_get_iostat_decoders[] = {
+	{"name", offsetof(struct rpc_group_get_iostat, name), spdk_json_decode_string, true},
+	{"per_channel", offsetof(struct rpc_group_get_iostat, per_channel), spdk_json_decode_bool, true},
+};
+
+static void
+rpc_group_get_iostat(struct spdk_jsonrpc_request *request,
+		     const struct spdk_json_val *params)
+{
+	struct rpc_group_get_iostat req = {};
+	struct spdk_bdev_group_desc *desc = NULL;
+	struct rpc_get_iostat_ctx *rpc_ctx;
+	struct group_get_iostat_ctx *group_ctx;
+	struct spdk_bdev_group *group;
+	int rc;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_group_get_iostat_decoders,
+					    SPDK_COUNTOF(rpc_group_get_iostat_decoders),
+					    &req)) {
+			SPDK_ERRLOG("spdk_json_decode_object failed\n");
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 "spdk_json_decode_object failed");
+			free_rpc_group_get_iostat(&req);
+			return;
+		}
+
+		if (req.per_channel == true && !req.name) {
+			SPDK_ERRLOG("Group name is required for per channel IO statistics\n");
+			spdk_jsonrpc_send_error_response(request, -EINVAL, spdk_strerror(EINVAL));
+			free_rpc_group_get_iostat(&req);
+			return;
+		}
+
+		if (req.name) {
+			rc = spdk_bdev_group_open(req.name, &desc);
+			if (rc != 0) {
+				SPDK_ERRLOG("Failed to open group '%s': %d\n", req.name, rc);
+				spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+				free_rpc_group_get_iostat(&req);
+				return;
+			}
+		}
+	}
+
+	free_rpc_group_get_iostat(&req);
+
+	rpc_ctx = calloc(1, sizeof(*rpc_ctx));
+	if (rpc_ctx == NULL) {
+		SPDK_ERRLOG("Failed to allocate rpc_iostat_ctx struct\n");
+		if (desc != NULL) {
+			spdk_bdev_group_close(desc);
+		}
+		spdk_jsonrpc_send_error_response(request, -ENOMEM, spdk_strerror(ENOMEM));
+		return;
+	}
+
+	/*
+	 * Increment initial group_count so that it will never reach 0 in the middle
+	 * of iterating.
+	 */
+	rpc_ctx->group_count++;
+	rpc_ctx->request = request;
+	rpc_ctx->per_channel = req.per_channel;
+
+	if (desc != NULL) {
+		group = spdk_bdev_group_desc_get_bdev_group(desc);
+
+		group_ctx = group_iostat_ctx_alloc();
+		if (group_ctx == NULL) {
+			SPDK_ERRLOG("Failed to allocate bdev_iostat_ctx struct\n");
+			rpc_ctx->rc = -ENOMEM;
+
+			spdk_bdev_group_close(desc);
+		} else {
+			group_ctx->desc = desc;
+
+			rpc_ctx->group_count++;
+			group_ctx->rpc_ctx = rpc_ctx;
+			if (req.per_channel == false) {
+				spdk_bdev_group_get_device_stat(group, group_ctx->stat,
+								group_get_iostat_done, group_ctx);
+			} else {
+				/* If per_channel is true, there is no failure after here and
+				 * we have to start RPC response before executing
+				 * spdk_bdev_for_each_channel().
+				 */
+				rpc_get_iostat_started(rpc_ctx);
+				spdk_json_write_named_string(rpc_ctx->w, "name", spdk_bdev_group_get_name(group));
+				spdk_json_write_named_array_begin(rpc_ctx->w, "channels");
+
+				spdk_for_each_channel(group,
+						      group_get_per_channel_stat,
+						      group_ctx,
+						      group_get_per_channel_stat_done);
+
+				rpc_get_iostat_done(rpc_ctx);
+				return;
+			}
+		}
+	} else {
+		rc = spdk_for_each_bdev_group(rpc_ctx, group_get_iostat);
+		if (rc != 0 && rpc_ctx->rc == 0) {
+			rpc_ctx->rc = rc;
+		}
+	}
+
+	if (rpc_ctx->rc == 0) {
+		/* We want to fail the RPC for all failures. If per_channel is false,
+		 * it is enough to defer starting RPC response until it is ensured that
+		 * all spdk_for_each_channel() calls will succeed or there is no bdev.
+		 */
+		rpc_get_iostat_started(rpc_ctx);
+		spdk_json_write_named_array_begin(rpc_ctx->w, "groups");
+	}
+
+	rpc_get_iostat_done(rpc_ctx);
+}
+SPDK_RPC_REGISTER("bdev_group_get_iostat", rpc_group_get_iostat, SPDK_RPC_RUNTIME)

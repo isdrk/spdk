@@ -3166,6 +3166,68 @@ Example response:
 }
 ~~~
 
+### bdev_group_get_iostat {#rpc_bdev_group_get_iostat}
+
+Get I/O statistics of bdev groups.
+
+#### Parameters
+
+The user may specify no parameters in order to list all bdev groups, or a bdev group may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | Bdev group name
+
+#### Response
+
+The response is an array of objects containing I/O statistics of the requested bdev groups.
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_get_iostat",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tick_rate": 2200000000,
+    "groups" : [
+      {
+        "name": "grp0",
+        "bytes_read": 36864,
+        "num_read_ops": 2,
+        "bytes_written": 0,
+        "num_write_ops": 0,
+        "bytes_unmapped": 0,
+        "num_unmap_ops": 0,
+        "read_latency_ticks": 178904,
+        "write_latency_ticks": 0,
+        "unmap_latency_ticks": 0,
+        "queue_depth_polling_period": 2,
+        "queue_depth": 0,
+        "io_time": 0,
+        "weighted_io_time": 0
+      }
+    ]
+  }
+}
+~~
+
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
 Set a bdev to read-only state

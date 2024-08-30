@@ -3846,6 +3846,14 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
     p.set_defaults(func=bdev_groups_get)
 
+    def bdev_group_get_iostat(args):
+        print_dict(rpc.bdev.bdev_group_get_iostat(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_get_iostat',
+                              help='Display current I/O statistics of all the groupss or specified group.')
+    p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
+    p.set_defaults(func=bdev_group_get_iostat)
+
     def bdev_set_ro(args):
         rpc.bdev.bdev_set_ro(args.client, name=args.name)
 
