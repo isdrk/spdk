@@ -402,13 +402,22 @@ struct spdk_bdev_node {
 	TAILQ_ENTRY(spdk_bdev_node) link;
 };
 
+struct spdk_bdev_group;
+
+struct spdk_bdev_group_desc {
+	struct spdk_bdev_group *group;
+	TAILQ_ENTRY(spdk_bdev_group_desc) link;
+};
+
 struct spdk_bdev_group {
 	struct spdk_bdev_qos *qos;
 	uint64_t qos_limits_usr_cfg[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	bool qos_mod_in_progress;
 	bool qos_reset_limits_in_progress;
+	bool pending_unregister;
 	char *name;
 	TAILQ_HEAD(, spdk_bdev_node) bdevs;
+	TAILQ_HEAD(, spdk_bdev_group_desc) open_descs;
 	struct spdk_spinlock spinlock;
 	TAILQ_ENTRY(spdk_bdev_group) link;
 };
@@ -10918,6 +10927,7 @@ spdk_bdev_group_create(const char *group_name)
 	}
 
 	TAILQ_INIT(&group->bdevs);
+	TAILQ_INIT(&group->open_descs);
 	spdk_spin_init(&group->spinlock);
 
 	spdk_io_device_register(group, bdev_group_channel_create,
@@ -10932,20 +10942,105 @@ spdk_bdev_group_create(const char *group_name)
 	return group;
 }
 
+static struct spdk_bdev_group *
+bdev_group_get_by_name(const char *group_name)
+{
+	struct spdk_bdev_group *group;
+
+	TAILQ_FOREACH(group, &g_bdev_mgr.groups, link) {
+		if (!strcmp(group->name, group_name)) {
+			break;
+		}
+	}
+
+	return group;
+}
+
 struct spdk_bdev_group *
 spdk_bdev_group_get_by_name(const char *group_name)
 {
 	struct spdk_bdev_group *group;
 
 	spdk_spin_lock(&g_bdev_mgr.spinlock);
-	TAILQ_FOREACH(group, &g_bdev_mgr.groups, link) {
-		if (!strcmp(group->name, group_name)) {
-			break;
-		}
-	}
+	group = bdev_group_get_by_name(group_name);
 	spdk_spin_unlock(&g_bdev_mgr.spinlock);
 
 	return group;
+}
+
+static int
+bdev_group_open(const char *group_name, struct spdk_bdev_group_desc **_desc)
+{
+	struct spdk_bdev_group_desc *desc;
+	struct spdk_bdev_group *group;
+
+	group = bdev_group_get_by_name(group_name);
+	if (group == NULL) {
+		SPDK_NOTICELOG("Unable to find group with name: %s\n", group_name);
+		return -ENODEV;
+	}
+
+	desc = calloc(1, sizeof(*desc));
+	if (desc == NULL) {
+		SPDK_ERRLOG("Failed to allocate memory for descriptor\n");
+		return -ENOMEM;
+	}
+
+	spdk_spin_lock(&group->spinlock);
+	desc->group = group;
+	TAILQ_INSERT_TAIL(&group->open_descs, desc, link);
+	spdk_spin_unlock(&group->spinlock);
+
+	*_desc = desc;
+
+	return 0;
+}
+
+int
+spdk_bdev_group_open(const char *group_name, struct spdk_bdev_group_desc **_desc)
+{
+	int rc;
+
+	spdk_spin_lock(&g_bdev_mgr.spinlock);
+	rc = bdev_group_open(group_name, _desc);
+	spdk_spin_unlock(&g_bdev_mgr.spinlock);
+
+	return rc;
+}
+
+static void bdev_group_unregister_cb(void *io_device);
+
+static void
+bdev_group_close(struct spdk_bdev_group *group, struct spdk_bdev_group_desc *desc)
+{
+	spdk_spin_lock(&group->spinlock);
+
+	TAILQ_REMOVE(&group->open_descs, desc, link);
+	free(desc);
+
+	if (TAILQ_EMPTY(&group->open_descs) && group->pending_unregister) {
+		spdk_spin_unlock(&group->spinlock);
+
+		spdk_io_device_unregister(group, bdev_group_unregister_cb);
+	} else {
+		spdk_spin_unlock(&group->spinlock);
+	}
+}
+
+void
+spdk_bdev_group_close(struct spdk_bdev_group_desc *desc)
+{
+	struct spdk_bdev_group *group = spdk_bdev_group_desc_get_bdev_group(desc);
+
+	spdk_spin_lock(&g_bdev_mgr.spinlock);
+	bdev_group_close(group, desc);
+	spdk_spin_unlock(&g_bdev_mgr.spinlock);
+}
+
+struct spdk_bdev_group *
+spdk_bdev_group_desc_get_bdev_group(struct spdk_bdev_group_desc *desc)
+{
+	return desc->group;
 }
 
 int
@@ -11430,6 +11525,16 @@ static void
 bdev_group_unregister(struct spdk_bdev_group *group)
 {
 	bdev_group_disable_qos(group);
+
+	spdk_spin_lock(&group->spinlock);
+	if (!TAILQ_EMPTY(&group->open_descs)) {
+		group->pending_unregister = true;
+		spdk_spin_unlock(&group->spinlock);
+
+		return;
+	} else {
+		spdk_spin_unlock(&group->spinlock);
+	}
 
 	spdk_io_device_unregister(group, bdev_group_unregister_cb);
 }

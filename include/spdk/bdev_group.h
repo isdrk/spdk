@@ -124,6 +124,34 @@ void spdk_bdev_group_destroy(struct spdk_bdev_group *group,
  */
 struct spdk_bdev_group *spdk_bdev_group_get_by_name(const char *group_name);
 
+struct spdk_bdev_group_desc;
+
+/**
+ * Open a group for safe system operations.
+ *
+ * \param group_name Group name to open.
+ * \param desc output parameter for the descriptor when operation is successful.
+ * \return 0 if operation is successful, suitable errno value otherwise.
+ */
+int spdk_bdev_group_open(const char *group_name,
+			 struct spdk_bdev_group_desc **desc);
+
+/**
+ * Close a previously opened bdev group.
+ *
+ * \param desc Bdev group descriptor to close.
+ */
+void spdk_bdev_group_close(struct spdk_bdev_group_desc *desc);
+
+/**
+ * Get the bdev group associated with a descriptor.
+ *
+ * \param desc Open bdev group descriptor
+ * \return bdev group associated with the descriptor.
+ */
+struct spdk_bdev_group *spdk_bdev_group_desc_get_bdev_group(
+	struct spdk_bdev_group_desc *desc);
+
 /**
  * Call the provided function for each block device group.
  *

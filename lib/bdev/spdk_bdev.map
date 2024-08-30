@@ -214,6 +214,9 @@
 	spdk_bdev_group_set_qos_rate_limits;
 	spdk_bdev_group_destroy;
 	spdk_bdev_group_get_by_name;
+	spdk_bdev_group_open;
+	spdk_bdev_group_close;
+	spdk_bdev_group_desc_get_bdev_group;
 	spdk_for_each_bdev_group;
 	spdk_bdev_group_subsystem_config_json;
 
