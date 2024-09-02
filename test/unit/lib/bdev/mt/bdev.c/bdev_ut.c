@@ -992,13 +992,15 @@ basic_qos(void)
 	struct spdk_bdev_channel *bdev_ch[2];
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status status, abort_status;
-	uint32_t qos_io_slice;
+	uint32_t qos_io_slice, qos_byte_slice;
 	int rc;
 
 	setup_test();
 
 	qos_io_slice = g_bdev_opts.qos_io_slice;
+	qos_byte_slice = g_bdev_opts.qos_byte_slice;
 	g_bdev_opts.qos_io_slice = 1;
+	g_bdev_opts.qos_byte_slice = 512;
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
@@ -1151,6 +1153,7 @@ basic_qos(void)
 	set_thread(0);
 
 	g_bdev_opts.qos_io_slice = qos_io_slice;
+	g_bdev_opts.qos_byte_slice = qos_byte_slice;
 
 	teardown_test();
 }
@@ -1162,7 +1165,7 @@ io_during_qos_queue(void)
 	struct spdk_bdev_channel *bdev_ch[2];
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status status0, status1, status2;
-	uint32_t qos_io_slice;
+	uint32_t qos_io_slice, qos_byte_slice;
 	int rc;
 
 	setup_test();
@@ -1170,6 +1173,8 @@ io_during_qos_queue(void)
 
 	qos_io_slice = g_bdev_opts.qos_io_slice;
 	g_bdev_opts.qos_io_slice = 1;
+	qos_byte_slice = g_bdev_opts.qos_byte_slice;
+	g_bdev_opts.qos_byte_slice = 512;
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
@@ -1256,6 +1261,7 @@ io_during_qos_queue(void)
 	poll_threads();
 
 	g_bdev_opts.qos_io_slice = qos_io_slice;
+	g_bdev_opts.qos_byte_slice = qos_byte_slice;
 
 	teardown_test();
 }
