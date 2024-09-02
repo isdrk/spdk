@@ -5742,6 +5742,7 @@ static int
 nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 		  const char *name,
 		  const struct spdk_nvme_transport_id *trid,
+		  const struct spdk_nvme_ctrlr_opts *opts,
 		  struct nvme_async_probe_ctx *ctx)
 {
 	struct nvme_ctrlr *nvme_ctrlr;
@@ -5773,9 +5774,9 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 	}
 
 	path_id->trid = *trid;
-	if (ctx != NULL) {
-		memcpy(path_id->hostid.hostaddr, ctx->drv_opts.src_addr, sizeof(path_id->hostid.hostaddr));
-		memcpy(path_id->hostid.hostsvcid, ctx->drv_opts.src_svcid, sizeof(path_id->hostid.hostsvcid));
+	if (opts != NULL) {
+		memcpy(path_id->hostid.hostaddr, opts->src_addr, sizeof(path_id->hostid.hostaddr));
+		memcpy(path_id->hostid.hostsvcid, opts->src_svcid, sizeof(path_id->hostid.hostsvcid));
 	}
 	nvme_ctrlr->active_path_id = path_id;
 	TAILQ_INSERT_HEAD(&nvme_ctrlr->trids, path_id, link);
@@ -5849,7 +5850,7 @@ bdev_nvme_get_default_ctrlr_opts(struct nvme_ctrlr_opts *opts)
 
 static void
 attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
-	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *drv_opts)
+	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts)
 {
 	char *name;
 
@@ -5859,7 +5860,7 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 		return;
 	}
 
-	if (nvme_ctrlr_create(ctrlr, name, trid, NULL) == 0) {
+	if (nvme_ctrlr_create(ctrlr, name, trid, opts, NULL) == 0) {
 		SPDK_DEBUGLOG(bdev_nvme, "Attached to %s (%s)\n", trid->traddr, name);
 	} else {
 		SPDK_ERRLOG("Failed to attach to %s (%s)\n", trid->traddr, name);
@@ -6282,7 +6283,7 @@ connect_attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	ctx = SPDK_CONTAINEROF(user_opts, struct nvme_async_probe_ctx, drv_opts);
 	ctx->ctrlr_attached = true;
 
-	rc = nvme_ctrlr_create(ctrlr, ctx->base_name, &ctx->trid, ctx);
+	rc = nvme_ctrlr_create(ctrlr, ctx->base_name, &ctx->trid, opts, ctx);
 	if (rc != 0) {
 		ctx->reported_bdevs = 0;
 		populate_namespaces_cb(ctx, rc);
