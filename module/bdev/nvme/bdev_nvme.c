@@ -1204,7 +1204,7 @@ any_io_path_may_become_available(struct nvme_bdev_channel *nbdev_ch)
 		}
 
 		if (nvme_qpair_is_connected(io_path->qpair) ||
-		    !nvme_ctrlr_is_failed(io_path->qpair->ctrlr)) {
+		    !nvme_ctrlr_is_failed(io_path->nvme_ns->ctrlr)) {
 			return true;
 		}
 	}
@@ -1455,7 +1455,7 @@ bdev_nvme_check_retry_io_nvme_status(struct nvme_bdev_io *bio,
 				     uint64_t *_delay_ms)
 {
 	struct nvme_io_path *io_path = bio->io_path;
-	struct nvme_ctrlr *nvme_ctrlr = io_path->qpair->ctrlr;
+	struct nvme_ctrlr *nvme_ctrlr = io_path->nvme_ns->ctrlr;
 	const struct spdk_nvme_ctrlr_data *cdata;
 
 	if (spdk_nvme_cpl_is_path_error(cpl) ||
@@ -2923,7 +2923,7 @@ _bdev_nvme_reset_io(struct nvme_io_path *io_path, struct nvme_bdev_io *bio)
 	struct spdk_bdev_io *bdev_io;
 	int rc;
 
-	rc = nvme_ctrlr_op(io_path->qpair->ctrlr, NVME_CTRLR_OP_RESET,
+	rc = nvme_ctrlr_op(io_path->nvme_ns->ctrlr, NVME_CTRLR_OP_RESET,
 			   bdev_nvme_reset_io_continue, bio);
 	if (rc != 0 && rc != -EBUSY) {
 		return rc;
@@ -8245,7 +8245,7 @@ bdev_nvme_admin_passthru(struct nvme_bdev_channel *nbdev_ch, struct nvme_bdev_io
 
 	/* Choose the first ctrlr which is not failed. */
 	STAILQ_FOREACH(io_path, &nbdev_ch->io_path_list, stailq) {
-		nvme_ctrlr = io_path->qpair->ctrlr;
+		nvme_ctrlr = io_path->nvme_ns->ctrlr;
 
 		/* We should skip any unavailable nvme_ctrlr rather than checking
 		 * if the return value of spdk_nvme_ctrlr_cmd_admin_raw() is -ENXIO.
@@ -8379,13 +8379,13 @@ bdev_nvme_abort(struct nvme_bdev_channel *nbdev_ch, struct nvme_bdev_io *bio,
 
 	io_path = bio_to_abort->io_path;
 	if (io_path != NULL) {
-		rc = spdk_nvme_ctrlr_cmd_abort_ext(io_path->qpair->ctrlr->ctrlr,
+		rc = spdk_nvme_ctrlr_cmd_abort_ext(io_path->nvme_ns->ctrlr->ctrlr,
 						   io_path->qpair->qpair,
 						   bio_to_abort,
 						   bdev_nvme_abort_done, bio);
 	} else {
 		STAILQ_FOREACH(io_path, &nbdev_ch->io_path_list, stailq) {
-			rc = spdk_nvme_ctrlr_cmd_abort_ext(io_path->qpair->ctrlr->ctrlr,
+			rc = spdk_nvme_ctrlr_cmd_abort_ext(io_path->nvme_ns->ctrlr->ctrlr,
 							   NULL,
 							   bio_to_abort,
 							   bdev_nvme_abort_done, bio);
@@ -8648,7 +8648,7 @@ void
 nvme_io_path_info_json(struct spdk_json_write_ctx *w, struct nvme_io_path *io_path)
 {
 	struct nvme_ns *nvme_ns = io_path->nvme_ns;
-	struct nvme_ctrlr *nvme_ctrlr = io_path->qpair->ctrlr;
+	struct nvme_ctrlr *nvme_ctrlr = io_path->nvme_ns->ctrlr;
 	const struct spdk_nvme_ctrlr_data *cdata;
 	const struct spdk_nvme_transport_id *trid;
 	const char *adrfam_str;
