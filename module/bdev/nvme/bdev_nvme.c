@@ -778,8 +778,6 @@ static int
 nvme_io_path_get_ctrlr_channel(struct nvme_io_path *io_path)
 {
 	struct spdk_io_channel *ch;
-	struct nvme_ctrlr_channel *ctrlr_ch;
-	struct nvme_qpair *nvme_qpair;
 
 	ch = spdk_get_io_channel(io_path->nvme_ns->ctrlr);
 	if (ch == NULL) {
@@ -787,13 +785,12 @@ nvme_io_path_get_ctrlr_channel(struct nvme_io_path *io_path)
 		return -ENOMEM;
 	}
 
-	ctrlr_ch = spdk_io_channel_get_ctx(ch);
+	io_path->ctrlr_ch = spdk_io_channel_get_ctx(ch);
 
-	nvme_qpair = ctrlr_ch->qpair;
-	assert(nvme_qpair != NULL);
+	io_path->qpair = io_path->ctrlr_ch->qpair;
+	assert(io_path->qpair != NULL);
 
-	io_path->qpair = nvme_qpair;
-	TAILQ_INSERT_TAIL(&nvme_qpair->io_path_list, io_path, tailq);
+	TAILQ_INSERT_TAIL(&io_path->qpair->io_path_list, io_path, tailq);
 
 	return 0;
 }
@@ -844,16 +841,10 @@ static void
 nvme_io_path_put_ctrlr_channel(struct nvme_io_path *io_path)
 {
 	struct spdk_io_channel *ch;
-	struct nvme_qpair *nvme_qpair;
-	struct nvme_ctrlr_channel *ctrlr_ch;
 
-	nvme_qpair = io_path->qpair;
-	assert(nvme_qpair != NULL);
+	assert(io_path->ctrlr_ch != NULL);
+	ch = spdk_io_channel_from_ctx(io_path->ctrlr_ch);
 
-	ctrlr_ch = nvme_qpair->ctrlr_ch;
-	assert(ctrlr_ch != NULL);
-
-	ch = spdk_io_channel_from_ctx(ctrlr_ch);
 	spdk_put_io_channel(ch);
 }
 
@@ -3087,7 +3078,7 @@ _bdev_nvme_reset_io(struct nvme_io_path *io_path, struct nvme_bdev_io *bio)
 	bio->io_path = io_path;
 
 	if (rc == -EBUSY) {
-		ctrlr_ch = io_path->qpair->ctrlr_ch;
+		ctrlr_ch = io_path->ctrlr_ch;
 		assert(ctrlr_ch != NULL);
 		/*
 		 * Reset call is queued only if it is from the app framework. This is on purpose so that
