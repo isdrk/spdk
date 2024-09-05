@@ -2812,6 +2812,8 @@ test_abort(void)
 	fuse_io->internal.ch = (struct spdk_bdev_channel *)ch1;
 	abort_io->internal.ch = (struct spdk_bdev_channel *)ch1;
 
+	set_thread(0);
+
 	/* Aborting the already completed request should fail. */
 	write_io->internal.in_submit_request = true;
 	bdev_nvme_submit_request(ch1, write_io);
@@ -4536,6 +4538,13 @@ test_find_io_path(void)
 	struct nvme_ns nvme_ns1 = {}, nvme_ns2 = {};
 	struct nvme_io_path io_path1 = { .qpair = &nvme_qpair1, .nvme_ns = &nvme_ns1, };
 	struct nvme_io_path io_path2 = { .qpair = &nvme_qpair2, .nvme_ns = &nvme_ns2, };
+	struct spdk_thread *thread;
+
+	thread = spdk_get_thread();
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+
+	nvme_qpair1.thread = thread;
+	nvme_qpair2.thread = thread;
 
 	STAILQ_INSERT_TAIL(&nbdev_ch.io_path_list, &io_path1, stailq);
 
@@ -6256,6 +6265,14 @@ test_find_next_io_path(void)
 	struct nvme_io_path io_path1 = { .qpair = &nvme_qpair1, .nvme_ns = &nvme_ns1, };
 	struct nvme_io_path io_path2 = { .qpair = &nvme_qpair2, .nvme_ns = &nvme_ns2, };
 	struct nvme_io_path io_path3 = { .qpair = &nvme_qpair3, .nvme_ns = &nvme_ns3, };
+	struct spdk_thread *thread;
+
+	thread = spdk_get_thread();
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+
+	nvme_qpair1.thread = thread;
+	nvme_qpair2.thread = thread;
+	nvme_qpair3.thread = thread;
 
 	STAILQ_INSERT_TAIL(&nbdev_ch.io_path_list, &io_path1, stailq);
 	STAILQ_INSERT_TAIL(&nbdev_ch.io_path_list, &io_path2, stailq);
