@@ -998,6 +998,10 @@ nvme_qpair_is_connected(struct nvme_qpair *nvme_qpair)
 static inline bool
 nvme_io_path_is_available(struct nvme_io_path *io_path)
 {
+	if (spdk_unlikely(io_path->qpair == NULL)) {
+		return false;
+	}
+
 	if (spdk_unlikely(!nvme_qpair_is_connected(io_path->qpair))) {
 		return false;
 	}
@@ -1091,6 +1095,11 @@ _bdev_nvme_find_io_path(struct nvme_bdev_channel *nbdev_ch)
 
 	io_path = start;
 	do {
+		if (spdk_unlikely(io_path->qpair == NULL)) {
+			io_path = nvme_io_path_get_next(nbdev_ch, io_path);
+			continue;
+		}
+
 		if (spdk_likely(nvme_qpair_is_connected(io_path->qpair) &&
 				!io_path->nvme_ns->ana_state_updating)) {
 
@@ -1140,6 +1149,10 @@ _bdev_nvme_find_io_path_min_qd(struct nvme_bdev_channel *nbdev_ch)
 	uint32_t num_outstanding_reqs;
 
 	STAILQ_FOREACH(io_path, &nbdev_ch->io_path_list, stailq) {
+		if (spdk_unlikely(io_path->qpair == NULL)) {
+			continue;
+		}
+
 		if (spdk_unlikely(!nvme_qpair_is_connected(io_path->qpair))) {
 			/* The device is currently resetting. */
 			continue;
@@ -1221,6 +1234,14 @@ any_io_path_may_become_available(struct nvme_bdev_channel *nbdev_ch)
 	STAILQ_FOREACH(io_path, &nbdev_ch->io_path_list, stailq) {
 		if (io_path->nvme_ns->ana_transition_timedout) {
 			continue;
+		}
+
+		if (io_path->qpair == NULL) {
+			/* If number of I/O qpairs is limited, I/O qpair may be
+			 * associated after I/O path is created. We should queue
+			 * I/O to check again later.
+			 */
+			return true;
 		}
 
 		if (nvme_qpair_is_connected(io_path->qpair) ||
@@ -8831,7 +8852,8 @@ nvme_io_path_info_json(struct spdk_json_write_ctx *w, struct nvme_io_path *io_pa
 	spdk_json_write_named_uint32(w, "cntlid", cdata->cntlid);
 	spdk_json_write_named_bool(w, "current", io_path->nbdev_ch != NULL &&
 				   io_path == io_path->nbdev_ch->current_io_path);
-	spdk_json_write_named_bool(w, "connected", nvme_qpair_is_connected(io_path->qpair));
+	spdk_json_write_named_bool(w, "connected", io_path->qpair != NULL &&
+				   nvme_qpair_is_connected(io_path->qpair));
 	spdk_json_write_named_bool(w, "accessible", nvme_ns_is_accessible(nvme_ns));
 
 	spdk_json_write_named_object_begin(w, "transport");
