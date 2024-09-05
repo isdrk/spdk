@@ -775,23 +775,14 @@ nvme_io_path_free(struct nvme_io_path *io_path)
 }
 
 static int
-_bdev_nvme_add_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_ns *nvme_ns)
+nvme_io_path_get_ctrlr_channel(struct nvme_io_path *io_path)
 {
-	struct nvme_io_path *io_path;
 	struct spdk_io_channel *ch;
 	struct nvme_ctrlr_channel *ctrlr_ch;
 	struct nvme_qpair *nvme_qpair;
 
-	io_path = nvme_io_path_alloc();
-	if (io_path == NULL) {
-		return -ENOMEM;
-	}
-
-	io_path->nvme_ns = nvme_ns;
-
-	ch = spdk_get_io_channel(nvme_ns->ctrlr);
+	ch = spdk_get_io_channel(io_path->nvme_ns->ctrlr);
 	if (ch == NULL) {
-		nvme_io_path_free(io_path);
 		SPDK_ERRLOG("Failed to alloc io_channel.\n");
 		return -ENOMEM;
 	}
@@ -803,6 +794,28 @@ _bdev_nvme_add_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_ns *nvme_
 
 	io_path->qpair = nvme_qpair;
 	TAILQ_INSERT_TAIL(&nvme_qpair->io_path_list, io_path, tailq);
+
+	return 0;
+}
+
+static int
+_bdev_nvme_add_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_ns *nvme_ns)
+{
+	struct nvme_io_path *io_path;
+	int rc;
+
+	io_path = nvme_io_path_alloc();
+	if (io_path == NULL) {
+		return -ENOMEM;
+	}
+
+	io_path->nvme_ns = nvme_ns;
+
+	rc = nvme_io_path_get_ctrlr_channel(io_path);
+	if (rc != 0) {
+		nvme_io_path_free(io_path);
+		return rc;
+	}
 
 	io_path->nbdev_ch = nbdev_ch;
 	STAILQ_INSERT_TAIL(&nbdev_ch->io_path_list, io_path, stailq);
@@ -828,11 +841,25 @@ bdev_nvme_clear_retry_io_path(struct nvme_bdev_channel *nbdev_ch,
 }
 
 static void
-_bdev_nvme_delete_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_path *io_path)
+nvme_io_path_put_ctrlr_channel(struct nvme_io_path *io_path)
 {
 	struct spdk_io_channel *ch;
 	struct nvme_qpair *nvme_qpair;
 	struct nvme_ctrlr_channel *ctrlr_ch;
+
+	nvme_qpair = io_path->qpair;
+	assert(nvme_qpair != NULL);
+
+	ctrlr_ch = nvme_qpair->ctrlr_ch;
+	assert(ctrlr_ch != NULL);
+
+	ch = spdk_io_channel_from_ctx(ctrlr_ch);
+	spdk_put_io_channel(ch);
+}
+
+static void
+_bdev_nvme_delete_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_path *io_path)
+{
 	struct nvme_bdev *nbdev;
 
 	nbdev = spdk_io_channel_get_io_device(spdk_io_channel_from_ctx(nbdev_ch));
@@ -850,14 +877,7 @@ _bdev_nvme_delete_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_pat
 	STAILQ_REMOVE(&nbdev_ch->io_path_list, io_path, nvme_io_path, stailq);
 	io_path->nbdev_ch = NULL;
 
-	nvme_qpair = io_path->qpair;
-	assert(nvme_qpair != NULL);
-
-	ctrlr_ch = nvme_qpair->ctrlr_ch;
-	assert(ctrlr_ch != NULL);
-
-	ch = spdk_io_channel_from_ctx(ctrlr_ch);
-	spdk_put_io_channel(ch);
+	nvme_io_path_put_ctrlr_channel(io_path);
 
 	/* After an io_path is removed, I/Os submitted to it may complete and update statistics
 	 * of the io_path. To avoid heap-use-after-free error from this case, do not free the
