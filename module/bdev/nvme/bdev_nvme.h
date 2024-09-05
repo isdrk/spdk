@@ -94,6 +94,8 @@ struct nvme_io_path;
 struct nvme_ctrlr_channel_iter;
 struct nvme_bdev_channel_iter;
 
+typedef TAILQ_HEAD(, nvme_io_path) nvme_io_path_tailq_t;
+
 struct nvme_path_id {
 	struct spdk_nvme_transport_id		trid;
 	struct spdk_nvme_host_id		hostid;
@@ -195,7 +197,7 @@ struct nvme_qpair {
 	struct spdk_thread		*thread;
 
 	/* The following is used to update io_path cache of nvme_bdev_channels. */
-	TAILQ_HEAD(, nvme_io_path)	io_path_list;
+	nvme_io_path_tailq_t		io_path_list;
 
 	TAILQ_ENTRY(nvme_qpair)		tailq;
 };

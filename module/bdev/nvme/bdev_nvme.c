@@ -1770,11 +1770,11 @@ bdev_nvme_clear_io_path_caches_done(struct nvme_ctrlr *nvme_ctrlr,
 }
 
 static void
-_bdev_nvme_clear_io_path_cache(struct nvme_qpair *nvme_qpair)
+_bdev_nvme_clear_io_path_cache(nvme_io_path_tailq_t *queue)
 {
 	struct nvme_io_path *io_path;
 
-	TAILQ_FOREACH(io_path, &nvme_qpair->io_path_list, tailq) {
+	TAILQ_FOREACH(io_path, queue, tailq) {
 		if (io_path->nbdev_ch == NULL) {
 			continue;
 		}
@@ -1790,7 +1790,7 @@ bdev_nvme_clear_io_path_cache(struct nvme_ctrlr_channel_iter *i,
 {
 	assert(ctrlr_ch->qpair != NULL);
 
-	_bdev_nvme_clear_io_path_cache(ctrlr_ch->qpair);
+	_bdev_nvme_clear_io_path_cache(&ctrlr_ch->qpair->io_path_list);
 
 	nvme_ctrlr_for_each_channel_continue(i, 0);
 }
@@ -1848,7 +1848,7 @@ bdev_nvme_disconnected_qpair_cb(struct spdk_nvme_qpair *qpair, void *poll_group_
 		nvme_qpair->qpair = NULL;
 	}
 
-	_bdev_nvme_clear_io_path_cache(nvme_qpair);
+	_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 
 	ctrlr_ch = nvme_qpair->ctrlr_ch;
 
@@ -1893,7 +1893,7 @@ bdev_nvme_check_io_qpairs(struct nvme_poll_group *group)
 
 		if (spdk_nvme_qpair_get_failure_reason(nvme_qpair->qpair) !=
 		    SPDK_NVME_QPAIR_FAILURE_NONE) {
-			_bdev_nvme_clear_io_path_cache(nvme_qpair);
+			_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 		}
 	}
 }
@@ -2056,7 +2056,7 @@ bdev_nvme_create_qpair(struct nvme_qpair *nvme_qpair)
 	nvme_qpair->qpair = qpair;
 
 	if (!g_opts.disable_auto_failback) {
-		_bdev_nvme_clear_io_path_cache(nvme_qpair);
+		_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 	}
 
 	return 0;
@@ -2414,7 +2414,7 @@ bdev_nvme_reset_destroy_qpair(struct nvme_ctrlr_channel_iter *i,
 	nvme_qpair = ctrlr_ch->qpair;
 	assert(nvme_qpair != NULL);
 
-	_bdev_nvme_clear_io_path_cache(nvme_qpair);
+	_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 
 	if (nvme_qpair->qpair != NULL) {
 		if (nvme_qpair->ctrlr->dont_retry) {
@@ -2471,7 +2471,7 @@ bdev_nvme_reset_check_qpair_connected(void *ctx)
 	ctrlr_ch->reset_iter = NULL;
 
 	if (!g_opts.disable_auto_failback) {
-		_bdev_nvme_clear_io_path_cache(ctrlr_ch->qpair);
+		_bdev_nvme_clear_io_path_cache(&ctrlr_ch->qpair->io_path_list);
 	}
 
 	return SPDK_POLLER_BUSY;
@@ -3640,7 +3640,7 @@ bdev_nvme_destroy_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 	nvme_qpair = ctrlr_ch->qpair;
 	assert(nvme_qpair != NULL);
 
-	_bdev_nvme_clear_io_path_cache(nvme_qpair);
+	_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 
 	if (nvme_qpair->qpair != NULL) {
 		if (ctrlr_ch->reset_iter == NULL) {
