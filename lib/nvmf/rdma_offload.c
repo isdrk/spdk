@@ -628,6 +628,10 @@ struct rdma_transport_opts {
 	bool		no_srq;
 	bool		no_wr_batching;
 	int		acceptor_backlog;
+	char		*doca_device;
+	char		*rdma_devices_str;
+	char		**rdma_devices;
+	int		num_rdma_devices;
 };
 
 struct spdk_nvmf_rdma_sta {
@@ -698,6 +702,14 @@ static const struct spdk_json_object_decoder rdma_transport_opts_decoder[] = {
 	{
 		"acceptor_backlog", offsetof(struct rdma_transport_opts, acceptor_backlog),
 		spdk_json_decode_int32, true
+	},
+	{
+		"doca_device", offsetof(struct rdma_transport_opts, doca_device),
+		spdk_json_decode_string, true
+	},
+	{
+		"rdma_device_list", offsetof(struct rdma_transport_opts, rdma_devices_str),
+		spdk_json_decode_string, true
 	},
 };
 
@@ -2733,6 +2745,8 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 #define SPDK_NVMF_RDMA_ACCEPTOR_BACKLOG 100
 #define SPDK_NVMF_RDMA_DEFAULT_ABORT_TIMEOUT_SEC 1
 #define SPDK_NVMF_RDMA_DEFAULT_NO_WR_BATCHING false
+#define SPDK_NVMF_RDMA_DEFAULT_DOCA_DEVICE "mlx5_0"
+#define SPDK_NVMF_RDMA_DEFAULT_RDMA_DEVICE "mlx5_2"
 
 static void
 nvmf_rdma_opts_init(struct spdk_nvmf_transport_opts *opts)
@@ -2982,9 +2996,9 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 
 	TAILQ_INIT(&rtransport->sta.bdevs);
 
-	if (TAILQ_EMPTY(&rtransport->devices)) {
-		SPDK_ERRLOG("No device found\n");
-		return -EINVAL;
+	rtransport->sta.dev = open_doca_sta_dev(rtransport->rdma_opts.doca_device);
+	if (!rtransport->sta.dev) {
+		return -ENODEV;
 	}
 
 	rc = doca_pe_create(&rtransport->sta.pe);
@@ -2993,67 +3007,30 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 		return -EINVAL;
 	}
 
-#if 0
-	TAILQ_FOREACH(device, &rtransport->devices, link) {
-		if (!rtransport->sta.sta) {
-			/* Create a new DOCA STA Context */
-			rc = doca_sta_create(device->doca_dev, rtransport->sta.pe, &rtransport->sta.sta);
-			if (DOCA_IS_ERROR(rc)) {
-				SPDK_ERRLOG("Unable to create DOCA STA Context for ibdev %s: %s\n",
-					    ibv_get_device_name(device->context->device),
-					    doca_error_get_descr(rc));
-				return -EINVAL;
-			}
-			SPDK_NOTICELOG("Create DOCA STA Context for ibdev %s\n",
-				       ibv_get_device_name(device->context->device));
-		} else {
-			/* Add device to the existing DOCA STA Context */
-			rc = doca_sta_add_dev(rtransport->sta.sta, device->doca_dev);
-			if (DOCA_IS_ERROR(rc)) {
-				SPDK_ERRLOG("Unable to add ibdev %s to DOCA STA Context: %s\n",
-					    ibv_get_device_name(device->context->device),
-					    doca_error_get_descr(rc));
-				return -EINVAL;
-			}
-			SPDK_NOTICELOG("Add ibdev %s to DOCA STA Context\n",
-				       ibv_get_device_name(device->context->device));
-		}
-	}
-#else
-	/*
-	 * It is a workaround. The doca_sta behavior is weird. For the most operations, you cannot
-	 * use the device given to doca_sta_create(). Only devices added via doca_sta_add_dev() are
-	 * functional. Since onlu port 1 is connected on my setup, I use the second device to
-	 * create an STA context and add the fisrt device to make it fuctional.
-	 */
-	device = TAILQ_FIRST(&rtransport->devices);
-	assert(device);
-	device = TAILQ_NEXT(device, link);
-	assert(device);
 	/* Create a new DOCA STA Context */
-	rtransport->sta.dev = device->doca_dev;
 	rc = doca_sta_create(rtransport->sta.dev, rtransport->sta.pe, &rtransport->sta.sta);
 	if (DOCA_IS_ERROR(rc)) {
-		SPDK_ERRLOG("Unable to create DOCA STA Context for ibdev %s: %s\n",
-			    ibv_get_device_name(device->context->device),
+		SPDK_ERRLOG("Unable to create DOCA STA Context for device %s: %s\n",
+			    rtransport->rdma_opts.doca_device,
 			    doca_error_get_descr(rc));
 		return -EINVAL;
 	}
-	SPDK_NOTICELOG("Create DOCA STA Context for ibdev %s\n",
-		       ibv_get_device_name(device->context->device));
-	device = TAILQ_FIRST(&rtransport->devices);
-	assert(device);
-	/* Add device to the existing DOCA STA Context */
-	rc = doca_sta_add_dev(rtransport->sta.sta, device->doca_dev);
-	if (DOCA_IS_ERROR(rc)) {
-		SPDK_ERRLOG("Unable to add ibdev %s to DOCA STA Context: %s\n",
-			    ibv_get_device_name(device->context->device),
-			    doca_error_get_descr(rc));
-		return -EINVAL;
+	SPDK_NOTICELOG("Create DOCA STA Context for device %s\n",
+		       rtransport->rdma_opts.doca_device);
+
+	TAILQ_FOREACH(device, &rtransport->devices, link) {
+		/* Add device to the existing DOCA STA Context */
+		rc = doca_sta_add_dev(rtransport->sta.sta, device->doca_dev);
+		if (DOCA_IS_ERROR(rc)) {
+			SPDK_ERRLOG("Unable to add RDMA device %s to DOCA STA Context: %s\n",
+				    ibv_get_device_name(device->context->device),
+				    doca_error_get_descr(rc));
+			return -EINVAL;
+		}
+		SPDK_NOTICELOG("Add RDMA device %s to DOCA STA Context\n",
+			       ibv_get_device_name(device->context->device));
 	}
-	SPDK_NOTICELOG("Add ibdev %s to DOCA STA Context\n",
-		       ibv_get_device_name(device->context->device));
-#endif
+
 	rtransport->sta.ctx = doca_sta_as_doca_ctx(rtransport->sta.sta);
 	if (!rtransport->sta.ctx) {
 		SPDK_ERRLOG("Unable to get context for DOCA STA\n");
@@ -3094,6 +3071,49 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 	return 0;
 }
 
+static int
+nvmf_parse_rdma_device_list(const char *rdma_devices_str, char ***rdma_devices, int *num_rdma_devices)
+{
+	char *str, *tmp, **devices;
+	int i;
+
+	str = strdup(rdma_devices_str);
+	if (!str) {
+		return -ENOMEM;
+	}
+
+	i = 0;
+	tmp = str;
+	while ((tmp = strchr(tmp, ',')) != NULL) {
+		i++;
+	}
+
+	devices = calloc(i, sizeof(char *));
+	if (!*devices) {
+		free(str);
+		return -ENOMEM;
+	}
+
+	i = 0;
+	tmp = strtok(str, ",");
+	while (tmp) {
+		devices[i] = strdup(tmp);
+		if (!devices[i]) {
+			free(devices);
+			free(str);
+			return -ENOMEM;
+		}
+		i++;
+		tmp = strtok(NULL, ",");
+	}
+
+	free(str);
+	*rdma_devices = devices;
+	*num_rdma_devices = i;
+
+	return 0;
+}
+
 static struct spdk_nvmf_transport *
 nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 {
@@ -3101,7 +3121,9 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_rdma_device	*device;
 	struct ibv_context		**contexts;
-	uint32_t			i;
+	struct ibv_context		*context;
+	int				i;
+	int				j;
 	int				flag;
 	uint32_t			sge_count;
 	uint32_t			min_shared_buffers;
@@ -3134,6 +3156,42 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		SPDK_ERRLOG("spdk_json_decode_object_relaxed failed\n");
 		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
 		return NULL;
+	}
+
+	if (rtransport->rdma_opts.rdma_devices_str) {
+		rc = nvmf_parse_rdma_device_list(rtransport->rdma_opts.rdma_devices_str,
+						 &rtransport->rdma_opts.rdma_devices,
+						 &rtransport->rdma_opts.num_rdma_devices);
+		if (rc) {
+			SPDK_ERRLOG("Failed to parse rdma_device_list %s\n", rtransport->rdma_opts.rdma_devices_str);
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+	}
+
+	if (!rtransport->rdma_opts.doca_device) {
+		rtransport->rdma_opts.doca_device = strdup(SPDK_NVMF_RDMA_DEFAULT_DOCA_DEVICE);
+		if (!rtransport->rdma_opts.doca_device) {
+			SPDK_ERRLOG("Failed to allocate memory for doca_device\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+	}
+
+	if (!rtransport->rdma_opts.rdma_devices) {
+		rtransport->rdma_opts.rdma_devices = malloc(sizeof(char *));
+		if (!rtransport->rdma_opts.rdma_devices) {
+			SPDK_ERRLOG("Failed to allocate memory for rdma_devices\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		rtransport->rdma_opts.rdma_devices[0] = strdup(SPDK_NVMF_RDMA_DEFAULT_RDMA_DEVICE);
+		if (!rtransport->rdma_opts.rdma_devices[0]) {
+			SPDK_ERRLOG("Failed to allocate memory for rdma_devices\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		rtransport->rdma_opts.num_rdma_devices = 1;
 	}
 
 	SPDK_INFOLOG(rdma, "*** RDMA Transport Init ***\n"
@@ -3247,15 +3305,29 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		return NULL;
 	}
 
-	i = 0;
 	rc = 0;
-	while (contexts[i] != NULL) {
-		rc = create_ib_device(rtransport, contexts[i], &device);
-		if (rc == 0) {
-			max_device_sge = spdk_min(max_device_sge, device->attr.max_sge);
-			device->is_ready = true;
+	for (i = 0; i < rtransport->rdma_opts.num_rdma_devices; i++) {
+		context = NULL;
+		for (j = 0; contexts[j] != NULL; j++) {
+			if (strcmp(rtransport->rdma_opts.rdma_devices[i],
+				   ibv_get_device_name(contexts[j]->device)) == 0) {
+				context = contexts[j];
+				break;
+			}
 		}
-		i++;
+		if (!context) {
+			SPDK_ERRLOG("RDMA device %s is not found.\n", rtransport->rdma_opts.rdma_devices[i]);
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		rc = create_ib_device(rtransport, context, &device);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to open RDMA device %s.\n", rtransport->rdma_opts.rdma_devices[i]);
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		max_device_sge = spdk_min(max_device_sge, device->attr.max_sge);
+		device->is_ready = true;
 	}
 	rdma_free_devices(contexts);
 
@@ -3329,6 +3401,7 @@ nvmf_rdma_dump_opts(struct spdk_nvmf_transport *transport, struct spdk_json_writ
 	}
 	spdk_json_write_named_int32(w, "acceptor_backlog", rtransport->rdma_opts.acceptor_backlog);
 	spdk_json_write_named_bool(w, "no_wr_batching", rtransport->rdma_opts.no_wr_batching);
+	spdk_json_write_named_string(w, "doca_device", rtransport->rdma_opts.doca_device);
 }
 
 static int nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem);
@@ -3364,6 +3437,13 @@ nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
 			SPDK_ERRLOG("doca_pe_destroy: %s\n", doca_error_get_descr(rc));
 		}
 	}
+
+	if (rtransport->sta.dev) {
+		rc = doca_dev_close(rtransport->sta.dev);
+		if (DOCA_IS_ERROR(rc)) {
+			SPDK_ERRLOG("doca_pe_destroy: %s\n", doca_error_get_descr(rc));
+		}
+	}
 }
 
 static int
@@ -3375,6 +3455,7 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	struct spdk_nvmf_rdma_device	*device, *device_tmp;
 	struct spdk_nvmf_rdma_bdev	*rbdev, *rbdev_tmp;
 	struct spdk_nvmf_rdma_subsystem *rsubsystem, *rsubsystem_tmp;
+	int				i;
 
 	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
 
@@ -3424,6 +3505,18 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	spdk_mempool_free(rtransport->data_wr_pool);
 
 	spdk_poller_unregister(&rtransport->accept_poller);
+	if (rtransport->rdma_opts.doca_device) {
+		free(rtransport->rdma_opts.doca_device);
+	}
+	if (rtransport->rdma_opts.rdma_devices) {
+		for (i = 0; i < rtransport->rdma_opts.num_rdma_devices; i++) {
+			free(rtransport->rdma_opts.rdma_devices[i]);
+		}
+		free(rtransport->rdma_opts.rdma_devices);
+	}
+	if (rtransport->rdma_opts.rdma_devices_str) {
+		free(rtransport->rdma_opts.rdma_devices_str);
+	}
 	free(rtransport);
 
 	if (cb_fn) {

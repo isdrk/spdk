@@ -117,6 +117,8 @@ def nvmf_create_transport(client, **params):
         c2h_success: Boolean flag to disable the C2H success optimization - TCP specific (optional)
         dif_insert_or_strip: Boolean flag to enable DIF insert/strip for I/O - TCP specific (optional)
         acceptor_backlog: Pending connections allowed at one time - RDMA specific (optional)
+        doca_device: DOCA device with STA capabilities - RDMA_OFFLOAD specific (optional)
+        rdma_device_list: Allowed list of RDMA devices - RDMA_OFFLOAD specific (optional)
         abort_timeout_sec: Abort execution timeout value, in seconds (optional)
         no_wr_batching: Boolean flag to disable work requests batching - RDMA specific (optional)
         control_msg_num: The number of control messages per poll group - TCP specific (optional)
