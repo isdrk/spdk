@@ -4,6 +4,7 @@
  *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include <doca_log.h>
 #include <doca_dev.h>
 #include <doca_pe.h>
 #include <doca_ctx.h>
@@ -628,6 +629,7 @@ struct rdma_transport_opts {
 	bool		no_srq;
 	bool		no_wr_batching;
 	int		acceptor_backlog;
+	char		*doca_log_level;
 	char		*doca_device;
 	char		*rdma_devices_str;
 	char		**rdma_devices;
@@ -702,6 +704,10 @@ static const struct spdk_json_object_decoder rdma_transport_opts_decoder[] = {
 	{
 		"acceptor_backlog", offsetof(struct rdma_transport_opts, acceptor_backlog),
 		spdk_json_decode_int32, true
+	},
+	{
+		"doca_log_level", offsetof(struct rdma_transport_opts, doca_log_level),
+		spdk_json_decode_string, true
 	},
 	{
 		"doca_device", offsetof(struct rdma_transport_opts, doca_device),
@@ -3072,6 +3078,75 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 }
 
 static int
+nvmf_doca_log_level_decode(const char *name, enum doca_log_level *level)
+{
+	struct log_level {
+		const char *name;
+		const enum doca_log_level value;
+	};
+       static const struct log_level log_levels[] = {
+		{ .name = "disable",	.value = DOCA_LOG_LEVEL_DISABLE },
+		{ .name = "critical",	.value = DOCA_LOG_LEVEL_CRIT },
+		{ .name = "error",	.value = DOCA_LOG_LEVEL_ERROR },
+		{ .name = "warning",	.value = DOCA_LOG_LEVEL_WARNING },
+		{ .name = "info",	.value = DOCA_LOG_LEVEL_INFO },
+		{ .name = "debug",	.value = DOCA_LOG_LEVEL_DEBUG },
+		{ .name = "trace",	.value = DOCA_LOG_LEVEL_TRACE },
+		{ .name = NULL,		.value = 0 },
+	};
+       const struct log_level *log_level;
+
+       for (log_level = log_levels; log_level->name != NULL; log_level++) {
+	       if (strcmp(name, log_level->name) == 0) {
+		       *level = log_level->value;
+		       return 0;
+	       }
+       }
+
+       SPDK_ERRLOG("Unknown log level %s\n", name);
+       return -1;
+}
+
+static int
+nvmf_enable_doca_log(const char *log_level_name)
+{
+	struct doca_log_backend *sta_lib_log;
+	enum doca_log_level log_level;
+	int rc;
+	doca_error_t drc;
+
+	if (!log_level_name) {
+		log_level = DOCA_LOG_LEVEL_ERROR;
+	} else {
+		rc = nvmf_doca_log_level_decode(log_level_name, &log_level);
+		if (rc) {
+			return -1;
+		}
+	}
+/*
+	// We do not use DOCA logs functionality for applications. We only need logs from DOCA libs.
+	drc = doca_log_backend_create_standard();
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to create DOCA log backend: %s\n", doca_error_get_descr(drc));
+	        return -1;
+	}
+*/
+	/* Register a logger backend for internal SDK errors and warnings */
+        drc = doca_log_backend_create_with_file_sdk(stderr, &sta_lib_log);
+        if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to create DOCA log backend for SDK: %s\n", doca_error_get_descr(drc));
+                return -1;
+	}
+        drc = doca_log_backend_set_sdk_level(sta_lib_log, log_level);
+        if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set log level for DOCA log backend: %s\n", doca_error_get_descr(drc));
+                return -1;
+	}
+
+	return 0;
+}
+
+static int
 nvmf_parse_rdma_device_list(const char *rdma_devices_str, char ***rdma_devices, int *num_rdma_devices)
 {
 	char *str, *tmp, **devices;
@@ -3154,6 +3229,13 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 					    SPDK_COUNTOF(rdma_transport_opts_decoder),
 					    &rtransport->rdma_opts)) {
 		SPDK_ERRLOG("spdk_json_decode_object_relaxed failed\n");
+		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+		return NULL;
+	}
+
+	rc = nvmf_enable_doca_log(rtransport->rdma_opts.doca_log_level);
+	if (rc) {
+		SPDK_ERRLOG("Failed to enable DOCA log\n");
 		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
 		return NULL;
 	}
@@ -3505,6 +3587,9 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	spdk_mempool_free(rtransport->data_wr_pool);
 
 	spdk_poller_unregister(&rtransport->accept_poller);
+	if (rtransport->rdma_opts.doca_log_level) {
+		free(rtransport->rdma_opts.doca_log_level);
+	}
 	if (rtransport->rdma_opts.doca_device) {
 		free(rtransport->rdma_opts.doca_device);
 	}
