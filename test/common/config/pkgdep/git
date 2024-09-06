@@ -402,14 +402,6 @@ function install_ice() {
 	)
 }
 
-function install_lcov() {
-	local lcov_version=v1.15
-
-	rm -rf /usr/src/lcov
-	sudo git clone "$GIT_REPO_LCOV" --branch "$lcov_version" /usr/src/lcov
-	(cd /usr/src/lcov; sudo make install)
-}
-
 function install_bpftrace() {
 	local deps=() bcc_rev
 
@@ -467,7 +459,6 @@ function install_sources() {
 			install_qemu
 			install_igb_uio
 			install_ice
-			install_lcov
 			install_bpftrace
 		)
 		install_extra_pkgs
@@ -517,8 +508,6 @@ export GIT_REPO_DPDK_KMODS
 export IRDMA_DRIVER
 : ${ICE_DRIVER="https://sourceforge.net/projects/e1000/files/ice%20stable/$ICE_VERSION/ice-$ICE_VERSION.tar.gz"}
 export ICE_DRIVER
-: ${GIT_REPO_LCOV=https://github.com/linux-test-project/lcov}
-export GIT_REPO_LCOV
 : ${GIT_REPO_BCC=https://github.com/iovisor/bcc.git}
 export GIT_REPO_BCC
 : ${GIT_REPO_BPFTRACE=https://github.com/iovisor/bpftrace.git}
