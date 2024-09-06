@@ -81,15 +81,6 @@ freebsd_set_maxsock_buf
 # More information: https://github.com/spdk/spdk/issues/1693
 CC_TYPE=$(grep CC_TYPE mk/cc.mk)
 if hash lcov && ! [[ "$CC_TYPE" == *"clang"* ]]; then
-	export LCOV_OPTS="
-		--rc lcov_branch_coverage=1
-		--rc lcov_function_coverage=1
-		--rc genhtml_branch_coverage=1
-		--rc genhtml_function_coverage=1
-		--rc genhtml_legend=1
-		--rc geninfo_all_blocks=1
-		"
-	export LCOV="lcov $LCOV_OPTS --no-external"
 	# Print lcov version to log
 	$LCOV --version
 	# zero out coverage data

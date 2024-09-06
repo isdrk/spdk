@@ -194,15 +194,6 @@ if [ "$cov_avail" = "yes" ]; then
 		UT_COVERAGE=$output_dir/ut_coverage
 	fi
 	mkdir -p $UT_COVERAGE
-	export LCOV_OPTS="
-		--rc lcov_branch_coverage=1
-		--rc lcov_function_coverage=1
-		--rc genhtml_branch_coverage=1
-		--rc genhtml_function_coverage=1
-		--rc genhtml_legend=1
-		--rc geninfo_all_blocks=1
-		"
-	export LCOV="lcov $LCOV_OPTS --no-external"
 	# zero out coverage data
 	$LCOV -q -c -i -d . -t "Baseline" -o $UT_COVERAGE/ut_cov_base.info
 fi
