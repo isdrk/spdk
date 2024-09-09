@@ -10,7 +10,7 @@
 #include <doca_ctx.h>
 #include <doca_sta.h>
 #include <doca_sta_be.h>
-//#include <doca_sta_subsystem.h>
+#include <doca_sta_subsystem.h>
 #include <infiniband/mlx5dv.h>
 
 #include "spdk/stdinc.h"
@@ -35,51 +35,6 @@
 #include "../nvme/nvme_pcie_internal.h"
 
 #include "spdk_internal/trace_defs.h"
-
-typedef uint64_t doca_sta_subs_handle_t;
-typedef uint64_t doca_sta_ns_handle_t;
-
-static doca_error_t
-doca_sta_subsystem_create(struct doca_sta *sta,
-			  const char *nqn,
-			  doca_sta_subs_handle_t *subs_handle)
-{
-	*subs_handle = 0xfeedbeef;
-
-	return DOCA_SUCCESS;
-}
-
-static doca_error_t
-doca_sta_subsystem_destroy(doca_sta_subs_handle_t subs_handle)
-{
-	return DOCA_SUCCESS;
-}
-
-static doca_error_t
-doca_sta_subsystem_add_dev(doca_sta_subs_handle_t subs_handle,
-			   const struct doca_dev *dev)
-{
-	return DOCA_SUCCESS;
-}
-
-static doca_error_t
-doca_sta_subsystem_add_ns(doca_sta_subs_handle_t subs_handle,
-			  uint32_t fe_ns_id,
-			  uint32_t be_ns_id,
-			  doca_sta_be_handle_t be_handle,
-			  doca_sta_ns_handle_t *ns_handle)
-{
-	*ns_handle = 0xfeedbeef;
-
-	return DOCA_SUCCESS;
-}
-
-static doca_error_t
-doca_sta_subsystem_rm_ns(doca_sta_subs_handle_t subs_handle, doca_sta_ns_handle_t ns_handle)
-{
-	return DOCA_SUCCESS;
-}
-
 
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload;
 
