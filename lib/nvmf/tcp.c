@@ -19,9 +19,9 @@
 #include "spdk/sock.h"
 
 #include "spdk_internal/assert.h"
-#include "spdk_internal/nvme_tcp.h"
 
 #include "nvmf_internal.h"
+#include "nvmf_tcp.h"
 #include "transport.h"
 
 #include "spdk_internal/trace_defs.h"
