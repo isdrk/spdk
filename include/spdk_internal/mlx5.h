@@ -14,7 +14,7 @@
 #include <rdma/rdma_cma.h>
 
 #define SPDK_MLX5_VENDOR_ID_MELLANOX 0x2c9
-
+#define SPDK_MLX5_DEV_MAX_NAME_LEN 64
 #define SPDK_MLX5_DRIVER_NAME "mlx5"
 
 struct spdk_mlx5_mkey_pool_obj {

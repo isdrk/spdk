@@ -30,6 +30,9 @@
 #define ACCEL_MLX5_MAX_WC (32u)
 #define ACCEL_MLX5_MAX_MKEYS_IN_TASK (16u)
 
+/* Assume we have up to 16 devices */
+#define ACCEL_MLX5_ALLOWED_DEVS_MAX_LEN ((SPDK_MLX5_DEV_MAX_NAME_LEN + 1) * 16)
+
 #define ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, task)	\
 do {							\
 	assert((qp)->wrs_submitted < (qp)->max_wrs);	\
@@ -94,26 +97,16 @@ struct accel_mlx5_module {
 	struct spdk_accel_module_if module;
 	struct accel_mlx5_dev_ctx *devices;
 	struct accel_mlx5_stats stats;
+	struct accel_mlx5_attr attr;
 	struct spdk_spinlock lock;
 	uint32_t num_devs;
-	uint16_t qp_size;
-	uint16_t cq_size;
-	uint32_t num_requests;
-	uint32_t split_mb_blocks;
-	bool siglast;
-	bool qp_per_domain;
-	/* copy of user input to make dump config easier */
-	char *allowed_devs_str;
 	char **allowed_devs;
 	size_t allowed_devs_count;
+	bool initialized;
 	bool enabled;
 	bool crypto_supported;
 	bool crc_supported;
 	bool merge;
-	bool initialized;
-	bool enable_driver;
-	bool disable_signature;
-	bool disable_crypto;
 };
 
 struct accel_mlx5_sge {
@@ -2555,7 +2548,8 @@ accel_mlx5_dev_get_qp_by_domain(struct accel_mlx5_dev *dev, struct spdk_memory_d
 static inline struct accel_mlx5_qp *
 accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
 {
-	if (!g_accel_mlx5.qp_per_domain || (!mlx5_task->base.src_domain && !mlx5_task->base.dst_domain)) {
+	if (!g_accel_mlx5.attr.qp_per_domain || (!mlx5_task->base.src_domain &&
+			!mlx5_task->base.dst_domain)) {
 		return &dev->mlx5_qp;
 	}
 
@@ -2699,10 +2693,10 @@ accel_mlx5_crypto_task_init(struct accel_mlx5_task *mlx5_task)
 #endif
 	}
 	if (dev->crypto_multi_block) {
-		if (g_accel_mlx5.split_mb_blocks) {
-			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.split_mb_blocks);
+		if (g_accel_mlx5.attr.split_mb_blocks) {
+			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 			/* Last req may consume less blocks */
-			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.split_mb_blocks);
+			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 		} else {
 			if (task->s.iovcnt > ACCEL_MLX5_MAX_SGE || task->d.iovcnt > ACCEL_MLX5_MAX_SGE) {
 				uint32_t max_sge_count = spdk_max(task->s.iovcnt, task->d.iovcnt);
@@ -2780,9 +2774,10 @@ accel_mlx5_encrypt_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 
 	num_blocks = task->nbytes / mlx5_task->base.block_size;
 	if (dev->crypto_multi_block) {
-		if (spdk_unlikely(g_accel_mlx5.split_mb_blocks && num_blocks > g_accel_mlx5.split_mb_blocks)) {
+		if (spdk_unlikely(g_accel_mlx5.attr.split_mb_blocks &&
+				  num_blocks > g_accel_mlx5.attr.split_mb_blocks)) {
 			SPDK_ERRLOG("Number of blocks in task %u exceeds split threshold %u, can't handle\n",
-				    num_blocks, g_accel_mlx5.split_mb_blocks);
+				    num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 			return -E2BIG;
 		}
 	} else if (num_blocks != 1) {
@@ -2864,9 +2859,10 @@ accel_mlx5_decrypt_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 
 	num_blocks = task->nbytes / mlx5_task->base.block_size;
 	if (dev->crypto_multi_block) {
-		if (spdk_unlikely(g_accel_mlx5.split_mb_blocks && num_blocks > g_accel_mlx5.split_mb_blocks)) {
+		if (spdk_unlikely(g_accel_mlx5.attr.split_mb_blocks &&
+				  num_blocks > g_accel_mlx5.attr.split_mb_blocks)) {
 			SPDK_ERRLOG("Number of blocks in task %u exceeds split threshold %u, can't handle\n",
-				    num_blocks, g_accel_mlx5.split_mb_blocks);
+				    num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 			return -E2BIG;
 		}
 	} else if (num_blocks != 1) {
@@ -2983,10 +2979,10 @@ accel_mlx5_encrypt_and_crc_task_init(struct accel_mlx5_task *mlx5_task)
 	num_blocks = task->nbytes / mlx5_task->base.block_size;
 	mlx5_task->num_blocks = num_blocks;
 	if (dev->crypto_multi_block) {
-		if (g_accel_mlx5.split_mb_blocks) {
-			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.split_mb_blocks);
+		if (g_accel_mlx5.attr.split_mb_blocks) {
+			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 			/* Last req may consume less blocks */
-			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.split_mb_blocks);
+			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 		} else {
 			mlx5_task->num_reqs = 1;
 			mlx5_task->blocks_per_req = num_blocks;
@@ -3075,10 +3071,10 @@ accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 	num_blocks = task->nbytes / task_crypto->block_size;
 	mlx5_task->num_blocks = num_blocks;
 	if (dev->crypto_multi_block) {
-		if (g_accel_mlx5.split_mb_blocks) {
-			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.split_mb_blocks);
+		if (g_accel_mlx5.attr.split_mb_blocks) {
+			mlx5_task->num_reqs = SPDK_CEIL_DIV(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 			/* Last req may consume less blocks */
-			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.split_mb_blocks);
+			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.attr.split_mb_blocks);
 		} else {
 			mlx5_task->num_reqs = 1;
 			mlx5_task->blocks_per_req = num_blocks;
@@ -3421,11 +3417,11 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 		return;
 	}
 
-	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
+	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.attr.qp_size;
 	mlx5_qp_attr.cap.max_recv_wr = 0;
 	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
 	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
-	mlx5_qp_attr.siglast = g_accel_mlx5.siglast;
+	mlx5_qp_attr.siglast = g_accel_mlx5.attr.siglast;
 
 	rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &qp->qp);
 	if (rc) {
@@ -3841,11 +3837,11 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 	struct spdk_mlx5_qp_attr mlx5_qp_attr = {};
 	int rc;
 
-	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.qp_size;
+	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.attr.qp_size;
 	mlx5_qp_attr.cap.max_recv_wr = 0;
 	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
 	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
-	mlx5_qp_attr.siglast = g_accel_mlx5.siglast;
+	mlx5_qp_attr.siglast = g_accel_mlx5.attr.siglast;
 
 	rc = spdk_mlx5_qp_create(dev->pd_ref, dev->cq, &mlx5_qp_attr, &qp->qp);
 	if (rc) {
@@ -3860,7 +3856,7 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 
 	STAILQ_INIT(&qp->in_hw);
 	qp->dev = dev;
-	qp->max_wrs = g_accel_mlx5.qp_size;
+	qp->max_wrs = g_accel_mlx5.attr.qp_size;
 
 	return 0;
 }
@@ -3927,7 +3923,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 
 		ch->num_devs++;
 
-		mlx5_cq_attr.cqe_cnt = g_accel_mlx5.cq_size;
+		mlx5_cq_attr.cqe_cnt = g_accel_mlx5.attr.cq_size;
 		mlx5_cq_attr.cqe_size = 64;
 		mlx5_cq_attr.cq_context = dev;
 
@@ -3943,7 +3939,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			goto err_out;
 		}
 
-		dev->max_wrs_in_cq = g_accel_mlx5.cq_size;
+		dev->max_wrs_in_cq = g_accel_mlx5.attr.cq_size;
 		STAILQ_INIT(&dev->nomem);
 		STAILQ_INIT(&dev->complete_wr_qps);
 	}
@@ -3989,7 +3985,7 @@ accel_mlx5_allowed_devs_free(void)
 		free(g_accel_mlx5.allowed_devs[i]);
 	}
 	free(g_accel_mlx5.allowed_devs);
-	free(g_accel_mlx5.allowed_devs_str);
+	free(g_accel_mlx5.attr.allowed_devs);
 	g_accel_mlx5.allowed_devs = NULL;
 	g_accel_mlx5.allowed_devs_count = 0;
 }
@@ -4042,26 +4038,34 @@ accel_mlx5_allowed_devs_parse(const char *allowed_devs)
 int
 accel_mlx5_enable(struct accel_mlx5_attr *attr)
 {
+	int rc;
+
+	if (g_accel_mlx5.attr.allowed_devs) {
+		/* If RPC is called several times, free saved config */
+		free(g_accel_mlx5.attr.allowed_devs);
+		g_accel_mlx5.attr.allowed_devs = NULL;
+	}
+
 	if (attr) {
-		/* Copy attributes */
-		g_accel_mlx5.qp_size = attr->qp_size;
-		g_accel_mlx5.cq_size = attr->cq_size;
-		g_accel_mlx5.num_requests = attr->num_requests;
-		g_accel_mlx5.split_mb_blocks = attr->split_mb_blocks;
-		g_accel_mlx5.siglast = attr->siglast;
-		g_accel_mlx5.qp_per_domain = attr->qp_per_domain;
-		g_accel_mlx5.enable_driver = attr->enable_driver;
-		g_accel_mlx5.disable_signature = attr->disable_signature;
-		g_accel_mlx5.disable_crypto = attr->disable_crypto;
+		if (attr->num_requests / spdk_env_get_core_count() < ACCEL_MLX5_MAX_MKEYS_IN_TASK) {
+			SPDK_ERRLOG("num requests per core must not be less than %u, current value %u\n",
+				    ACCEL_MLX5_MAX_MKEYS_IN_TASK, attr->num_requests / spdk_env_get_core_count());
+			return -EINVAL;
+		}
+		if (attr->qp_size < 8) {
+			SPDK_ERRLOG("qp_size must be at least 8\n");
+			return -EINVAL;
+		}
+		g_accel_mlx5.attr = *attr;
+		g_accel_mlx5.attr.allowed_devs = NULL;
 
 		if (attr->allowed_devs) {
-			int rc;
-
-			g_accel_mlx5.allowed_devs_str = strdup(attr->allowed_devs);
-			if (!g_accel_mlx5.allowed_devs_str) {
+			/* Contains a copy of user's string */
+			g_accel_mlx5.attr.allowed_devs = strndup(attr->allowed_devs, ACCEL_MLX5_ALLOWED_DEVS_MAX_LEN);
+			if (!g_accel_mlx5.attr.allowed_devs) {
 				return -ENOMEM;
 			}
-			rc = accel_mlx5_allowed_devs_parse(attr->allowed_devs);
+			rc = accel_mlx5_allowed_devs_parse(g_accel_mlx5.attr.allowed_devs);
 			if (rc) {
 				return rc;
 			}
@@ -4072,6 +4076,8 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 				return rc;
 			}
 		}
+	} else {
+		accel_mlx5_get_default_attr(&g_accel_mlx5.attr);
 	}
 
 	g_accel_mlx5.enabled = attr ? attr->enable_module : true;
@@ -4281,7 +4287,7 @@ accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *
 	}
 	dev_ctx->context = dev;
 	dev_ctx->pd = pd;
-	dev_ctx->num_mkeys = g_accel_mlx5.num_requests;
+	dev_ctx->num_mkeys = g_accel_mlx5.attr.num_requests;
 	dev_ctx->domain = spdk_rdma_utils_get_memory_domain(pd, SPDK_DMA_DEVICE_TYPE_RDMA);
 	if (!dev_ctx->domain) {
 		return -ENOMEM;
@@ -4305,7 +4311,7 @@ accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *
 		if (crypto_caps->multi_block_be_tweak) {
 			/* TODO: multi_block LE tweak will be checked later once LE BSF is fixed */
 			dev_ctx->crypto_multi_block = true;
-		} else if (g_accel_mlx5.split_mb_blocks) {
+		} else if (g_accel_mlx5.attr.split_mb_blocks) {
 			SPDK_WARNLOG("\"split_mb_block\" is set but dev %s doesn't support multi block crypto\n",
 				     dev->device->name);
 		}
@@ -4331,7 +4337,7 @@ accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *
 			return rc;
 		}
 	}
-	if (g_accel_mlx5.enable_driver) {
+	if (g_accel_mlx5.attr.enable_driver) {
 		if (g_accel_mlx5.crypto_supported && g_accel_mlx5.crc_supported) {
 			rc = accel_mlx5_mkeys_create(dev_ctx,
 						     SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
@@ -4434,7 +4440,7 @@ accel_mlx5_init(void)
 
 	spdk_spin_init(&g_accel_mlx5.lock);
 
-	if (g_accel_mlx5.siglast) {
+	if (g_accel_mlx5.attr.siglast) {
 		g_accel_mlx5_process_cpl_fn = accel_mlx5_process_cpls_siglast;
 	} else {
 		g_accel_mlx5_process_cpl_fn = accel_mlx5_process_cpls;
@@ -4508,8 +4514,8 @@ accel_mlx5_init(void)
 			       g_accel_mlx5.crc_supported);
 	}
 
-	g_accel_mlx5.crypto_supported &= !g_accel_mlx5.disable_crypto;
-	g_accel_mlx5.crc_supported &= !g_accel_mlx5.disable_signature;
+	g_accel_mlx5.crypto_supported &= !g_accel_mlx5.attr.disable_crypto;
+	g_accel_mlx5.crc_supported &= !g_accel_mlx5.attr.disable_signature;
 
 	g_accel_mlx5.devices = calloc(num_devs, sizeof(*g_accel_mlx5.devices));
 	if (!g_accel_mlx5.devices) {
@@ -4543,7 +4549,7 @@ accel_mlx5_init(void)
 	free(rdma_devs);
 	g_accel_mlx5.initialized = true;
 
-	if (g_accel_mlx5.enable_driver) {
+	if (g_accel_mlx5.attr.enable_driver) {
 		SPDK_NOTICELOG("Enabling mlx5 platform driver\n");
 		spdk_accel_driver_register(&g_accel_mlx5_driver);
 		spdk_accel_set_driver(g_accel_mlx5_driver.name);
@@ -4567,18 +4573,18 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_string(w, "method", "mlx5_scan_accel_module");
 	spdk_json_write_named_object_begin(w, "params");
 	if (g_accel_mlx5.enabled) {
-		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.qp_size);
-		spdk_json_write_named_uint16(w, "cq_size", g_accel_mlx5.cq_size);
-		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.num_requests);
-		spdk_json_write_named_bool(w, "enable_driver", g_accel_mlx5.enable_driver);
-		spdk_json_write_named_uint32(w, "split_mb_blocks", g_accel_mlx5.split_mb_blocks);
-		if (g_accel_mlx5.allowed_devs_str) {
-			spdk_json_write_named_string(w, "allowed_devs", g_accel_mlx5.allowed_devs_str);
+		spdk_json_write_named_uint16(w, "qp_size", g_accel_mlx5.attr.qp_size);
+		spdk_json_write_named_uint16(w, "cq_size", g_accel_mlx5.attr.cq_size);
+		spdk_json_write_named_uint32(w, "num_requests", g_accel_mlx5.attr.num_requests);
+		spdk_json_write_named_bool(w, "enable_driver", g_accel_mlx5.attr.enable_driver);
+		spdk_json_write_named_uint32(w, "split_mb_blocks", g_accel_mlx5.attr.split_mb_blocks);
+		if (g_accel_mlx5.attr.allowed_devs) {
+			spdk_json_write_named_string(w, "allowed_devs", g_accel_mlx5.attr.allowed_devs);
 		}
-		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.siglast);
-		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.qp_per_domain);
-		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.disable_signature);
-		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.disable_crypto);
+		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.attr.siglast);
+		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.attr.qp_per_domain);
+		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.attr.disable_signature);
+		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.attr.disable_crypto);
 	} else {
 		spdk_json_write_named_bool(w, "enable_module", g_accel_mlx5.enabled);
 	}
@@ -4894,13 +4900,15 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 		.crypto_supports_tweak_mode	= accel_mlx5_crypto_supports_tweak_mode,
 		.get_memory_domains	= accel_mlx5_get_memory_domains,
 	},
+	.attr = {
+		.qp_size = ACCEL_MLX5_QP_SIZE,
+		.cq_size = ACCEL_MLX5_CQ_SIZE,
+		.num_requests = ACCEL_MLX5_NUM_MKEYS,
+		.split_mb_blocks = 0,
+		.disable_signature = false,
+		.disable_crypto = false
+	},
 	.enabled = true,
-	.qp_size = ACCEL_MLX5_QP_SIZE,
-	.cq_size = ACCEL_MLX5_CQ_SIZE,
-	.num_requests = ACCEL_MLX5_NUM_MKEYS,
-	.split_mb_blocks = 0,
-	.disable_signature = false,
-	.disable_crypto = false
 };
 
 static struct spdk_accel_driver g_accel_mlx5_driver = {
