@@ -156,6 +156,7 @@ static void nvme_ctrlr_populate_namespaces_done(struct nvme_ctrlr *nvme_ctrlr,
 		struct nvme_async_probe_ctx *ctx);
 static int bdev_nvme_library_init(void);
 static void bdev_nvme_library_fini(void);
+static void bdev_nvme_library_fini_done(void);
 static void _bdev_nvme_submit_request(struct nvme_bdev_channel *nbdev_ch,
 				      struct spdk_bdev_io *bdev_io);
 static void bdev_nvme_submit_request(struct spdk_io_channel *ch,
@@ -602,8 +603,7 @@ _nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 	pthread_mutex_lock(&g_bdev_nvme_mutex);
 	if (g_bdev_nvme_module_finish && TAILQ_EMPTY(&g_nvme_bdev_ctrlrs)) {
 		pthread_mutex_unlock(&g_bdev_nvme_mutex);
-		spdk_io_device_unregister(&g_nvme_bdev_ctrlrs, NULL);
-		spdk_bdev_module_fini_done();
+		bdev_nvme_library_fini_done();
 		return;
 	}
 	pthread_mutex_unlock(&g_bdev_nvme_mutex);
@@ -7281,8 +7281,7 @@ bdev_nvme_fini_destruct_ctrlrs(void)
 	g_bdev_nvme_module_finish = true;
 	if (TAILQ_EMPTY(&g_nvme_bdev_ctrlrs)) {
 		pthread_mutex_unlock(&g_bdev_nvme_mutex);
-		spdk_io_device_unregister(&g_nvme_bdev_ctrlrs, NULL);
-		spdk_bdev_module_fini_done();
+		bdev_nvme_library_fini_done();
 		return;
 	}
 
@@ -7295,6 +7294,13 @@ check_discovery_fini(void *arg)
 	if (TAILQ_EMPTY(&g_discovery_ctxs)) {
 		bdev_nvme_fini_destruct_ctrlrs();
 	}
+}
+
+static void
+bdev_nvme_library_fini_done(void)
+{
+	spdk_io_device_unregister(&g_nvme_bdev_ctrlrs, NULL);
+	spdk_bdev_module_fini_done();
 }
 
 static void
