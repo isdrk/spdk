@@ -90,7 +90,7 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 		return NULL;
 	}
 
-	dv_qp->common.qp = dv_qp->mlx5_qp->verbs_qp;
+	dv_qp->common.qp = spdk_mlx5_qp_get_verbs_qp(dv_qp->mlx5_qp);
 	dv_qp->common.cm_id = cm_id;
 
 	qp_attr->cap = mlx5_qp_attr.cap;
@@ -98,17 +98,17 @@ spdk_rdma_qp_create(struct rdma_cm_id *cm_id, struct spdk_rdma_qp_init_attr *qp_
 	accel_driver = spdk_accel_driver_get_name();
 	if (accel_driver != NULL &&
 	    strncmp(accel_driver, SPDK_MLX5_DRIVER_NAME, sizeof(SPDK_MLX5_DRIVER_NAME)) == 0) {
-		dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = spdk_mlx5_mkey_pool_get_channel(
+		dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = spdk_mlx5_mkey_pool_get_ref(
 					qp_attr->pd, SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO);
 		dv_qp->supports_accel = dv_qp->supports_accel ||
 					dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] != NULL;
-		dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = spdk_mlx5_mkey_pool_get_channel(
+		dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = spdk_mlx5_mkey_pool_get_ref(
 					qp_attr->pd, SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
 		dv_qp->supports_accel = dv_qp->supports_accel ||
 					dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] != NULL;
 		dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] =
-			spdk_mlx5_mkey_pool_get_channel(qp_attr->pd,
-							SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
+			spdk_mlx5_mkey_pool_get_ref(qp_attr->pd,
+						    SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
 		dv_qp->supports_accel = dv_qp->supports_accel ||
 					dv_qp->mkey_pool_ch[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] != NULL;
 		SPDK_DEBUGLOG(rdma_mlx5_dv, "mlx5 driver enabled, accel support %d\n", dv_qp->supports_accel);
@@ -182,7 +182,7 @@ spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp)
 
 	for (i = 0; i < SPDK_COUNTOF(dv_qp->mkey_pool_ch); i++) {
 		if (dv_qp->mkey_pool_ch[i]) {
-			spdk_mlx5_mkey_pool_put_channel(dv_qp->mkey_pool_ch[i]);
+			spdk_mlx5_mkey_pool_put_ref(dv_qp->mkey_pool_ch[i]);
 			dv_qp->mkey_pool_ch[i] = NULL;
 		}
 	}

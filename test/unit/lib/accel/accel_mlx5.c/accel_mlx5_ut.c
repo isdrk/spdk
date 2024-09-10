@@ -20,12 +20,9 @@ DEFINE_STUB(spdk_mlx5_crypto_keytag_create, int, (struct spdk_mlx5_crypto_dek_cr
 DEFINE_STUB_V(spdk_mlx5_crypto_keytag_destroy, (struct spdk_mlx5_crypto_keytag *keytag));
 DEFINE_STUB(spdk_mlx5_cq_poll_completions, int, (struct spdk_mlx5_cq *cq,
 		struct spdk_mlx5_cq_completion *comp, int max_completions), 0);
-DEFINE_STUB(spdk_mlx5_query_relaxed_ordering_caps, int, (struct ibv_context *context,
-		struct spdk_mlx5_relaxed_ordering_caps *caps), 0);
-DEFINE_STUB(spdk_mlx5_create_indirect_mkey, struct spdk_mlx5_indirect_mkey *, (struct ibv_pd *pd,
-		struct mlx5_devx_mkey_attr *attr), NULL);
 DEFINE_STUB(spdk_mlx5_qp_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 				       struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out), 0);
+DEFINE_STUB(spdk_mlx5_qp_get_verbs_qp, struct ibv_qp *, (struct spdk_mlx5_qp *qp), 0);
 DEFINE_STUB(spdk_mlx5_qp_connect_loopback, int, (struct spdk_mlx5_qp *qp), 0);
 DEFINE_STUB_V(spdk_mlx5_qp_destroy, (struct spdk_mlx5_qp *qp));
 DEFINE_STUB_V(spdk_mlx5_qp_complete_send, (struct spdk_mlx5_qp *qp));
@@ -38,8 +35,8 @@ DEFINE_STUB(spdk_mlx5_crypto_devs_allow, int, (const char *const dev_names[], si
 	    0);
 DEFINE_STUB_V(spdk_accel_module_finish, (void));
 DEFINE_STUB(spdk_mlx5_crypto_devs_get, struct ibv_context **, (int *dev_num), NULL);
-DEFINE_STUB(spdk_mlx5_query_crypto_caps, int, (struct ibv_context *context,
-		struct spdk_mlx5_crypto_caps *caps), 0);
+DEFINE_STUB(spdk_mlx5_device_query_caps, int, (struct ibv_context *context,
+		struct spdk_mlx5_device_caps *caps), 0);
 DEFINE_STUB_V(spdk_mlx5_crypto_devs_release, (struct ibv_context **rdma_devs));
 DEFINE_STUB(spdk_memory_domain_translate_data, int, (struct spdk_memory_domain *src_domain,
 		void *src_domain_ctx,
@@ -64,23 +61,24 @@ DEFINE_STUB(spdk_mlx5_umr_configure_sig_crypto, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_sig_attr *sig_attr,
 		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 		uint64_t wr_id, uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_set_psv, int, (struct spdk_mlx5_qp *dv_qp, uint32_t psv_index,
-				     uint32_t crc_seed, uint64_t wr_id, uint32_t flags), 0);
+DEFINE_STUB(spdk_mlx5_qp_set_psv, int, (struct spdk_mlx5_qp *dv_qp, uint32_t psv_index,
+					uint32_t crc_seed, uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_umr_configure_sig, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id,
 		uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_destroy_indirect_mkey, int, (struct spdk_mlx5_indirect_mkey *mkey), 0);
 DEFINE_STUB(spdk_mlx5_create_psv, struct spdk_mlx5_psv *, (struct ibv_pd *pd), NULL);
 DEFINE_STUB(spdk_mlx5_destroy_psv, int, (struct spdk_mlx5_psv *psv), 0);
-DEFINE_STUB(spdk_mlx5_mkey_pools_init, int, (struct spdk_mlx5_mkey_pool_param *params,
-		struct ibv_pd **pds, uint32_t num_pds), 0);
-DEFINE_STUB(spdk_mlx5_mkey_pools_destroy, int, (struct ibv_pd **pds, uint32_t num_pds,
-		uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_mkey_pool_get_channel, void *, (struct ibv_pd *pd, uint32_t flags), NULL);
-DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_channel, (void *ch));
-DEFINE_STUB(spdk_mlx5_mkey_pool_get_bulk, int, (void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys,
+DEFINE_STUB(spdk_mlx5_mkey_pool_init, int, (struct spdk_mlx5_mkey_pool_param *params,
+		struct ibv_pd *pd), 0);
+DEFINE_STUB(spdk_mlx5_mkey_pool_destroy, int, (uint32_t flags, struct ibv_pd *pd), 0);
+DEFINE_STUB(spdk_mlx5_mkey_pool_get_ref, struct spdk_mlx5_mkey_pool *, (struct ibv_pd *pd,
+		uint32_t flags), NULL);
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_ref, (struct spdk_mlx5_mkey_pool *pool));
+DEFINE_STUB(spdk_mlx5_mkey_pool_get_bulk, int, (struct spdk_mlx5_mkey_pool *pool,
+		struct spdk_mlx5_mkey_pool_obj **mkeys,
 		uint32_t mkeys_count), 0);
-DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_bulk, (void *ch, struct spdk_mlx5_mkey_pool_obj **mkeys,
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_bulk, (struct spdk_mlx5_mkey_pool *pool,
+		struct spdk_mlx5_mkey_pool_obj **mkeys,
 		uint32_t mkeys_count));
 DEFINE_STUB(spdk_mlx5_mkey_pool_find_mkey_by_id, struct spdk_mlx5_mkey_pool_obj *, (void *ch,
 		uint32_t mkey_id), NULL);

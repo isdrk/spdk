@@ -155,7 +155,7 @@ static inline void
 mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 		   uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct mlx5_wqe_raddr_seg *rseg;
 	struct mlx5_wqe_data_seg *dseg;
@@ -196,7 +196,7 @@ static inline void
 mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 			  uint64_t raddr, uint32_t rkey, int op, uint32_t flags, uint64_t wr_id, uint32_t bb_count)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct mlx5_wqe_raddr_seg *rseg;
 	struct mlx5_wqe_data_seg *dseg;
@@ -247,7 +247,7 @@ int
 spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 			uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
 
 	/* One building block is 64 bytes - 4 octowords
@@ -279,7 +279,7 @@ int
 spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 		       uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
 
 	/* One building block is 64 bytes - 4 octowords
@@ -310,7 +310,7 @@ static inline void
 mlx5_dma_send_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int op,
 		   uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct mlx5_wqe_data_seg *dseg;
 	uint8_t fm_ce_se;
@@ -344,7 +344,7 @@ static inline void
 mlx5_dma_send_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
 			  int op, uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct mlx5_wqe_data_seg *dseg;
 	uint8_t fm_ce_se;
@@ -387,7 +387,7 @@ static inline int
 mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int opcode,
 	     uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
 
 	/* One building block is 64 bytes - 4 octowords
@@ -431,7 +431,7 @@ spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num
 int
 spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, uint64_t wrid)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint16_t wqe_index;
 	struct mlx5_wqe_data_seg *dseg;
 	uint32_t i;
@@ -487,7 +487,7 @@ mlx5_qp_update_sq_comp(struct spdk_mlx5_qp *qp)
 }
 
 static inline struct mlx5_cqe64 *
-mlx5_cq_get_cqe(struct spdk_mlx5_hw_cq *hw_cq, int cqe_size)
+mlx5_cq_get_cqe(struct mlx5_hw_cq *hw_cq, int cqe_size)
 {
 	struct mlx5_cqe64 *cqe;
 
@@ -502,7 +502,7 @@ mlx5_cq_get_cqe(struct spdk_mlx5_hw_cq *hw_cq, int cqe_size)
 
 
 static inline struct mlx5_cqe64 *
-mlx5_cq_poll_one(struct spdk_mlx5_hw_cq *hw_cq, int cqe_size)
+mlx5_cq_poll_one(struct mlx5_hw_cq *hw_cq, int cqe_size)
 {
 	struct mlx5_cqe64 *cqe;
 
@@ -581,7 +581,7 @@ mlx5_srq_get_comp_wr_id(struct spdk_mlx5_srq *srq, struct mlx5_cqe64 *cqe)
 static void
 mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp)
 {
-	comp->status = MLX5_CQE_SYNDROME_SIGERR;
+	comp->status = SPDK_MLX5_CQE_SYNDROME_SIGERR;
 	comp->mkey = be32toh(cqe->mkey);
 
 	SPDK_DEBUGLOG(mlx5,

@@ -12,7 +12,7 @@ extern struct spdk_log_flag SPDK_LOG_mlx5_wqe_dump;
 void
 mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
 {
-	struct spdk_mlx5_hw_qp *hw = &qp->hw;
+	struct mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi;
 	uint32_t to_end;
 	uint32_t *wqe;
@@ -38,14 +38,14 @@ mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
 			be32toh(wqe[4]),  be32toh(wqe[5]),  be32toh(wqe[6]),  be32toh(wqe[7]),
 			be32toh(wqe[8]),  be32toh(wqe[9]),  be32toh(wqe[10]), be32toh(wqe[11]),
 			be32toh(wqe[12]), be32toh(wqe[13]), be32toh(wqe[14]), be32toh(wqe[15]));
-		wqe = mlx5_qp_get_next_wqbb(hw, &to_end, wqe);
+		wqe = mlx5_qp_get_next_wqebb(hw, &to_end, wqe);
 	}
 }
 
 void
 mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index)
 {
-	struct spdk_mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t *dseg;
 	size_t dumped_bytes;
 
@@ -93,7 +93,7 @@ mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index)
 }
 
 void
-mlx5_cq_dump_cqe(struct spdk_mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe)
+mlx5_cq_dump_cqe(struct mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe)
 {
 	unsigned ci;
 	uint32_t *cqe = (uint32_t *)_cqe;

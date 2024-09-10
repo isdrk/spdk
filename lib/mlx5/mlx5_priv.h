@@ -5,14 +5,141 @@
 #include "spdk/stdinc.h"
 #include "spdk/queue.h"
 #include "spdk/barrier.h"
+#include "spdk/likely.h"
 
-#include "infiniband/mlx5dv.h"
+#include <infiniband/mlx5dv.h>
 #include "spdk_internal/mlx5.h"
 
-#define MLX5_WQE_UMR_CTRL_MKEY_MASK_BSF_OCTOWORD_SIZE (0x1 << 5)
-#define MLX5_CRYPTO_BSF_SIZE_64B (0x2)
-#define MLX5_CRYPTO_BSF_SIZE_WITH_SIG (0x3)
-#define MLX5_CRYPTO_BSF_P_TYPE_CRYPTO (0x1)
+/**
+ * Low level CQ representation, suitable for the direct polling
+ */
+struct mlx5_hw_cq {
+	uint64_t cq_addr;
+	uint64_t dbrec_addr;
+	uint32_t cqe_cnt;
+	uint32_t cqe_size;
+	uint32_t ci;
+	uint32_t cq_num;
+};
+
+struct spdk_mlx5_hw_srq {
+	uint64_t dbrec_addr;
+	uint64_t rq_addr;
+	uint32_t stride;
+	uint32_t head;
+	uint32_t tail;
+	uint16_t wqe_cnt;
+	uint32_t max_wr;
+	uint32_t max_sge;
+	uint32_t srqn;
+};
+
+struct spdk_mlx5_srq {
+	struct spdk_mlx5_hw_srq hw;
+	uint64_t *wr_id;
+	struct ibv_srq *verbs_srq;
+};
+
+/**
+ * Low level CQ representation, suitable for the WQEs submission.
+ * Only submission queue is supported, receive queue is omitted since not used right now
+ */
+struct mlx5_hw_qp {
+	uint64_t dbr_addr;
+	uint64_t sq_addr;
+	uint64_t sq_bf_addr;
+	uint32_t sq_wqe_cnt;
+	uint16_t sq_pi;
+	uint32_t sq_tx_db_nc;
+	uint32_t qp_num;
+	uint64_t rq_addr;
+	uint32_t rq_wqe_cnt;
+	uint16_t rq_stride;
+	uint16_t rq_pi;
+};
+
+/* qp_num is 24 bits. 2D lookup table uses upper and lower 12 bits to find a qp by qp_num */
+#define SPDK_MLX5_QP_NUM_UPPER_SHIFT (12)
+#define SPDK_MLX5_QP_NUM_LOWER_MASK ((1 << SPDK_MLX5_QP_NUM_UPPER_SHIFT) - 1)
+#define SPDK_MLX5_QP_NUM_LUT_SIZE (1 << 12)
+
+struct spdk_mlx5_cq {
+	struct mlx5_hw_cq hw;
+	struct {
+		struct spdk_mlx5_qp **table;
+		uint32_t count;
+	} qps [SPDK_MLX5_QP_NUM_LUT_SIZE];
+	struct ibv_cq *verbs_cq;
+	uint32_t qps_count;
+};
+
+struct mlx5_qp_sq_completion {
+	uint64_t wr_id;
+	/* Number of unsignaled completions before this one. Used to track qp overflow */
+	uint32_t completions;
+};
+
+struct mlx5_qp_rq_completion {
+	uint64_t wr_id;
+};
+
+struct spdk_mlx5_qp {
+	struct mlx5_hw_qp hw;
+	struct mlx5_qp_sq_completion *sq_completions;
+	struct mlx5_qp_rq_completion *rq_completions;
+	/* Pointer to a last WQE controll segment written to SQ */
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct spdk_mlx5_cq *cq;
+	struct spdk_mlx5_srq *srq;
+	struct ibv_qp *verbs_qp;
+	/* Number of WQEs submitted to HW which won't produce a CQE */
+	uint16_t nonsignaled_outstanding;
+	uint16_t max_send_sge;
+	/* Number of WQEs available for submission */
+	uint16_t tx_available;
+	uint16_t last_pi;
+	uint16_t max_recv_sge;
+	uint16_t rx_available;
+	uint8_t sigmode;
+	bool aes_xts_inc_64;
+};
+
+enum {
+	/* Default mode, use flags passed by the user */
+	SPDK_MLX5_QP_SIG_NONE = 0,
+	/* Enable completion for every control WQE segment, regardless of the flags passed by the user */
+	SPDK_MLX5_QP_SIG_ALL = 1,
+	/* Enable completion only for the last control WQE segment, regardless of the flags passed by the user */
+	SPDK_MLX5_QP_SIG_LAST = 2,
+};
+
+/**
+ * Completion and Event mode (SPDK_MLX5_WQE_CTRL_CE_*)
+ * Maps internal representation of completion events configuration to PRM values
+ * g_mlx5_ce_map[][X] is fm_ce_se >> 2 & 0x3 */
+static uint8_t g_mlx5_ce_map[3][4] = {
+	/* SPDK_MLX5_QP_SIG_NONE */
+	[0] = {
+		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
+		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
+	},
+	/* SPDK_MLX5_QP_SIG_ALL */
+	[1] = {
+		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
+		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
+		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
+	},
+	/* SPDK_MLX5_QP_SIG_LAST */
+	[2] = {
+		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
+		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
+	}
+};
 
 struct mlx5_crypto_bsf_seg {
 	uint8_t		size_type;
@@ -28,17 +155,6 @@ struct mlx5_crypto_bsf_seg {
 	uint8_t		keytag[8];
 	uint8_t		rsvd3[16];
 };
-
-#define MLX5_SIG_BSF_SIZE_32B (0x1)
-#define MLX5_SIG_BSF_SIZE_WITH_CRYPTO (0x3)
-/* Transaction Format Selector */
-#define MLX5_SIG_BSF_TFS_CRC32C (64)
-#define MLX5_SIG_BSF_TFS_SHIFT (24)
-/* Transaction Init/Check_gen bits */
-#define MLX5_SIG_BSF_EXT_M_T_CHECK_GEN (1u << 24)
-#define MLX5_SIG_BSF_EXT_M_T_INIT (1u << 25)
-#define MLX5_SIG_BSF_EXT_W_T_CHECK_GEN (1u << 28)
-#define MLX5_SIG_BSF_EXT_W_T_INIT (1u << 29)
 
 struct mlx5_sig_bsf_inl {
 	__be16 vld_refresh;
@@ -85,41 +201,6 @@ struct mlx5_wqe_set_psv_seg {
 	__be64 transient_signature;
 };
 
-/*
- * Completion and Event mode (SPDK_MLX5_WQE_CTRL_CE_*)
- * 0x0: cqe_on_cqe_error - Generate CQE only on WQE completion with error. (note - per IB spec, for completion with
- * error, CQE should be generated)
- * 0x1: cqe_on_first_cqe_error - Generate CQE only on first WQE completion with error (i.e if CQE on previous WQE
- * completed in error, no CQE will be generated)
- * 0x2: cqe_always - Generate CQE on WQE completion (good or bad)
- * 0x3: cqe_and_eqe - Generate CQE and EQE (local Solicited event)
- *
- * g_mlx5_ce_map[][X] is fm_ce_se >> 2 & 0x3 */
-static uint8_t g_mlx5_ce_map[3][4] = {
-	/* SPDK_MLX5_QP_SIG_NONE */
-	[0] = {
-		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
-		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
-	},
-	/* SPDK_MLX5_QP_SIG_ALL */
-	[1] = {
-		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
-		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE,
-		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
-	},
-	/* SPDK_MLX5_QP_SIG_LAST */
-	[2] = {
-		[0] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[1] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[2] = SPDK_MLX5_WQE_CTRL_CE_CQ_NO_FLUSH_ERROR,
-		[3] = SPDK_MLX5_WQE_CTRL_CE_CQ_ECE
-	}
-
-};
-
 static inline uint8_t
 mlx5_qp_fm_ce_se_update(struct spdk_mlx5_qp *qp, uint8_t fm_ce_se)
 {
@@ -133,40 +214,39 @@ mlx5_qp_fm_ce_se_update(struct spdk_mlx5_qp *qp, uint8_t fm_ce_se)
 }
 
 static inline void *
-mlx5_qp_get_wqe_bb(struct spdk_mlx5_hw_qp *hw_qp)
+mlx5_qp_get_wqe_bb(struct mlx5_hw_qp *hw_qp)
 {
 	return (void *)hw_qp->sq_addr + (hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1)) * MLX5_SEND_WQE_BB;
 }
 
 static inline void *
-mlx5_qp_get_next_wqbb(struct spdk_mlx5_hw_qp *qp, uint32_t *to_end, void *cur)
+mlx5_qp_get_next_wqebb(struct mlx5_hw_qp *hw_qp, uint32_t *to_end, void *cur)
 {
 	*to_end -= MLX5_SEND_WQE_BB;
 	if (*to_end == 0) { /* wqe buffer wap around */
-		*to_end = qp->sq_wqe_cnt * MLX5_SEND_WQE_BB;
-		return (void *)(uintptr_t)qp->sq_addr;
+		*to_end = hw_qp->sq_wqe_cnt * MLX5_SEND_WQE_BB;
+		return (void *)(uintptr_t)hw_qp->sq_addr;
 	}
 
 	return ((char *)cur) + MLX5_SEND_WQE_BB;
 }
 
 static inline void
-mlx5_qp_set_sq_comp(struct spdk_mlx5_qp *dv_qp, uint16_t pi,
+mlx5_qp_set_sq_comp(struct spdk_mlx5_qp *qp, uint16_t pi,
 		    uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
 {
-	dv_qp->sq_completions[pi].wr_id = wr_id;
+	qp->sq_completions[pi].wr_id = wr_id;
 	if ((fm_ce_se & SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) != SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) {
 		/* non-signaled WQE, accumulate it in outstanding */
-		dv_qp->nonsignaled_outstanding += n_bb;
-		dv_qp->sq_completions[pi].completions = 0;
+		qp->nonsignaled_outstanding += n_bb;
+		qp->sq_completions[pi].completions = 0;
 		return;
 	}
 
 	/* Store number of previous nonsignaled WQEs */
-	dv_qp->sq_completions[pi].completions = dv_qp->nonsignaled_outstanding + n_bb;
-	dv_qp->nonsignaled_outstanding = 0;
+	qp->sq_completions[pi].completions = qp->nonsignaled_outstanding + n_bb;
+	qp->nonsignaled_outstanding = 0;
 }
-
 
 #if defined(__aarch64__)
 #define spdk_memory_bus_store_fence()  asm volatile("dmb oshst" ::: "memory")
@@ -240,7 +320,7 @@ mlx5_ring_rx_db(struct spdk_mlx5_qp *qp)
 void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
 void mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index);
 void mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index);
-void mlx5_cq_dump_cqe(struct spdk_mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe);
+void mlx5_cq_dump_cqe(struct mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe);
 #else
 #define mlx5_qp_dump_sq_wqe(...) do { } while (0)
 #define mlx5_qp_dump_rq_wqe(...) do { } while (0)
@@ -270,6 +350,18 @@ mlx5_set_ctrl_seg(struct mlx5_wqe_ctrl_seg *ctrl, uint16_t pi,
 			    fm_ce_se, ds, signature, imm);
 }
 
+static inline struct spdk_mlx5_qp *
+mlx5_cq_find_qp(struct spdk_mlx5_cq *cq, uint32_t qp_num)
+{
+	uint32_t qpn_upper = qp_num >> SPDK_MLX5_QP_NUM_UPPER_SHIFT;
+	uint32_t qpn_mask = qp_num & SPDK_MLX5_QP_NUM_LOWER_MASK;
+
+	if (spdk_unlikely(!cq->qps[qpn_upper].count)) {
+		return NULL;
+	}
+	return cq->qps[qpn_upper].table[qpn_mask];
+}
+
 static inline int
 mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
 {
@@ -289,18 +381,6 @@ mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
 	*pd_id = pd_info.pdn;
 
 	return 0;
-}
-
-static inline struct spdk_mlx5_qp *
-mlx5_cq_find_qp(struct spdk_mlx5_cq *cq, uint32_t qp_num)
-{
-	uint32_t qpn_upper = qp_num >> SPDK_MLX5_QP_NUM_UPPER_SHIFT;
-	uint32_t qpn_mask = qp_num & SPDK_MLX5_QP_NUM_LOWER_MASK;
-
-	if (spdk_unlikely(!cq->qps[qpn_upper].count)) {
-		return NULL;
-	}
-	return cq->qps[qpn_upper].table[qpn_mask];
 }
 
 static inline void *

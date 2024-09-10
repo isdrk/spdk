@@ -123,7 +123,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 {
 	struct mlx5dv_qp dv_qp;
 	struct mlx5dv_obj dv_obj;
-	struct spdk_mlx5_crypto_caps crypto_caps = {};
+	struct spdk_mlx5_device_caps caps = {};
 	struct ibv_qp_init_attr_ex dv_qp_attr = {
 		.qp_context = attr->qp_context,
 		.cap = attr->cap,
@@ -151,7 +151,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 		SPDK_ERRLOG("SRQ and RQ can't be enabled simultaneously\n");
 		return -EINVAL;
 	}
-	rc = spdk_mlx5_query_crypto_caps(pd->context, &crypto_caps);
+	rc = spdk_mlx5_device_query_caps(pd->context, &caps);
 	if (rc) {
 		SPDK_ERRLOG("Failed to query dev %s crypto caps\n", pd->context->device->name);
 		return rc;
@@ -202,7 +202,7 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->max_send_sge = attr->cap.max_send_sge;
 	qp->rx_available = qp->hw.rq_wqe_cnt;
 	qp->max_recv_sge = attr->cap.max_recv_sge;
-	qp->aes_xts_inc_64 = crypto_caps.tweak_inc_64;
+	qp->aes_xts_inc_64 = caps.crypto.tweak_inc_64;
 	rc = posix_memalign((void **)&qp->sq_completions, 4096,
 			    qp->hw.sq_wqe_cnt * sizeof(*qp->sq_completions));
 	if (rc) {
@@ -296,12 +296,12 @@ static int
 mlx5_fill_qp_conn_caps(struct ibv_context *context,
 		       struct mlx5_qp_conn_caps *conn_caps)
 {
-	struct spdk_mlx5_crypto_caps crypto_caps = {};
+	struct spdk_mlx5_device_caps caps = {};
 	uint8_t in[DEVX_ST_SZ_BYTES(query_hca_cap_in)] = {0};
 	uint8_t out[DEVX_ST_SZ_BYTES(query_hca_cap_out)] = {0};
 	int rc;
 
-	rc = spdk_mlx5_query_crypto_caps(context, &crypto_caps);
+	rc = spdk_mlx5_device_query_caps(context, &caps);
 	if (rc) {
 		return rc;
 	}
@@ -320,7 +320,7 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 			 capability.cmd_hca_cap.resources_on_nvme_emulation_manager);
 	conn_caps->fl_when_roce_disabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.fl_rc_qp_when_roce_disabled);
-	conn_caps->qp_8k_mtu = crypto_caps.crypto && crypto_caps.large_mtu_tweak;
+	conn_caps->qp_8k_mtu = caps.crypto_supported && caps.crypto.large_mtu_tweak;
 	conn_caps->roce_enabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.roce);
 	if (!conn_caps->roce_enabled) {
@@ -803,6 +803,12 @@ spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp)
 	};
 
 	return ibv_modify_qp(qp->verbs_qp, &attr, IBV_QP_STATE);
+}
+
+struct ibv_qp *
+spdk_mlx5_qp_get_verbs_qp(struct spdk_mlx5_qp *qp)
+{
+	return qp->verbs_qp;
 }
 
 static void
