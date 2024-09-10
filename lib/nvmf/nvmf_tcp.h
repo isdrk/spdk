@@ -124,8 +124,6 @@ struct nvme_tcp_pdu {
 	uint32_t					remaining;
 	uint32_t					padding_len;
 
-	struct spdk_dif_ctx				*dif_ctx;
-
 	void						*req; /* data tied to a tcp request */
 	void						*qpair;
 	SLIST_ENTRY(nvme_tcp_pdu)			slist;
@@ -209,12 +207,7 @@ nvme_tcp_pdu_calc_data_digest(struct nvme_tcp_pdu *pdu)
 
 	assert(pdu->data_len != 0);
 
-	if (spdk_likely(!pdu->dif_ctx)) {
-		crc32c = spdk_crc32c_iov_update(pdu->data_iov, pdu->data_iovcnt, crc32c);
-	} else {
-		spdk_dif_update_crc32c_stream(pdu->data_iov, pdu->data_iovcnt,
-					      0, pdu->data_len, &crc32c, pdu->dif_ctx);
-	}
+	crc32c = spdk_crc32c_iov_update(pdu->data_iov, pdu->data_iovcnt, crc32c);
 
 	mod = pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT;
 	if (mod != 0) {
@@ -337,15 +330,8 @@ nvme_tcp_build_iovs(struct iovec *iov, int iovcnt, struct nvme_tcp_pdu *pdu,
 
 	/* Data Segment */
 	plen += pdu->data_len;
-	if (spdk_likely(!pdu->dif_ctx)) {
-		if (!_nvme_tcp_sgl_append_multi(&sgl, pdu->data_iov, pdu->data_iovcnt)) {
-			goto end;
-		}
-	} else {
-		if (!_nvme_tcp_sgl_append_multi_with_md(&sgl, pdu->data_iov, pdu->data_iovcnt,
-							pdu->data_len, pdu->dif_ctx)) {
-			goto end;
-		}
+	if (!_nvme_tcp_sgl_append_multi(&sgl, pdu->data_iov, pdu->data_iovcnt)) {
+		goto end;
 	}
 
 	/* Data Digest */
@@ -376,15 +362,8 @@ nvme_tcp_build_payload_iovs(struct iovec *iov, int iovcnt, struct nvme_tcp_pdu *
 
 	spdk_iov_sgl_init(&sgl, iov, iovcnt, pdu->rw_offset);
 
-	if (spdk_likely(!pdu->dif_ctx)) {
-		if (!_nvme_tcp_sgl_append_multi(&sgl, pdu->data_iov, pdu->data_iovcnt)) {
-			goto end;
-		}
-	} else {
-		if (!_nvme_tcp_sgl_append_multi_with_md(&sgl, pdu->data_iov, pdu->data_iovcnt,
-							pdu->data_len, pdu->dif_ctx)) {
-			goto end;
-		}
+	if (!_nvme_tcp_sgl_append_multi(&sgl, pdu->data_iov, pdu->data_iovcnt)) {
+		goto end;
 	}
 
 	/* Data Digest */
@@ -503,14 +482,8 @@ nvme_tcp_pdu_set_data_buf(struct nvme_tcp_pdu *pdu,
 
 	pdu->data_len = data_len;
 
-	if (spdk_likely(!pdu->dif_ctx)) {
-		buf_offset = data_offset;
-		buf_len = data_len;
-	} else {
-		spdk_dif_ctx_set_data_offset(pdu->dif_ctx, data_offset);
-		spdk_dif_get_range_with_md(data_offset, data_len,
-					   &buf_offset, &buf_len, pdu->dif_ctx);
-	}
+	buf_offset = data_offset;
+	buf_len = data_len;
 
 	if (iovcnt == 1) {
 		_nvme_tcp_pdu_set_data(pdu, (void *)((uint64_t)iov[0].iov_base + buf_offset), buf_len);

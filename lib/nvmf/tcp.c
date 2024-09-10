@@ -1269,8 +1269,7 @@ pdu_data_crc32_compute(struct nvme_tcp_pdu *pdu)
 	/* Data Digest */
 	if (pdu->data_len > 0 && g_nvme_tcp_ddgst[pdu->hdr.common.pdu_type] && tqpair->host_ddgst_enable) {
 		/* Only support this limitated case for the first step */
-		if (spdk_likely(!pdu->dif_ctx && (pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0)
-				&& tqpair->group)) {
+		if (spdk_likely((pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0) && tqpair->group)) {
 			rc = spdk_accel_submit_crc32cv(tqpair->group->accel_channel, &pdu->data_digest_crc32, pdu->data_iov,
 						       pdu->data_iovcnt, 0, data_crc32_accel_done, pdu);
 			if (spdk_likely(rc == 0)) {
@@ -1990,10 +1989,6 @@ nvmf_tcp_h2c_data_hdr_handle(struct spdk_nvmf_tcp_transport *ttransport,
 
 	pdu->req = tcp_req;
 
-	if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-		pdu->dif_ctx = &tcp_req->req.dif.dif_ctx;
-	}
-
 	nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
 				  h2c_data->datao, h2c_data->datal);
 	nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
@@ -2243,7 +2238,7 @@ nvmf_tcp_pdu_payload_handle(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_
 	SPDK_DEBUGLOG(nvmf_tcp, "enter\n");
 	/* check data digest if need */
 	if (pdu->ddgst_enable) {
-		if (tqpair->qpair.qid != 0 && !pdu->dif_ctx && tqpair->group &&
+		if (tqpair->qpair.qid != 0 && tqpair->group &&
 		    (pdu->data_len % SPDK_NVME_TCP_DIGEST_ALIGNMENT == 0)) {
 			rc = spdk_accel_submit_crc32cv(tqpair->group->accel_channel, &pdu->data_digest_crc32, pdu->data_iov,
 						       pdu->data_iovcnt, 0, data_crc32_calc_done, pdu);
@@ -2598,15 +2593,6 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 				return NVME_TCP_PDU_IN_PROGRESS;
 			}
 
-			/* Generate and insert DIF to whole data block received if DIF is enabled */
-			if (spdk_unlikely(pdu->dif_ctx != NULL) &&
-			    spdk_dif_generate_stream(pdu->data_iov, pdu->data_iovcnt, 0, data_len,
-						     pdu->dif_ctx) != 0) {
-				SPDK_ERRLOG("DIF generate failed\n");
-				nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_QUIESCING);
-				break;
-			}
-
 			/* All of this PDU has now been read from the socket. */
 			nvmf_tcp_pdu_payload_handle(tqpair, pdu);
 			break;
@@ -2700,12 +2686,6 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 
 		SPDK_DEBUGLOG(nvmf_tcp, "Data requested length= 0x%x\n", length);
 
-		if (spdk_unlikely(req->dif_enabled)) {
-			req->dif.orig_length = length;
-			length = spdk_dif_get_length_with_md(length, &req->dif.dif_ctx);
-			req->dif.elba_length = length;
-		}
-
 		if (nvmf_ctrlr_use_zcopy(req)) {
 			SPDK_DEBUGLOG(nvmf_tcp, "Using zero-copy to execute request %p\n", tcp_req);
 			req->data_from_pool = false;
@@ -2789,11 +2769,6 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 		req->length = length;
 		req->data_from_pool = false;
 
-		if (spdk_unlikely(req->dif_enabled)) {
-			length = spdk_dif_get_length_with_md(length, &req->dif.dif_ctx);
-			req->dif.elba_length = length;
-		}
-
 		req->iov[0].iov_len = length;
 		req->iovcnt = 1;
 		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_HAVE_BUFFER);
@@ -2842,7 +2817,6 @@ _nvmf_tcp_send_c2h_data(struct spdk_nvmf_tcp_qpair *tqpair,
 	struct nvme_tcp_pdu *rsp_pdu;
 	struct spdk_nvme_tcp_c2h_data_hdr *c2h_data;
 	uint32_t plen, pdo, alignment;
-	int rc;
 
 	SPDK_DEBUGLOG(nvmf_tcp, "enter\n");
 
@@ -2884,10 +2858,6 @@ _nvmf_tcp_send_c2h_data(struct spdk_nvmf_tcp_qpair *tqpair,
 
 	c2h_data->common.plen = plen;
 
-	if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-		rsp_pdu->dif_ctx = &tcp_req->req.dif.dif_ctx;
-	}
-
 	nvme_tcp_pdu_set_data_buf(rsp_pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
 				  c2h_data->datao, c2h_data->datal);
 
@@ -2897,56 +2867,6 @@ _nvmf_tcp_send_c2h_data(struct spdk_nvmf_tcp_qpair *tqpair,
 	if (ttransport->tcp_opts.c2h_success &&
 	    tcp_req->rsp.cdw0 == 0 && tcp_req->rsp.cdw1 == 0) {
 		c2h_data->common.flags |= SPDK_NVME_TCP_C2H_DATA_FLAGS_SUCCESS;
-	}
-
-	if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-		struct spdk_nvme_cpl *rsp = &tcp_req->req.rsp->nvme_cpl;
-		struct spdk_dif_error err_blk = {};
-		uint32_t mapped_length = 0;
-		uint32_t available_iovs = SPDK_COUNTOF(rsp_pdu->iov);
-		uint32_t ddgst_len = 0;
-
-		if (tqpair->host_ddgst_enable) {
-			/* Data digest consumes additional iov entry */
-			available_iovs--;
-			/* plen needs to be updated since nvme_tcp_build_iovs compares expected and actual plen */
-			ddgst_len = SPDK_NVME_TCP_DIGEST_LEN;
-			c2h_data->common.plen -= ddgst_len;
-		}
-		/* Temp call to estimate if data can be described by limited number of iovs.
-		 * iov vector will be rebuilt in nvmf_tcp_qpair_write_pdu */
-		nvme_tcp_build_iovs(rsp_pdu->iov, available_iovs, rsp_pdu, tqpair->host_hdgst_enable,
-				    false, &mapped_length);
-
-		if (mapped_length != c2h_data->common.plen) {
-			c2h_data->datal = mapped_length - (c2h_data->common.plen - c2h_data->datal);
-			SPDK_DEBUGLOG(nvmf_tcp,
-				      "Part C2H, data_len %u (of %u), PDU len %u, updated PDU len %u, offset %u\n",
-				      c2h_data->datal, tcp_req->req.length, c2h_data->common.plen, mapped_length, rsp_pdu->rw_offset);
-			c2h_data->common.plen = mapped_length;
-
-			/* Rebuild pdu->data_iov since data length is changed */
-			nvme_tcp_pdu_set_data_buf(rsp_pdu, tcp_req->req.iov, tcp_req->req.iovcnt, c2h_data->datao,
-						  c2h_data->datal);
-
-			c2h_data->common.flags &= ~(SPDK_NVME_TCP_C2H_DATA_FLAGS_LAST_PDU |
-						    SPDK_NVME_TCP_C2H_DATA_FLAGS_SUCCESS);
-		}
-
-		c2h_data->common.plen += ddgst_len;
-
-		assert(rsp_pdu->rw_offset <= tcp_req->req.length);
-
-		rc = spdk_dif_verify_stream(rsp_pdu->data_iov, rsp_pdu->data_iovcnt,
-					    0, rsp_pdu->data_len, rsp_pdu->dif_ctx, &err_blk);
-		if (rc != 0) {
-			SPDK_ERRLOG("DIF error detected. type=%d, offset=%" PRIu32 "\n",
-				    err_blk.err_type, err_blk.err_offset);
-			rsp->status.sct = SPDK_NVME_SCT_MEDIA_ERROR;
-			rsp->status.sc = nvmf_tcp_dif_error_to_compl_status(err_blk.err_type);
-			nvmf_tcp_send_capsule_resp_pdu(tcp_req, tqpair);
-			return;
-		}
 	}
 
 	rsp_pdu->rw_offset += c2h_data->datal;
@@ -3090,11 +3010,6 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 			/* copy the cmd from the receive pdu */
 			tcp_req->cmd = tqpair->pdu_in_progress->hdr.capsule_cmd.ccsqe;
 
-			if (spdk_unlikely(spdk_nvmf_request_get_dif_ctx(&tcp_req->req, &tcp_req->req.dif.dif_ctx))) {
-				tcp_req->req.dif_enabled = true;
-				tqpair->pdu_in_progress->dif_ctx = &tcp_req->req.dif.dif_ctx;
-			}
-
 			nvmf_tcp_check_fused_ordering(ttransport, tqpair, tcp_req);
 
 			/* The next state transition depends on the data transfer needs of this request. */
@@ -3144,11 +3059,6 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 					  (uintptr_t)tcp_req);
 			/* Get a zcopy buffer if the request can be serviced through zcopy */
 			if (spdk_nvmf_request_using_zcopy(&tcp_req->req)) {
-				if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-					assert(tcp_req->req.dif.elba_length >= tcp_req->req.length);
-					tcp_req->req.length = tcp_req->req.dif.elba_length;
-				}
-
 				nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_AWAITING_ZCOPY_START);
 				spdk_nvmf_request_zcopy_start(&tcp_req->req);
 				break;
@@ -3216,11 +3126,6 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 		case TCP_REQUEST_STATE_READY_TO_EXECUTE:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_READY_TO_EXECUTE, tqpair->qpair.trace_id, 0,
 					  (uintptr_t)tcp_req);
-
-			if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-				assert(tcp_req->req.dif.elba_length >= tcp_req->req.length);
-				tcp_req->req.length = tcp_req->req.dif.elba_length;
-			}
 
 			if (tcp_req->cmd.fuse != SPDK_NVME_CMD_FUSE_NONE) {
 				if (tcp_req->fused_failed) {
@@ -3292,11 +3197,6 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 			break;
 		case TCP_REQUEST_STATE_EXECUTED:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_EXECUTED, tqpair->qpair.trace_id, 0, (uintptr_t)tcp_req);
-
-			if (spdk_unlikely(tcp_req->req.dif_enabled)) {
-				tcp_req->req.length = tcp_req->req.dif.orig_length;
-			}
-
 			nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_READY_TO_COMPLETE);
 			break;
 		case TCP_REQUEST_STATE_READY_TO_COMPLETE:
