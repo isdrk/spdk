@@ -1551,7 +1551,7 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		tqpair->flags.pending_events = false;
 	}
 
-	nvme_tcp_qpair_abort_reqs(qpair, 0);
+	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	xlio_sock_release_packets(tqpair);
 
 	if (qpair->outstanding_zcopy_reqs == 0 && tqpair->consumed_packets == 0) {
@@ -1574,7 +1574,7 @@ nvme_tcp_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_q
 
 	assert(qpair != NULL);
 	tqpair = nvme_tcp_qpair(qpair);
-	nvme_tcp_qpair_abort_reqs(qpair, 0);
+	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	assert(TAILQ_EMPTY(&tqpair->outstanding_reqs));
 	assert(tqpair->qpair.num_outstanding_reqs == 0);
 	qpair->reserved_req = NULL;
