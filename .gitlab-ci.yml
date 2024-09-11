@@ -133,7 +133,7 @@ test-autotest-job:
     # clean up output of autotest from previous runs
     - sudo rm -rf $CI_PROJECT_DIR/../output/
     - sudo ./scripts/setup.sh
-    - sudo ./test/accel/accel_mlx5.sh
+    - sudo ./test/accel/mlx5/accel_mlx5.sh
     - sudo ./autotest.sh .ci/autotest-vm.conf
     - sudo chown -R $USER $CI_PROJECT_DIR
 
@@ -142,10 +142,9 @@ test-crypto-k8s-job:
   tags: [crypto, k8s, x86_64, oci-sriov]
   script:
     - export CI_DUT_RDMA=$(rdma link |grep "$CI_DUT_IFACE" |sed -e 's/^link //; s#/.*##')
-    - perl -i -pne 's/mlx5_0/'${CI_DUT_RDMA}'/' test/accel/*json
     - grep -i huge /proc/meminfo
     - tar xf .test.tar
-    - sudo ./test/accel/accel_mlx5_crypto.sh
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh ${CI_DUT_RDMA}
 
 coverity-job:
   extends: .do_build

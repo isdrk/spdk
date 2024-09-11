@@ -676,6 +676,8 @@ _free_task_buffers(struct ap_task *task)
 		free(task->dst_iovs);
 	} else if (g_workload_selection == SPDK_ACCEL_OPC_CRC32C ||
 		   g_workload_selection == SPDK_ACCEL_OPC_COPY_CRC32C ||
+		   g_workload_selection == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C ||
+		   g_workload_selection == SPDK_ACCEL_OPC_CHECK_CRC32C ||
 		   g_workload_selection == SPDK_ACCEL_OPC_DIF_VERIFY ||
 		   g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE ||
 		   g_workload_selection == SPDK_ACCEL_OPC_DIF_GENERATE_COPY) {
