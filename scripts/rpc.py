@@ -3196,7 +3196,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                         qp_size=args.qp_size,
                                         cq_size=args.cq_size,
                                         num_requests=args.num_requests,
-                                        split_mb_blocks=args.split_mb_blocks,
+                                        crypto_split_blocks=args.crypto_split_blocks,
                                         allowed_devs=args.allowed_devs,
                                         siglast=args.siglast,
                                         merge=args.merge,
@@ -3210,7 +3210,10 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
     p.add_argument('-c', '--cq-size', type=int, help='CQ size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
-    p.add_argument('-s', '--split-mb-blocks', type=int, help="Number of data blocks to be processed in 1 UMR.")
+    p.add_argument('-s', '--split-mb-blocks', type=int, dest='crypto_split_blocks',
+                   help="Number of data blocks to be processed in 1 crypto UMR. DEPRECATED, use --crypto-split-blocks")
+    p.add_argument('--crypto-split-blocks', type=int, dest='crypto_split_blocks',
+                   help="Number of data blocks to be processed in 1 crypto UMR.")
     p.add_argument('-d', '--allowed-devs', help="Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1")
     p.add_argument('--allowed-crypto-devs', dest='allowed_devs', help="[DEPRECATED] Comma separated list of allowed crypto device names")
     p.add_argument('-l', '--siglast', dest='siglast', action='store_true',

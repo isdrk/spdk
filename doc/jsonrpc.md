@@ -2411,7 +2411,7 @@ Name                    | Optional | Type    | Description
 qp_size                 | Optional | number  | qpair size
 cq_size                 | Optional | number  | Size of the shared CQ
 num_requests            | Optional | number  | Size of the shared requests pool
-split_mb_blocks         | Optional | number  | Number of data blocks to be processed in 1 UMR
+crypto_split_blocks     | Optional | number  | Number of data blocks to be processed in 1 UMR
 allowed-devs            | Optional | string  | Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1
 siglast                 | Optional | boolean | Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB
 qp_per_domain           | Optional | boolean | Use dedicated qpair per memory domain per channel

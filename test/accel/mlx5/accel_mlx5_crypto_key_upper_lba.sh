@@ -22,7 +22,7 @@ function gen_accel_mlx5_crypto_json() {
 		          "method": "mlx5_scan_accel_module",
 		          "params": {
 		            "allowed_devs": "${allowed_devices}",
-		            "split_mb_blocks": ${crypto_split_blocks}
+		            "crypto_split_blocks": ${crypto_split_blocks}
 		          }
 		        },
 		        {

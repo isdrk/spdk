@@ -14,9 +14,9 @@ struct accel_mlx5_attr {
 	uint16_t cq_size;
 	/* The number of requests in the global pool */
 	uint32_t num_requests;
-	/* The number of data blocks to be processed in 1 UMR.
+	/* The number of data blocks to be processed in 1 crypto UMR.
 	 * 0 means no limit. HW must support multi block crypto */
-	uint32_t split_mb_blocks;
+	uint32_t crypto_split_blocks;
 	/* Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB */
 	bool siglast;
 	bool qp_per_domain;
