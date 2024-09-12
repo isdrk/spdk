@@ -260,6 +260,14 @@ struct spdk_thread *spdk_thread_get_app_thread(void);
 bool spdk_thread_is_app_thread(struct spdk_thread *thread);
 
 /**
+ * Get the next registered SPDK thread.
+ *
+ * \param prev The current SPDK thread. This can be NULL to get the first SPDK thread.
+ * \return The next registered SPDK thread.
+ */
+struct spdk_thread *spdk_thread_get_next_thread(struct spdk_thread *prev);
+
+/**
  * Force the current system thread to act as if executing the given SPDK thread.
  *
  * \param thread The thread to set.

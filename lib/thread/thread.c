@@ -610,6 +610,22 @@ spdk_thread_is_app_thread(struct spdk_thread *thread)
 	return g_app_thread == thread;
 }
 
+struct spdk_thread *
+spdk_thread_get_next_thread(struct spdk_thread *thread)
+{
+	struct spdk_thread *next_thread;
+
+	pthread_mutex_lock(&g_devlist_mutex);
+	if (thread == NULL) {
+		next_thread = TAILQ_FIRST(&g_threads);
+	} else {
+		next_thread = TAILQ_NEXT(thread, tailq);
+	}
+	pthread_mutex_unlock(&g_devlist_mutex);
+
+	return next_thread;
+}
+
 void
 spdk_thread_bind(struct spdk_thread *thread, bool bind)
 {
