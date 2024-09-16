@@ -34,6 +34,7 @@ DEFINE_STUB(spdk_sock_is_ipv4, bool, (struct spdk_sock *sock), true);
 DEFINE_STUB(spdk_sock_is_connected, bool, (struct spdk_sock *sock), true);
 DEFINE_STUB(spdk_sock_release_buf, int, (struct spdk_sock *sock, void *buf,
 		struct spdk_sock_buf_token *token), 0);
+DEFINE_STUB(spdk_sock_get_default_impl, const char *, (void), "posix");
 
 static uint8_t g_buf[0x1000] = {};
 

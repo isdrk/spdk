@@ -107,6 +107,7 @@
 #define SPDK_NVMF_TCP_DEFAULT_BUFFER_CACHE_SIZE UINT32_MAX
 #define SPDK_NVMF_TCP_DEFAULT_DIF_INSERT_OR_STRIP false
 #define SPDK_NVMF_TCP_DEFAULT_ABORT_TIMEOUT_SEC 1
+#define SPDK_NVMF_TCP_DEFAULT_STREAM_SEGMENTS_PER_POLL_GROUP 1024
 
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_tcp;
 static bool g_tls_log = false;
@@ -408,6 +409,14 @@ struct spdk_nvmf_tcp_req  {
 	STAILQ_ENTRY(spdk_nvmf_tcp_req)		control_msg_link;
 };
 
+/* This tracks a segment of the TCP stream */
+struct spdk_nvmf_tcp_stream_segment {
+	void						*buf;
+	uint32_t					len;
+	struct spdk_sock_buf_token			*token;
+	STAILQ_ENTRY(spdk_nvmf_tcp_stream_segment)	link;
+};
+
 struct spdk_nvmf_tcp_qpair {
 	struct spdk_nvmf_qpair			qpair;
 	struct spdk_nvmf_tcp_poll_group		*group;
@@ -451,6 +460,10 @@ struct spdk_nvmf_tcp_qpair {
 	uint32_t				resource_count;
 	uint32_t				recv_buf_size;
 
+	STAILQ_HEAD(, spdk_nvmf_tcp_stream_segment)	pending_stream;
+	uint32_t					stream_offset;
+	bool						use_zero_copy_rx;
+
 	struct spdk_nvmf_tcp_port		*port;
 
 	/* IP address */
@@ -490,6 +503,8 @@ struct spdk_nvmf_tcp_poll_group {
 	struct spdk_nvmf_transport_poll_group	group;
 	struct spdk_sock_group			*sock_group;
 	struct spdk_interrupt			*intr;
+
+	STAILQ_HEAD(, spdk_nvmf_tcp_stream_segment) free_segments;
 
 	TAILQ_HEAD(, spdk_nvmf_tcp_qpair)	qpairs;
 
@@ -822,6 +837,7 @@ static void
 _nvmf_tcp_qpair_destroy(void *_tqpair)
 {
 	struct spdk_nvmf_tcp_qpair *tqpair = _tqpair;
+	struct spdk_nvmf_tcp_stream_segment *segment, *tmp;
 	spdk_nvmf_transport_qpair_fini_cb cb_fn = tqpair->fini_cb_fn;
 	void *cb_arg = tqpair->fini_cb_arg;
 	int err = 0;
@@ -829,6 +845,18 @@ _nvmf_tcp_qpair_destroy(void *_tqpair)
 	spdk_trace_record(TRACE_TCP_QP_DESTROY, tqpair->qpair.trace_id, 0, 0);
 
 	SPDK_DEBUGLOG(nvmf_tcp, "enter\n");
+
+	STAILQ_FOREACH_SAFE(segment, &tqpair->pending_stream, link, tmp) {
+		STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
+
+		spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+
+		if (tqpair->group != NULL) {
+			STAILQ_INSERT_HEAD(&tqpair->group->free_segments, segment, link);
+		} else {
+			free(segment);
+		}
+	}
 
 	err = spdk_sock_close(&tqpair->sock);
 	assert(err == 0);
@@ -1797,6 +1825,8 @@ nvmf_tcp_handle_connect(struct spdk_nvmf_tcp_port *port, struct spdk_sock *sock)
 	tqpair->qpair.transport = port->transport;
 	tqpair->qpair.numa.id_valid = 1;
 	tqpair->qpair.numa.id = spdk_sock_get_numa_id(sock);
+	STAILQ_INIT(&tqpair->pending_stream);
+	tqpair->use_zero_copy_rx = (strcmp(spdk_sock_get_default_impl(), "posix") != 0);
 
 	rc = spdk_sock_getaddr(tqpair->sock, tqpair->target_addr,
 			       sizeof(tqpair->target_addr), &tqpair->target_port,
@@ -1942,6 +1972,7 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 	struct spdk_nvmf_tcp_transport	*ttransport;
 	struct spdk_nvmf_tcp_poll_group *tgroup;
 	struct spdk_sock_group_opts	sgroup_opts = {};
+	int i;
 
 	tgroup = calloc(1, sizeof(*tgroup));
 	if (!tgroup) {
@@ -1958,6 +1989,7 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 	}
 
 	TAILQ_INIT(&tgroup->qpairs);
+	STAILQ_INIT(&tgroup->free_segments);
 
 	ttransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_tcp_transport, transport);
 
@@ -1989,6 +2021,20 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 		if (tgroup->intr == NULL) {
 			SPDK_ERRLOG("Failed to register interrupt for sock group\n");
 			goto cleanup;
+		}
+	}
+
+	if (strcmp(spdk_sock_get_default_impl(), "posix") != 0) {
+		for (i = 0; i < SPDK_NVMF_TCP_DEFAULT_STREAM_SEGMENTS_PER_POLL_GROUP; i++) {
+			struct spdk_nvmf_tcp_stream_segment *segment;
+
+			segment = calloc(1, sizeof(*segment));
+			if (segment == NULL) {
+				assert(false);
+				break;
+			}
+
+			STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
 		}
 	}
 
@@ -2041,6 +2087,8 @@ nvmf_tcp_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 {
 	struct spdk_nvmf_tcp_poll_group *tgroup, *next_tgroup;
 	struct spdk_nvmf_tcp_transport *ttransport;
+	struct spdk_nvmf_tcp_stream_segment *segment, *tsegment;
+	int count;
 
 	tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
 	spdk_interrupt_unregister(&tgroup->intr);
@@ -2069,6 +2117,18 @@ nvmf_tcp_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 	}
 	if (ttransport->next_pg == tgroup) {
 		ttransport->next_pg = next_tgroup;
+	}
+
+	count = 0;
+	STAILQ_FOREACH_SAFE(segment, &tgroup->free_segments, link, tsegment) {
+		count++;
+		STAILQ_REMOVE_HEAD(&tgroup->free_segments, link);
+		free(segment);
+	}
+
+	if (count != SPDK_NVMF_TCP_DEFAULT_STREAM_SEGMENTS_PER_POLL_GROUP) {
+		SPDK_ERRLOG("tgroup=%p free_segments count is %u but should be %u\n", tgroup, count,
+			    SPDK_NVMF_TCP_DEFAULT_STREAM_SEGMENTS_PER_POLL_GROUP);
 	}
 
 	free(tgroup);
@@ -2817,30 +2877,69 @@ err:
 
 static int
 nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
-		   void *buf)
+		   void *_buf)
 {
+	struct spdk_nvmf_tcp_stream_segment *segment;
 	int ret;
+	uint8_t *buf = _buf;
 
-	ret = spdk_sock_recv(tqpair->sock, buf, bytes);
+	if (tqpair->use_zero_copy_rx) {
+		ret = 0;
+		while (bytes > 0) {
+			int len;
 
-	if (ret > 0) {
-		return ret;
-	}
+			segment = STAILQ_FIRST(&tqpair->pending_stream);
+			if (segment == NULL) {
+				break;
+			}
 
-	if (ret < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			return 0;
+			assert(segment->len > tqpair->stream_offset);
+
+			/* For now, we do a data copy. This is not efficient. */
+			len = spdk_min(segment->len - tqpair->stream_offset, (uint32_t)bytes);
+			memcpy(buf, segment->buf + tqpair->stream_offset, len);
+
+			tqpair->stream_offset += len;
+			ret += len;
+			bytes -= len;
+			buf += len;
+
+			if (tqpair->stream_offset == segment->len) {
+				struct spdk_nvmf_tcp_poll_group *tgroup;
+
+				tgroup = tqpair->group;
+
+				STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
+				tqpair->stream_offset = 0;
+
+				spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+				STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+			}
+		}
+	} else {
+		ret = spdk_sock_recv(tqpair->sock, buf, bytes);
+
+		if (ret > 0) {
+			return ret;
 		}
 
-		/* For connect reset issue, do not output error log */
-		if (errno != ECONNRESET) {
-			SPDK_ERRLOG("spdk_sock_recv() failed, errno %d: %s\n",
-				    errno, spdk_strerror(errno));
+		if (ret < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				return 0;
+			}
+
+			/* For connect reset issue, do not output error log */
+			if (errno != ECONNRESET) {
+				SPDK_ERRLOG("spdk_sock_recv() failed, errno %d: %s\n",
+					    errno, spdk_strerror(errno));
+			}
 		}
+
+		/* connection closed */
+		return NVME_TCP_CONNECTION_FATAL;
 	}
 
-	/* connection closed */
-	return NVME_TCP_CONNECTION_FATAL;
+	return ret;
 }
 
 static int
@@ -3597,7 +3696,42 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 static void
 nvmf_tcp_qpair_process(struct spdk_nvmf_tcp_qpair *tqpair)
 {
+	struct spdk_nvmf_tcp_poll_group	*tgroup;
+	struct spdk_nvmf_tcp_stream_segment *segment;
 	int rc;
+
+	if (tqpair->use_zero_copy_rx) {
+		tgroup = tqpair->group;
+
+		/* First, acquire a segment tracker. */
+		segment = STAILQ_FIRST(&tgroup->free_segments);
+		if (segment == NULL) {
+			/* This is ok. We can't pull in new segments right now, but presumably some will get released in the future
+			 * and we'll be able to make forward progress again. */
+			return;
+		}
+
+		while (segment != NULL) {
+			/* Now try to grab the next portion of the TCP stream */
+			rc = spdk_sock_recv_next(tqpair->sock, &segment->buf, &segment->token);
+			if (rc < 0) {
+				if (errno == ENOBUFS || errno == EAGAIN) {
+					break;
+				}
+
+				nvmf_tcp_qpair_disconnect(tqpair);
+			} else if (rc == 0) {
+				break;
+			}
+
+			segment->len = rc;
+
+			STAILQ_REMOVE_HEAD(&tgroup->free_segments, link);
+			STAILQ_INSERT_TAIL(&tqpair->pending_stream, segment, link);
+
+			segment = STAILQ_FIRST(&tgroup->free_segments);
+		}
+	}
 
 	assert(tqpair != NULL);
 	rc = nvmf_tcp_sock_process(tqpair);
@@ -3612,6 +3746,8 @@ static void
 nvmf_tcp_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
 {
 	struct spdk_nvmf_tcp_qpair *tqpair = arg;
+
+	assert(tqpair->sock == sock);
 
 	nvmf_tcp_qpair_process(tqpair);
 }
@@ -3664,8 +3800,9 @@ nvmf_tcp_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
 			   struct spdk_nvmf_qpair *qpair)
 {
 	struct spdk_nvmf_tcp_poll_group	*tgroup;
-	struct spdk_nvmf_tcp_qpair		*tqpair;
+	struct spdk_nvmf_tcp_qpair	*tqpair;
 	int				rc;
+	struct spdk_nvmf_tcp_stream_segment *segment, *tmp;
 
 	tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
 	tqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_tcp_qpair, qpair);
@@ -3690,6 +3827,17 @@ nvmf_tcp_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
 	}
 
 	nvmf_tcp_abort_await_buffer_reqs(tqpair);
+
+	/* Remove the pending stream segments here. If we wait until later when the queue
+	 * is destroyed, these segments will leak. */
+	STAILQ_FOREACH_SAFE(segment, &tqpair->pending_stream, link, tmp) {
+		STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
+
+		spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+		STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+	}
+
+	tqpair->group = NULL;
 
 	return rc;
 }
