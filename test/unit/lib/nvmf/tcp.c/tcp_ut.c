@@ -858,14 +858,12 @@ test_nvmf_tcp_qpair_init_mem_resource(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(tqpair->resource_count == SPDK_NVMF_TCP_DEFAULT_MAX_IO_QUEUE_DEPTH);
 	CU_ASSERT(tqpair->reqs != NULL);
-	CU_ASSERT(tqpair->bufs != NULL);
 	CU_ASSERT(tqpair->pdus != NULL);
 	/* Just to check the first and last entry */
 	CU_ASSERT(tqpair->reqs[0].ttag == 1);
 	CU_ASSERT(tqpair->reqs[0].req.qpair == &tqpair->qpair);
 	CU_ASSERT(tqpair->reqs[0].pdu == &tqpair->pdus[0]);
 	CU_ASSERT(tqpair->reqs[0].pdu->qpair == &tqpair->qpair);
-	CU_ASSERT(tqpair->reqs[0].buf == (void *)((uintptr_t)tqpair->bufs));
 	CU_ASSERT(tqpair->reqs[0].req.rsp == (void *)&tqpair->reqs[0].rsp);
 	CU_ASSERT(tqpair->reqs[0].req.cmd == (void *)&tqpair->reqs[0].cmd);
 	CU_ASSERT(tqpair->reqs[0].state == TCP_REQUEST_STATE_FREE);
@@ -873,7 +871,6 @@ test_nvmf_tcp_qpair_init_mem_resource(void)
 	CU_ASSERT(tqpair->reqs[127].req.qpair == &tqpair->qpair);
 	CU_ASSERT(tqpair->reqs[127].pdu == &tqpair->pdus[127]);
 	CU_ASSERT(tqpair->reqs[127].pdu->qpair == &tqpair->qpair);
-	CU_ASSERT(tqpair->reqs[127].buf == (void *)((uintptr_t)tqpair->bufs) + 127 * 4096);
 	CU_ASSERT(tqpair->reqs[127].req.rsp == (void *)&tqpair->reqs[127].rsp);
 	CU_ASSERT(tqpair->reqs[127].req.cmd == (void *)&tqpair->reqs[127].cmd);
 	CU_ASSERT(tqpair->reqs[127].state == TCP_REQUEST_STATE_FREE);

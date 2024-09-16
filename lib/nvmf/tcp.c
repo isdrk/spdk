@@ -403,13 +403,17 @@ struct spdk_nvmf_tcp_req  {
 	STAILQ_ENTRY(spdk_nvmf_tcp_req)		link;
 	TAILQ_ENTRY(spdk_nvmf_tcp_req)		state_link;
 	STAILQ_ENTRY(spdk_nvmf_tcp_req)		control_msg_link;
+
+	struct spdk_nvmf_tcp_stream_segment	*segment_refs[NVMF_REQ_MAX_BUFFERS];
+	uint32_t				segment_cnt;
 };
 
 /* This tracks a segment of the TCP stream */
 struct spdk_nvmf_tcp_stream_segment {
 	void						*buf;
-	uint32_t					len;
 	struct spdk_sock_buf_token			*token;
+	uint32_t					len;
+	uint32_t					refcnt;
 	STAILQ_ENTRY(spdk_nvmf_tcp_stream_segment)	link;
 };
 
@@ -845,12 +849,17 @@ _nvmf_tcp_qpair_destroy(void *_tqpair)
 	STAILQ_FOREACH_SAFE(segment, &tqpair->pending_stream, link, tmp) {
 		STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
 
-		spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+		assert(segment->refcnt > 0);
+		segment->refcnt--;
 
-		if (tqpair->group != NULL) {
-			STAILQ_INSERT_HEAD(&tqpair->group->free_segments, segment, link);
-		} else {
-			free(segment);
+		if (segment->refcnt == 0) {
+			spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+
+			if (tqpair->group != NULL) {
+				STAILQ_INSERT_HEAD(&tqpair->group->free_segments, segment, link);
+			} else {
+				free(segment);
+			}
 		}
 	}
 
@@ -1680,7 +1689,7 @@ nvmf_tcp_qpair_init_mem_resource(struct spdk_nvmf_tcp_qpair *tqpair)
 		return -1;
 	}
 
-	if (in_capsule_data_size) {
+	if (in_capsule_data_size && !tqpair->use_zero_copy_rx) {
 		tqpair->bufs = spdk_zmalloc(tqpair->resource_count * in_capsule_data_size, 0x1000,
 					    NULL, SPDK_ENV_LCORE_ID_ANY,
 					    SPDK_MALLOC_DMA);
@@ -2872,6 +2881,132 @@ err:
 }
 
 static int
+nvme_tcp_double_buffer_scattered_payload(struct spdk_nvmf_tcp_qpair *tqpair,
+		struct spdk_nvmf_tcp_req *tcp_req, struct nvme_tcp_pdu *pdu)
+{
+	struct spdk_nvmf_tcp_stream_segment *segment;
+	struct spdk_nvmf_tcp_poll_group *tgroup;
+	size_t total_sz = 0;
+	void *double_buf;
+	void *buf;
+	size_t len;
+	int i, j;
+	size_t offset = 0;
+
+	tgroup = tqpair->group;
+
+	for (i = 0; i < (int)pdu->data_iovcnt; i++) {
+		total_sz += pdu->data_iov[i].iov_len;
+	}
+
+	double_buf = spdk_malloc(total_sz, 4096, NULL, SPDK_ENV_SOCKET_ID_ANY, 0);
+	if (double_buf == NULL) {
+		SPDK_ERRLOG("Failed to allocate buffer for scattered payload\n");
+		return -ENOMEM;
+	}
+
+	/* We walk backward as we copy because we may not get all the way to the beginning of the tcp_req iov array. */
+	for (i = (int)pdu->data_iovcnt - 1, j = tcp_req->req.iovcnt - 1; i > -1; i--, j--) {
+		buf = pdu->data_iov[i].iov_base;
+		len = pdu->data_iov[i].iov_len;
+		segment = tcp_req->segment_refs[j];
+
+		tcp_req->req.iov[j].iov_base = NULL;
+		tcp_req->req.iov[j].iov_len = 0;
+		tcp_req->req.iovcnt--;
+
+		tcp_req->segment_refs[j] = NULL;
+		tcp_req->segment_cnt--;
+
+		pdu->data_iov[i].iov_base = NULL;
+		pdu->data_iov[i].iov_len = 0;
+		pdu->data_iovcnt--;
+
+		memcpy(double_buf + offset, buf, len);
+		offset += len;
+
+		segment->refcnt--;
+		if (segment->refcnt == 0) {
+			assert(tgroup != NULL);
+			spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+
+			STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+
+		}
+	}
+
+	tcp_req->req.iov[tcp_req->req.iovcnt].iov_base = double_buf;
+	tcp_req->req.iov[tcp_req->req.iovcnt].iov_len = total_sz;
+	tcp_req->req.iovcnt++;
+
+	/* A null entry is a signal that this was double buffered. */
+	tcp_req->segment_refs[tcp_req->segment_cnt] = NULL;
+	tcp_req->segment_cnt++;
+
+	return 0;
+}
+
+static int
+nvme_tcp_read_data_zcopy(struct spdk_nvmf_tcp_qpair *tqpair, struct spdk_nvmf_tcp_req *tcp_req,
+			 struct nvme_tcp_pdu *pdu)
+{
+	struct spdk_nvmf_tcp_stream_segment *segment;
+	uint32_t length;
+	int ret;
+
+	length = pdu->data_len - pdu->rw_offset;
+
+	ret = 0;
+	while (length > 0) {
+		int len;
+
+		segment = STAILQ_FIRST(&tqpair->pending_stream);
+		if (segment == NULL) {
+			break;
+		}
+
+		assert(segment->len > tqpair->stream_offset);
+
+		len = spdk_min(segment->len - tqpair->stream_offset, (uint32_t)length);
+
+		if (pdu->data_iovcnt >= NVMF_REQ_MAX_BUFFERS - 1 ||
+		    tcp_req->req.iovcnt >= NVMF_REQ_MAX_BUFFERS - 1) {
+			ret = nvme_tcp_double_buffer_scattered_payload(tqpair, tcp_req, pdu);
+			if (ret != 0) {
+				return ret;
+			}
+		}
+
+		pdu->data_iov[pdu->data_iovcnt].iov_base = segment->buf + tqpair->stream_offset;
+		pdu->data_iov[pdu->data_iovcnt].iov_len = len;
+		pdu->data_iovcnt++;
+
+		tcp_req->req.iov[tcp_req->req.iovcnt].iov_base = segment->buf + tqpair->stream_offset;
+		tcp_req->req.iov[tcp_req->req.iovcnt].iov_len = len;
+		tcp_req->req.iovcnt++;
+
+		tcp_req->segment_refs[tcp_req->segment_cnt] = segment;
+		tcp_req->segment_cnt++;
+		segment->refcnt++;
+
+		tqpair->stream_offset += len;
+		length -= len;
+		ret += len;
+
+		if (tqpair->stream_offset == segment->len) {
+			tqpair->stream_offset = 0;
+			STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
+
+			assert(segment->refcnt > 0);
+			segment->refcnt--;
+			assert(segment->refcnt != 0);
+		}
+	}
+
+	return ret;
+}
+
+static int
 nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 		   void *_buf)
 {
@@ -2942,6 +3077,7 @@ static int
 nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct iovec iov[NVMF_REQ_MAX_BUFFERS + 1];
+	struct spdk_nvmf_tcp_req *tcp_req;
 	int iovcnt;
 	struct spdk_iov_sgl sgl;
 	int i;
@@ -2949,6 +3085,12 @@ nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_p
 
 	assert(tqpair != NULL);
 	assert(tqpair->sock != NULL);
+
+	tcp_req = pdu->req;
+	if (tqpair->use_zero_copy_rx && tcp_req != NULL && tcp_req->has_in_capsule_data) {
+		/* We'll do a zero copy recv into the PDU. */
+		return nvme_tcp_read_data_zcopy(tqpair, tcp_req, pdu);
+	}
 
 	spdk_iov_sgl_init(&sgl, iov, NVMF_REQ_MAX_BUFFERS + 1, pdu->rw_offset);
 
@@ -3236,7 +3378,11 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 			goto fatal_err;
 		}
 
-		if (spdk_unlikely(length > max_len)) {
+		if (tqpair->use_zero_copy_rx) {
+			/* We don't fill out req->iov. It will be filled in as data arrives. */
+			req->iovcnt = 0;
+			tcp_req->segment_cnt = 0;
+		} else if (length > max_len) {
 			/* According to the SPEC we should support ICD up to 8192 bytes for admin and fabric commands */
 			if (length <= SPDK_NVME_TCP_IN_CAPSULE_DATA_MAX_SIZE &&
 			    (cmd->opc == SPDK_NVME_OPC_FABRIC || req->qpair->qid == 0)) {
@@ -3252,6 +3398,8 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 					nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_BUF);
 					return;
 				}
+				req->iov[0].iov_len = length;
+				req->iovcnt = 1;
 			} else {
 				SPDK_ERRLOG("In-capsule data length 0x%x exceeds capsule length 0x%x\n",
 					    length, max_len);
@@ -3260,13 +3408,13 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 			}
 		} else {
 			req->iov[0].iov_base = tcp_req->buf;
+			req->iov[0].iov_len = length;
+			req->iovcnt = 1;
 		}
 
 		req->length = length;
 		req->data_from_pool = false;
 
-		req->iov[0].iov_len = length;
-		req->iovcnt = 1;
 		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_HAVE_BUFFER);
 
 		return;
@@ -3530,7 +3678,7 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 		case TCP_REQUEST_STATE_HAVE_BUFFER:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_HAVE_BUFFER, tqpair->qpair.trace_id, 0,
 					  (uintptr_t)tcp_req);
-			assert(tcp_req->req.iovcnt > 0);
+			assert(tqpair->use_zero_copy_rx || tcp_req->req.iovcnt > 0);
 
 			/* If data is transferring from host to controller, we need to do a transfer from the host. */
 			if (tcp_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
@@ -3546,8 +3694,13 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 					SPDK_DEBUGLOG(nvmf_tcp, "Not need to send r2t for tcp_req(%p) on tqpair=%p\n", tcp_req,
 						      tqpair);
 					/* No need to send r2t, contained in the capsuled data */
-					nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
-								  0, tcp_req->req.length);
+					if (tqpair->use_zero_copy_rx) {
+						pdu->data_len = tcp_req->req.length;
+						pdu->data_iovcnt = 0;
+					} else {
+						nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
+									  0, tcp_req->req.length);
+					}
 					nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
 				}
 				break;
@@ -3648,15 +3801,44 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 
 			if (tcp_req->req.data_from_pool) {
 				spdk_nvmf_request_free_buffers(&tcp_req->req, group, transport);
-			} else if (spdk_unlikely(tcp_req->has_in_capsule_data &&
-						 (tcp_req->cmd.opc == SPDK_NVME_OPC_FABRIC ||
-						  tqpair->qpair.qid == 0) && tcp_req->req.length > transport->opts.in_capsule_data_size)) {
+			} else if (tcp_req->has_in_capsule_data) {
 				tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
-				assert(tgroup->control_msg_list);
-				SPDK_DEBUGLOG(nvmf_tcp, "Put buf to control msg list\n");
-				nvmf_tcp_control_msg_put(tgroup->control_msg_list,
-							 tcp_req->req.iov[0].iov_base);
+
+				if (!tqpair->use_zero_copy_rx) {
+					if (spdk_unlikely((tcp_req->cmd.opc == SPDK_NVME_OPC_FABRIC || tqpair->qpair.qid == 0) &&
+							  tcp_req->req.length > transport->opts.in_capsule_data_size)) {
+						assert(tgroup->control_msg_list);
+						SPDK_DEBUGLOG(nvmf_tcp, "Put buf to control msg list\n");
+						nvmf_tcp_control_msg_put(tgroup->control_msg_list,
+									 tcp_req->req.iov[0].iov_base);
+					}
+				} else {
+					struct spdk_nvmf_tcp_stream_segment *segment;
+					uint32_t i;
+
+					for (i = 0; i < tcp_req->segment_cnt; i++) {
+						segment = tcp_req->segment_refs[i];
+
+						if (segment == NULL) {
+							/* This signals a double buffer */
+							spdk_free(tcp_req->req.iov[i].iov_base);
+						} else {
+							assert(segment->refcnt > 0);
+							segment->refcnt--;
+
+							if (segment->refcnt == 0) {
+								assert(tgroup != NULL);
+								spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+
+								STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+							}
+						}
+					}
+
+					tcp_req->segment_cnt = 0;
+				}
 			}
+
 			tcp_req->req.length = 0;
 			tcp_req->req.iovcnt = 0;
 			tcp_req->fused_failed = false;
@@ -3721,6 +3903,8 @@ nvmf_tcp_qpair_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			}
 
 			segment->len = rc;
+			assert(segment->refcnt == 0);
+			segment->refcnt = 1;
 
 			STAILQ_REMOVE_HEAD(&tgroup->free_segments, link);
 			STAILQ_INSERT_TAIL(&tqpair->pending_stream, segment, link);
@@ -3829,8 +4013,13 @@ nvmf_tcp_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
 	STAILQ_FOREACH_SAFE(segment, &tqpair->pending_stream, link, tmp) {
 		STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
 
-		spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
-		STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+		assert(segment->refcnt > 0);
+		segment->refcnt--;
+
+		if (segment->refcnt == 0) {
+			spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+			STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+		}
 	}
 
 	tqpair->group = NULL;
