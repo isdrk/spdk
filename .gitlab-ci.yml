@@ -132,8 +132,10 @@ test-autotest-job:
     - tar xf .test.tar
     # clean up output of autotest from previous runs
     - sudo rm -rf $CI_PROJECT_DIR/../output/
-    - sudo ./scripts/setup.sh
+    - sudo HUGEMEM=8192 ./scripts/setup.sh
     - sudo ./test/accel/mlx5/accel_mlx5.sh
+    - sudo ./test/accel/mlx5/accel_mlx5_crc32c.sh
+    - sudo ./test/accel/mlx5/accel_mlx5_copy.sh
     - sudo ./autotest.sh .ci/autotest-vm.conf
     - sudo chown -R $USER $CI_PROJECT_DIR
 
@@ -145,6 +147,7 @@ test-crypto-k8s-job:
     - grep -i huge /proc/meminfo
     - tar xf .test.tar
     - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh ${CI_DUT_RDMA}
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA}
 
 coverity-job:
   extends: .do_build
