@@ -2251,11 +2251,9 @@ static inline int
 accel_mlx5_task_continue(struct accel_mlx5_task *task)
 {
 	struct accel_mlx5_qp *qp = task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
 
 	if (spdk_unlikely(qp->recovering)) {
-		STAILQ_INSERT_TAIL(&dev->nomem, task, link);
-		return 0;
+		return -EIO;
 	}
 
 	return g_accel_mlx5_tasks_ops[task->mlx5_opcode].cont(task);
@@ -3324,6 +3322,9 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 			    task->src_domain, task->dst_domain);
 		return -ENODEV;
 	}
+	if (spdk_unlikely(mlx5_task->qp->recovering)) {
+		return -ENODEV;
+	}
 
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
@@ -3338,11 +3339,6 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 		return rc;
 	}
 
-	if (spdk_unlikely(mlx5_task->qp->recovering)) {
-		STAILQ_INSERT_TAIL(&dev->nomem, mlx5_task, link);
-		return 0;
-	}
-
 	if (!ch->pp_handler_registered) {
 		ch->pp_handler_registered = spdk_thread_post_poller_handler_register(accel_mlx5_pp_handler,
 					    ch) == 0;
@@ -3353,7 +3349,7 @@ accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *tas
 }
 
 static inline void
-accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5_qp *qp)
+accel_mlx5_task_clear_on_recovery(struct accel_mlx5_task *task, struct accel_mlx5_qp *qp)
 {
 	if (task->qp != qp) {
 		return;
@@ -3361,6 +3357,8 @@ accel_mlx5_task_clear_mkey_cache(struct accel_mlx5_task *task, struct accel_mlx5
 	if (task->base.cached_lkey) {
 		*task->base.cached_lkey = 0;
 	}
+	STAILQ_REMOVE(&qp->dev->nomem, task, accel_mlx5_task, link);
+	accel_mlx5_task_fail(task, -EIO);
 }
 
 static void accel_mlx5_recover_qp(struct accel_mlx5_qp *qp);
@@ -3378,7 +3376,7 @@ accel_mlx5_recover_qp_poller(void *arg)
 static void
 accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 {
-	struct accel_mlx5_task *task;
+	struct accel_mlx5_task *task, *tmp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	int rc;
 
@@ -3388,13 +3386,12 @@ accel_mlx5_recover_qp(struct accel_mlx5_qp *qp)
 		qp->qp = NULL;
 	}
 	/* There is a good chance that WR failure was caused by invalidated cached mkey.
-	 * Clear the cache to avoid new failures. We clear cache for all tasks here,
-	 * including ones queued in nomem queue. This may clear mkeys that are still
-	 * valid, but it is better than triggering another QP recovery. Caches will be
-	 * refilled quickly.
+	 * Clear the cache to avoid new failures.
+	 * a task might use a qpair assigned to a memory domain. Such qpair is removed, so we should
+	 * fail all tasks referencing the qpair
 	 */
-	STAILQ_FOREACH(task, &dev->nomem, link) {
-		accel_mlx5_task_clear_mkey_cache(task, qp);
+	STAILQ_FOREACH_SAFE(task, &dev->nomem, link, tmp) {
+		accel_mlx5_task_clear_on_recovery(task, qp);
 	}
 	if (qp->domain) {
 		/* No need to re-create a qp created for a specific domain, it will be created when needed */
@@ -3575,10 +3572,9 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 static inline void
 accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 {
-	struct accel_mlx5_task *task, *tmp, *last;
+	struct accel_mlx5_task *task, *tmp;
 	int rc;
 
-	last = STAILQ_LAST(&dev->nomem, accel_mlx5_task, link);
 	STAILQ_FOREACH_SAFE(task, &dev->nomem, link, tmp) {
 		STAILQ_REMOVE_HEAD(&dev->nomem, link);
 		rc = accel_mlx5_task_continue(task);
@@ -3586,11 +3582,6 @@ accel_mlx5_resubmit_nomem_tasks(struct accel_mlx5_dev *dev)
 			if (rc != -ENOMEM) {
 				accel_mlx5_task_fail(task, rc);
 			}
-			break;
-		}
-		/* If qpair is recovering, task is added back to the nomem list and 0 is returned. In that case we
-		 * need a special condition to iterate the list once and stop this FOREACH loop */
-		if (task == last) {
 			break;
 		}
 	}
