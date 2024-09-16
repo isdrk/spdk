@@ -6,7 +6,7 @@ from spdk.rpc.helpers import deprecated_alias
 
 
 def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None, crypto_split_blocks=None, allowed_devs=None,
-                           siglast=None, merge=None, qp_per_domain=None, enable_driver=None, enable_module=None,
+                           merge=None, qp_per_domain=None, enable_driver=None, enable_module=None,
                            disable_signature=None, disable_crypto=None):
     """Configure mlx5 accel module. Scans all mlx5 devices which can perform needed operations
 
@@ -16,7 +16,6 @@ def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None
         num_requests: size of the shared requests pool (optional)
         crypto_split_blocks: number of data blocks to be processed in 1 UMR (optional)
         allowed_devs: comma separated list of allowed device names (optional)
-        siglast: ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB (optional)
         merge: merge tasks in the sequence when possible (optional)
         qp_per_domain: use dedicated qpair per memory domain per channel (optional)
         enable_driver: enable accel mlx5 platform driver (optional)
@@ -36,8 +35,6 @@ def mlx5_scan_accel_module(client, qp_size=None, cq_size=None, num_requests=None
         params['crypto_split_blocks'] = crypto_split_blocks
     if allowed_devs is not None:
         params['allowed_devs'] = allowed_devs
-    if siglast is not None:
-        params['siglast'] = siglast
     if merge is not None:
         print("WARNING: merge param is deprecated and will be removed soon, use --enable-driver instead.")
         params['enable_driver'] = merge

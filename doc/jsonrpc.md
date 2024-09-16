@@ -2413,7 +2413,6 @@ cq_size                 | Optional | number  | Size of the shared CQ
 num_requests            | Optional | number  | Size of the shared requests pool
 crypto_split_blocks     | Optional | number  | Number of data blocks to be processed in 1 UMR
 allowed-devs            | Optional | string  | Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1
-siglast                 | Optional | boolean | Ignore CQ_UPDATE flags, mark last WQE with CQ_UPDATE before updating the DB
 qp_per_domain           | Optional | boolean | Use dedicated qpair per memory domain per channel
 enable_driver           | Optional | boolean | Enable accel mlx5 platform driver
 enable_module           | Optional | boolean | Enable accel mlx5 module

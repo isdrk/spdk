@@ -285,9 +285,6 @@ accel_mlx5_qpair_compare(struct accel_mlx5_qp *qp1, struct accel_mlx5_qp *qp2)
 
 RB_GENERATE_STATIC(accel_mlx5_qpairs_map, accel_mlx5_qp, node, accel_mlx5_qpair_compare);
 
-static void(*g_accel_mlx5_process_cpl_fn)(struct accel_mlx5_dev *dev,
-		struct spdk_mlx5_cq_completion *wc, int reaped);
-
 static inline void
 accel_mlx5_iov_sgl_init(struct accel_mlx5_iov_sgl *s, struct iovec *iov, int iovcnt)
 {
@@ -3469,71 +3466,6 @@ accel_mlx5_find_mkey_by_id(struct accel_mlx5_dev *dev, uint32_t mkey_id)
 }
 
 static inline void
-accel_mlx5_process_cpls_siglast(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc,
-				int reaped)
-{
-	struct accel_mlx5_task *task, *signaled_task, *task_tmp;
-	struct accel_mlx5_qp *qp;
-	uint32_t completed;
-	int i, rc;
-
-	for (i = 0; i < reaped; i++) {
-		if (spdk_unlikely(wc[i].status == SPDK_MLX5_CQE_SYNDROME_SIGERR)) {
-			struct spdk_mlx5_mkey_pool_obj *mkey = accel_mlx5_find_mkey_by_id(dev, wc[i].mkey);
-
-			assert(mkey);
-			mkey->sig.sigerr_count++;
-			mkey->sig.sigerr = true;
-			continue;
-		}
-
-		signaled_task = (struct accel_mlx5_task *)wc[i].wr_id;
-		if (spdk_unlikely(!signaled_task)) {
-			/* That is unsignaled completion with error, just ignore it */
-			continue;
-		}
-
-		qp = signaled_task->qp;
-		STAILQ_FOREACH_SAFE(task, &qp->in_hw, link, task_tmp) {
-			STAILQ_REMOVE_HEAD(&qp->in_hw, link);
-			assert(task->num_submitted_reqs > task->num_completed_reqs);
-			completed = task->num_submitted_reqs - task->num_completed_reqs;
-			assert(qp->wrs_submitted >= task->num_wrs);
-			qp->wrs_submitted -= task->num_wrs;
-			assert(dev->wrs_in_cq > 0);
-			dev->wrs_in_cq--;
-			task->num_completed_reqs += completed;
-			SPDK_DEBUGLOG(accel_mlx5, "task %p, remaining %u\n", task,
-				      task->num_reqs - task->num_completed_reqs);
-			if (spdk_unlikely(wc[i].status) && (signaled_task == task)) {
-				/* We may have X unsignaled tasks queued in in_hw, if an error happens,
-				 * then HW generates completions for every unsignaled WQE.
-				 * If cpl with error generated for task X+1 then we still can process
-				 * previous tasks as usual */
-				accel_mlx5_process_error_cpl(&wc[i], task);
-				break;
-			}
-
-			if (task->num_completed_reqs == task->num_reqs) {
-				accel_mlx5_task_complete(task);
-			} else if (task->num_completed_reqs == task->num_submitted_reqs) {
-				assert(task->num_submitted_reqs < task->num_reqs);
-				rc = accel_mlx5_task_continue(task);
-				if (spdk_unlikely(rc)) {
-					if (rc != -ENOMEM) {
-						accel_mlx5_task_fail(task, rc);
-					}
-					break;
-				}
-			}
-			if (task == signaled_task) {
-				break;
-			}
-		}
-	}
-}
-
-static inline void
 accel_mlx5_process_cpls(struct accel_mlx5_dev *dev, struct spdk_mlx5_cq_completion *wc, int reaped)
 {
 	struct accel_mlx5_task *task;
@@ -3635,7 +3567,7 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 	SPDK_DEBUGLOG(accel_mlx5, "Reaped %d cpls on dev %s\n", reaped,
 		      dev->dev_ctx->pd->context->device->name);
 
-	g_accel_mlx5_process_cpl_fn(dev, wc, reaped);
+	accel_mlx5_process_cpls(dev, wc, reaped);
 
 	return reaped;
 }
@@ -3825,7 +3757,6 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 	mlx5_qp_attr.cap.max_recv_wr = 0;
 	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
 	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
-	mlx5_qp_attr.siglast = g_accel_mlx5.attr.siglast;
 
 	rc = spdk_mlx5_qp_create(dev->dev_ctx->pd, dev->cq, &mlx5_qp_attr, &qp->qp);
 	if (rc) {
@@ -3948,7 +3879,6 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->cq_size = ACCEL_MLX5_CQ_SIZE;
 	attr->num_requests = ACCEL_MLX5_NUM_MKEYS;
 	attr->crypto_split_blocks = 0;
-	attr->siglast = false;
 	attr->enable_driver = false;
 	attr->qp_per_domain = true;
 	attr->enable_module = true;
@@ -4425,12 +4355,6 @@ accel_mlx5_init(void)
 
 	spdk_spin_init(&g_accel_mlx5.lock);
 
-	if (g_accel_mlx5.attr.siglast) {
-		g_accel_mlx5_process_cpl_fn = accel_mlx5_process_cpls_siglast;
-	} else {
-		g_accel_mlx5_process_cpl_fn = accel_mlx5_process_cpls;
-	}
-
 	g_accel_mlx5.crypto_supported = true;
 	g_accel_mlx5.crc_supported = true;
 	g_accel_mlx5.num_devs = 0;
@@ -4566,7 +4490,6 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		if (g_accel_mlx5.attr.allowed_devs) {
 			spdk_json_write_named_string(w, "allowed_devs", g_accel_mlx5.attr.allowed_devs);
 		}
-		spdk_json_write_named_bool(w, "siglast", g_accel_mlx5.attr.siglast);
 		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.attr.qp_per_domain);
 		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.attr.disable_signature);
 		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.attr.disable_crypto);
