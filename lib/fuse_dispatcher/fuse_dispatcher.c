@@ -422,20 +422,20 @@ _iov_arr_get_buf(struct iovec *iovs, size_t cnt, struct iov_offs *offs, size_t s
 
 	arg_buf = _iov_arr_get_buf_info(iovs, cnt, offs, &arg_size);
 	if (!arg_buf) {
-		SPDK_INFOLOG(fuse_dispatcher, "No %s arg header attached at %zu:%zu\n", direction, offs->iov_offs,
-			     offs->buf_offs);
+		SPDK_INFOLOG(fuse_dispatcher, "Requested %s buffer is already consumed or not existing: "
+			     "count=%d, attached=%zu:%zu\n", direction, (int)cnt, offs->iov_offs, offs->buf_offs);
 		return NULL;
 	}
 
 	if (!arg_size) {
-		SPDK_INFOLOG(fuse_dispatcher, "%s arg of zero length attached at %zu:%zu\n", direction,
-			     offs->iov_offs, offs->buf_offs);
+		SPDK_INFOLOG(fuse_dispatcher, "Requested %s buffer attached at %zu:%zu has zero length\n",
+			     direction, offs->iov_offs, offs->buf_offs);
 		return NULL;
 	}
 
 	if (size > arg_size) {
-		SPDK_INFOLOG(fuse_dispatcher, "%s arg is too small (%zu > %zu) at %zu:%zu\n", direction, size,
-			     arg_size, offs->iov_offs, offs->buf_offs);
+		SPDK_INFOLOG(fuse_dispatcher, "Requested %s buffer is too small (expected size = %zu > actual "
+			     "size = %zu) at %zu:%zu\n", direction, size, arg_size, offs->iov_offs, offs->buf_offs);
 		return NULL;
 	}
 
@@ -458,14 +458,14 @@ _fsdev_io_in_arg_get_str(struct fuse_io *fuse_io)
 	arg_buf = _iov_arr_get_buf_info(fuse_io->in_iov, fuse_io->in_iovcnt, &fuse_io->in_offs,
 					&arg_size);
 	if (!arg_buf) {
-		SPDK_ERRLOG("No IN arg header attached at %zu:%zu\n", fuse_io->in_offs.iov_offs,
-			    fuse_io->in_offs.buf_offs);
+		SPDK_ERRLOG("Requested IN string buffer is already consumed or not existing: count=%d, attached=%zu:%zu\n",
+			    fuse_io->in_iovcnt, fuse_io->in_offs.iov_offs, fuse_io->in_offs.buf_offs);
 		return NULL;
 	}
 
 	len = strnlen(arg_buf, arg_size);
 	if (len == arg_size) {
-		SPDK_ERRLOG("no string or bad string attached at %zu:%zu\n", fuse_io->in_offs.iov_offs,
+		SPDK_ERRLOG("No string or bad string attached at %zu:%zu\n", fuse_io->in_offs.iov_offs,
 			    fuse_io->in_offs.buf_offs);
 		return NULL;
 	}
