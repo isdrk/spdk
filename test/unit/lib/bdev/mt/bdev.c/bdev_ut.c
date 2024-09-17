@@ -1153,7 +1153,7 @@ basic_qos(void)
 	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
 	poll_threads();
 	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev->internal.qos->ch == NULL);
+	CU_ASSERT(bdev->internal.qos->started == false);
 
 	/* Create the channels in reverse order. */
 	set_thread(1);
@@ -1165,9 +1165,6 @@ basic_qos(void)
 	io_ch[0] = spdk_bdev_get_io_channel(g_desc);
 	bdev_ch[0] = spdk_io_channel_get_ctx(io_ch[0]);
 	CU_ASSERT(bdev_ch[0]->flags == BDEV_CH_QOS_ENABLED);
-
-	/* Confirm that the qos thread is now thread 1 */
-	CU_ASSERT(bdev->internal.qos->ch == io_ch[1]);
 
 	/* Tear down the channels */
 	set_thread(0);
@@ -2920,9 +2917,6 @@ basic_bdev_group_qos(void)
 	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
 	CU_ASSERT(bdev_ch2->flags == BDEV_CH_QOS_GROUP_ENABLED);
 
-	/* Confirm that the QoS poller is on thread 0. */
-	CU_ASSERT(group->qos->ch == spdk_io_channel_from_ctx(bdev_ch->group_ch));
-
 	/* Reduce R/W IOPS Limit to 2. */
 	limits->rate_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT].remaining_this_timeslice = 2;
 
@@ -3020,7 +3014,7 @@ basic_bdev_group_qos(void)
 
 	/* Group QoS should exist. */
 	CU_ASSERT(group->qos != NULL);
-	CU_ASSERT(group->qos->ch != NULL);
+	CU_ASSERT(group->qos->started == true);
 
 	/* Open the bdev again. */
 	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
@@ -3037,9 +3031,6 @@ basic_bdev_group_qos(void)
 	io_ch = spdk_bdev_get_io_channel(g_desc);
 	bdev_ch = spdk_io_channel_get_ctx(io_ch);
 	CU_ASSERT(bdev_ch->flags == BDEV_CH_QOS_GROUP_ENABLED);
-
-	/* Confirm that the QoS poller is still on thread 1 */
-	CU_ASSERT(group->qos->ch == spdk_io_channel_from_ctx(bdev_ch->group_ch));
 
 	/* Tear down the channels */
 	set_thread(0);

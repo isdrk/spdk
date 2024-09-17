@@ -605,18 +605,9 @@ bdev_qos_limit_reset_quota(struct bdev_qos_limit *limit, int timeslice_count)
 }
 
 void
-bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits,
-			    uint64_t now,
-			    uint64_t timeslice_size,
-			    uint64_t *last_timeslice)
+bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits, int timeslice_count)
 {
-	int timeslice_count = 0;
 	int i;
-
-	while (now >= (*last_timeslice + timeslice_size)) {
-		*last_timeslice += timeslice_size;
-		timeslice_count++;
-	}
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		bdev_qos_limit_reset_quota(&limits->rate_limits[i], timeslice_count);

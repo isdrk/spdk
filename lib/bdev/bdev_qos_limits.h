@@ -92,10 +92,7 @@ bool bdev_qos_limits_cache_queue_io(struct bdev_qos_limits_cache *cache,
 				    struct spdk_bdev_io *bdev_io);
 bool bdev_qos_limits_queue_io(struct bdev_qos_limits *limits,
 			      struct spdk_bdev_io *bdev_io);
-void bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits,
-				 uint64_t now,
-				 uint64_t timeslice_size,
-				 uint64_t *last_timeslice);
+void bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits, int timeslice_count);
 bool bdev_qos_limits_check_disabled(const uint64_t *limits);
 
 #endif /* SPDK_BDEV_QOS_LIMIT_H */
