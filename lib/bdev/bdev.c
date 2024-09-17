@@ -221,6 +221,8 @@ struct spdk_bdev_qos_cache {
 	TAILQ_ENTRY(spdk_bdev_qos_cache) tailq;
 };
 
+struct spdk_bdev_group_channel;
+
 struct spdk_bdev_mgmt_channel {
 	/*
 	 * Each thread keeps a cache of bdev_io - this allows
@@ -237,6 +239,7 @@ struct spdk_bdev_mgmt_channel {
 
 	TAILQ_HEAD(, spdk_bdev_shared_resource)	shared_resources;
 	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
+	TAILQ_HEAD(, spdk_bdev_group_channel)	group_ch_list;
 };
 
 struct spdk_bdev_channel;
@@ -445,6 +448,8 @@ struct spdk_bdev_group_channel {
 	struct spdk_bdev_qos_cache	*qos_cache;
 	TAILQ_HEAD(, spdk_bdev_channel)	bdev_ch_list;
 	struct spdk_bdev_group		*group;
+	struct spdk_io_channel		*mgmt_io_ch;
+	TAILQ_ENTRY(spdk_bdev_group_channel) tailq;
 };
 
 #define __bdev_to_io_dev(bdev)		(((char *)bdev) + 1)
@@ -2090,6 +2095,7 @@ bdev_mgmt_channel_create(void *io_device, void *ctx_buf)
 
 	TAILQ_INIT(&ch->shared_resources);
 	TAILQ_INIT(&ch->io_wait_queue);
+	TAILQ_INIT(&ch->group_ch_list);
 
 	return 0;
 }
@@ -10919,9 +10925,17 @@ bdev_group_channel_create(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev_group *group = io_device;
 	struct spdk_bdev_group_channel *ch = ctx_buf;
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
 
 	TAILQ_INIT(&ch->bdev_ch_list);
 	ch->group = group;
+
+	ch->mgmt_io_ch = spdk_get_io_channel(&g_bdev_mgr);
+	assert(ch->mgmt_io_ch != NULL);
+
+	mgmt_ch = __io_ch_to_bdev_mgmt_ch(ch->mgmt_io_ch);
+
+	TAILQ_INSERT_TAIL(&mgmt_ch->group_ch_list, ch, tailq);
 
 	spdk_spin_lock(&group->spinlock);
 
@@ -10937,6 +10951,13 @@ bdev_group_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev_group_channel *ch = ctx_buf;
 	struct spdk_bdev_group *group = io_device;
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
+
+	mgmt_ch = __io_ch_to_bdev_mgmt_ch(ch->mgmt_io_ch);
+
+	TAILQ_REMOVE(&mgmt_ch->group_ch_list, ch, tailq);
+
+	spdk_put_io_channel(ch->mgmt_io_ch);
 
 	if (ch->qos_cache != NULL) {
 		spdk_spin_lock(&group->spinlock);
