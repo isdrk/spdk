@@ -2535,12 +2535,51 @@ accel_mlx5_dev_get_qp_by_domain(struct accel_mlx5_dev *dev, struct spdk_memory_d
 	return qp;
 }
 
-static inline struct accel_mlx5_qp *
-accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_dev *dev)
+static inline int
+accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *ch)
 {
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct spdk_mlx5_driver_io_context *driver_ctx;
+	struct accel_mlx5_dev *dev = NULL;
+	uint16_t i;
+
+	if (task->seq && (driver_ctx = spdk_accel_sequence_get_driver_ctx(task->seq)) != NULL) {
+		if (spdk_unlikely(task->op_code != SPDK_ACCEL_OPC_ENCRYPT &&
+				  task->op_code != SPDK_ACCEL_OPC_DECRYPT)) {
+			SPDK_ERRLOG("Mkey registartion is only supported for encrypt\n");
+			return -ENOTSUP;
+		}
+		if (spdk_unlikely(driver_ctx->mkey != NULL)) {
+			SPDK_ERRLOG("driver IO ctx already has an mkey\n");
+			return -ENOTSUP;
+		}
+		dev = NULL;
+		for (i = 0; i < ch->num_devs; i++) {
+			if (ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
+				dev = &ch->devs[i];
+				break;
+			}
+		}
+		if (spdk_unlikely(!dev)) {
+			SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
+				    driver_ctx->qp->pd->context->device->name);
+			return -ENODEV;
+		}
+
+		mlx5_task->driver_mkey = 1;
+	} else {
+		dev = &ch->devs[ch->dev_idx];
+		ch->dev_idx++;
+		if (ch->dev_idx == ch->num_devs) {
+			ch->dev_idx = 0;
+		}
+	}
+	assert(dev);
+
 	if (!g_accel_mlx5.attr.qp_per_domain || (!mlx5_task->base.src_domain &&
 			!mlx5_task->base.dst_domain)) {
-		return &dev->mlx5_qp;
+		mlx5_task->qp = &dev->mlx5_qp;
+		return 0;
 	}
 
 	/* TODO: find a way to distinguish between SPDK internal and app external domains.
@@ -2551,36 +2590,42 @@ accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_d
 	case ACCEL_MLX5_OPC_ENCRYPT_MKEY:
 	case ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C:
 		if (mlx5_task->base.src_domain) {
-			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
+			mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
 		} else {
-			return &dev->mlx5_qp;
+			mlx5_task->qp = &dev->mlx5_qp;
 		}
 		break;
 	case ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT:
 	case ACCEL_MLX5_OPC_DECRYPT_MKEY:
 		if (mlx5_task->base.dst_domain) {
-			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+			mlx5_task->qp =  accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
 		} else {
-			return &dev->mlx5_qp;
+			mlx5_task->qp = &dev->mlx5_qp;
 		}
 		break;
 	case ACCEL_MLX5_OPC_COPY:
 		if (mlx5_task->base.dst_domain) {
-			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+			mlx5_task->qp =  accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
 		} else {
-			return &dev->mlx5_qp;
+			mlx5_task->qp = &dev->mlx5_qp;
 		}
 		break;
 	case ACCEL_MLX5_OPC_CRC32C:
 		if (mlx5_task->base.src_domain) {
-			return accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
+			mlx5_task->qp =  accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
 		} else {
-			return &dev->mlx5_qp;
+			mlx5_task->qp = &dev->mlx5_qp;
 		}
 		break;
 	default:
-		return NULL;
+		return -ENOTSUP;
 	}
+
+	if (spdk_unlikely(!mlx5_task->qp || mlx5_task->qp->recovering)) {
+		return -ENODEV;
+	}
+
+	return 0;
 }
 
 static inline int
@@ -3319,82 +3364,58 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 	},
 };
 
-static int
-accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *task)
+static inline void
+accel_mlx5_task_reset(struct accel_mlx5_task *mlx5_task)
 {
-	struct accel_mlx5_io_channel *ch = spdk_io_channel_get_ctx(_ch);
-	struct accel_mlx5_task *mlx5_task = SPDK_CONTAINEROF(task, struct accel_mlx5_task, base);
-	struct accel_mlx5_dev *dev;
-	struct spdk_mlx5_driver_io_context *driver_ctx;
-	uint32_t i;
-	int rc;
-
-	assert(g_accel_mlx5.enabled);
-
-	if (task->seq && (driver_ctx = spdk_accel_sequence_get_driver_ctx(task->seq)) != NULL) {
-		if (spdk_unlikely(task->op_code != SPDK_ACCEL_OPC_ENCRYPT &&
-				  task->op_code != SPDK_ACCEL_OPC_DECRYPT)) {
-			SPDK_ERRLOG("Mkey registartion is only supported for encrypt\n");
-			return -ENOTSUP;
-		}
-		if (spdk_unlikely(driver_ctx->mkey != NULL)) {
-			SPDK_ERRLOG("driver IO ctx already has an mkey\n");
-			return -ENOTSUP;
-		}
-		dev = NULL;
-		for (i = 0; i < ch->num_devs; i++) {
-			if (ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
-				dev = &ch->devs[i];
-				break;
-			}
-		}
-		if (spdk_unlikely(!dev)) {
-			SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
-				    driver_ctx->qp->pd->context->device->name);
-			return -ENODEV;
-		}
-
-		mlx5_task->driver_mkey = 1;
-	} else {
-		dev = &ch->devs[ch->dev_idx];
-		ch->dev_idx++;
-		if (ch->dev_idx == ch->num_devs) {
-			ch->dev_idx = 0;
-		}
-	}
-
-	accel_mlx5_task_init_opcode(mlx5_task);
-
-	mlx5_task->qp = accel_mlx5_task_assign_qp(mlx5_task, dev);
-	if (spdk_unlikely(!mlx5_task->qp)) {
-		SPDK_ERRLOG("no qp for task %p opc %d; domain src %p, dst %p\n", mlx5_task, mlx5_task->mlx5_opcode,
-			    task->src_domain, task->dst_domain);
-		return -ENODEV;
-	}
-	if (spdk_unlikely(mlx5_task->qp->recovering)) {
-		return -ENODEV;
-	}
-
 	mlx5_task->num_completed_reqs = 0;
 	mlx5_task->num_submitted_reqs = 0;
-	dev->stats.opcodes[mlx5_task->mlx5_opcode]++;
+	mlx5_task->num_ops = 0;
+	mlx5_task->num_reqs = 0;
+	mlx5_task->raw = 0;
+}
 
+static inline int
+_accel_mlx5_submit_tasks(struct accel_mlx5_io_channel *accel_ch, struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+	int rc;
+
+	dev->stats.opcodes[mlx5_task->mlx5_opcode]++;
 	rc = g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].init(mlx5_task);
 	if (spdk_unlikely(rc)) {
 		if (rc == -ENOMEM) {
 			return 0;
 		}
-		SPDK_ERRLOG("Task opc %d init failed, rc %d\n", task->op_code, rc);
+		SPDK_ERRLOG("Task opc %d init failed, rc %d\n", mlx5_task->base.op_code, rc);
 		return rc;
 	}
 
-	if (!ch->pp_handler_registered) {
-		ch->pp_handler_registered = spdk_thread_post_poller_handler_register(accel_mlx5_pp_handler,
-					    ch) == 0;
+	if (!accel_ch->pp_handler_registered) {
+		accel_ch->pp_handler_registered = spdk_thread_post_poller_handler_register(accel_mlx5_pp_handler,
+						  accel_ch) == 0;
 	}
-	rc = g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
+	return g_accel_mlx5_tasks_ops[mlx5_task->mlx5_opcode].process(mlx5_task);
+}
 
-	return rc;
+static inline int
+accel_mlx5_submit_tasks(struct spdk_io_channel *_ch, struct spdk_accel_task *task)
+{
+	struct accel_mlx5_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct accel_mlx5_task *mlx5_task = SPDK_CONTAINEROF(task, struct accel_mlx5_task, base);
+	int rc;
+
+	assert(g_accel_mlx5.enabled);
+
+	accel_mlx5_task_reset(mlx5_task);
+	accel_mlx5_task_init_opcode(mlx5_task);
+	rc = accel_mlx5_task_assign_qp(mlx5_task, ch);
+	if (spdk_unlikely(rc)) {
+		SPDK_ERRLOG("no qp for task %p opc %d; domain src %p, dst %p\n", mlx5_task, mlx5_task->mlx5_opcode,
+			    task->src_domain, task->dst_domain);
+		return -ENODEV;
+	}
+
+	return _accel_mlx5_submit_tasks(ch, mlx5_task);
 }
 
 static inline void
@@ -4819,17 +4840,31 @@ accel_mlx5_get_memory_domains(struct spdk_memory_domain **domains, int array_siz
 }
 
 static inline int
-accel_mlx5_execute_sequence(struct spdk_io_channel *ch, struct spdk_accel_sequence *seq)
+accel_mlx5_execute_sequence(struct spdk_io_channel *_ch, struct spdk_accel_sequence *seq)
 {
 	struct spdk_accel_task *task;
 	struct accel_mlx5_task *mlx5_task;
+	struct accel_mlx5_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	int rc;
+
+	assert(g_accel_mlx5.enabled);
 
 	task = spdk_accel_sequence_first_task(seq);
 	mlx5_task = SPDK_CONTAINEROF(task, struct accel_mlx5_task, base);
-	mlx5_task->driver_seq = 1;
 	SPDK_DEBUGLOG(accel_mlx5, "new driver seq %p, ch %p, task %p\n", seq, ch, task);
 
-	return accel_mlx5_submit_tasks(ch, task);
+	accel_mlx5_task_reset(mlx5_task);
+	accel_mlx5_task_init_opcode(mlx5_task);
+	rc = accel_mlx5_task_assign_qp(mlx5_task, ch);
+	if (spdk_unlikely(rc)) {
+		SPDK_ERRLOG("no qp for task %p opc %d; domain src %p, dst %p\n", mlx5_task, mlx5_task->mlx5_opcode,
+			    task->src_domain, task->dst_domain);
+		return -ENODEV;
+	}
+	mlx5_task->driver_seq = 1;
+	SPDK_DEBUGLOG(accel_mlx5, "driver starts seq %p, ch %p, task %p\n", seq, ch, task);
+
+	return _accel_mlx5_submit_tasks(ch, mlx5_task);
 }
 
 static struct accel_mlx5_module g_accel_mlx5 = {
