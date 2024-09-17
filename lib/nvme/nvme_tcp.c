@@ -507,6 +507,9 @@ tcp_write_pdu_seq_cb(void *ctx, int status)
 		return;
 	}
 
+	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
+	MAKE_DIGEST_WORD(pdu->data_digest, pdu->data_digest_crc32);
+
 	_tcp_write_pdu(pdu);
 }
 
@@ -579,15 +582,6 @@ pdu_accel_compute_crc32_seq_cb(void *cb_arg, int status)
 				     pdu_accel_compute_crc32_done, pdu);
 }
 
-static void
-pdu_accel_seq_compute_crc32_done(void *cb_arg)
-{
-	struct nvme_tcp_pdu *pdu = cb_arg;
-
-	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
-	MAKE_DIGEST_WORD(pdu->data_digest, pdu->data_digest_crc32);
-}
-
 static bool
 pdu_accel_compute_crc32(struct nvme_tcp_pdu *pdu)
 {
@@ -611,7 +605,7 @@ pdu_accel_compute_crc32(struct nvme_tcp_pdu *pdu)
 		rc = nvme_tcp_accel_append_crc32c(tgroup, &req->accel_sequence,
 						  &pdu->data_digest_crc32,
 						  pdu->data_iov, pdu->data_iovcnt, 0,
-						  pdu_accel_seq_compute_crc32_done, pdu);
+						  NULL, NULL);
 		if (spdk_unlikely(rc != 0)) {
 			/* If accel is out of resources, fall back to non-accelerated crc32 */
 			if (rc == -ENOMEM) {
@@ -1211,6 +1205,8 @@ nvme_tcp_recv_payload_seq_cb(void *cb_arg, int status)
 	struct nvme_request *req = treq->req;
 	struct nvme_tcp_qpair *tqpair = treq->tqpair;
 	struct nvme_tcp_poll_group *group;
+	struct nvme_tcp_pdu *pdu = treq->pdu;
+	uint32_t result;
 
 	assert(treq->ordering.bits.in_progress_accel);
 	treq->ordering.bits.in_progress_accel = 0;
@@ -1227,6 +1223,13 @@ nvme_tcp_recv_payload_seq_cb(void *cb_arg, int status)
 	if (spdk_unlikely(status != 0)) {
 		SPDK_ERRLOG("Failed to execute accel sequence: %d\n", status);
 		treq->rsp.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+	}
+
+	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
+	result = MATCH_DIGEST_WORD(pdu->data_digest, pdu->data_digest_crc32);
+	if (spdk_unlikely(!result)) {
+		SPDK_ERRLOG("data digest error on tqpair=(%p)\n", tqpair);
+		treq->rsp.status.sc = SPDK_NVME_SC_COMMAND_TRANSIENT_TRANSPORT_ERROR;
 	}
 
 	nvme_tcp_req_complete_safe(treq);
@@ -1387,22 +1390,6 @@ nvme_tcp_req_copy_pdu(struct nvme_tcp_req *treq, struct nvme_tcp_pdu *pdu)
 	treq->pdu->data_len = pdu->data_len;
 }
 
-static void
-nvme_tcp_accel_seq_recv_compute_crc32_done(void *cb_arg)
-{
-	struct nvme_tcp_req *treq = cb_arg;
-	struct nvme_tcp_qpair *tqpair = treq->tqpair;
-	struct nvme_tcp_pdu *pdu = treq->pdu;
-	bool result;
-
-	pdu->data_digest_crc32 ^= SPDK_CRC32C_XOR;
-	result = MATCH_DIGEST_WORD(pdu->data_digest, pdu->data_digest_crc32);
-	if (spdk_unlikely(!result)) {
-		SPDK_ERRLOG("data digest error on tqpair=(%p)\n", tqpair);
-		treq->rsp.status.sc = SPDK_NVME_SC_COMMAND_TRANSIENT_TRANSPORT_ERROR;
-	}
-}
-
 static bool
 nvme_tcp_accel_recv_compute_crc32(struct nvme_tcp_req *treq, struct nvme_tcp_pdu *pdu)
 {
@@ -1424,7 +1411,7 @@ nvme_tcp_accel_recv_compute_crc32(struct nvme_tcp_req *treq, struct nvme_tcp_pdu
 		rc = nvme_tcp_accel_append_crc32c(tgroup, &req->accel_sequence,
 						  &treq->pdu->data_digest_crc32,
 						  treq->pdu->data_iov, treq->pdu->data_iovcnt, 0,
-						  nvme_tcp_accel_seq_recv_compute_crc32_done, treq);
+						  NULL, NULL);
 		if (spdk_unlikely(rc != 0)) {
 			/* If accel is out of resources, fall back to non-accelerated crc32 */
 			if (rc == -ENOMEM) {
