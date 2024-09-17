@@ -177,6 +177,9 @@ struct spdk_bdev_qos {
 	/** The channel on which the qouta is managed. */
 	struct spdk_io_channel *ch;
 
+	/** Context for this QoS. */
+	void *ctx;
+
 	/** Size of a timeslice in tsc ticks. */
 	uint64_t timeslice_size;
 
@@ -3946,11 +3949,11 @@ bdev_group_reset_qos_cache(struct  spdk_bdev_group *group)
 static int
 bdev_group_poll_qos(void *arg)
 {
-	struct spdk_bdev_group *group = arg;
-	struct spdk_bdev_qos *qos = group->qos;
+	struct spdk_bdev_qos *qos = arg;
+	struct spdk_bdev_group *group = qos->ctx;
 	uint64_t now = spdk_get_ticks();
 
-	if (spdk_unlikely(qos == NULL)) {
+	if (spdk_unlikely(group == NULL)) {
 		return SPDK_POLLER_IDLE;
 	}
 
@@ -3977,11 +3980,11 @@ bdev_group_poll_qos(void *arg)
 static int
 bdev_channel_poll_qos(void *arg)
 {
-	struct spdk_bdev *bdev = arg;
-	struct spdk_bdev_qos *qos = bdev->internal.qos;
+	struct spdk_bdev_qos *qos = arg;
+	struct spdk_bdev *bdev = qos->ctx;
 	uint64_t now = spdk_get_ticks();
 
-	if (spdk_unlikely(qos == NULL)) {
+	if (spdk_unlikely(bdev == NULL)) {
 		return SPDK_POLLER_IDLE;
 	}
 
@@ -4189,7 +4192,7 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 
 			qos->last_timeslice = spdk_get_ticks();
 			qos->poller = SPDK_POLLER_REGISTER(bdev_channel_poll_qos,
-							   bdev,
+							   qos,
 							   g_bdev_opts.qos_timeslice_us);
 		}
 
@@ -4633,7 +4636,7 @@ bdev_qos_channel_destroy(void *cb_arg)
 }
 
 static struct spdk_bdev_qos *
-bdev_qos_create(void)
+bdev_qos_create(void *ctx)
 {
 	struct spdk_bdev_qos *qos;
 
@@ -4650,6 +4653,8 @@ bdev_qos_create(void)
 	qos->timeslice_size =
 		g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 
+	qos->ctx = ctx;
+
 	bdev_qos_limits_init(&qos->limits, g_bdev_opts.qos_io_slice,
 			     g_bdev_opts.qos_byte_slice);
 
@@ -4664,6 +4669,7 @@ bdev_qos_destroy(struct spdk_bdev_qos *qos)
 		spdk_spin_destroy(&qos->spinlock);
 		free(qos);
 	} else {
+		qos->ctx = NULL;
 		spdk_thread_send_msg(spdk_io_channel_get_thread(qos->ch),
 				     bdev_qos_channel_destroy, qos);
 	}
@@ -8379,7 +8385,7 @@ bdev_start_qos(struct spdk_bdev *bdev)
 		SPDK_DEBUGLOG(bdev, "Starting QoS for %s\n", bdev->name);
 		/* Create QoS */
 		if (!bdev->internal.qos) {
-			bdev->internal.qos = bdev_qos_create();
+			bdev->internal.qos = bdev_qos_create(bdev);
 			if (!bdev->internal.qos) {
 				return -ENOMEM;
 			}
@@ -8399,7 +8405,7 @@ bdev_group_start_qos(struct spdk_bdev_group *group)
 		SPDK_DEBUGLOG(bdev, "Starting group QoS for %s\n", group->name);
 		/* Create QoS */
 		if (!group->qos) {
-			group->qos = bdev_qos_create();
+			group->qos = bdev_qos_create(group);
 			if (!group->qos) {
 				return -ENOMEM;
 			}
@@ -9729,7 +9735,7 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 
 	if (disable_rate_limit == false) {
 		if (bdev->internal.qos == NULL) {
-			bdev->internal.qos = bdev_qos_create();
+			bdev->internal.qos = bdev_qos_create(bdev);
 			if (bdev->internal.qos == NULL) {
 				spdk_spin_unlock(&bdev->internal.spinlock);
 				bdev_set_qos_limit_done(ctx, -ENOMEM);
@@ -10858,7 +10864,7 @@ bdev_group_ch_enable_qos(struct spdk_bdev_group_channel *group_ch)
 
 	qos->last_timeslice = spdk_get_ticks();
 	qos->poller = SPDK_POLLER_REGISTER(bdev_group_poll_qos,
-					   group,
+					   qos,
 					   g_bdev_opts.qos_timeslice_us);
 }
 
@@ -11474,7 +11480,7 @@ spdk_bdev_group_set_qos_rate_limits(struct spdk_bdev_group *group, const uint64_
 
 	if (!disable_rate_limit) {
 		if (group->qos == NULL) {
-			group->qos = bdev_qos_create();
+			group->qos = bdev_qos_create(group);
 			if (group->qos == NULL) {
 				spdk_spin_unlock(&group->spinlock);
 				SPDK_ERRLOG("Unable to allocate QoS Limits\n");
