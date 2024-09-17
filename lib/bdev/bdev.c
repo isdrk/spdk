@@ -239,6 +239,8 @@ struct spdk_bdev_mgmt_channel {
 	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
 };
 
+struct spdk_bdev_channel;
+
 /*
  * Per-module (or per-io_device) data. Multiple bdevs built on the same io_device
  * will queue here their IO that awaits retry. It makes it possible to retry sending
@@ -272,6 +274,8 @@ struct spdk_bdev_shared_resource {
 
 	/* Refcount of bdev channels using this resource */
 	uint32_t		ref;
+
+	TAILQ_HEAD(, spdk_bdev_channel) bdev_ch_list;
 
 	TAILQ_ENTRY(spdk_bdev_shared_resource) link;
 };
@@ -341,7 +345,8 @@ struct spdk_bdev_channel {
 	bdev_io_tailq_t		qos_allowed_io;
 	bdev_io_tailq_t		group_qos_allowed_io;
 
-	TAILQ_ENTRY(spdk_bdev_channel) tailq;
+	TAILQ_ENTRY(spdk_bdev_channel) tailq_group;
+	TAILQ_ENTRY(spdk_bdev_channel) tailq_shared_resource;
 
 	struct spdk_spinlock	spinlock;
 };
@@ -3980,7 +3985,7 @@ bdev_group_ch_reset_qos_cache(struct spdk_io_channel *ch, void *ctx)
 		bdev_qos_limits_cache_reset(&group_ch->qos_cache->limits);
 	}
 
-	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq_group) {
 		bdev_ch_submit_group_qos_allowed_io(bdev_ch);
 	}
 }
@@ -4081,7 +4086,7 @@ bdev_ch_create_group_channel(struct spdk_bdev_channel *bdev_ch,
 	}
 
 	bdev_ch->group_ch = spdk_io_channel_get_ctx(group_io_ch);
-	TAILQ_INSERT_TAIL(&bdev_ch->group_ch->bdev_ch_list, bdev_ch, tailq);
+	TAILQ_INSERT_TAIL(&bdev_ch->group_ch->bdev_ch_list, bdev_ch, tailq_group);
 
 	bdev_ch_enable_qos_group(bdev_ch);
 }
@@ -4095,7 +4100,7 @@ bdev_ch_destroy_group_channel(struct spdk_bdev_channel *bdev_ch)
 
 	bdev_ch_disable_qos_group(bdev_ch);
 
-	TAILQ_REMOVE(&bdev_ch->group_ch->bdev_ch_list, bdev_ch, tailq);
+	TAILQ_REMOVE(&bdev_ch->group_ch->bdev_ch_list, bdev_ch, tailq_group);
 
 	spdk_put_io_channel(spdk_io_channel_from_ctx(bdev_ch->group_ch));
 	bdev_ch->group_ch = NULL;
@@ -4170,6 +4175,8 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	bdev_ch_destroy_group_channel(ch);
 
 	shared_resource = ch->shared_resource;
+
+	TAILQ_REMOVE(&shared_resource->bdev_ch_list, ch, tailq_shared_resource);
 
 	assert(TAILQ_EMPTY(&ch->io_locked));
 	assert(TAILQ_EMPTY(&ch->io_submitted));
@@ -4442,6 +4449,7 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 		shared_resource->mgmt_ch = mgmt_ch;
 		shared_resource->io_outstanding = 0;
 		TAILQ_INIT(&shared_resource->nomem_io);
+		TAILQ_INIT(&shared_resource->bdev_ch_list);
 		shared_resource->nomem_threshold = 0;
 		shared_resource->shared_ch = ch->channel;
 		shared_resource->ref = 1;
@@ -4456,6 +4464,8 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	spdk_spin_init(&ch->spinlock);
 	ch->flags = 0;
 	ch->shared_resource = shared_resource;
+
+	TAILQ_INSERT_TAIL(&shared_resource->bdev_ch_list, ch, tailq_shared_resource);
 
 	TAILQ_INIT(&ch->io_submitted);
 	TAILQ_INIT(&ch->io_locked);
@@ -11395,7 +11405,7 @@ bdev_group_enable_qos_msg(struct spdk_io_channel_iter *i)
 
 	bdev_group_ch_enable_qos(group_ch);
 
-	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq_group) {
 		bdev_ch_enable_qos_group(bdev_ch);
 	}
 
@@ -11420,7 +11430,7 @@ bdev_group_disable_qos_msg(struct spdk_io_channel_iter *i)
 	struct spdk_bdev_group *group = group_ch->group;
 	struct spdk_bdev_channel *bdev_ch;
 
-	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq_group) {
 		bdev_ch_disable_qos_group(bdev_ch);
 	}
 
@@ -11596,7 +11606,7 @@ bdev_group_destroy_msg(struct spdk_io_channel_iter *i)
 	struct spdk_bdev_group_channel *group_ch = spdk_io_channel_get_ctx(_ch);
 	struct spdk_bdev_channel *bdev_ch, *tmp_bdev_ch;
 
-	TAILQ_FOREACH_SAFE(bdev_ch, &group_ch->bdev_ch_list, tailq, tmp_bdev_ch) {
+	TAILQ_FOREACH_SAFE(bdev_ch, &group_ch->bdev_ch_list, tailq_group, tmp_bdev_ch) {
 		bdev_ch_destroy_group_channel(bdev_ch);
 	}
 
@@ -11646,7 +11656,7 @@ spdk_bdev_group_get_io_stat(struct spdk_bdev_group *group, struct spdk_io_channe
 
 	spdk_bdev_reset_io_stat(stat, SPDK_BDEV_RESET_STAT_ALL);
 
-	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq_group) {
 		spdk_bdev_add_io_stat(stat, bdev_ch->stat);
 	}
 }
@@ -11676,7 +11686,7 @@ bdev_group_get_channel_stat(struct spdk_io_channel_iter *i)
 	struct spdk_bdev_group_channel *group_ch = spdk_io_channel_get_ctx(ch);
 	struct spdk_bdev_channel *bdev_ch;
 
-	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq) {
+	TAILQ_FOREACH(bdev_ch, &group_ch->bdev_ch_list, tailq_group) {
 		spdk_bdev_add_io_stat(ctx->stat, bdev_ch->stat);
 	}
 
