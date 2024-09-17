@@ -4186,8 +4186,7 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 			qos->ch = io_ch;
 
 			bdev_qos_limits_update_max_quota_per_timeslice(&qos->limits);
-			qos->timeslice_size =
-				g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
+
 			qos->last_timeslice = spdk_get_ticks();
 			qos->poller = SPDK_POLLER_REGISTER(bdev_channel_poll_qos,
 							   bdev,
@@ -4647,6 +4646,9 @@ bdev_qos_create(void)
 	TAILQ_INIT(&qos->cache_list);
 	TAILQ_INIT(&qos->queued_io);
 	spdk_spin_init(&qos->spinlock);
+
+	qos->timeslice_size =
+		g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 
 	bdev_qos_limits_init(&qos->limits, g_bdev_opts.qos_io_slice,
 			     g_bdev_opts.qos_byte_slice);
@@ -10854,8 +10856,6 @@ bdev_group_ch_enable_qos(struct spdk_bdev_group_channel *group_ch)
 	qos->ch = spdk_get_io_channel(group);
 	assert(qos->ch != NULL);
 
-	qos->timeslice_size =
-		g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() / SPDK_SEC_TO_USEC;
 	qos->last_timeslice = spdk_get_ticks();
 	qos->poller = SPDK_POLLER_REGISTER(bdev_group_poll_qos,
 					   group,
