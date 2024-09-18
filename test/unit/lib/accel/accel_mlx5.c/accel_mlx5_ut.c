@@ -13,6 +13,8 @@
 DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *domain));
 DEFINE_STUB(spdk_memory_domain_get_dma_device_id, const char *, (struct spdk_memory_domain *domain),
 	    "UT_DMA");
+DEFINE_STUB(spdk_memory_domain_get_dma_device_type, enum spdk_dma_device_type,
+	    (struct spdk_memory_domain *domain), SPDK_DMA_DEVICE_TYPE_RDMA);
 DEFINE_STUB(spdk_memory_domain_update_notification_subscribe, int, (void *user_ctx,
 		spdk_memory_domain_update_notification_cb user_cb), 0);
 DEFINE_STUB(spdk_mlx5_crypto_keytag_create, int, (struct spdk_mlx5_crypto_dek_create_attr *attr,
