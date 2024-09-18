@@ -407,16 +407,16 @@ int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_c
  */
 bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
 
-/* 'to_set' flags in spdk_fsdev_setattr */
-#define FSDEV_SET_ATTR_MODE	(1 << 0)
-#define FSDEV_SET_ATTR_UID	(1 << 1)
-#define FSDEV_SET_ATTR_GID	(1 << 2)
-#define FSDEV_SET_ATTR_SIZE	(1 << 3)
-#define FSDEV_SET_ATTR_ATIME	(1 << 4)
-#define FSDEV_SET_ATTR_MTIME	(1 << 5)
-#define FSDEV_SET_ATTR_ATIME_NOW	(1 << 6)
-#define FSDEV_SET_ATTR_MTIME_NOW	(1 << 7)
-#define FSDEV_SET_ATTR_CTIME	(1 << 8)
+/* Valid flags to set in spdk_fsdev_setattr */
+#define SPDK_FSDEV_ATTR_MODE		(1 << 0)
+#define SPDK_FSDEV_ATTR_UID		(1 << 1)
+#define SPDK_FSDEV_ATTR_GID		(1 << 2)
+#define SPDK_FSDEV_ATTR_SIZE		(1 << 3)
+#define SPDK_FSDEV_ATTR_ATIME		(1 << 4)
+#define SPDK_FSDEV_ATTR_MTIME		(1 << 5)
+#define SPDK_FSDEV_ATTR_ATIME_NOW	(1 << 6)
+#define SPDK_FSDEV_ATTR_MTIME_NOW	(1 << 7)
+#define SPDK_FSDEV_ATTR_CTIME		(1 << 8)
 
 struct spdk_fsdev_file_object;
 struct spdk_fsdev_file_handle;

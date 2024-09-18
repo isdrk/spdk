@@ -2020,7 +2020,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fhandle = fsdev_io->u_in.setattr.fhandle ?
 		  fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle) : NULL;
 
-	if (to_set & FSDEV_SET_ATTR_MODE) {
+	if (to_set & SPDK_FSDEV_ATTR_MODE) {
 		if (fhandle) {
 			res = fchmod(fhandle->fd, attr->mode);
 		} else {
@@ -2033,9 +2033,9 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 
-	if (to_set & (FSDEV_SET_ATTR_UID | FSDEV_SET_ATTR_GID)) {
-		uid_t uid = (to_set & FSDEV_SET_ATTR_UID) ? attr->uid : (uid_t) -1;
-		gid_t gid = (to_set & FSDEV_SET_ATTR_GID) ? attr->gid : (gid_t) -1;
+	if (to_set & (SPDK_FSDEV_ATTR_UID | SPDK_FSDEV_ATTR_GID)) {
+		uid_t uid = (to_set & SPDK_FSDEV_ATTR_UID) ? attr->uid : (uid_t) -1;
+		gid_t gid = (to_set & SPDK_FSDEV_ATTR_GID) ? attr->gid : (gid_t) -1;
 
 		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
 		if (res == -1) {
@@ -2045,7 +2045,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 
-	if (to_set & FSDEV_SET_ATTR_SIZE) {
+	if (to_set & SPDK_FSDEV_ATTR_SIZE) {
 		int truncfd;
 
 		if (fhandle) {
@@ -2073,7 +2073,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 
-	if (to_set & (FSDEV_SET_ATTR_ATIME | FSDEV_SET_ATTR_MTIME)) {
+	if (to_set & (SPDK_FSDEV_ATTR_ATIME | SPDK_FSDEV_ATTR_MTIME)) {
 		struct timespec tv[2];
 
 		tv[0].tv_sec = 0;
@@ -2081,16 +2081,16 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		tv[0].tv_nsec = UTIME_OMIT;
 		tv[1].tv_nsec = UTIME_OMIT;
 
-		if (to_set & FSDEV_SET_ATTR_ATIME_NOW) {
+		if (to_set & SPDK_FSDEV_ATTR_ATIME_NOW) {
 			tv[0].tv_nsec = UTIME_NOW;
-		} else if (to_set & FSDEV_SET_ATTR_ATIME) {
+		} else if (to_set & SPDK_FSDEV_ATTR_ATIME) {
 			tv[0].tv_sec = attr->atime;
 			tv[0].tv_nsec = attr->atimensec;
 		}
 
-		if (to_set & FSDEV_SET_ATTR_MTIME_NOW) {
+		if (to_set & SPDK_FSDEV_ATTR_MTIME_NOW) {
 			tv[1].tv_nsec = UTIME_NOW;
-		} else if (to_set & FSDEV_SET_ATTR_MTIME) {
+		} else if (to_set & SPDK_FSDEV_ATTR_MTIME) {
 			tv[1].tv_sec = attr->mtime;
 			tv[1].tv_nsec = attr->mtimensec;
 		}

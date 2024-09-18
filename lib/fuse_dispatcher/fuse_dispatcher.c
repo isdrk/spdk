@@ -507,8 +507,8 @@ _fuse_op_requires_reply(uint32_t opcode)
 }
 
 static void
-convert_stat(struct fuse_io *fuse_io, struct spdk_fsdev_file_object *fobject,
-	     const struct spdk_fsdev_file_attr *attr, struct fuse_attr *fattr)
+fsdev_attr_to_fuse(struct fuse_io *fuse_io, struct spdk_fsdev_file_object *fobject,
+		   const struct spdk_fsdev_file_attr *attr, struct fuse_attr *fattr)
 {
 	fattr->ino	= fsdev_io_h2d_u64(fuse_io, attr->ino);
 	fattr->mode	= fsdev_io_h2d_u32(fuse_io, attr->mode);
@@ -549,7 +549,7 @@ fill_entry(struct fuse_io *fuse_io, struct fuse_entry_out *arg,
 	arg->entry_valid_nsec = fsdev_io_h2d_u32(fuse_io, calc_timeout_nsec(attr->valid_ms));
 	arg->attr_valid = fsdev_io_h2d_u64(fuse_io, calc_timeout_sec(attr->valid_ms));
 	arg->attr_valid_nsec = fsdev_io_h2d_u32(fuse_io, calc_timeout_nsec(attr->valid_ms));
-	convert_stat(fuse_io, fobject, attr, &arg->attr);
+	fsdev_attr_to_fuse(fuse_io, fobject, attr, &arg->attr);
 }
 
 static void
@@ -786,7 +786,7 @@ fuse_dispatcher_io_complete_attr(struct fuse_io *fuse_io, const struct spdk_fsde
 	memset(&arg, 0, sizeof(arg));
 	arg.attr_valid = fsdev_io_h2d_u64(fuse_io, calc_timeout_sec(attr->valid_ms));
 	arg.attr_valid_nsec = fsdev_io_h2d_u32(fuse_io, calc_timeout_nsec(attr->valid_ms));
-	convert_stat(fuse_io, file_object(fuse_io), attr, &arg.attr);
+	fsdev_attr_to_fuse(fuse_io, file_object(fuse_io), attr, &arg.attr);
 
 	fuse_dispatcher_io_copy_and_complete(fuse_io, &arg, size, 0);
 }
@@ -1167,6 +1167,34 @@ do_getattr(struct fuse_io *fuse_io)
 	}
 }
 
+#define FATTR_FLAGS_MAP \
+	FATTR_FLAG(ATTR_MODE)       \
+	FATTR_FLAG(ATTR_UID)        \
+	FATTR_FLAG(ATTR_GID)        \
+	FATTR_FLAG(ATTR_SIZE)       \
+	FATTR_FLAG(ATTR_ATIME)      \
+	FATTR_FLAG(ATTR_MTIME)      \
+	FATTR_FLAG(ATTR_ATIME_NOW)  \
+	FATTR_FLAG(ATTR_MTIME_NOW)  \
+	FATTR_FLAG(ATTR_CTIME)
+
+static uint32_t
+fuse_fattr_flags_to_fsdev(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define FATTR_FLAG(name) \
+	if (flags & F##name) {               \
+		result |= SPDK_FSDEV_##name; \
+	}
+
+	FATTR_FLAGS_MAP;
+
+#undef FXATTR_FLAG
+
+	return result;
+}
+
 static void
 do_setattr_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 		   const struct spdk_fsdev_file_attr *attr)
@@ -1213,17 +1241,18 @@ do_setattr(struct fuse_io *fuse_io)
 		valid &= ~FATTR_FH;
 		fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
 	}
+	valid = fuse_fattr_flags_to_fsdev(valid);
 
 	valid &=
-		FSDEV_SET_ATTR_MODE |
-		FSDEV_SET_ATTR_UID |
-		FSDEV_SET_ATTR_GID |
-		FSDEV_SET_ATTR_SIZE |
-		FSDEV_SET_ATTR_ATIME |
-		FSDEV_SET_ATTR_MTIME |
-		FSDEV_SET_ATTR_ATIME_NOW |
-		FSDEV_SET_ATTR_MTIME_NOW |
-		FSDEV_SET_ATTR_CTIME;
+		SPDK_FSDEV_ATTR_MODE |
+		SPDK_FSDEV_ATTR_UID |
+		SPDK_FSDEV_ATTR_GID |
+		SPDK_FSDEV_ATTR_SIZE |
+		SPDK_FSDEV_ATTR_ATIME |
+		SPDK_FSDEV_ATTR_MTIME |
+		SPDK_FSDEV_ATTR_ATIME_NOW |
+		SPDK_FSDEV_ATTR_MTIME_NOW |
+		SPDK_FSDEV_ATTR_CTIME;
 
 	err = spdk_fsdev_setattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 				 file_object(fuse_io), file_handle(fh), &attr, valid,
