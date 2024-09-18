@@ -824,6 +824,15 @@ void spdk_io_channel_send_msg(struct spdk_thread *thread, void *io_device,
 			      spdk_channel_msg_fn fn, void *ctx);
 
 /**
+ * Call 'fn' on all channels associated with io_device by broadcast manner.
+ *
+ * \param io_device 'fn' will be called on all channels associated with this io_device.
+ * \param fn Called on the appropriate thread for all channels associated with io_device.
+ * \param ctx Context buffer passed to 'fn'.
+ */
+void spdk_for_each_channel_broadcast(void *io_device, spdk_channel_msg_fn fn, void *ctx);
+
+/**
  * Get the io_device for the specified I/O channel.
  *
  * \param ch I/O channel.
