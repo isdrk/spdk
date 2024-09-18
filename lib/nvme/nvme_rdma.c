@@ -221,7 +221,7 @@ struct nvme_rdma_qpair {
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	free_reqs;
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	outstanding_reqs;
 
-	struct spdk_rdma_utils_memory_domain		*memory_domain;
+	struct spdk_memory_domain		*memory_domain;
 
 	/* Count of outstanding send objects */
 	uint16_t				current_num_sends;
@@ -1437,7 +1437,7 @@ nvme_rdma_get_memory_translation(struct spdk_nvme_rdma_req *rdma_req,
 
 		rc = spdk_memory_domain_translate_data(req->payload.opts->memory_domain,
 						       req->payload.opts->memory_domain_ctx,
-						       rqpair->memory_domain->domain, &ctx, _ctx->addr,
+						       rqpair->memory_domain, &ctx, _ctx->addr,
 						       _ctx->length, &dma_translation);
 		if (spdk_unlikely(rc) || dma_translation.iov_count != 1) {
 			SPDK_ERRLOG("DMA memory translation failed, rc %d, iov count %u\n", rc,
@@ -3494,7 +3494,7 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 	struct nvme_rdma_qpair *rqpair = nvme_rdma_qpair(ctrlr->adminq);
 
 	if (domains && array_size > 0) {
-		domains[0] = rqpair->memory_domain->domain;
+		domains[0] = rqpair->memory_domain;
 	}
 
 	return 1;

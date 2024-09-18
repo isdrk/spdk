@@ -59,7 +59,7 @@ struct accel_mlx5_dev_ctx {
 	uint32_t *crc_dma_buf;
 	struct ibv_context *context;
 	struct ibv_pd *pd;
-	struct spdk_rdma_utils_memory_domain *domain;
+	struct spdk_memory_domain *domain;
 	struct spdk_rdma_utils_mem_map *map;
 	uint32_t num_mkeys;
 	bool mkeys;
@@ -396,7 +396,7 @@ accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *do
 		domain_translation.size = sizeof(struct spdk_memory_domain_translation_result);
 		local_ctx.size = sizeof(local_ctx);
 		local_ctx.rdma.ibv_qp = qp->verbs_qp;
-		rc = spdk_memory_domain_translate_data(domain, domain_ctx, dev->dev_ctx->domain->domain,
+		rc = spdk_memory_domain_translate_data(domain, domain_ctx, dev->dev_ctx->domain,
 						       &local_ctx, addr, size, &domain_translation);
 		if (spdk_unlikely(rc || domain_translation.iov_count != 1)) {
 			SPDK_ERRLOG("Memory domain translation failed, addr %p, length %zu\n", addr, size);
@@ -4796,7 +4796,7 @@ accel_mlx5_get_memory_domains(struct spdk_memory_domain **domains, int array_siz
 	size = spdk_min(array_size, (int)g_accel_mlx5.num_devs);
 
 	for (i = 0; i < size; i++) {
-		domains[i] = g_accel_mlx5.devices[i].domain->domain;
+		domains[i] = g_accel_mlx5.devices[i].domain;
 	}
 
 	return (int)g_accel_mlx5.num_devs;

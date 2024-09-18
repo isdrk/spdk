@@ -42,6 +42,15 @@ DEFINE_STUB(spdk_memory_domain_translate_data, int, (struct spdk_memory_domain *
 		void *src_domain_ctx,
 		struct spdk_memory_domain *dst_domain, struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
 		void *addr, size_t len, struct spdk_memory_domain_translation_result *result), 0);
+DEFINE_STUB(spdk_memory_domain_transfer_data, int, (struct spdk_memory_domain *dst_domain,
+		void *dst_domain_ctx,
+		struct iovec *dst_iov, uint32_t dst_iovcnt,
+		struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+		struct iovec *src_iov, uint32_t src_iovcnt,
+		struct spdk_memory_domain_translation_result *src_translation,
+		spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
+DEFINE_STUB(spdk_memory_domain_get_user_context, void *, (struct spdk_memory_domain *domain,
+		size_t *ctx_size), NULL);
 DEFINE_STUB(spdk_rdma_utils_get_translation, int, (struct spdk_rdma_utils_mem_map *map,
 		void *address,
 		size_t length, struct spdk_rdma_utils_memory_translation *translation), 0);
@@ -98,9 +107,9 @@ DEFINE_STUB(spdk_accel_sequence_first_task, struct spdk_accel_task *,
 	    (struct spdk_accel_sequence *seq), NULL);
 DEFINE_STUB_V(spdk_accel_driver_register, (struct spdk_accel_driver *driver));
 DEFINE_STUB(spdk_accel_set_driver, int, (const char *name), 0);
-DEFINE_STUB(spdk_rdma_utils_get_memory_domain, struct spdk_rdma_utils_memory_domain *,
+DEFINE_STUB(spdk_rdma_utils_get_memory_domain, struct spdk_memory_domain *,
 	    (struct ibv_pd *pd, enum spdk_dma_device_type type), NULL);
-DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_rdma_utils_memory_domain *domain));
+DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_memory_domain *domain));
 DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (struct ibv_pd *pd,
 		struct spdk_nvme_rdma_hooks *hooks, int accel_flags), 0);
 DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **_map));

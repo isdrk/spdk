@@ -42,17 +42,17 @@ DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (s
 		struct spdk_nvme_rdma_hooks *hooks, int acces_flags), NULL)
 DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **map));
 
-DEFINE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain, struct spdk_rdma_utils_memory_domain *);
-struct spdk_rdma_utils_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
+DEFINE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain, struct spdk_memory_domain *);
+struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
 		enum spdk_dma_device_type type)
 {
-	static struct spdk_rdma_utils_memory_domain domain;
+	static struct spdk_memory_domain *domain = (struct spdk_memory_domain *)0xdeadbeef;
 
 	HANDLE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain);
-	return &domain;
+	return domain;
 }
 
-DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_rdma_utils_memory_domain *domain));
+DEFINE_STUB_V(spdk_rdma_utils_put_memory_domain, (struct spdk_memory_domain *domain));
 
 DEFINE_STUB(spdk_rdma_accel_sequence_supported, bool, (struct spdk_rdma_qp *qp), false);
 DEFINE_STUB(spdk_rdma_get_io_context_size, size_t, (void), 0);

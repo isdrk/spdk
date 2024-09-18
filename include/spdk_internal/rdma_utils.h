@@ -17,15 +17,6 @@ extern "C" {
 /* Contains hooks definition */
 #include "spdk/nvme.h"
 
-struct spdk_rdma_utils_memory_domain {
-	TAILQ_ENTRY(spdk_rdma_utils_memory_domain) link;
-	uint32_t ref;
-	enum spdk_dma_device_type type;
-	struct ibv_pd *pd;
-	struct spdk_memory_domain *domain;
-	struct spdk_memory_domain_rdma_ctx rdma_ctx;
-};
-
 struct spdk_rdma_utils_mem_map;
 
 union spdk_rdma_utils_mr {
@@ -134,7 +125,7 @@ void spdk_rdma_utils_put_pd(struct ibv_pd *pd);
  * \param type Memory domain type, allows flexible customization
  * \return Pointer to memory domain or NULL;
  */
-struct spdk_rdma_utils_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
+struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
 		enum spdk_dma_device_type type);
 
 /**
@@ -142,7 +133,7 @@ struct spdk_rdma_utils_memory_domain *spdk_rdma_utils_get_memory_domain(struct i
  *
  * \param domain Pointer to memory domain
  */
-void spdk_rdma_utils_put_memory_domain(struct spdk_rdma_utils_memory_domain *domain);
+void spdk_rdma_utils_put_memory_domain(struct spdk_memory_domain *domain);
 
 #ifdef __cplusplus
 }

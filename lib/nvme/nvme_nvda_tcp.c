@@ -141,7 +141,7 @@ struct nvme_tcp_qpair {
 	struct spdk_bit_pool			*cid_pool;
 	struct nvme_tcp_req			**tcp_reqs_lookup;
 	struct spdk_rdma_utils_mem_map		*mem_map;
-	struct spdk_rdma_utils_memory_domain	*memory_domain;
+	struct spdk_memory_domain		*memory_domain;
 	struct spdk_nvme_tcp_stat		*stats;
 
 	uint32_t				pdus_mkey;
@@ -2191,7 +2191,7 @@ nvme_tcp_get_memory_translation(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qp
 
 		rc = spdk_memory_domain_translate_data(req->payload.opts->memory_domain,
 						       req->payload.opts->memory_domain_ctx,
-						       tqpair->memory_domain->domain, &dst_domain_ctx,
+						       tqpair->memory_domain, &dst_domain_ctx,
 						       _ctx->addr, _ctx->length, &dma_translation);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("DMA memory translation failed, rc %d\n", rc);
@@ -5363,7 +5363,7 @@ nvme_tcp_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 		SPDK_NOTICELOG("Memory domain support disabled\n");
 		return 0;
 	} else if (domains && array_size > 0) {
-		domains[0] = tqpair->memory_domain->domain;
+		domains[0] = tqpair->memory_domain;
 	}
 
 	return 1;
