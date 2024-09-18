@@ -4019,27 +4019,19 @@ bdev_mgmt_ch_reset_qos_cache(struct spdk_bdev_mgmt_channel *mgmt_ch)
 }
 
 static void
-_bdev_reset_qos(struct spdk_io_channel_iter *i)
+_bdev_reset_qos(struct spdk_io_channel *ch, void *ctx)
 {
-	struct spdk_io_channel *ch = spdk_io_channel_iter_get_channel(i);
 	struct spdk_bdev_mgmt_channel *mgmt_ch = __io_ch_to_bdev_mgmt_ch(ch);
 
 	bdev_mgmt_ch_reset_qos_cache(mgmt_ch);
 	bdev_mgmt_ch_submit_qos_allowed_io(mgmt_ch);
 	bdev_mgmt_ch_submit_group_qos_allowed_io(mgmt_ch);
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-bdev_reset_qos_done(struct spdk_io_channel_iter *i, int status)
-{
 }
 
 static void
 bdev_reset_qos(void)
 {
-	spdk_for_each_channel(&g_bdev_mgr, _bdev_reset_qos, NULL, bdev_reset_qos_done);
+	spdk_for_each_channel_broadcast(&g_bdev_mgr, _bdev_reset_qos, NULL);
 }
 
 static void
