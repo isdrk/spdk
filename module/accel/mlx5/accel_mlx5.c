@@ -62,6 +62,7 @@ struct accel_mlx5_dev_ctx {
 	struct spdk_rdma_utils_memory_domain *domain;
 	struct spdk_rdma_utils_mem_map *map;
 	uint32_t num_mkeys;
+	bool mkeys;
 	bool crypto_mkeys;
 	bool sig_mkeys;
 	bool crypto_sig_mkeys;
@@ -224,6 +225,7 @@ struct accel_mlx5_dev {
 	struct spdk_mlx5_mkey_pool *crypto_mkeys;
 	struct spdk_mlx5_mkey_pool *sig_mkeys;
 	struct spdk_mlx5_mkey_pool *crypto_sig_mkeys;
+	struct spdk_mlx5_mkey_pool *mkeys;
 	/* IO channel this dev belongs to. The same channel is used by platform driver */
 	struct spdk_io_channel *ch;
 	/* Pending tasks waiting for requests resources */
@@ -3736,6 +3738,9 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 		if (dev->crypto_sig_mkeys) {
 			spdk_mlx5_mkey_pool_put_ref(dev->crypto_sig_mkeys);
 		}
+		if (dev->mkeys) {
+			spdk_mlx5_mkey_pool_put_ref(dev->mkeys);
+		}
 
 		spdk_spin_lock(&g_accel_mlx5.lock);
 		accel_mlx5_add_stats(&g_accel_mlx5.stats, &dev->stats);
@@ -3803,7 +3808,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			dev->crypto_mkeys = spdk_mlx5_mkey_pool_get_ref(dev->dev_ctx->pd,
 					    SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO);
 			if (!dev->crypto_mkeys) {
-				SPDK_ERRLOG("Failed to get crypto mkey pool channel, dev %s\n", dev_ctx->context->device->name);
+				SPDK_ERRLOG("Failed to get crypto mkey pool ref, dev %s\n", dev_ctx->context->device->name);
 				/* Should not happen since mkey pool is created on accel_mlx5 initialization.
 				 * We should not be here if pool creation failed */
 				assert(0);
@@ -3814,7 +3819,7 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			dev->sig_mkeys = spdk_mlx5_mkey_pool_get_ref(dev->dev_ctx->pd,
 					 SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
 			if (!dev->sig_mkeys) {
-				SPDK_ERRLOG("Failed to get sig mkey pool channel, dev %s\n", dev_ctx->context->device->name);
+				SPDK_ERRLOG("Failed to get sig mkey pool ref, dev %s\n", dev_ctx->context->device->name);
 				/* Should not happen since mkey pool is created on accel_mlx5 initialization.
 				 * We should not be here if pool creation failed */
 				assert(0);
@@ -3825,7 +3830,17 @@ accel_mlx5_create_cb(void *io_device, void *ctx_buf)
 			dev->crypto_sig_mkeys = spdk_mlx5_mkey_pool_get_ref(dev->dev_ctx->pd,
 						SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE);
 			if (!dev->crypto_sig_mkeys) {
-				SPDK_ERRLOG("Failed to get crypto_sig mkey pool channel, dev %s\n", dev_ctx->context->device->name);
+				SPDK_ERRLOG("Failed to get crypto_sig mkey pool ref, dev %s\n", dev_ctx->context->device->name);
+				/* Should not happen since mkey pool is created on accel_mlx5 initialization.
+				 * We should not be here if pool creation failed */
+				assert(0);
+				goto err_out;
+			}
+		}
+		if (dev_ctx->mkeys) {
+			dev->mkeys = spdk_mlx5_mkey_pool_get_ref(dev->dev_ctx->pd, 0);
+			if (!dev->mkeys) {
+				SPDK_ERRLOG("Failed to get mkey pool ref, dev %s\n", dev_ctx->context->device->name);
 				/* Should not happen since mkey pool is created on accel_mlx5 initialization.
 				 * We should not be here if pool creation failed */
 				assert(0);
@@ -4049,6 +4064,9 @@ accel_mlx5_free_resources(void)
 			spdk_mlx5_mkey_pool_destroy(SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE,
 						    dev->pd);
 		}
+		if (dev->mkeys) {
+			spdk_mlx5_mkey_pool_destroy(0, dev->pd);
+		}
 		spdk_rdma_utils_put_pd(dev->pd);
 	}
 	free(g_accel_mlx5.devices);
@@ -4207,6 +4225,15 @@ accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *
 			IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE);
 	if (!dev_ctx->map) {
 		return -ENOMEM;
+	}
+
+	if (g_accel_mlx5.attr.enable_driver) {
+		rc = accel_mlx5_mkeys_create(dev_ctx, 0);
+		if (rc) {
+			SPDK_ERRLOG("Failed to create mkeys pool, rc %d, dev %s\n", rc, dev->device->name);
+			return rc;
+		}
+		dev_ctx->mkeys = true;
 	}
 
 	if (g_accel_mlx5.crypto_supported) {
