@@ -170,8 +170,6 @@ struct accel_mlx5_task {
 		uint8_t raw;
 		struct {
 			uint8_t inplace : 1;
-			/* Set if the task is executed as a part of the previous task. */
-			uint8_t merged : 1;
 			/* This task is handled by mlx5 driver */
 			uint8_t driver_seq : 1;
 			/* The user requesteed to register mkey, without DMA operation */
@@ -181,7 +179,7 @@ struct accel_mlx5_task {
 			 If not set, memory data will be decrypted during TX and wire data will
 			 be encrypted during RX. */
 			uint8_t enc_order : 2;
-			uint8_t reserved : 2;
+			uint8_t reserved : 3;
 		};
 	};
 	uint8_t mlx5_opcode;
@@ -2535,6 +2533,20 @@ accel_mlx5_dev_get_qp_by_domain(struct accel_mlx5_dev *dev, struct spdk_memory_d
 	return qp;
 }
 
+static inline struct accel_mlx5_dev *
+accel_mlx5_ch_get_dev(struct accel_mlx5_io_channel *ch)
+{
+	struct accel_mlx5_dev *dev;
+
+	dev = &ch->devs[ch->dev_idx];
+	ch->dev_idx++;
+	if (ch->dev_idx == ch->num_devs) {
+		ch->dev_idx = 0;
+	}
+
+	return dev;
+}
+
 static inline int
 accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *ch)
 {
@@ -2568,11 +2580,7 @@ accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_i
 
 		mlx5_task->driver_mkey = 1;
 	} else {
-		dev = &ch->devs[ch->dev_idx];
-		ch->dev_idx++;
-		if (ch->dev_idx == ch->num_devs) {
-			ch->dev_idx = 0;
-		}
+		dev = accel_mlx5_ch_get_dev(ch);
 	}
 	assert(dev);
 
@@ -2588,14 +2596,12 @@ accel_mlx5_task_assign_qp(struct accel_mlx5_task *mlx5_task, struct accel_mlx5_i
 	switch (mlx5_task->mlx5_opcode) {
 	case ACCEL_MLX5_OPC_CRYPTO:
 	case ACCEL_MLX5_OPC_ENCRYPT_MKEY:
-	case ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C:
 		if (mlx5_task->base.src_domain) {
 			mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
 		} else {
 			mlx5_task->qp = &dev->mlx5_qp;
 		}
 		break;
-	case ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT:
 	case ACCEL_MLX5_OPC_DECRYPT_MKEY:
 		if (mlx5_task->base.dst_domain) {
 			mlx5_task->qp =  accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.dst_domain);
@@ -3177,71 +3183,9 @@ accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 	return 0;
 }
 
-static inline void
-accel_mlx5_task_merge_encrypt_and_crc(struct accel_mlx5_task *mlx5_task)
-{
-	struct spdk_accel_task *task = &mlx5_task->base;
-	struct spdk_accel_task *task_next = TAILQ_NEXT(task, seq_link);
-	struct iovec *crypto_dst_iovs;
-	uint32_t crypto_dst_iovcnt;
-
-	assert(task->op_code == SPDK_ACCEL_OPC_ENCRYPT);
-
-	if (!task_next || task_next->op_code != SPDK_ACCEL_OPC_CRC32C) {
-		return;
-	}
-
-	if (task->d.iovcnt == 0 || (task->d.iovcnt == task->s.iovcnt &&
-				    accel_mlx5_compare_iovs(task->d.iovs, task->s.iovs, task->s.iovcnt))) {
-		mlx5_task->inplace = 1;
-		crypto_dst_iovs = task->s.iovs;
-		crypto_dst_iovcnt = task->s.iovcnt;
-	} else {
-		mlx5_task->inplace = 0;
-		crypto_dst_iovs = task->d.iovs;
-		crypto_dst_iovcnt = task->d.iovcnt;
-	}
-
-	if ((crypto_dst_iovcnt != task_next->s.iovcnt) ||
-	    !accel_mlx5_compare_iovs(crypto_dst_iovs, task_next->s.iovs,
-				     crypto_dst_iovcnt)) {
-		return;
-	}
-
-	assert(!mlx5_task->driver_mkey);
-	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C;
-}
-
-static inline void
-accel_mlx5_task_merge_crc_and_decrypt(struct accel_mlx5_task *mlx5_task_crc)
-{
-	struct spdk_accel_task *task_crc = &mlx5_task_crc->base;
-	struct spdk_accel_task *task_crypto = TAILQ_NEXT(task_crc, seq_link);
-
-	assert(task_crc->op_code == SPDK_ACCEL_OPC_CHECK_CRC32C);
-
-	if (!task_crypto || task_crypto->op_code != SPDK_ACCEL_OPC_DECRYPT) {
-		return;
-	}
-
-	if (task_crypto->d.iovcnt == 0 ||
-	    (task_crypto->d.iovcnt == task_crypto->s.iovcnt &&
-	     accel_mlx5_compare_iovs(task_crypto->d.iovs, task_crypto->s.iovs, task_crypto->s.iovcnt))) {
-		mlx5_task_crc->inplace = 1;
-	} else {
-		mlx5_task_crc->inplace = 0;
-	}
-
-	if ((task_crypto->s.iovcnt != task_crc->s.iovcnt) ||
-	    !accel_mlx5_compare_iovs(task_crypto->s.iovs, task_crc->s.iovs,
-				     task_crypto->s.iovcnt)) {
-		return;
-	}
-
-	mlx5_task_crc->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT;
-	mlx5_task_crc->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
-}
-
+/**
+ * Used to set mlx5 opcode for a regular task
+ */
 static inline void
 accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 {
@@ -3254,17 +3198,12 @@ accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 	case SPDK_ACCEL_OPC_ENCRYPT:
 		assert(g_accel_mlx5.crypto_supported);
 		mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
-		mlx5_task->mlx5_opcode = mlx5_task->driver_mkey ? ACCEL_MLX5_OPC_ENCRYPT_MKEY :
-					 ACCEL_MLX5_OPC_CRYPTO;
-		if (g_accel_mlx5.merge) {
-			accel_mlx5_task_merge_encrypt_and_crc(mlx5_task);
-		}
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO;
 		break;
 	case SPDK_ACCEL_OPC_DECRYPT:
 		assert(g_accel_mlx5.crypto_supported);
 		mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
-		mlx5_task->mlx5_opcode = mlx5_task->driver_mkey ? ACCEL_MLX5_OPC_DECRYPT_MKEY :
-					 ACCEL_MLX5_OPC_CRYPTO;
+		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO;
 		break;
 	case SPDK_ACCEL_OPC_CRC32C:
 		mlx5_task->inplace = 1;
@@ -3273,9 +3212,6 @@ accel_mlx5_task_init_opcode(struct accel_mlx5_task *mlx5_task)
 	case SPDK_ACCEL_OPC_CHECK_CRC32C:
 		mlx5_task->inplace = 1;
 		mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C;
-		if (g_accel_mlx5.merge) {
-			accel_mlx5_task_merge_crc_and_decrypt(mlx5_task);
-		}
 		break;
 	case SPDK_ACCEL_OPC_COPY_CRC32C:
 		mlx5_task->inplace = 0;
@@ -4839,6 +4775,233 @@ accel_mlx5_get_memory_domains(struct spdk_memory_domain **domains, int array_siz
 	return (int)g_accel_mlx5.num_devs;
 }
 
+static inline bool
+accel_mlx5_task_merge_encrypt_and_crc(struct accel_mlx5_task *mlx5_task,
+				      struct accel_mlx5_io_channel *accel_ch)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct spdk_accel_task *task_next = TAILQ_NEXT(task, seq_link);
+	struct accel_mlx5_dev *dev;
+	struct iovec *crypto_dst_iovs;
+	uint32_t crypto_dst_iovcnt;
+	bool inplace;
+
+	assert(task->op_code == SPDK_ACCEL_OPC_ENCRYPT);
+
+	if (!task_next || task_next->op_code != SPDK_ACCEL_OPC_CRC32C) {
+		return false;
+	}
+
+	if (task->d.iovcnt == 0 || (task->d.iovcnt == task->s.iovcnt &&
+				    accel_mlx5_compare_iovs(task->d.iovs, task->s.iovs, task->s.iovcnt))) {
+		inplace = true;
+		crypto_dst_iovs = task->s.iovs;
+		crypto_dst_iovcnt = task->s.iovcnt;
+	} else {
+		inplace = false;
+		crypto_dst_iovs = task->d.iovs;
+		crypto_dst_iovcnt = task->d.iovcnt;
+	}
+
+	if ((crypto_dst_iovcnt != task_next->s.iovcnt) ||
+	    !accel_mlx5_compare_iovs(crypto_dst_iovs, task_next->s.iovs,
+				     crypto_dst_iovcnt)) {
+		return false;
+	}
+
+	assert(!mlx5_task->driver_mkey);
+	accel_mlx5_task_reset(mlx5_task);
+	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C;
+	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
+	mlx5_task->inplace = inplace;
+
+	dev = accel_mlx5_ch_get_dev(accel_ch);
+	assert(dev);
+
+	if (!g_accel_mlx5.attr.qp_per_domain || !task->src_domain) {
+		mlx5_task->qp = &dev->mlx5_qp;
+	} else {
+		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, task->src_domain);
+	}
+
+	return true;
+}
+
+static inline bool
+accel_mlx5_task_merge_crc_and_decrypt(struct accel_mlx5_task *mlx5_task,
+				      struct accel_mlx5_io_channel *accel_ch)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct spdk_accel_task *task_crypto = TAILQ_NEXT(task, seq_link);
+	struct accel_mlx5_dev *dev;
+	bool inplace;
+
+	assert(task->op_code == SPDK_ACCEL_OPC_CHECK_CRC32C);
+
+	if (!task_crypto || task_crypto->op_code != SPDK_ACCEL_OPC_DECRYPT) {
+		return false;
+	}
+
+	if (task_crypto->d.iovcnt == 0 ||
+	    (task_crypto->d.iovcnt == task_crypto->s.iovcnt &&
+	     accel_mlx5_compare_iovs(task_crypto->d.iovs, task_crypto->s.iovs, task_crypto->s.iovcnt))) {
+		inplace = true;
+	} else {
+		inplace = false;
+	}
+
+	if ((task_crypto->s.iovcnt != task->s.iovcnt) ||
+	    !accel_mlx5_compare_iovs(task_crypto->s.iovs, task->s.iovs,
+				     task_crypto->s.iovcnt)) {
+		return false;
+	}
+
+	accel_mlx5_task_reset(mlx5_task);
+	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT;
+	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY;
+	mlx5_task->inplace = inplace;
+
+	dev = accel_mlx5_ch_get_dev(accel_ch);
+	assert(dev);
+
+	if (!g_accel_mlx5.attr.qp_per_domain || !task->src_domain) {
+		mlx5_task->qp = &dev->mlx5_qp;
+	} else {
+		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, task->src_domain);
+	}
+
+	return true;
+}
+
+static inline int
+accel_mlx5_driver_encrypt_mkey_configure(struct spdk_mlx5_driver_io_context *driver_ctx,
+		struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *accel_ch)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_dev *dev = NULL;
+	uint32_t i;
+
+	for (i = 0; i < accel_ch->num_devs; i++) {
+		if (accel_ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
+			dev = &accel_ch->devs[i];
+			break;
+		}
+	}
+	if (spdk_unlikely(!dev)) {
+		SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
+			    driver_ctx->qp->pd->context->device->name);
+		return -ENODEV;
+	}
+
+	if (!g_accel_mlx5.attr.qp_per_domain || !task->src_domain) {
+		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
+	} else {
+		mlx5_task->qp = &dev->mlx5_qp;
+	}
+	if (spdk_unlikely(!mlx5_task->qp || mlx5_task->qp->recovering)) {
+		return -ENODEV;
+	}
+
+	accel_mlx5_task_reset(mlx5_task);
+	mlx5_task->driver_mkey = 1;
+	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
+	mlx5_task->mlx5_opcode = ACCEL_MLX5_OPC_ENCRYPT_MKEY;
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_driver_decrypt_mkey_configure(struct spdk_mlx5_driver_io_context *driver_ctx,
+		struct accel_mlx5_task *mlx5_task, struct accel_mlx5_io_channel *accel_ch)
+{
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_dev *dev = NULL;
+	uint32_t i;
+
+	for (i = 0; i < accel_ch->num_devs; i++) {
+		if (accel_ch->devs[i].dev_ctx->pd == driver_ctx->qp->pd) {
+			dev = &accel_ch->devs[i];
+			break;
+		}
+	}
+	if (spdk_unlikely(!dev)) {
+		SPDK_ERRLOG("Can't find MLX5 dev for pd %p dev %s\n", driver_ctx->qp->pd,
+			    driver_ctx->qp->pd->context->device->name);
+		return -ENODEV;
+	}
+
+	if (!g_accel_mlx5.attr.qp_per_domain || !task->dst_domain) {
+		mlx5_task->qp = accel_mlx5_dev_get_qp_by_domain(dev, mlx5_task->base.src_domain);
+	} else {
+		mlx5_task->qp = &dev->mlx5_qp;
+	}
+	if (spdk_unlikely(!mlx5_task->qp || mlx5_task->qp->recovering)) {
+		return -ENODEV;
+	}
+
+	accel_mlx5_task_reset(mlx5_task);
+	mlx5_task->driver_mkey = 1;
+	mlx5_task->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
+	mlx5_task->mlx5_opcode =  ACCEL_MLX5_OPC_DECRYPT_MKEY;
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
+				   struct accel_mlx5_io_channel *accel_ch)
+{
+	struct spdk_accel_task *first_base = spdk_accel_sequence_first_task(seq);
+	struct accel_mlx5_task *first = SPDK_CONTAINEROF(first_base, struct accel_mlx5_task, base);
+	struct spdk_mlx5_driver_io_context *driver_ctx;
+
+	driver_ctx = spdk_accel_sequence_get_driver_ctx(seq);
+
+	/* Handle tasks which require special processing, e.g. merge */
+	switch (first_base->op_code) {
+	case SPDK_ACCEL_OPC_ENCRYPT:
+		assert(g_accel_mlx5.crypto_supported);
+		if (driver_ctx) {
+			if (spdk_unlikely(driver_ctx->mkey != NULL)) {
+				SPDK_ERRLOG("driver IO ctx already has an mkey\n");
+				return -ENOTSUP;
+			}
+			return accel_mlx5_driver_encrypt_mkey_configure(driver_ctx, first, accel_ch);
+		}
+
+		if (g_accel_mlx5.merge && accel_mlx5_task_merge_encrypt_and_crc(first, accel_ch)) {
+			if (spdk_unlikely(!first->qp || first->qp->recovering)) {
+				return -ENODEV;
+			}
+			return 0;
+		}
+		break;
+	case SPDK_ACCEL_OPC_DECRYPT:
+		assert(g_accel_mlx5.crypto_supported);
+		if (driver_ctx) {
+			if (spdk_unlikely(driver_ctx->mkey != NULL)) {
+				SPDK_ERRLOG("driver IO ctx already has an mkey\n");
+				return -ENOTSUP;
+			}
+			return accel_mlx5_driver_decrypt_mkey_configure(driver_ctx, first, accel_ch);
+		}
+		break;
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+		if (g_accel_mlx5.merge && accel_mlx5_task_merge_crc_and_decrypt(first, accel_ch)) {
+			if (spdk_unlikely(!first->qp || first->qp->recovering)) {
+				return -ENODEV;
+			}
+			return 0;
+		}
+		break;
+	}
+
+	/* Nothing special, execute in regular way */
+	accel_mlx5_task_reset(first);
+	accel_mlx5_task_init_opcode(first);
+	return accel_mlx5_task_assign_qp(first, accel_ch);
+}
+
 static inline int
 accel_mlx5_execute_sequence(struct spdk_io_channel *_ch, struct spdk_accel_sequence *seq)
 {
@@ -4849,18 +5012,14 @@ accel_mlx5_execute_sequence(struct spdk_io_channel *_ch, struct spdk_accel_seque
 
 	assert(g_accel_mlx5.enabled);
 
-	task = spdk_accel_sequence_first_task(seq);
-	mlx5_task = SPDK_CONTAINEROF(task, struct accel_mlx5_task, base);
-	SPDK_DEBUGLOG(accel_mlx5, "new driver seq %p, ch %p, task %p\n", seq, ch, task);
-
-	accel_mlx5_task_reset(mlx5_task);
-	accel_mlx5_task_init_opcode(mlx5_task);
-	rc = accel_mlx5_task_assign_qp(mlx5_task, ch);
+	rc = accel_mlx5_driver_examine_sequence(seq, ch);
 	if (spdk_unlikely(rc)) {
-		SPDK_ERRLOG("no qp for task %p opc %d; domain src %p, dst %p\n", mlx5_task, mlx5_task->mlx5_opcode,
-			    task->src_domain, task->dst_domain);
-		return -ENODEV;
+		SPDK_ERRLOG("Driver failed to process seq %p on ch %p, rc %d\n", seq, ch, rc);
+		return rc;
 	}
+	task = spdk_accel_sequence_first_task(seq);
+	assert(task);
+	mlx5_task = SPDK_CONTAINEROF(task, struct accel_mlx5_task, base);
 	mlx5_task->driver_seq = 1;
 	SPDK_DEBUGLOG(accel_mlx5, "driver starts seq %p, ch %p, task %p\n", seq, ch, task);
 
