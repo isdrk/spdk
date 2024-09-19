@@ -590,30 +590,39 @@ enum spdk_nvmf_rdma_bdev_type {
 	SPDK_NVMF_RDMA_BDEV_TYPE_NULL
 };
 
+struct spdk_nvmf_rdma_bdev_queue_destroy_ctx {
+	bool destroy_completed;
+	bool destroy_failed;
+};
+
 struct spdk_nvmf_rdma_bdev_nvme_queue {
-	struct spdk_nvme_qpair	*nvme_qpair;
-	struct spdk_dmabuf	*db_dmabuf;
-	doca_sta_be_q_handle_t	handle;
-	struct doca_mmap	*sq_mmap;
-	struct doca_mmap	*cq_mmap;
-	struct doca_mmap	*sqdb_mmap;
-	struct doca_mmap	*cqdb_mmap;
+	struct spdk_nvme_qpair				*nvme_qpair;
+	struct spdk_dmabuf				*db_dmabuf;
+	doca_sta_be_q_handle_t				handle;
+	struct doca_mmap				*sq_mmap;
+	struct doca_mmap				*cq_mmap;
+	struct doca_mmap				*sqdb_mmap;
+	struct doca_mmap				*cqdb_mmap;
+	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx	destroy_ctx;
 };
 
 struct spdk_nvmf_rdma_bdev_null_queue {
-	void			*sq;
-	void			*cq;
-	uint64_t		*sqdb;
-	uint64_t		*cqdb;
-	doca_sta_be_q_handle_t	handle;
-	struct doca_mmap	*sq_mmap;
-	struct doca_mmap	*cq_mmap;
-	struct doca_mmap	*sqdb_mmap;
-	struct doca_mmap	*cqdb_mmap;
+	void						*sq;
+	void						*cq;
+	uint64_t					*sqdb;
+	uint64_t					*cqdb;
+	doca_sta_be_q_handle_t				handle;
+	struct doca_mmap				*sq_mmap;
+	struct doca_mmap				*cq_mmap;
+	struct doca_mmap				*sqdb_mmap;
+	struct doca_mmap				*cqdb_mmap;
+	struct doca_comch_producer_task_send		*destroy_task;
+	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx	destroy_ctx;
 };
 
 struct spdk_nvmf_rdma_bdev {
 	struct spdk_bdev		*bdev;
+	struct spdk_nvmf_rdma_sta	*sta;
 	int				refs;
 	doca_sta_be_handle_t		handle;
 	enum spdk_nvmf_rdma_bdev_type	type;
@@ -623,17 +632,24 @@ struct spdk_nvmf_rdma_bdev {
 		struct spdk_nvmf_rdma_bdev_nvme_queue *nvme_queue;
 		struct spdk_nvmf_rdma_bdev_null_queue *null_queue;
 	};
+	bool				delete_started;
+	bool				delete_completed;
+	bool				delete_failed;
 	TAILQ_ENTRY(spdk_nvmf_rdma_bdev)  link;
 };
 
 struct spdk_nvmf_rdma_ns {
-	struct spdk_nvmf_ns		*ns;
-	struct spdk_nvmf_rdma_subsystem	*rsubsystem;
-	struct spdk_nvmf_rdma_bdev	*rbdev;
-	doca_sta_ns_handle_t		handle;
-	uint32_t			fe_ns_id;
-	uint32_t			be_ns_id;
-	TAILQ_ENTRY(spdk_nvmf_rdma_ns)	link;
+	struct spdk_nvmf_ns			*ns;
+	struct spdk_nvmf_rdma_subsystem		*rsubsystem;
+	struct spdk_nvmf_rdma_bdev		*rbdev;
+	doca_sta_ns_handle_t			handle;
+	uint32_t				fe_ns_id;
+	uint32_t				be_ns_id;
+	struct doca_comch_producer_task_send	*delete_task;
+	bool					delete_started;
+	bool					delete_completed;
+	bool					delete_failed;
+	TAILQ_ENTRY(spdk_nvmf_rdma_ns)		link;
 };
 
 struct spdk_nvmf_rdma_subsystem_dev {
@@ -1596,6 +1612,28 @@ nvmf_rdma_event_reject(struct rdma_cm_id *id, enum spdk_nvmf_rdma_transport_erro
 	rej_data.sts = error;
 
 	rdma_reject(id, &rej_data, sizeof(rej_data));
+}
+
+static struct spdk_nvmf_rdma_subsystem *
+nvmf_rdma_find_subsystem(struct spdk_nvmf_rdma_transport *rtransport)
+{
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	int num_subsystems = 0;
+
+	if (TAILQ_EMPTY(&rtransport->subsystems)) {
+		SPDK_ERRLOG("Subsystem list is empty\n");
+		return NULL;
+	}
+
+	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+		num_subsystems++;
+	}
+
+	if (num_subsystems != 1) {
+		SPDK_ERRLOG("Only 1 subsystem is supported\n");
+		return NULL;
+	}
+	return TAILQ_FIRST(&rtransport->subsystems);
 }
 
 static int
@@ -3109,6 +3147,46 @@ nvmf_rdma_sta_state_changed_cb(const union doca_data user_data,
 	rtransport->sta.state = next_state;
 }
 
+
+static void sta_offload_task_detach_ns_complete(struct doca_comch_producer_task_send *task,
+                                                union doca_data task_user_data)
+{
+	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	rns->delete_completed = true;
+	rns->handle = 0;
+}
+
+static void sta_offload_task_detach_ns_complete_err(struct doca_comch_producer_task_send *task,
+                                                    union doca_data task_user_data)
+{
+	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	rns->delete_failed = true;
+	rns->delete_completed = true;
+}
+
+static void sta_offload_task_destroy_bqueue_complete(struct doca_comch_producer_task_send *task,
+                                                union doca_data task_user_data)
+{
+	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	destroy_ctx->destroy_completed = true;
+}
+
+static void sta_offload_task_destroy_bqueue_complete_err(struct doca_comch_producer_task_send *task,
+                                                    union doca_data task_user_data)
+{
+	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	destroy_ctx->destroy_failed = true;
+	destroy_ctx->destroy_completed = true;
+}
+
 static int
 nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 {
@@ -3172,6 +3250,22 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 		SPDK_ERRLOG("Unable to set state changed callback for DOCA STA: %s\n", doca_error_get_descr(rc));
 		return -EINVAL;
 	}
+
+	rc = doca_sta_subsystem_task_rm_ns_set_conf(rtransport->sta.sta,
+						    sta_offload_task_detach_ns_complete,
+						    sta_offload_task_detach_ns_complete_err);
+        if (rc != DOCA_SUCCESS) {
+                SPDK_ERRLOG("Failed to subsystem_task_rm_ns_set_conf, err: %s", doca_error_get_name(rc));
+                return -EINVAL;
+        }
+
+	rc = doca_sta_be_task_destroy_queue_set_conf(rtransport->sta.sta,
+						     sta_offload_task_destroy_bqueue_complete,
+						     sta_offload_task_destroy_bqueue_complete_err);
+        if (rc != DOCA_SUCCESS) {
+                SPDK_ERRLOG("Failed to doca_sta_be_task_destroy_queue_set_conf, err: %s", doca_error_get_name(rc));
+                return -EINVAL;
+        }
 
 	rc = doca_ctx_start(rtransport->sta.ctx);
 	if (DOCA_IS_ERROR(rc)) {
@@ -6539,17 +6633,62 @@ nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
 }
 
 static int
-nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
+nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
+			    doca_sta_be_q_handle_t handle,
+			    struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx)
 {
+	struct doca_comch_producer_task_send *destroy_task;
+	struct doca_task *doca_task;
+	union doca_data task_user_data;
 	doca_error_t drc;
 
+	memset(destroy_ctx, 0, sizeof(*destroy_ctx));
+	task_user_data.ptr = destroy_ctx;
+
+	drc = doca_sta_be_destroy_queue_task_alloc_init(handle, task_user_data, &destroy_task);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to alloc destroy task: %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	doca_task = doca_comch_producer_task_send_as_task(destroy_task);
+	if (!doca_task) {
+		SPDK_ERRLOG("Failed to get doca_task\n");
+		return -1;
+	}
+
+	drc = doca_task_submit(doca_task);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to submit be destroy queue task: %s\n", doca_error_get_descr(drc));
+		doca_task_free(doca_task);
+		return -1;
+	}
+
+	while (!destroy_ctx->destroy_completed) {
+		doca_pe_progress(sta->pe);
+	}
+
+	if (destroy_ctx->destroy_failed) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
+{
+	doca_error_t drc;
+	int rc;
+
 	if (queue->handle) {
-		SPDK_NOTICELOG("Destroy DOCA STA nvme backend queue 0x%lx\n", queue->handle);
-		drc = doca_sta_be_destroy_queue(queue->handle);
-		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy doca_sta_be_queue: %s\n", doca_error_get_descr(drc));
+		rc = nvmf_sta_bdev_queue_destroy(sta, queue->handle, &queue->destroy_ctx);
+		if (rc) {
+			SPDK_ERRLOG("Failed to destroy nvme backend queue\n");
 			return -1;
 		}
+		SPDK_NOTICELOG("Destroy DOCA STA nvme backend queue 0x%lx\n", queue->handle);
+		queue->handle = 0;
 	}
 
 	if (queue->sq_mmap) {
@@ -6558,6 +6697,7 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 			SPDK_ERRLOG("Failed to destroy SQ doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->sq_mmap = NULL;
 	}
 
 	if (queue->cq_mmap) {
@@ -6566,6 +6706,7 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 			SPDK_ERRLOG("Failed to destroy CQ doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->cq_mmap = NULL;
 	}
 
 	if (queue->sqdb_mmap) {
@@ -6574,6 +6715,7 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 			SPDK_ERRLOG("Failed to destroy SQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->sqdb_mmap = NULL;
 	}
 
 	if (queue->cqdb_mmap) {
@@ -6582,14 +6724,17 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 			SPDK_ERRLOG("Failed to destroy CQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->cqdb_mmap = NULL;
 	}
 
 	if (queue->db_dmabuf) {
 		spdk_dmabuf_put(queue->db_dmabuf);
+		queue->db_dmabuf = NULL;
 	}
 
 	if (queue->nvme_qpair) {
 		spdk_nvme_ctrlr_free_io_qpair(queue->nvme_qpair);
+		queue->nvme_qpair = NULL;
 	}
 
 	return 0;
@@ -6617,14 +6762,14 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	queue->nvme_qpair = spdk_nvme_ctrlr_alloc_io_qpair(nvme_ctrlr, &opts, sizeof(opts));
 	if (!queue->nvme_qpair) {
 		SPDK_ERRLOG("Failed to allocate nvme IO qpair\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
 	rc = spdk_nvme_ctrlr_connect_io_qpair(nvme_ctrlr, queue->nvme_qpair);
 	if (rc) {
 		SPDK_ERRLOG("Failed to connect nvme IO qpair, rc %d\n", rc);
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return rc;
 	}
 
@@ -6643,7 +6788,7 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			 -1, 0);
 	if (!queue->sq_mmap) {
 		SPDK_ERRLOG("Failed to create SQ mmap\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6653,14 +6798,14 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			 -1, 0);
 	if (!queue->cq_mmap) {
 		SPDK_ERRLOG("Failed to create CQ mmap\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
 	queue->db_dmabuf = spdk_dmabuf_get((void *)nvme_pqpair->sq_tdbl, sizeof(*nvme_pqpair->sq_tdbl));
 	if (!queue->db_dmabuf) {
 		SPDK_ERRLOG("Failed to get dmabuf for nvme doorbell registers\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6673,7 +6818,7 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			   queue->db_dmabuf->fd, 0);
 	if (!queue->sqdb_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6683,7 +6828,7 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			   queue->db_dmabuf->fd, 0);
 	if (!queue->cqdb_mmap) {
 		SPDK_ERRLOG("Failed to create CQDB mmap\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6691,7 +6836,7 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 				    queue->cqdb_mmap, &queue->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
-		nvmf_rdma_bdev_nvme_queue_destroy(queue);
+		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6701,17 +6846,19 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 }
 
 static int
-nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
+nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nvmf_rdma_bdev_null_queue *queue)
 {
+	int rc;
 	doca_error_t drc;
 
 	if (queue->handle) {
-		SPDK_NOTICELOG("Destroy DOCA STA null backend queue 0x%lx\n", queue->handle);
-		drc = doca_sta_be_destroy_queue(queue->handle);
-		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy DOCA STA null backend queue: %s\n", doca_error_get_descr(drc));
+		rc = nvmf_sta_bdev_queue_destroy(sta, queue->handle, &queue->destroy_ctx);
+		if (rc) {
+			SPDK_ERRLOG("Failed to destroy null backend queue\n");
 			return -1;
 		}
+		SPDK_NOTICELOG("Destroy DOCA STA null backend queue 0x%lx\n", queue->handle);
+		queue->handle = 0;
 	}
 	if (queue->sq_mmap) {
 		drc = doca_mmap_destroy(queue->sq_mmap);
@@ -6719,6 +6866,7 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
 			SPDK_ERRLOG("Failed to destroy SQ doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->sq_mmap = NULL;
 	}
 
 	if (queue->cq_mmap) {
@@ -6727,6 +6875,7 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
 			SPDK_ERRLOG("Failed to destroy CQ doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->cq_mmap = NULL;
 	}
 
 	if (queue->sqdb_mmap) {
@@ -6735,6 +6884,7 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
 			SPDK_ERRLOG("Failed to destroy SQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->sqdb_mmap = NULL;
 	}
 
 	if (queue->cqdb_mmap) {
@@ -6743,11 +6893,16 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_bdev_null_queue *queue)
 			SPDK_ERRLOG("Failed to destroy CQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+		queue->cqdb_mmap = NULL;
 	}
 
 	spdk_free(queue->sq);
 	spdk_free(queue->cq);
 	spdk_free(queue->sqdb);
+	queue->sq = NULL;
+	queue->cq = NULL;
+	queue->sqdb = NULL;
+
 	return 0;
 }
 
@@ -6763,7 +6918,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 				 0x1000, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 	if (!queue->sq) {
 		SPDK_ERRLOG("Failed to allocate null SQ\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -ENOMEM;
 	}
 
@@ -6771,7 +6926,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 				 0x1000, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
 	if (!queue->cq) {
 		SPDK_ERRLOG("Failed to allocate null CQ\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -ENOMEM;
 	}
 
@@ -6787,7 +6942,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			 QUEUE_SIZE * sizeof(struct spdk_nvme_cmd), -1, 0);
 	if (!queue->sq_mmap) {
 		SPDK_ERRLOG("Failed to create SQ mmap\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6795,7 +6950,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			 QUEUE_SIZE * sizeof(struct spdk_nvme_cpl), -1, 0);
 	if (!queue->cq_mmap) {
 		SPDK_ERRLOG("Failed to create CQ mmap\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6803,7 +6958,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			   -1, 0);
 	if (!queue->sqdb_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6811,7 +6966,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 			   -1, 0);
 	if (!queue->cqdb_mmap) {
 		SPDK_ERRLOG("Failed to create CQDB mmap\n");
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6819,7 +6974,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 				    queue->cqdb_mmap, &queue->handle);
 	if (drc) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
-		nvmf_rdma_bdev_null_queue_destroy(queue);
+		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
@@ -6836,7 +6991,7 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 	if (rbdev->type == SPDK_NVMF_RDMA_BDEV_TYPE_NVME) {
 		if (rbdev->nvme_queue) {
 			for (i = 0; i < rbdev->num_queues; i++) {
-				rc = nvmf_rdma_bdev_nvme_queue_destroy(&rbdev->nvme_queue[i]);
+				rc = nvmf_rdma_bdev_nvme_queue_destroy(rbdev->sta, &rbdev->nvme_queue[i]);
 				if (rc) {
 					SPDK_ERRLOG("Failed to destroy nvme backend queue %d\n", i);
 					return rc;
@@ -6848,7 +7003,7 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 	} else {
 		if (rbdev->null_queue) {
 			for (i = 0; i < rbdev->num_queues; i++) {
-				rc = nvmf_rdma_bdev_null_queue_destroy(&rbdev->null_queue[i]);
+				rc = nvmf_rdma_bdev_null_queue_destroy(rbdev->sta, &rbdev->null_queue[i]);
 				if (rc) {
 					SPDK_ERRLOG("Failed to destroy null backend queue %d\n", i);
 					return rc;
@@ -6889,6 +7044,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		return NULL;
 	}
 	rbdev->bdev = bdev;
+	rbdev->sta = &rtransport->sta;
 	rbdev->num_queues = num_bdev_queues;
 	rbdev->null_ns_id = 1;
 
@@ -6975,6 +7131,7 @@ nvmf_rdma_add_bdev(struct spdk_nvmf_rdma_transport *rtransport,
 	if (!rbdev) {
 		SPDK_ERRLOG("Failed to create bdev\n");
 	} else {
+		rbdev->refs = 1;
 		TAILQ_INSERT_TAIL(&rtransport->bdevs, rbdev, link);
 	}
 
@@ -6985,6 +7142,11 @@ static int
 nvmf_rdma_rm_bdev(struct spdk_nvmf_rdma_transport *rtransport, struct spdk_nvmf_rdma_bdev *rbdev)
 {
 	int rc;
+
+	rbdev->refs--;
+	if (rbdev->refs != 0) {
+		return 0;
+	}
 
 	TAILQ_REMOVE(&rtransport->bdevs, rbdev, link);
 	rc = nvmf_rdma_bdev_destroy(rbdev);
@@ -6998,14 +7160,32 @@ nvmf_rdma_rm_bdev(struct spdk_nvmf_rdma_transport *rtransport, struct spdk_nvmf_
 static int
 spdk_nvmf_rdma_ns_destroy(struct spdk_nvmf_rdma_ns *rns)
 {
+	union doca_data task_user_data;
 	int rc;
 	doca_error_t drc;
 
 	if (rns->handle) {
-		drc = doca_sta_subsystem_rm_ns(rns->rsubsystem->handle, rns->handle);
+		rns->delete_started = true;
+		task_user_data.ptr = rns;
+
+		drc = doca_sta_subsystem_task_rm_ns_alloc_init(rns->rsubsystem->handle, rns->handle,
+							       task_user_data, &rns->delete_task);
 		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to remove namespace from DOCA STA subsystem: %s\n",
-				    doca_error_get_descr(drc));
+			SPDK_ERRLOG("Failed to alloc DOCA task: %s\n", doca_error_get_descr(drc));
+			rns->delete_started = false;
+			return -1;
+		}
+		drc = doca_task_submit(doca_comch_producer_task_send_as_task(rns->delete_task));
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to submit DOCA task: %s\n", doca_error_get_descr(drc));
+			rns->delete_started = false;
+			return -1;
+		}
+
+		while (!rns->delete_completed) {
+			doca_pe_progress(rns->rsubsystem->rtransport->sta.pe);
+		}
+		if (rns->delete_failed) {
 			return -1;
 		}
 		rns->handle = 0;
