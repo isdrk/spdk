@@ -3199,8 +3199,8 @@ basic_bdev_group_qos_queue_io(void)
 	poll_thread_times(0, 1);
 
 	CU_ASSERT(!TAILQ_EMPTY(&qos->queued_io));
-	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->group_qos_allowed_io));
-	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch2->group_qos_allowed_io));
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->group_qos_allowed_io));
+	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch2->shared_resource->mgmt_ch->group_qos_allowed_io));
 
 	poll_threads();
 	set_thread(1);
@@ -3210,8 +3210,8 @@ basic_bdev_group_qos_queue_io(void)
 	CU_ASSERT(status2 == SPDK_BDEV_IO_STATUS_SUCCESS);
 	CU_ASSERT(status3 == SPDK_BDEV_IO_STATUS_PENDING);
 	CU_ASSERT(!TAILQ_EMPTY(&qos->queued_io));
-	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->group_qos_allowed_io));
-	CU_ASSERT(TAILQ_EMPTY(&bdev_ch2->group_qos_allowed_io));
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->group_qos_allowed_io));
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch2->shared_resource->mgmt_ch->group_qos_allowed_io));
 
 	/* Advance to the next timeslice. */
 	spdk_delay_us(g_bdev_opts.qos_timeslice_us);
@@ -3221,7 +3221,7 @@ basic_bdev_group_qos_queue_io(void)
 	poll_thread_times(0, 1);
 
 	CU_ASSERT(TAILQ_EMPTY(&qos->queued_io));
-	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->group_qos_allowed_io));
+	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->group_qos_allowed_io));
 
 	poll_threads();
 
@@ -3276,7 +3276,7 @@ basic_bdev_group_qos_queue_io(void)
 	poll_thread_times(0, 1);
 
 	CU_ASSERT(TAILQ_EMPTY(&qos->queued_io));
-	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->group_qos_allowed_io));
+	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->group_qos_allowed_io));
 
 	/* Send an abort to the I/O on the same thread. */
 	abort_status = SPDK_BDEV_IO_STATUS_PENDING;
@@ -3287,7 +3287,7 @@ basic_bdev_group_qos_queue_io(void)
 	poll_threads();
 	CU_ASSERT(abort_status == SPDK_BDEV_IO_STATUS_SUCCESS);
 	CU_ASSERT(status == SPDK_BDEV_IO_STATUS_ABORTED);
-	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->group_qos_allowed_io));
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->group_qos_allowed_io));
 
 	/*
 	 * Check if queued I/Os are unthrottled if bdev is removed from group.
@@ -3488,7 +3488,7 @@ basic_two_level_qos_queue_io(void)
 
 	/* I/O to ut_bdev should move to the originating thread. */
 	CU_ASSERT(TAILQ_EMPTY(&bdev->internal.qos->queued_io));
-	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->qos_allowed_io));
+	CU_ASSERT(!TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->qos_allowed_io));
 
 	poll_threads();
 
@@ -3496,7 +3496,7 @@ basic_two_level_qos_queue_io(void)
 	stub_complete_io(g_bdev.io_target, 1);
 	poll_threads();
 
-	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->qos_allowed_io));
+	CU_ASSERT(TAILQ_EMPTY(&bdev_ch->shared_resource->mgmt_ch->qos_allowed_io));
 	CU_ASSERT(status == SPDK_BDEV_IO_STATUS_SUCCESS);
 
 	/*
