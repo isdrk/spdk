@@ -34,7 +34,7 @@
 
 #include "spdk_internal/nvme_nvda_tcp.h"
 #include "spdk_internal/trace_defs.h"
-#include "spdk_internal/rdma.h"
+#include "spdk_internal/rdma_provider.h"
 #include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/xlio.h"
 #include "spdk/accel_module.h"
@@ -2171,7 +2171,7 @@ nvme_tcp_qpair_cmd_send_complete(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 
 static inline int
 nvme_tcp_get_memory_translation(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qpair *tqpair,
-				struct spdk_rdma_memory_translation_ctx *_ctx)
+				struct spdk_rdma_provider_memory_translation_ctx *_ctx)
 {
 	struct nvme_request *req = &tcp_req->req;
 	struct spdk_memory_domain_translation_result dma_translation;
@@ -2231,7 +2231,7 @@ nvme_tcp_fill_data_mkeys(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp
 	int rc;
 
 	for (iovcnt = 0; iovcnt < pdu->data_iovcnt; iovcnt++) {
-		struct spdk_rdma_memory_translation_ctx ctx = {
+		struct spdk_rdma_provider_memory_translation_ctx ctx = {
 			. addr = pdu->iovs[iovcnt].iov_base,
 			.length = pdu->iovs[iovcnt].iov_len
 		};

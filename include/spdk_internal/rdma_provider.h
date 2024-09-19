@@ -13,64 +13,64 @@
 #include "spdk/dma.h"
 
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
-#define SPDK_RDMA_RXE_VENDOR_ID_OLD 0
-#define SPDK_RDMA_RXE_VENDOR_ID_NEW 0XFFFFFF
+#define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_OLD 0
+#define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_NEW 0XFFFFFF
 
-struct spdk_rdma_wr_stats {
+struct spdk_rdma_provider_wr_stats {
 	/* Total number of submitted requests */
 	uint64_t num_submitted_wrs;
 	/* Total number of doorbell updates */
 	uint64_t doorbell_updates;
 };
 
-struct spdk_rdma_qp_stats {
-	struct spdk_rdma_wr_stats send;
-	struct spdk_rdma_wr_stats recv;
+struct spdk_rdma_provider_qp_stats {
+	struct spdk_rdma_provider_wr_stats send;
+	struct spdk_rdma_provider_wr_stats recv;
 	uint64_t accel_sequences_executed;
 };
 
-struct spdk_rdma_qp_init_attr {
-	void		       *qp_context;
-	struct spdk_rdma_cq    *cq;
-	struct spdk_rdma_srq   *srq;
-	struct ibv_qp_cap	cap;
-	struct ibv_pd	       *pd;
-	struct spdk_rdma_qp_stats *stats;
+struct spdk_rdma_provider_qp_init_attr {
+	void				*qp_context;
+	struct spdk_rdma_provider_cq	*cq;
+	struct spdk_rdma_provider_srq	*srq;
+	struct ibv_qp_cap		cap;
+	struct ibv_pd			*pd;
+	struct spdk_rdma_provider_qp_stats *stats;
 };
 
-struct spdk_rdma_send_wr_list {
+struct spdk_rdma_provider_send_wr_list {
 	struct ibv_send_wr	*first;
 	struct ibv_send_wr	*last;
 };
 
-struct spdk_rdma_recv_wr_list {
+struct spdk_rdma_provider_recv_wr_list {
 	struct ibv_recv_wr	*first;
 	struct ibv_recv_wr	*last;
 };
 
-struct spdk_rdma_qp {
+struct spdk_rdma_provider_qp {
 	struct ibv_qp *qp;
 	struct rdma_cm_id *cm_id;
-	struct spdk_rdma_send_wr_list send_wrs;
-	struct spdk_rdma_recv_wr_list recv_wrs;
-	struct spdk_rdma_qp_stats *stats;
+	struct spdk_rdma_provider_send_wr_list send_wrs;
+	struct spdk_rdma_provider_recv_wr_list recv_wrs;
+	struct spdk_rdma_provider_qp_stats *stats;
 	bool shared_stats;
 };
 
-struct spdk_rdma_srq_init_attr {
+struct spdk_rdma_provider_srq_init_attr {
 	struct ibv_pd *pd;
-	struct spdk_rdma_wr_stats *stats;
+	struct spdk_rdma_provider_wr_stats *stats;
 	struct ibv_srq_init_attr srq_init_attr;
 };
 
-struct spdk_rdma_srq {
+struct spdk_rdma_provider_srq {
 	struct ibv_srq *srq;
-	struct spdk_rdma_recv_wr_list recv_wrs;
-	struct spdk_rdma_wr_stats *stats;
+	struct spdk_rdma_provider_recv_wr_list recv_wrs;
+	struct spdk_rdma_provider_wr_stats *stats;
 	bool shared_stats;
 };
 
-struct spdk_rdma_cq_init_attr {
+struct spdk_rdma_provider_cq_init_attr {
 	int				cqe;
 	int				comp_vector;
 	void			       *cq_context;
@@ -78,11 +78,11 @@ struct spdk_rdma_cq_init_attr {
 	struct ibv_pd		       *pd;
 };
 
-struct spdk_rdma_cq {
+struct spdk_rdma_provider_cq {
 	struct ibv_cq *cq;
 };
 
-struct spdk_rdma_memory_translation_ctx {
+struct spdk_rdma_provider_memory_translation_ctx {
 	void *addr;
 	size_t length;
 	uint32_t lkey;
@@ -95,7 +95,8 @@ struct spdk_rdma_memory_translation_ctx {
  * \param init_attr Pointer to SRQ init attr
  * \return pointer to srq on success or NULL on failure. errno is updated in failure case.
  */
-struct spdk_rdma_srq *spdk_rdma_srq_create(struct spdk_rdma_srq_init_attr *init_attr);
+struct spdk_rdma_provider_srq *spdk_rdma_provider_srq_create(struct spdk_rdma_provider_srq_init_attr
+		*init_attr);
 
 /**
  * Destroy RDMA SRQ
@@ -103,7 +104,7 @@ struct spdk_rdma_srq *spdk_rdma_srq_create(struct spdk_rdma_srq_init_attr *init_
  * \param rdma_srq Pointer to SRQ
  * \return 0 on succes, errno on failure
  */
-int spdk_rdma_srq_destroy(struct spdk_rdma_srq *rdma_srq);
+int spdk_rdma_provider_srq_destroy(struct spdk_rdma_provider_srq *rdma_srq);
 
 /**
  * Append the given recv wr structure to the SRQ's outstanding recv list.
@@ -113,7 +114,8 @@ int spdk_rdma_srq_destroy(struct spdk_rdma_srq *rdma_srq);
  * \param first pointer to the first Work Request
  * \return true if there were no outstanding WRs before, false otherwise
  */
-bool spdk_rdma_srq_queue_recv_wrs(struct spdk_rdma_srq *rdma_srq, struct ibv_recv_wr *first);
+bool spdk_rdma_provider_srq_queue_recv_wrs(struct spdk_rdma_provider_srq *rdma_srq,
+		struct ibv_recv_wr *first);
 
 /**
  * Submit all queued receive Work Request
@@ -122,7 +124,8 @@ bool spdk_rdma_srq_queue_recv_wrs(struct spdk_rdma_srq *rdma_srq, struct ibv_rec
  * \param bad_wr Stores a pointer to the first failed WR if this function return nonzero value
  * \return 0 on succes, errno on failure
  */
-int spdk_rdma_srq_flush_recv_wrs(struct spdk_rdma_srq *rdma_srq, struct ibv_recv_wr **bad_wr);
+int spdk_rdma_provider_srq_flush_recv_wrs(struct spdk_rdma_provider_srq *rdma_srq,
+		struct ibv_recv_wr **bad_wr);
 
 /**
  * Create RDMA provider specific qpair
@@ -131,8 +134,8 @@ int spdk_rdma_srq_flush_recv_wrs(struct spdk_rdma_srq *rdma_srq, struct ibv_recv
  * \param qp_attr Pointer to qpair init attributes
  * \return Pointer to a newly created qpair on success or NULL on failure
  */
-struct spdk_rdma_qp *spdk_rdma_qp_create(struct rdma_cm_id *cm_id,
-		struct spdk_rdma_qp_init_attr *qp_attr);
+struct spdk_rdma_provider_qp *spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
+		struct spdk_rdma_provider_qp_init_attr *qp_attr);
 
 /**
  * Accept a connection request. Called by the passive side (NVMEoF target)
@@ -141,7 +144,8 @@ struct spdk_rdma_qp *spdk_rdma_qp_create(struct rdma_cm_id *cm_id,
  * \param conn_param Optional information needed to establish the connection
  * \return 0 on success, errno on failure
  */
-int spdk_rdma_qp_accept(struct spdk_rdma_qp *spdk_rdma_qp, struct rdma_conn_param *conn_param);
+int spdk_rdma_provider_qp_accept(struct spdk_rdma_provider_qp *spdk_rdma_qp,
+				 struct rdma_conn_param *conn_param);
 
 /**
  * Complete the connection process, must be called by the active
@@ -150,14 +154,14 @@ int spdk_rdma_qp_accept(struct spdk_rdma_qp *spdk_rdma_qp, struct rdma_conn_para
  * \param spdk_rdma_qp Pointer to SPDK RDMA qpair
  * \return 0 on success, errno on failure
  */
-int spdk_rdma_qp_complete_connect(struct spdk_rdma_qp *spdk_rdma_qp);
+int spdk_rdma_provider_qp_complete_connect(struct spdk_rdma_provider_qp *spdk_rdma_qp);
 
 /**
  * Destroy RDMA provider specific qpair
  *
  * \param spdk_rdma_qp Pointer to SPDK RDMA qpair to be destroyed
  */
-void spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp);
+void spdk_rdma_provider_qp_destroy(struct spdk_rdma_provider_qp *spdk_rdma_qp);
 
 /**
  * Disconnect a connection and transition associated qpair to error state.
@@ -165,7 +169,7 @@ void spdk_rdma_qp_destroy(struct spdk_rdma_qp *spdk_rdma_qp);
  *
  * \param spdk_rdma_qp Pointer to qpair to be disconnected
  */
-int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp);
+int spdk_rdma_provider_qp_disconnect(struct spdk_rdma_provider_qp *spdk_rdma_qp);
 
 /**
  * Append the given send wr structure to the qpair's outstanding sends list.
@@ -175,7 +179,8 @@ int spdk_rdma_qp_disconnect(struct spdk_rdma_qp *spdk_rdma_qp);
  * \param first Pointer to the first Work Request
  * \return true if there were no outstanding WRs before, false otherwise
  */
-bool spdk_rdma_qp_queue_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr *first);
+bool spdk_rdma_provider_qp_queue_send_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
+		struct ibv_send_wr *first);
 
 /**
  * Submit all queued send Work Request
@@ -184,7 +189,8 @@ bool spdk_rdma_qp_queue_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_s
  * \param bad_wr Stores a pointer to the first failed WR if this function return nonzero value
  * \return 0 on succes, errno on failure
  */
-int spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_send_wr **bad_wr);
+int spdk_rdma_provider_qp_flush_send_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
+		struct ibv_send_wr **bad_wr);
 
 /**
  * Append the given recv wr structure to the qpair's outstanding recv list.
@@ -194,7 +200,8 @@ int spdk_rdma_qp_flush_send_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_se
  * \param first Pointer to the first Work Request
  * \return true if there were no outstanding WRs before, false otherwise
  */
-bool spdk_rdma_qp_queue_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_recv_wr *first);
+bool spdk_rdma_provider_qp_queue_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
+		struct ibv_recv_wr *first);
 
 /**
  * Submit all queued recv Work Request
@@ -202,7 +209,8 @@ bool spdk_rdma_qp_queue_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_r
  * \param bad_wr Stores a pointer to the first failed WR if this function return nonzero value
  * \return 0 on succes, errno on failure
  */
-int spdk_rdma_qp_flush_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_recv_wr **bad_wr);
+int spdk_rdma_provider_qp_flush_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
+		struct ibv_recv_wr **bad_wr);
 
 /**
  * Create RDMA provider specific CQ
@@ -210,14 +218,15 @@ int spdk_rdma_qp_flush_recv_wrs(struct spdk_rdma_qp *spdk_rdma_qp, struct ibv_re
  * \param cq_attr Pointer to CQ init attributes
  * \return Pointer to a newly created CQ on success or NULL on failure
  */
-struct spdk_rdma_cq *spdk_rdma_cq_create(struct spdk_rdma_cq_init_attr *cq_attr);
+struct spdk_rdma_provider_cq *spdk_rdma_provider_cq_create(struct spdk_rdma_provider_cq_init_attr
+		*cq_attr);
 
 /**
  * Destroy RDMA provider specific CQ
  *
  * \param rdma_cq Pointer to SPDK RDMA CQ to be destroyed
  */
-void spdk_rdma_cq_destroy(struct spdk_rdma_cq *rdma_cq);
+void spdk_rdma_provider_cq_destroy(struct spdk_rdma_provider_cq *rdma_cq);
 
 /**
  * Resize Completion Queue
@@ -226,7 +235,7 @@ void spdk_rdma_cq_destroy(struct spdk_rdma_cq *rdma_cq);
  * \param cqe New CQ size
  * \return 0 on succes, errno on failure
  */
-int spdk_rdma_cq_resize(struct spdk_rdma_cq *rdma_cq, int cqe);
+int spdk_rdma_provider_cq_resize(struct spdk_rdma_provider_cq *rdma_cq, int cqe);
 
 /**
  * Poll Completion Queue, save up to \b num_entries into \b wc array
@@ -236,7 +245,8 @@ int spdk_rdma_cq_resize(struct spdk_rdma_cq *rdma_cq, int cqe);
  * \param wc Array of work completions to be filled by this function
  * \return number of polled completions on succes, negated errno on failure
  */
-int spdk_rdma_cq_poll(struct spdk_rdma_cq *rdma_cq, int num_entries, struct ibv_wc *wc);
+int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entries,
+			       struct ibv_wc *wc);
 
 struct spdk_accel_sequence;
 
@@ -246,14 +256,14 @@ struct spdk_accel_sequence;
  * \param qp Qpair object
  * return true if accel sequence is supported
  */
-bool spdk_rdma_accel_sequence_supported(struct spdk_rdma_qp *qp);
+bool spdk_rdma_provider_accel_sequence_supported(struct spdk_rdma_provider_qp *qp);
 
 /**
  * Get a size of per IO context to be used by rdma library
  *
  * \return number of bytes per IO context
  */
-size_t spdk_rdma_get_io_context_size(void);
+size_t spdk_rdma_provider_get_io_context_size(void);
 
 /**
  * Prototype of a function to be called when accel sequence completes.
@@ -261,46 +271,46 @@ size_t spdk_rdma_get_io_context_size(void);
  * \param cb_arg User context
  * \param status Status of accel sequence execution
  */
-typedef void (*spdk_rdma_accel_seq_cb)(void *cb_arg, int status);
+typedef void (*spdk_rdma_provider_accel_seq_cb)(void *cb_arg, int status);
 
 /**
  * Execute accel sequence. Result is a memory key which is stored in the \b rdma_io_ctx and can later be retrieved
- * with \ref spdk_rdma_accel_seq_get_translation. Result is always a single memory key, so the whole payload is
+ * with \ref spdk_rdma_provider_accel_seq_get_translation. Result is always a single memory key, so the whole payload is
  * virtually contiguous.
  *
- * Note: \ref spdk_rdma_accel_sequence_supported must return true to work with accel sequence
+ * Note: \ref spdk_rdma_provider_accel_sequence_supported must return true to work with accel sequence
  *
  * \param qp Qpair object
- * \param rdma_io_ctx IO context of \ref spdk_rdma_get_io_context_size size
+ * \param rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size
  * \param seq Accel sequence to execute
  * \param cb_fn Function to call on completion
  * \param cb_ctx Context to be passed to cb_fn
  * \return 0 on success, negated errno on failure
  */
-int spdk_rdma_accel_sequence_finish(struct spdk_rdma_qp *qp, void *rdma_io_ctx,
-				    struct spdk_accel_sequence *seq, spdk_rdma_accel_seq_cb cb_fn, void *cb_ctx);
+int spdk_rdma_provider_accel_sequence_finish(struct spdk_rdma_provider_qp *qp, void *rdma_io_ctx,
+		struct spdk_accel_sequence *seq, spdk_rdma_provider_accel_seq_cb cb_fn, void *cb_ctx);
 
 /**
  * Get memory keys which are result of accel sequence. \b addr parameter might be changed.
  *
- * Note: \ref spdk_rdma_accel_sequence_finish must be successfully completed before calling this function
+ * Note: \ref spdk_rdma_provider_accel_sequence_finish must be successfully completed before calling this function
  *
- * \param rdma_io_ctx IO context of \ref spdk_rdma_get_io_context_size size
+ * \param rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size
  * \param[in/out] translation Memory translation. The caller must fill \b addr and \b length fields before calling
  * this function. This function may update these values.
  * \return 0 on success, negated errno on failure
  */
-int spdk_rdma_accel_seq_get_translation(void *rdma_io_ctx,
-					struct  spdk_rdma_memory_translation_ctx *translation);
+int spdk_rdma_provider_accel_seq_get_translation(void *rdma_io_ctx,
+		struct  spdk_rdma_provider_memory_translation_ctx *translation);
 
 /**
  * Release resources (e.g. memory key) acquired during accel sequence execution.
  *
- * Note: must be caled only when \ref spdk_rdma_accel_sequence_finish returns 0.
+ * Note: must be caled only when \ref spdk_rdma_provider_accel_sequence_finish returns 0.
  *
- * \param _rdma_io_ctx IO context of \ref spdk_rdma_get_io_context_size size which was used in \ref spdk_rdma_accel_sequence_finish
+ * \param _rdma_io_ctx IO context of \ref spdk_rdma_provider_get_io_context_size size which was used in \ref spdk_rdma_provider_accel_sequence_finish
  * \return 0 on success, negated errno on failure
  */
-int spdk_rdma_accel_sequence_release(struct spdk_rdma_qp *qp, void *_rdma_io_ctx);
+int spdk_rdma_provider_accel_sequence_release(struct spdk_rdma_provider_qp *qp, void *_rdma_io_ctx);
 
 #endif /* SPDK_RDMA_H */

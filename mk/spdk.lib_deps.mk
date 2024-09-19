@@ -36,9 +36,9 @@ endif
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
 DEPDIRS-rdma_utils := log util
-DEPDIRS-rdma := log util dma
+DEPDIRS-rdma_provider := log util
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-rdma += accel mlx5
+DEPDIRS-rdma_provider += accel mlx5
 endif
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
@@ -48,7 +48,7 @@ ifeq ($(OS),Linux)
 DEPDIRS-nvme += vfio_user
 endif
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvme += rdma rdma_utils
+DEPDIRS-nvme += rdma_provider rdma_utils
 endif
 ifeq ($(CONFIG_XLIO),y)
 DEPDIRS-nvme += xlio
@@ -78,7 +78,7 @@ DEPDIRS-ublk := log util thread $(JSON_LIBS) bdev
 endif
 DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvmf += rdma rdma_utils
+DEPDIRS-nvmf += rdma_provider rdma_utils
 endif
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 DEPDIRS-mlx5 = log rdma_utils util
@@ -130,7 +130,7 @@ DEPDIRS-env_dpdk_rpc := $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util
 DEPDIRS-sock_uring := log sock util
-DEPDIRS-sock_xlio := log sock util rdma env_dpdk event xlio
+DEPDIRS-sock_xlio := log sock util rdma_provider env_dpdk event xlio
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util json
