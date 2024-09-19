@@ -8,9 +8,12 @@
 #include <doca_dev.h>
 #include <doca_pe.h>
 #include <doca_ctx.h>
+#include <doca_comch_producer.h>
 #include <doca_sta.h>
 #include <doca_sta_be.h>
 #include <doca_sta_subsystem.h>
+#include <doca_sta_io.h>
+#include <doca_sta_io_qp.h>
 #include <infiniband/mlx5dv.h>
 
 #include "spdk/stdinc.h"
@@ -342,8 +345,18 @@ struct spdk_nvmf_rdma_ibv_event_ctx {
 	STAILQ_ENTRY(spdk_nvmf_rdma_ibv_event_ctx)	link;
 };
 
-struct spdk_nvmf_rdma_qpair {
+enum spdk_nvmf_common_qpair_type {
+	SPDK_NVMF_COMMON_QPAIR_RDMA,
+	SPDK_NVMF_COMMON_QPAIR_OFFLOAD
+};
+
+struct spdk_nvmf_common_qpair {
 	struct spdk_nvmf_qpair			qpair;
+	enum spdk_nvmf_common_qpair_type	type;
+};
+
+struct spdk_nvmf_rdma_qpair {
+	struct spdk_nvmf_common_qpair		common;
 
 	struct spdk_nvmf_rdma_device		*device;
 	struct spdk_nvmf_rdma_poller		*poller;
@@ -427,6 +440,16 @@ struct spdk_nvmf_rdma_qpair {
 	bool					to_close;
 };
 
+static inline struct spdk_nvmf_rdma_qpair *
+nvmf_rdma_qpair_get(struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_common_qpair *cqpair;
+
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+	assert(cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA);
+	return SPDK_CONTAINEROF(cqpair, struct spdk_nvmf_rdma_qpair, common);
+}
+
 struct spdk_nvmf_rdma_poller_stat {
 	uint64_t				completions;
 	uint64_t				polls;
@@ -470,6 +493,56 @@ struct spdk_nvmf_rdma_poller {
 	TAILQ_ENTRY(spdk_nvmf_rdma_poller)	link;
 };
 
+struct spdk_nvmf_offload_poller;
+
+struct spdk_nvmf_offload_qpair {
+	struct spdk_nvmf_common_qpair		common;
+	struct spdk_nvmf_rdma_device		*device;
+	doca_sta_qp_handle_t			handle;
+	struct spdk_nvmf_rdma_subsystem		*rsubsystem;
+	struct spdk_nvmf_offload_poller		*opoller;
+	struct rdma_cm_id			*cm_id;
+	struct rdma_cm_id			*listen_id;
+
+	/* The maximum number of I/O outstanding on this connection at one time */
+	uint16_t				max_queue_depth;
+
+	/* The maximum number of active RDMA READ and ATOMIC operations at one time */
+	uint16_t				max_read_depth;
+
+	/*
+	 * io_channel which is used to destroy qpair when it is removed from poll group
+	 */
+	struct spdk_io_channel			*destruct_channel;
+
+	/* Indicate that nvmf_rdma_close_qpair is called */
+	bool					to_close;
+	struct doca_comch_producer_task_send	*destroy_task;
+
+	RB_ENTRY(spdk_nvmf_offload_qpair)       node;
+};
+
+static inline struct spdk_nvmf_offload_qpair *
+nvmf_offload_qpair_get(struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_common_qpair *cqpair;
+
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+	assert(cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD);
+	return SPDK_CONTAINEROF(cqpair, struct spdk_nvmf_offload_qpair, common);
+}
+
+struct spdk_nvmf_offload_poller {
+	struct spdk_nvmf_rdma_poll_group	*group;
+	struct doca_pe				*pe;
+	struct doca_sta_io			*sta_io;
+	struct doca_ctx				*io_ctx;
+	enum doca_ctx_states			state;
+	bool					need_destroy;
+
+	RB_HEAD(offload_qpairs_tree, spdk_nvmf_offload_qpair)	qpairs;
+};
+
 struct spdk_nvmf_rdma_poll_group_stat {
 	uint64_t				pending_data_buffer;
 };
@@ -478,6 +551,7 @@ struct spdk_nvmf_rdma_poll_group {
 	struct spdk_nvmf_transport_poll_group		group;
 	struct spdk_nvmf_rdma_poll_group_stat		stat;
 	TAILQ_HEAD(, spdk_nvmf_rdma_poller)		pollers;
+	struct spdk_nvmf_offload_poller			*offload_poller;
 	TAILQ_ENTRY(spdk_nvmf_rdma_poll_group)		link;
 };
 
@@ -685,6 +759,14 @@ RB_GENERATE_STATIC(qpairs_tree, spdk_nvmf_rdma_qpair, node, nvmf_rdma_qpair_comp
 static bool nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				      struct spdk_nvmf_rdma_request *rdma_req);
 
+static int
+nvmf_offload_qpair_compare(struct spdk_nvmf_offload_qpair *oqpair1, struct spdk_nvmf_offload_qpair *oqpair2)
+{
+	return oqpair1->handle < oqpair2->handle ? -1 : oqpair1->handle > oqpair2->handle;
+}
+
+RB_GENERATE_STATIC(offload_qpairs_tree, spdk_nvmf_offload_qpair, node, nvmf_offload_qpair_compare);
+
 static void _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 				 struct spdk_nvmf_rdma_poller *rpoller);
 
@@ -759,7 +841,7 @@ nvmf_rdma_update_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair) {
 	rc = nvmf_rdma_check_ibv_state(new_state);
 	if (rc)
 	{
-		SPDK_ERRLOG("QP#%d: bad state updated: %u, maybe hardware issue\n", rqpair->qpair.qid, new_state);
+		SPDK_ERRLOG("QP#%d: bad state updated: %u, maybe hardware issue\n", rqpair->common.qpair.qid, new_state);
 		/*
 		 * IBV_QPS_UNKNOWN undefined if lib version smaller than libibverbs-1.1.8
 		 * IBV_QPS_UNKNOWN is the enum element after IBV_QPS_ERR
@@ -837,7 +919,7 @@ nvmf_rdma_dump_qpair_contents(struct spdk_nvmf_rdma_qpair *rqpair)
 {
 	int i;
 
-	SPDK_ERRLOG("Dumping contents of queue pair (QID %d)\n", rqpair->qpair.qid);
+	SPDK_ERRLOG("Dumping contents of queue pair (QID %d)\n", rqpair->common.qpair.qid);
 	for (i = 0; i < rqpair->max_queue_depth; i++) {
 		if (rqpair->resources->reqs[i].state != RDMA_REQUEST_STATE_FREE) {
 			nvmf_rdma_dump_request(&rqpair->resources->reqs[i]);
@@ -964,7 +1046,7 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 		rdma_req = &resources->reqs[i];
 
 		if (opts->qpair != NULL) {
-			rdma_req->req.qpair = &opts->qpair->qpair;
+			rdma_req->req.qpair = &opts->qpair->common.qpair;
 		} else {
 			rdma_req->req.qpair = NULL;
 		}
@@ -1045,7 +1127,7 @@ nvmf_rdma_qpair_destroy(struct spdk_nvmf_rdma_qpair *rqpair)
 	spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_DESTROY, 0, 0, (uintptr_t)rqpair);
 
 	if (rqpair->qd != 0) {
-		struct spdk_nvmf_qpair *qpair = &rqpair->qpair;
+		struct spdk_nvmf_qpair *qpair = &rqpair->common.qpair;
 		struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(qpair->transport,
 				struct spdk_nvmf_rdma_transport, transport);
 		struct spdk_nvmf_rdma_request *req;
@@ -1175,7 +1257,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	struct spdk_nvmf_rdma_device		*device;
 	struct spdk_rdma_qp_init_attr		qp_init_attr = {};
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(qpair);
 	device = rqpair->device;
 
 	qp_init_attr.qp_context	= rqpair;
@@ -1248,12 +1330,68 @@ error:
 	return -1;
 }
 
+static int
+nvmf_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
+{
+	struct spdk_nvmf_offload_poller *poller = oqpair->opoller;
+	doca_error_t drc;
+
+	if (oqpair->handle) {
+		drc = doca_sta_io_qp_destroy(poller->sta_io, oqpair->handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Unable to destroy DOCA STA IO QP: %s\n", doca_error_get_descr(drc));
+			return -EINVAL;
+		}
+	}
+
+	if (oqpair->destruct_channel) {
+		spdk_put_io_channel(oqpair->destruct_channel);
+		oqpair->destruct_channel = NULL;
+	}
+
+	free(oqpair);
+
+	return 0;
+}
+
+static int
+nvmf_offload_qpair_initialize(struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_offload_qpair *oqpair;
+	struct spdk_nvmf_offload_poller *opoller;
+	doca_error_t drc;
+
+	oqpair = nvmf_offload_qpair_get(qpair);
+	opoller = oqpair->opoller;
+
+	drc = doca_sta_io_qp_connect(opoller->sta_io, oqpair->device->doca_dev, oqpair->cm_id,
+				     oqpair->rsubsystem->handle, &oqpair->handle);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Cannot connect offload qpair: %s\n", doca_error_get_descr(drc));
+		goto error;
+	}
+
+	drc = doca_sta_io_qp_connect_established(opoller->sta_io, oqpair->handle);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to establish connection: %s\n", doca_error_get_descr(drc));
+		goto error;
+	}
+
+
+	return 0;
+
+error:
+	rdma_destroy_id(oqpair->cm_id);
+	oqpair->cm_id = NULL;
+	return -1;
+}
+
 /* Append the given recv wr structure to the resource structs outstanding recvs list. */
 /* This function accepts either a single wr or the first wr in a linked list. */
 static void
 nvmf_rdma_qpair_queue_recv_wrs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_recv_wr *first)
 {
-	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
+	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->common.qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
 	if (rqpair->srq != NULL) {
@@ -1279,8 +1417,8 @@ request_transfer_in(struct spdk_nvmf_request *req)
 
 	qpair = req->qpair;
 	rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
-	rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
+	rqpair = nvmf_rdma_qpair_get(qpair);
+	rtransport = SPDK_CONTAINEROF(rqpair->common.qpair.transport,
 				      struct spdk_nvmf_rdma_transport, transport);
 
 	assert(req->xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER);
@@ -1357,8 +1495,8 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	qpair = req->qpair;
 	rsp = &req->rsp->nvme_cpl;
 	rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
-	rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
+	rqpair = nvmf_rdma_qpair_get(qpair);
+	rtransport = SPDK_CONTAINEROF(rqpair->common.qpair.transport,
 				      struct spdk_nvmf_rdma_transport, transport);
 
 	/* Advance our sq_head pointer */
@@ -1465,6 +1603,8 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 {
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_rdma_qpair	*rqpair = NULL;
+	struct spdk_nvmf_offload_qpair	*oqpair = NULL;
+	struct spdk_nvmf_qpair		*qpair = NULL;
 	struct spdk_nvmf_rdma_port	*port;
 	struct rdma_conn_param		*rdma_param = NULL;
 	const struct spdk_nvmf_rdma_request_private_data *private_data = NULL;
@@ -1555,27 +1695,48 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	SPDK_DEBUGLOG(rdma_offload, "Final Negotiated Queue Depth: %d R/W Depth: %d\n",
 		      max_queue_depth, max_read_depth);
 
-	rqpair = calloc(1, sizeof(struct spdk_nvmf_rdma_qpair));
-	if (rqpair == NULL) {
-		SPDK_ERRLOG("Could not allocate new connection.\n");
-		nvmf_rdma_event_reject(event->id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
-		return -1;
-	}
+	if (private_data->qid == 0) {
+		rqpair = calloc(1, sizeof(struct spdk_nvmf_rdma_qpair));
+		if (rqpair == NULL) {
+			SPDK_ERRLOG("Could not allocate new connection.\n");
+			nvmf_rdma_event_reject(event->id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
+			return -1;
+		}
 
-	rqpair->device = port->device;
-	rqpair->max_queue_depth = max_queue_depth;
-	rqpair->max_read_depth = max_read_depth;
-	rqpair->cm_id = event->id;
-	rqpair->listen_id = event->listen_id;
-	rqpair->qpair.transport = transport;
-	STAILQ_INIT(&rqpair->ibv_events);
+		rqpair->common.type = SPDK_NVMF_COMMON_QPAIR_RDMA;
+		rqpair->device = port->device;
+		rqpair->max_queue_depth = max_queue_depth;
+		rqpair->max_read_depth = max_read_depth;
+		rqpair->cm_id = event->id;
+		rqpair->listen_id = event->listen_id;
+		STAILQ_INIT(&rqpair->ibv_events);
+
+		qpair = &rqpair->common.qpair;
+	} else {
+		oqpair = calloc(1, sizeof(struct spdk_nvmf_offload_qpair));
+		if (oqpair == NULL) {
+			SPDK_ERRLOG("Could not allocate new connection.\n");
+			nvmf_rdma_event_reject(event->id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
+			return -1;
+		}
+		oqpair->common.type = SPDK_NVMF_COMMON_QPAIR_OFFLOAD;
+		oqpair->device = port->device;
+		oqpair->max_queue_depth = max_queue_depth;
+		oqpair->max_read_depth = max_read_depth;
+		oqpair->cm_id = event->id;
+		oqpair->listen_id = event->listen_id;
+		oqpair->rsubsystem = nvmf_rdma_find_subsystem(rtransport);
+
+		qpair = &oqpair->common.qpair;
+	}
+	qpair->transport = transport;
+	event->id->context = qpair;
+
 	/* use qid from the private data to determine the qpair type
 	   qid will be set to the appropriate value when the controller is created */
-	rqpair->qpair.qid = private_data->qid;
+	qpair->qid = private_data->qid;
 
-	event->id->context = &rqpair->qpair;
-
-	spdk_nvmf_tgt_new_qpair(transport->tgt, &rqpair->qpair);
+	spdk_nvmf_tgt_new_qpair(transport->tgt, qpair);
 
 	return 0;
 }
@@ -1840,7 +2001,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 	uint32_t				num_wrs = 1;
 	uint32_t				length;
 
-	rqpair = SPDK_CONTAINEROF(req->qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(req->qpair);
 	rgroup = rqpair->poller->group;
 
 	/* rdma wr specifics */
@@ -1926,7 +2087,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	uint32_t				i;
 	int					rc;
 
-	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 	rgroup = rqpair->poller->group;
 
 	inline_segment = &req->cmd->nvme_cmd.dptr.sgl1;
@@ -2148,7 +2309,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	struct spdk_nvmf_rdma_qpair		*rqpair;
 	struct spdk_nvmf_rdma_poll_group	*rgroup;
 
-	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 	if (rdma_req->req.data_from_pool) {
 		rgroup = rqpair->poller->group;
 
@@ -2305,7 +2466,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 	int				data_posted;
 	uint32_t			num_blocks, num_rdma_reads_available, qdepth;
 
-	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 	device = rqpair->device;
 	rgroup = rqpair->poller->group;
 
@@ -2313,7 +2474,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 	/* If the queue pair is in an error state, force the request to the completed state
 	 * to release resources. */
-	if (rqpair->ibv_state == IBV_QPS_ERR || rqpair->qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
+	if (rqpair->ibv_state == IBV_QPS_ERR || rqpair->common.qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
 		switch (rdma_req->state) {
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
 			STAILQ_REMOVE(&rgroup->group.pending_buf_queue, &rdma_req->req, spdk_nvmf_request, buf_link);
@@ -2354,7 +2515,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			memset(rdma_req->req.rsp, 0, sizeof(*rdma_req->req.rsp));
 			rdma_req->transfer_wr = &rdma_req->data.wr;
 
-			if (rqpair->ibv_state == IBV_QPS_ERR  || rqpair->qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
+			if (rqpair->ibv_state == IBV_QPS_ERR  || rqpair->common.qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
 				rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 				break;
 			}
@@ -2488,7 +2649,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 					if (rc != 0) {
 						SPDK_ERRLOG("DIF generation failed\n");
 						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-						spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+						spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 						break;
 					}
 				}
@@ -4044,7 +4205,7 @@ nvmf_rdma_qpair_process_pending(struct spdk_nvmf_rdma_transport *rtransport,
 		STAILQ_REMOVE_HEAD(&resources->incoming_queue, link);
 
 		if (rqpair->srq != NULL) {
-			rdma_req->req.qpair = &rdma_req->recv->qpair->qpair;
+			rdma_req->req.qpair = &rdma_req->recv->qpair->common.qpair;
 			rdma_req->recv->qpair->qd++;
 		} else {
 			rqpair->qd++;
@@ -4087,7 +4248,7 @@ nvmf_rdma_can_ignore_last_wqe_reached(struct spdk_nvmf_rdma_device *device)
 static void
 nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 {
-	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
+	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->common.qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
 	nvmf_rdma_qpair_process_pending(rtransport, rqpair, true);
@@ -4117,7 +4278,7 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 		return;
 	}
 
-	assert(rqpair->qpair.state == SPDK_NVMF_QPAIR_ERROR);
+	assert(rqpair->common.qpair.state == SPDK_NVMF_QPAIR_ERROR);
 
 	nvmf_rdma_qpair_destroy(rqpair);
 }
@@ -4126,6 +4287,7 @@ static int
 nvmf_rdma_disconnect(struct rdma_cm_event *evt, bool *event_acked)
 {
 	struct spdk_nvmf_qpair		*qpair;
+	struct spdk_nvmf_common_qpair   *cqpair;
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 
 	if (evt->id == NULL) {
@@ -4142,11 +4304,13 @@ nvmf_rdma_disconnect(struct rdma_cm_event *evt, bool *event_acked)
 	rdma_ack_cm_event(evt);
 	*event_acked = true;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		rqpair = nvmf_rdma_qpair_get(qpair);
+		spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_DISCONNECT, 0, 0, (uintptr_t)rqpair);
+	}
 
-	spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_DISCONNECT, 0, 0, (uintptr_t)rqpair);
-
-	spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+	spdk_nvmf_qpair_disconnect(qpair, NULL, NULL);
 
 	return 0;
 }
@@ -4184,7 +4348,7 @@ nvmf_rdma_disconnect_qpairs_on_port(struct spdk_nvmf_rdma_transport *rtransport,
 		TAILQ_FOREACH(rpoller, &rgroup->pollers, link) {
 			RB_FOREACH(rqpair, qpairs_tree, &rpoller->qpairs) {
 				if (rqpair->listen_id == port->id) {
-					spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+					spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 				}
 			}
 		}
@@ -4412,8 +4576,8 @@ nvmf_rdma_send_qpair_async_event(struct spdk_nvmf_rdma_qpair *rqpair,
 	struct spdk_thread *thr = NULL;
 	int rc;
 
-	if (rqpair->qpair.group) {
-		thr = rqpair->qpair.group->thread;
+	if (rqpair->common.qpair.group) {
+		thr = rqpair->common.qpair.group->thread;
 	} else if (rqpair->destruct_channel) {
 		thr = spdk_io_channel_get_thread(rqpair->destruct_channel);
 	}
@@ -4478,7 +4642,7 @@ nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 			spdk_trace_record(TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT, 0, 0,
 					  (uintptr_t)rqpair, event.event_type);
 			nvmf_rdma_update_ibv_state(rqpair);
-			spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+			spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 			break;
 		case IBV_EVENT_QP_LAST_WQE_REACHED:
 			/* This event only occurs for shared receive queues. */
@@ -4496,7 +4660,7 @@ nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 			spdk_trace_record(TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT, 0, 0,
 					  (uintptr_t)rqpair, event.event_type);
 			if (nvmf_rdma_update_ibv_state(rqpair) == IBV_QPS_ERR) {
-				spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+				spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 			}
 			break;
 		case IBV_EVENT_QP_REQ_ERR:
@@ -4753,6 +4917,166 @@ _nvmf_rdma_register_poller_in_group(void *c)
 	}
 }
 
+static void
+nvmf_sta_io_state_changed_cb(const union doca_data user_data,
+			     struct doca_ctx *ctx,
+			     enum doca_ctx_states prev_state,
+			     enum doca_ctx_states next_state)
+{
+	struct spdk_nvmf_offload_poller *opoller = user_data.ptr;
+
+	SPDK_DEBUGLOG(rdma_offload, "DOCA STA IO Context state is chnaged %s -> %s\n",
+		      nvmf_rdma_sta_state_to_str(prev_state),
+		      nvmf_rdma_sta_state_to_str(next_state));
+
+	opoller->state = next_state;
+}
+
+static void
+nvmf_sta_io_disconnect_comp_hadler(struct doca_comch_producer_task_send *task,
+				   union doca_data task_user_data)
+{
+	struct spdk_nvmf_offload_qpair *oqpair = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	SPDK_DEBUGLOG(rdma_offload, "Disconect task completed for IO QP 0x%lx\n", oqpair->handle);
+	nvmf_offload_qpair_destroy(oqpair);
+}
+
+static void
+nvmf_sta_io_disconnect_error_hadler(struct doca_comch_producer_task_send *task,
+				    union doca_data task_user_data)
+{
+	struct spdk_nvmf_offload_qpair *oqpair = task_user_data.ptr;
+
+	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	SPDK_ERRLOG("Disconect task failed for IO QP 0x%lx\n", oqpair->handle);
+}
+
+static int
+nvmf_offload_poller_destroy(struct spdk_nvmf_offload_poller *opoller)
+{
+	doca_error_t drc;
+
+	if (opoller->io_ctx != NULL && opoller->state == DOCA_CTX_STATE_RUNNING) {
+		drc = doca_ctx_stop(opoller->io_ctx);
+		if (DOCA_IS_ERROR(drc)) {
+			if (drc != DOCA_ERROR_IN_PROGRESS) {
+				SPDK_ERRLOG("Unable to stop DOCA STA IO: %s\n", doca_error_get_descr(drc));
+				return -EINVAL;
+			}
+			assert(opoller->state == DOCA_CTX_STATE_STOPPING);
+			while (opoller->state == DOCA_CTX_STATE_STOPPING) {
+				doca_pe_progress(opoller->pe);
+			}
+			if (opoller->state != DOCA_CTX_STATE_IDLE) {
+				SPDK_ERRLOG("Unexpected state %s of DOCA STA IO\n",
+					    nvmf_rdma_sta_state_to_str(opoller->state));
+				return -EINVAL;
+			}
+		}
+	}
+	if (opoller->sta_io) {
+		drc = doca_sta_io_destroy(opoller->sta_io);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Unable to destroy doca_sta_io: %s\n", doca_error_get_descr(drc));
+			return -EINVAL;
+		}
+		opoller->sta_io = NULL;
+	}
+
+	if (opoller->pe) {
+		drc = doca_pe_destroy(opoller->pe);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Unable to destroy doca_pe: %s\n", doca_error_get_descr(drc));
+			return -EINVAL;
+		}
+		opoller->pe = NULL;
+	}
+	free(opoller);
+
+	return 0;
+}
+
+static int
+nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
+			   struct spdk_nvmf_rdma_poll_group *rgroup,
+			   struct spdk_nvmf_offload_poller **out_opoller)
+{
+	struct spdk_nvmf_offload_poller *opoller;
+	union doca_data udata;
+	doca_error_t drc;
+
+	opoller = calloc(1, sizeof(*opoller));
+	if (!opoller) {
+		SPDK_ERRLOG("Cannot allocate memory for offload poller context\n");
+		return -ENOMEM;
+	}
+	RB_INIT(&opoller->qpairs);
+	opoller->state = DOCA_CTX_STATE_IDLE;
+
+	drc = doca_pe_create(&opoller->pe);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to create doca_pe: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+	drc = doca_sta_io_create(rtransport->sta.sta, opoller->pe, &opoller->sta_io);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to create doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+	drc = doca_sta_io_task_disconnect_set_conf(opoller->sta_io, nvmf_sta_io_disconnect_comp_hadler,
+						   nvmf_sta_io_disconnect_error_hadler);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set disconnect handlers for doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+	opoller->io_ctx = doca_sta_io_as_doca_ctx(opoller->sta_io);
+	if (!opoller->io_ctx) {
+		SPDK_ERRLOG("Unable to get doca_ctx\n");
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
+	udata.ptr = opoller;
+	drc = doca_ctx_set_user_data(opoller->io_ctx, udata);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Unable to set udata for doca_sta_io %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+	drc = doca_ctx_set_state_changed_cb(opoller->io_ctx, nvmf_sta_io_state_changed_cb);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Unable to set state changed callback for doca_sta_io %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+	drc = doca_ctx_start(opoller->io_ctx);
+	if (DOCA_IS_ERROR(drc)) {
+		if (drc != DOCA_ERROR_IN_PROGRESS) {
+			SPDK_ERRLOG("Unable to start doca_sta_io: %s\n", doca_error_get_descr(drc));
+			nvmf_offload_poller_destroy(opoller);
+			return -EINVAL;
+		}
+
+		assert(opoller->state == DOCA_CTX_STATE_STARTING);
+		while (opoller->state == DOCA_CTX_STATE_STARTING) {
+			doca_pe_progress(opoller->pe);
+		}
+
+		if (opoller->state != DOCA_CTX_STATE_RUNNING) {
+			SPDK_NOTICELOG("Wrong DOCA STA IO state %s\n", nvmf_rdma_sta_state_to_str(opoller->state));
+			nvmf_offload_poller_destroy(opoller);
+			return -EINVAL;
+		}
+	}
+	*out_opoller = opoller;
+	return 0;
+}
+
 static void nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group);
 
 static struct spdk_nvmf_transport_poll_group *
@@ -4786,6 +5110,12 @@ nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport,
 	if (rtransport->conn_sched.next_admin_pg == NULL) {
 		rtransport->conn_sched.next_admin_pg = rgroup;
 		rtransport->conn_sched.next_io_pg = rgroup;
+	}
+
+	rc = nvmf_offload_poller_create(rtransport, rgroup, &rgroup->offload_poller);
+	if (rc) {
+		nvmf_rdma_poll_group_destroy(&rgroup->group);
+		return NULL;
 	}
 
 	return &rgroup->group;
@@ -4907,6 +5237,10 @@ nvmf_rdma_poll_group_destroy(struct spdk_nvmf_transport_poll_group *group)
 		return;
 	}
 
+	if (rgroup->offload_poller) {
+		nvmf_offload_poller_destroy(rgroup->offload_poller);
+	}
+
 	TAILQ_FOREACH_SAFE(poller, &rgroup->pollers, link, tmp) {
 		nvmf_rdma_poller_destroy(poller);
 	}
@@ -4943,19 +5277,24 @@ nvmf_rdma_qpair_reject_connection(struct spdk_nvmf_rdma_qpair *rqpair)
 	}
 }
 
-static int
-nvmf_rdma_poll_group_add(struct spdk_nvmf_transport_poll_group *group,
-			 struct spdk_nvmf_qpair *qpair)
+static void
+nvmf_offload_qpair_reject_connection(struct spdk_nvmf_offload_qpair *oqpair)
 {
-	struct spdk_nvmf_rdma_poll_group	*rgroup;
-	struct spdk_nvmf_rdma_qpair		*rqpair;
-	struct spdk_nvmf_rdma_device		*device;
-	struct spdk_nvmf_rdma_poller		*poller;
-	int					rc;
+	if (oqpair->cm_id != NULL) {
+		nvmf_rdma_event_reject(oqpair->cm_id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
+	}
+}
 
-	rgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_rdma_poll_group, group);
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+static int
+nvmf_rdma_poll_group_add_rdma_qpair(struct spdk_nvmf_rdma_poll_group *rgroup,
+				    struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_rdma_qpair	*rqpair;
+	struct spdk_nvmf_rdma_device	*device;
+	struct spdk_nvmf_rdma_poller	*poller;
+	int				rc;
 
+	rqpair = nvmf_rdma_qpair_get(qpair);
 	device = rqpair->device;
 
 	TAILQ_FOREACH(poller, &rgroup->pollers, link) {
@@ -5000,12 +5339,62 @@ nvmf_rdma_poll_group_add(struct spdk_nvmf_transport_poll_group *group,
 }
 
 static int
-nvmf_rdma_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
-			    struct spdk_nvmf_qpair *qpair)
+nvmf_rdma_poll_group_add_offload_qpair(struct spdk_nvmf_rdma_poll_group *rgroup,
+				       struct spdk_nvmf_qpair *qpair)
 {
-	struct spdk_nvmf_rdma_qpair		*rqpair;
+	struct spdk_nvmf_offload_qpair	*oqpair;
+	struct spdk_nvmf_offload_poller	*opoller;
+	int				rc;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	oqpair = nvmf_offload_qpair_get(qpair);
+	opoller = rgroup->offload_poller;
+
+	if (opoller->need_destroy) {
+		SPDK_ERRLOG("Poller is destroying.\n");
+		return -1;
+	}
+
+	oqpair->opoller = opoller;
+
+	rc = nvmf_offload_qpair_initialize(qpair);
+	if (rc < 0) {
+		SPDK_ERRLOG("Failed to initialize nvmf_rdma_qpair with qpair=%p\n", qpair);
+		oqpair->opoller = NULL;
+		return -1;
+	}
+
+	RB_INSERT(offload_qpairs_tree, &opoller->qpairs, oqpair);
+
+	return 0;
+}
+
+static int
+nvmf_rdma_poll_group_add(struct spdk_nvmf_transport_poll_group *group,
+			 struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_rdma_poll_group	*rgroup;
+	struct spdk_nvmf_common_qpair		*cqpair;
+
+	rgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_rdma_poll_group, group);
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		return nvmf_rdma_poll_group_add_rdma_qpair(rgroup, qpair);
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		return nvmf_rdma_poll_group_add_offload_qpair(rgroup, qpair);
+	}
+	SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+
+	return -1;
+}
+
+static int
+nvmf_rdma_poll_group_remove_rdma_qpair(struct spdk_nvmf_transport_poll_group *group,
+				       struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_rdma_qpair *rqpair;
+
+	rqpair = nvmf_rdma_qpair_get(qpair);
 	assert(group->transport->tgt != NULL);
 
 	rqpair->destruct_channel = spdk_get_io_channel(group->transport->tgt);
@@ -5024,13 +5413,54 @@ nvmf_rdma_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
 }
 
 static int
+nvmf_rdma_poll_group_remove_offload_qpair(struct spdk_nvmf_transport_poll_group *group,
+					  struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_offload_qpair *oqpair;
+
+	oqpair = nvmf_offload_qpair_get(qpair);
+	assert(group->transport->tgt != NULL);
+
+	oqpair->destruct_channel = spdk_get_io_channel(group->transport->tgt);
+
+	if (!oqpair->destruct_channel) {
+		SPDK_WARNLOG("failed to get io_channel, qpair %p\n", oqpair);
+		return 0;
+	}
+
+	/* Sanity check that we get io_channel on the correct thread */
+	if (qpair->group) {
+		assert(qpair->group->thread == spdk_io_channel_get_thread(oqpair->destruct_channel));
+	}
+
+	return 0;
+}
+
+static int
+nvmf_rdma_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
+			    struct spdk_nvmf_qpair *qpair)
+{
+	struct spdk_nvmf_common_qpair		*cqpair;
+
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		return nvmf_rdma_poll_group_remove_rdma_qpair(group, qpair);
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		return nvmf_rdma_poll_group_remove_offload_qpair(group, qpair);
+	}
+	SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+
+	return -1;
+}
+
+static int
 nvmf_rdma_request_free(struct spdk_nvmf_request *req)
 {
 	struct spdk_nvmf_rdma_request	*rdma_req = SPDK_CONTAINEROF(req, struct spdk_nvmf_rdma_request, req);
 	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(req->qpair->transport,
 			struct spdk_nvmf_rdma_transport, transport);
-	struct spdk_nvmf_rdma_qpair *rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair,
-					      struct spdk_nvmf_rdma_qpair, qpair);
+	struct spdk_nvmf_rdma_qpair *rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 
 	/*
 	 * AER requests are freed when a qpair is destroyed. The recv corresponding to that request
@@ -5059,8 +5489,7 @@ nvmf_rdma_request_complete(struct spdk_nvmf_request *req)
 			struct spdk_nvmf_rdma_transport, transport);
 	struct spdk_nvmf_rdma_request	*rdma_req = SPDK_CONTAINEROF(req,
 			struct spdk_nvmf_rdma_request, req);
-	struct spdk_nvmf_rdma_qpair     *rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair,
-			struct spdk_nvmf_rdma_qpair, qpair);
+	struct spdk_nvmf_rdma_qpair     *rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 
 	if (rqpair->ibv_state != IBV_QPS_ERR) {
 		/* The connection is alive, so process the request as normal */
@@ -5076,10 +5505,9 @@ nvmf_rdma_request_complete(struct spdk_nvmf_request *req)
 }
 
 static void
-nvmf_rdma_close_qpair(struct spdk_nvmf_qpair *qpair,
-		      spdk_nvmf_transport_qpair_fini_cb cb_fn, void *cb_arg)
+nvmf_rdma_close_qpair_rdma(struct spdk_nvmf_qpair *qpair, bool qpair_initialized)
 {
-	struct spdk_nvmf_rdma_qpair *rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	struct spdk_nvmf_rdma_qpair *rqpair = nvmf_rdma_qpair_get(qpair);
 
 	rqpair->to_close = true;
 
@@ -5088,7 +5516,7 @@ nvmf_rdma_close_qpair(struct spdk_nvmf_qpair *qpair,
 	 * the RDMA qp has not been initialized yet and the RDMA CM
 	 * event has not yet been acknowledged, so we need to reject it.
 	 */
-	if (rqpair->qpair.state == SPDK_NVMF_QPAIR_UNINITIALIZED) {
+	if (!qpair_initialized) {
 		nvmf_rdma_qpair_reject_connection(rqpair);
 		nvmf_rdma_qpair_destroy(rqpair);
 		return;
@@ -5099,8 +5527,69 @@ nvmf_rdma_close_qpair(struct spdk_nvmf_qpair *qpair,
 	}
 
 	nvmf_rdma_destroy_drained_qpair(rqpair);
+}
 
-	if (cb_fn) {
+static void
+nvmf_rdma_close_qpair_offload(struct spdk_nvmf_qpair *qpair, bool qpair_initialized)
+{
+	struct spdk_nvmf_offload_qpair *oqpair = nvmf_offload_qpair_get(qpair);
+	union doca_data task_user_data;
+	struct doca_task *doca_task;
+	doca_error_t drc;
+
+	oqpair->to_close = true;
+
+	/* This happens only when the qpair is disconnected before
+	 * it is added to the poll group. Since there is no poll group,
+	 * the RDMA qp has not been initialized yet and the RDMA CM
+	 * event has not yet been acknowledged, so we need to reject it.
+	 */
+	if (!qpair_initialized) {
+		nvmf_offload_qpair_reject_connection(oqpair);
+		nvmf_offload_qpair_destroy(oqpair);
+		return;
+	}
+
+	task_user_data.ptr = oqpair;
+	drc = doca_sta_io_task_disconnect_alloc_init(oqpair->opoller->sta_io, task_user_data, oqpair->handle,
+						     &oqpair->destroy_task);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to alloc disconnect task for IO QP 0x%lx: %s\n", oqpair->handle,
+			    doca_error_get_descr(drc));
+		return;
+	}
+
+	doca_task = doca_comch_producer_task_send_as_task(oqpair->destroy_task);
+	if (!doca_task) {
+		SPDK_ERRLOG("Failed to get doca_task\n");
+		return;
+	}
+
+	drc = doca_task_submit(doca_task);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to submit disconnect task for IO QP 0x%lx: %s\n", oqpair->handle,
+			    doca_error_get_descr(drc));
+	}
+}
+
+static void
+nvmf_rdma_close_qpair(struct spdk_nvmf_qpair *qpair,
+		      spdk_nvmf_transport_qpair_fini_cb cb_fn, void *cb_arg)
+{
+	struct spdk_nvmf_common_qpair *cqpair;
+	bool qpair_initialized = (qpair->state != SPDK_NVMF_QPAIR_UNINITIALIZED);
+
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
+
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		nvmf_rdma_close_qpair_rdma(qpair, qpair_initialized);
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		nvmf_rdma_close_qpair_offload(qpair, qpair_initialized);
+	} else {
+		SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+	}
+
+	if (qpair_initialized && cb_fn) {
 		cb_fn(cb_arg);
 	}
 }
@@ -5139,7 +5628,7 @@ _poller_reset_failed_recvs(struct spdk_nvmf_rdma_poller *rpoller, struct ibv_rec
 		rdma_recv->qpair->current_recv_depth++;
 		bad_recv_wr = bad_recv_wr->next;
 		SPDK_ERRLOG("Failed to post a recv for the qpair %p with errno %d\n", rdma_recv->qpair, -rc);
-		spdk_nvmf_qpair_disconnect(&rdma_recv->qpair->qpair, NULL, NULL);
+		spdk_nvmf_qpair_disconnect(&rdma_recv->qpair->common.qpair, NULL, NULL);
 	}
 }
 
@@ -5151,7 +5640,7 @@ _qp_reset_failed_recvs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_recv_wr *
 		bad_recv_wr = bad_recv_wr->next;
 		rqpair->current_recv_depth++;
 	}
-	spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+	spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 }
 
 static void
@@ -5234,9 +5723,9 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 		prev_rdma_req = cur_rdma_req;
 	}
 
-	if (rqpair->qpair.state == SPDK_NVMF_QPAIR_ACTIVE) {
+	if (rqpair->common.qpair.state == SPDK_NVMF_QPAIR_ACTIVE) {
 		/* Disconnect the connection. */
-		spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+		spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 	}
 
 }
@@ -5287,11 +5776,11 @@ nvmf_rdma_log_wc_status(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_wc *wc)
 		 * Work Requests with IBV_WC_WR_FLUSH_ERR status. Don't log an error in that case */
 		SPDK_DEBUGLOG(rdma_offload,
 			      "Error on CQ %p, (qp state %d ibv_state %d) request 0x%lu, type %s, status: (%d): %s\n",
-			      rqpair->poller->cq, rqpair->qpair.state, rqpair->ibv_state, wc->wr_id,
+			      rqpair->poller->cq, rqpair->common.qpair.state, rqpair->ibv_state, wc->wr_id,
 			      nvmf_rdma_wr_type_str(wr_type), wc->status, ibv_wc_status_str(wc->status));
 	} else {
 		SPDK_ERRLOG("Error on CQ %p, (qp state %d ibv_state %d) request 0x%lu, type %s, status: (%d): %s\n",
-			    rqpair->poller->cq, rqpair->qpair.state, rqpair->ibv_state, wc->wr_id,
+			    rqpair->poller->cq, rqpair->common.qpair.state, rqpair->ibv_state, wc->wr_id,
 			    nvmf_rdma_wr_type_str(wr_type), wc->status, ibv_wc_status_str(wc->status));
 	}
 }
@@ -5342,7 +5831,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_SEND:
 			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, rsp_wr);
-			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+			rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 
 			if (!wc[i].status) {
 				count++;
@@ -5385,7 +5874,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			if (!wc[i].status) {
 				assert(wc[i].opcode == IBV_WC_RECV);
 				if (rqpair->current_recv_depth >= rqpair->max_queue_depth) {
-					spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+					spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 					break;
 				}
 			}
@@ -5398,7 +5887,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			break;
 		case RDMA_WR_TYPE_DATA:
 			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvmf_rdma_request, data_wr);
-			rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+			rqpair = nvmf_rdma_qpair_get(rdma_req->req.qpair);
 
 			assert(rdma_req->num_outstanding_data_wr > 0);
 
@@ -5451,9 +5940,9 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 			error = true;
 
-			if (rqpair->qpair.state == SPDK_NVMF_QPAIR_ACTIVE) {
+			if (rqpair->common.qpair.state == SPDK_NVMF_QPAIR_ACTIVE) {
 				/* Disconnect the connection. */
-				spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+				spdk_nvmf_qpair_disconnect(&rqpair->common.qpair, NULL, NULL);
 			} else {
 				nvmf_rdma_destroy_drained_qpair(rqpair);
 			}
@@ -5462,7 +5951,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 
 		nvmf_rdma_qpair_process_pending(rtransport, rqpair, false);
 
-		if (rqpair->qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
+		if (rqpair->common.qpair.state != SPDK_NVMF_QPAIR_ACTIVE) {
 			nvmf_rdma_destroy_drained_qpair(rqpair);
 		}
 	}
@@ -5554,6 +6043,8 @@ nvmf_rdma_poll_group_poll(struct spdk_nvmf_transport_poll_group *group)
 		count += rc;
 	}
 
+	doca_pe_progress(rgroup->offload_poller->pe);
+
 	return count;
 }
 
@@ -5615,7 +6106,7 @@ nvmf_rdma_qpair_get_peer_trid(struct spdk_nvmf_qpair *qpair,
 {
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(qpair);
 
 	return nvmf_rdma_trid_from_cm_id(rqpair->cm_id, trid, true);
 }
@@ -5626,7 +6117,7 @@ nvmf_rdma_qpair_get_local_trid(struct spdk_nvmf_qpair *qpair,
 {
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(qpair);
 
 	return nvmf_rdma_trid_from_cm_id(rqpair->cm_id, trid, false);
 }
@@ -5637,7 +6128,7 @@ nvmf_rdma_qpair_get_listen_trid(struct spdk_nvmf_qpair *qpair,
 {
 	struct spdk_nvmf_rdma_qpair	*rqpair;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(qpair);
 
 	return nvmf_rdma_trid_from_cm_id(rqpair->listen_id, trid, false);
 }
@@ -5662,8 +6153,7 @@ _nvmf_rdma_qpair_abort_request(void *ctx)
 	struct spdk_nvmf_request *req = ctx;
 	struct spdk_nvmf_rdma_request *rdma_req_to_abort = SPDK_CONTAINEROF(
 				req->req_to_abort, struct spdk_nvmf_rdma_request, req);
-	struct spdk_nvmf_rdma_qpair *rqpair = SPDK_CONTAINEROF(req->req_to_abort->qpair,
-					      struct spdk_nvmf_rdma_qpair, qpair);
+	struct spdk_nvmf_rdma_qpair *rqpair = nvmf_rdma_qpair_get(req->req_to_abort->qpair);
 	int rc;
 
 	spdk_poller_unregister(&req->poller);
@@ -5731,7 +6221,7 @@ nvmf_rdma_qpair_abort_request(struct spdk_nvmf_qpair *qpair,
 	uint32_t i, max_req_count;
 	struct spdk_nvmf_rdma_request *rdma_req_to_abort = NULL, *rdma_req;
 
-	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	rqpair = nvmf_rdma_qpair_get(qpair);
 	rtransport = SPDK_CONTAINEROF(qpair->transport, struct spdk_nvmf_rdma_transport, transport);
 	transport = &rtransport->transport;
 
