@@ -1966,7 +1966,7 @@ lo_flush(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	int res;
+	int res, dup_fd;
 
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flush.fobject);
 	if (!fobject) {
@@ -1981,11 +1981,18 @@ lo_flush(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto bad_fhandle;
 	}
 
-	res = close(dup(fhandle->fd));
+	dup_fd = dup(fhandle->fd);
+	if (dup_fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("dup(%d) failed for " FOBJECT_FMT " (fh=%p, err=%d)\n",
+			    fhandle->fd, FOBJECT_ARGS(fobject), fhandle, res);
+		goto fop_failed;
+	}
+	res = close(dup_fd);
 	if (res) {
 		res = -errno;
-		SPDK_ERRLOG("close(dup(%d)) failed for " FOBJECT_FMT " (fh=%p, err=%d)\n",
-			    fhandle->fd, FOBJECT_ARGS(fobject), fhandle, res);
+		SPDK_ERRLOG("close(%d) failed for " FOBJECT_FMT " (fh=%p, err=%d)\n",
+			    dup_fd, FOBJECT_ARGS(fobject), fhandle, res);
 		goto fop_failed;
 	}
 
