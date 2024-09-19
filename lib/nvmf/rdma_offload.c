@@ -3267,6 +3267,12 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
                 return -EINVAL;
         }
 
+	rc = doca_sta_set_max_sta_io(rtransport->sta.sta, spdk_env_get_core_count());
+        if (rc != DOCA_SUCCESS) {
+                SPDK_ERRLOG("Failed to set max_sta_io: %s", doca_error_get_name(rc));
+                return -EINVAL;
+        }
+
 	rc = doca_ctx_start(rtransport->sta.ctx);
 	if (DOCA_IS_ERROR(rc)) {
 		if (rc != DOCA_ERROR_IN_PROGRESS) {
