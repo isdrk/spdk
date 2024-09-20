@@ -3405,6 +3405,32 @@ do_poll(struct fuse_io *fuse_io)
 	}
 }
 
+#define FALLOC_FLAGS_MAP \
+	FALLOC_FLAG(FL_KEEP_SIZE)      \
+	FALLOC_FLAG(FL_PUNCH_HOLE)     \
+	FALLOC_FLAG(FL_NO_HIDE_STALE)  \
+	FALLOC_FLAG(FL_COLLAPSE_RANGE) \
+	FALLOC_FLAG(FL_ZERO_RANGE)     \
+	FALLOC_FLAG(FL_INSERT_RANGE)   \
+	FALLOC_FLAG(FL_UNSHARE_RANGE)
+
+static uint32_t
+fuse_falloc_flags_to_fsdev(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define FALLOC_FLAG(name) \
+	if (flags & FALLOC_##name) {                \
+		result |= SPDK_FSDEV_FALLOC_##name; \
+	}
+
+	FALLOC_FLAGS_MAP;
+
+#undef FALLOC_FLAG
+
+	return result;
+}
+
 static void
 do_fallocate_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
@@ -3418,6 +3444,7 @@ do_fallocate(struct fuse_io *fuse_io)
 {
 	int err;
 	struct fuse_fallocate_in *arg;
+	uint32_t mode;
 	uint64_t fh;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
@@ -3428,10 +3455,11 @@ do_fallocate(struct fuse_io *fuse_io)
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io, arg->fh);
+	mode = fuse_falloc_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io, arg->mode));
 
 	err = spdk_fsdev_fallocate(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 				   file_object(fuse_io), file_handle(fh),
-				   fsdev_io_d2h_u32(fuse_io, arg->mode), fsdev_io_d2h_u64(fuse_io, arg->offset),
+				   mode, fsdev_io_d2h_u64(fuse_io, arg->offset),
 				   fsdev_io_d2h_u64(fuse_io, arg->length),
 				   do_fallocate_cpl_clb, fuse_io);
 	if (err) {

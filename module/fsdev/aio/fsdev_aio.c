@@ -3327,6 +3327,59 @@ bad_fhandle:
 	return res;
 }
 
+#define FALLOC_FLAGS_MAP \
+	FALLOC_FLAG(FL_KEEP_SIZE)      \
+	FALLOC_FLAG(FL_PUNCH_HOLE)     \
+	FALLOC_FLAG(FL_NO_HIDE_STALE)  \
+	FALLOC_FLAG(FL_COLLAPSE_RANGE) \
+	FALLOC_FLAG(FL_ZERO_RANGE)     \
+	FALLOC_FLAG(FL_INSERT_RANGE)   \
+	FALLOC_FLAG(FL_UNSHARE_RANGE)
+
+static uint32_t
+fsdev_falloc_flags_to_posix(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define FALLOC_FLAG(name) \
+	if (flags & SPDK_FSDEV_FALLOC_##name) { \
+		result |= FALLOC_##name;        \
+	}
+
+	FALLOC_FLAGS_MAP;
+
+#undef FALLOC_FLAG
+
+	return result;
+}
+
+static int
+lo_do_fallocate(struct aio_fsdev_file_handle *fhandle, uint32_t mode,
+		uint64_t offset, uint64_t length)
+{
+	int res;
+
+#ifdef __linux__
+	res = fallocate(fhandle->fd, mode, offset, length);
+
+	/* Standard errno-based error handling. */
+	if (res == -1) {
+		res = -errno;
+	}
+#else
+	res = posix_fallocate(fhandle->fd, offset, length);
+
+	/*
+	 * posix_fallocate() returns positive error without
+	 * setting errno.
+	 */
+	if (res) {
+		res = -res;
+	}
+#endif
+	return res;
+}
+
 static int
 lo_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -3338,11 +3391,12 @@ lo_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	uint64_t offset  = fsdev_io->u_in.fallocate.offset;
 	uint64_t length = fsdev_io->u_in.fallocate.length;
 
+#ifndef __linux__
 	if (mode) {
 		SPDK_ERRLOG("non-zero mode is not suppored\n");
-		res = -EOPNOTSUPP;
+		return -EINVAL;
 	}
-
+#endif
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fallocate.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
@@ -3356,9 +3410,10 @@ lo_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto bad_fhandle;
 	}
 
-	res = posix_fallocate(fhandle->fd, offset, length);
+	mode = fsdev_falloc_flags_to_posix(mode);
+	res = lo_do_fallocate(fhandle, mode, offset, length);
 	if (res) {
-		SPDK_ERRLOG("posix_fallocate failed for fh=%p with err=%d\n",
+		SPDK_ERRLOG("fallocate failed for fh=%p with err=%d\n",
 			    fhandle, res);
 		goto fop_failed;
 	}
