@@ -94,6 +94,7 @@ mlx5_cq_init(struct ibv_pd *pd, const struct spdk_mlx5_cq_attr *attr, struct spd
 	}
 
 	cq->hw.cq_addr = (uintptr_t)mlx5_cq.buf;
+	cq->hw.dbrec_addr = (uintptr_t)mlx5_cq.dbrec;
 	cq->hw.ci = 0;
 	cq->hw.cqe_cnt = mlx5_cq.cqe_cnt;
 	cq->hw.cqe_size = mlx5_cq.cqe_size;
@@ -697,12 +698,25 @@ spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
 	return 0;
 }
 
+static inline void
+mlx5_cq_update_consumer_index(struct spdk_mlx5_cq *cq)
+{
+	*((uint32_t *)(uintptr_t)cq->hw.dbrec_addr) = htobe32(cq->hw.ci & 0xffffff);
+}
+
 int
 spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe)
 {
 	struct mlx5dv_obj dv_obj;
 	struct mlx5dv_cq mlx5_cq;
 	int rc;
+
+	/*
+	 * The resize operation fails if the number of outstanding CQEs exceeds the new CQ size.
+	 * Since we do not update the consumer index in the poll function, we must update it here
+	 * to let the HW calculate the number of outstanding CQEs correctly.
+	 */
+	mlx5_cq_update_consumer_index(cq);
 
 	rc = ibv_resize_cq(cq->verbs_cq, cqe);
 	if (rc) {

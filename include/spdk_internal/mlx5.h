@@ -124,6 +124,7 @@ int spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct
 /* low level cq view, suitable for the direct polling, adapted from struct mlx5dv_cq */
 struct spdk_mlx5_hw_cq {
 	uint64_t cq_addr;
+	uint64_t dbrec_addr;
 	uint32_t cqe_cnt;
 	uint32_t cqe_size;
 	uint32_t ci;
