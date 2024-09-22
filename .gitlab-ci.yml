@@ -162,3 +162,65 @@ code-style-job:
     - apt-get -q update
     - ./scripts/pkgdep.sh --developer-tools
     - ./scripts/check_format.sh
+
+test-virtio-fs-app:
+  stage: test
+  tags: [vm, linux, x86_64, f39]
+  variables:
+    VIRTIO_FS_TARGET_REF: main
+    GIT_STRATEGY: none
+  rules:
+    - changes:
+      - include/spdk/fsdev*.h
+      - include/linux/virtio_fs.h
+      - include/linux/fuse_kernel.h
+      - include/linux/virtio_types.h
+      - python/spdk/rpc/fsdev.py
+      - lib/fsdev/
+      - lib/fuse_dispatcher/
+      - module/event/subsystems/fsdev/
+      - module/fsdev/
+      - test/unit/lib/fsdev/
+    - when: manual
+  script:
+    - wget http://swx-repos.mtr.labs.mlnx/repository/collectx-ci/temp/ci.env
+    - . ./ci.env
+    - set | grep VIRTIO
+    - >
+      curl -s --header "PRIVATE-TOKEN: $VIRTIO_FS_TARGET_API_TOKEN" --request POST
+      --form token=$VIRTIO_FS_TARGET_TRIGGER_TOKEN --form ref=$VIRTIO_FS_TARGET_REF
+      --form variables[SPDK_REPO_URL]="$CI_REPOSITORY_URL" --form variables[SPDK_SHA]="$CI_COMMIT_SHA"
+      --form variables[SPDK_PIPELINE_ID]="$CI_PIPELINE_ID" --form variables[SPDK_PIPELINE_URL]="$CI_PIPELINE_URL"
+      --form variables[SPDK_JOB_ID]="$CI_JOB_ID" --form variables[SPDK_JOB_URL]="$CI_JOB_URL"
+      $VIRTIO_FS_TARGET_API_V4_URL/projects/$VIRTIO_FS_TARGET_PROJECT_ID/trigger/pipeline > ./trigger.json
+    - |
+      VIRTIO_FS_PIPELINE_ID=$(cat ./trigger.json | jq .id)
+      VIRTIO_FS_PIPELINE_URL=$(cat ./trigger.json | jq -r .web_url)
+      echo virtio-fs-target app pipeline $VIRTIO_FS_PIPELINE_ID triggered. Pipeline URL: $VIRTIO_FS_PIPELINE_URL
+      echo Waiting for the pipeline to finish...
+      while true; do
+        sleep 10
+        curl -s --header "PRIVATE-TOKEN: $VIRTIO_FS_TARGET_API_TOKEN" $VIRTIO_FS_TARGET_API_V4_URL/projects/$VIRTIO_FS_TARGET_PROJECT_ID/pipelines/$VIRTIO_FS_PIPELINE_ID > ./pipeline.json
+        PIPELINE_STATUS=$(cat ./pipeline.json | jq -r .status)
+        case $PIPELINE_STATUS in
+          created | waiting_for_resource | preparing | pending | running)
+            echo "Pipeline $VIRTIO_FS_PIPELINE_ID current status: $PIPELINE_STATUS"
+            ;;
+          *)
+            echo "Pipeline $VIRTIO_FS_PIPELINE_ID finished with status: $PIPELINE_STATUS"
+            break
+            ;;
+        esac
+      done
+    - |
+      PIPELINE_STATUS=$(cat ./pipeline.json | jq -r .status)
+      if [ "$PIPELINE_STATUS" != "success" ]; then
+          echo "Pipeline $VIRTIO_FS_PIPELINE_ID failed with status: $PIPELINE_STATUS"
+          false
+      fi
+  dependencies: []
+  artifacts:
+    when: always
+    paths:
+      - trigger.json
+      - pipeline.json
