@@ -2841,14 +2841,14 @@ nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 	struct iovec iov[NVME_TCP_MAX_SGL_DESCRIPTORS + 1];
 	int iovcnt;
 	struct spdk_iov_sgl sgl;
-	uint32_t i;
-	int ret;
+	int i;
+	int ret, rc;
 
 	assert(sock != NULL);
 
 	spdk_iov_sgl_init(&sgl, iov, NVME_TCP_MAX_SGL_DESCRIPTORS + 1, pdu->rw_offset);
 
-	for (i = 0; i < pdu->data_iovcnt; i++) {
+	for (i = 0; i < (int)pdu->data_iovcnt; i++) {
 		if (!spdk_iov_sgl_append(&sgl, pdu->data_iov[i].iov_base, pdu->data_iov[i].iov_len)) {
 			goto end;
 		}
@@ -2863,30 +2863,21 @@ end:
 	iovcnt = NVME_TCP_MAX_SGL_DESCRIPTORS + 1 - sgl.iovcnt;
 	assert(iovcnt >= 0);
 
-	if (iovcnt == 1) {
-		return nvme_tcp_read_data(sock, iov->iov_len, iov->iov_base);
-	}
-
-	ret = spdk_sock_readv(sock, iov, iovcnt);
-
-	if (ret > 0) {
-		return ret;
-	}
-
-	if (ret < 0) {
-		if (errno == EAGAIN || errno == EWOULDBLOCK) {
-			return 0;
+	ret = 0;
+	for (i = 0; i < iovcnt; i++) {
+		rc = nvme_tcp_read_data(sock, iov[i].iov_len, iov[i].iov_base);
+		if (rc < 0) {
+			return NVME_TCP_CONNECTION_FATAL;
 		}
 
-		/* For connect reset issue, do not output error log */
-		if (errno != ECONNRESET) {
-			SPDK_ERRLOG("spdk_sock_readv() failed, errno %d: %s\n",
-				    errno, spdk_strerror(errno));
+		ret += rc;
+
+		if ((size_t)rc < iov[i].iov_len) {
+			break;
 		}
 	}
 
-	/* connection closed */
-	return NVME_TCP_CONNECTION_FATAL;
+	return ret;
 }
 
 static int
