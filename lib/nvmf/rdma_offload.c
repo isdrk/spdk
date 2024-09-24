@@ -1375,13 +1375,18 @@ nvmf_offload_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 {
 	struct spdk_nvmf_offload_qpair *oqpair;
 	struct spdk_nvmf_offload_poller *opoller;
+	struct spdk_nvmf_rdma_accept_private_data accept_data;
 	doca_error_t drc;
 
 	oqpair = nvmf_offload_qpair_get(qpair);
 	opoller = oqpair->opoller;
 
+	accept_data.recfmt = 0;
+	accept_data.crqsize = oqpair->max_queue_depth;
+
 	drc = doca_sta_io_qp_connect(opoller->sta_io, oqpair->device->doca_dev, oqpair->cm_id,
-				     oqpair->rsubsystem->handle, &oqpair->handle);
+				     &accept_data, sizeof(accept_data), oqpair->rsubsystem->handle,
+				     &oqpair->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Cannot connect offload qpair: %s\n", doca_error_get_descr(drc));
 		goto error;
