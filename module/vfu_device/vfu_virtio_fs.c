@@ -36,6 +36,7 @@ struct virtio_fs_endpoint {
 	struct spdk_thread *init_thread;
 	struct spdk_io_channel *io_channel;
 	struct virtio_fs_config	fs_cfg;
+	bool destruction_initiated;
 
 	/* virtio_fs ring process poller */
 	struct spdk_poller *ring_poller;
@@ -443,7 +444,10 @@ vfu_virtio_fs_endpoint_destruct(struct spdk_vfu_endpoint *endpoint)
 		if (fs_endpoint->init_thread == spdk_get_thread()) {
 			_vfu_virtio_fs_fsdev_close(fs_endpoint);
 		} else {
-			spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fsdev_close, fs_endpoint);
+			if (!fs_endpoint->destruction_initiated) {
+				spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fsdev_close, fs_endpoint);
+				fs_endpoint->destruction_initiated = 1;
+			}
 			return -EAGAIN;
 		}
 	}
