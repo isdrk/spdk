@@ -117,6 +117,9 @@
 	spdk_pci_get_event;
 	spdk_pci_register_error_handler;
 	spdk_pci_unregister_error_handler;
+	spdk_dmabuf_pci_device_removed;
+	spdk_dmabuf_get;
+	spdk_dmabuf_put;
 
 	# Public functions in env_dpdk.h
 	spdk_env_dpdk_post_init;
