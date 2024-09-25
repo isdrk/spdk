@@ -140,6 +140,8 @@ function usage() {
 	echo " --without-aio-fsdev       No path required."
 	echo " --with-doca[=DIR]         Build with DOCA. Required for NVMF RDMA Target offload."
 	echo " --without-doca            Path to custom DOCA installation directory may be specified."
+	echo " --with-flexio[=DIR]       Build with FlexIO. Required for nvmf target offload."
+	echo " --without-flexio          Path to custom FLEXIO installation directory may be specified."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -534,6 +536,45 @@ for i in "$@"; do
 			;;
 		--without-doca)
 			CONFIG[DOCA]=n
+			;;
+		--with-flexio=*)
+			flexio_path=$(readlink -f ${i#*=})
+			if [ ! -d "$flexio_path" ]; then
+				echo "FlexIO directory $flexio_path not found, aborting"
+				exit 1
+			fi
+
+			flexio_incdir=${flexio_path}/include
+			if [ ! -d "$flexio_incdir" ]; then
+				echo "FlexIO incdir $flexio_incdir not found, aborting"
+				exit 1
+			fi
+
+			flexio_libdir=${flexio_path}/lib
+			if [ ! -d "$flexio_libdir" ]; then
+				echo "FlexIO libdir $flexio_libdir not found, aborting"
+				exit 1
+			fi
+			if [ -d "${flexio_libdir}/${arch}" ]; then
+				flexio_libdir=${flexio_libdir}/${arch}
+			fi
+
+			CONFIG[FLEXIO]=y
+			CFLAGS="${CFLAGS:+$CFLAGS }-I$flexio_incdir"
+			LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$flexio_libdir"
+			;;
+		--with-flexio)
+			if command -v "pkg-config" > /dev/null 2>&1 && pkg-config --exists libflexio; then
+				CONFIG[FLEXIO]=y
+				CFLAGS="${CFLAGS:+$CFLAGS }$(pkg-config --cflags libflexio)"
+				LDFLAGS="${LDFLAGS:+$LDFLAGS }$(pkg-config --libs-only-L libflexio)"
+			else
+				echo "libflexio.pc not found, aborting"
+				exit 1
+			fi
+			;;
+		--without-flexio)
+			CONFIG[FLEXIO]=n
 			;;
 		--with-daos)
 			CONFIG[DAOS]=y

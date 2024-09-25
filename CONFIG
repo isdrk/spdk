@@ -110,6 +110,9 @@ CONFIG_FC_PATH=
 # Enable DOCA STA support for the NVMf RDMA target.
 CONFIG_DOCA=n
 
+# Enable FLEXIO support for the NVMf RDMA target.
+CONFIG_FLEXIO=n
+
 # Build Ceph RBD support in bdev modules
 # Requires librbd development libraries
 CONFIG_RBD=n
