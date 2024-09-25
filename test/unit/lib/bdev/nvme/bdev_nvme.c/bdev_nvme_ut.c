@@ -609,6 +609,7 @@ nvme_ctrlr_poll_internal(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_probe_c
 	if (probe_ctx->cb_ctx) {
 		ctrlr->opts = *(struct spdk_nvme_ctrlr_opts *)probe_ctx->cb_ctx;
 	}
+	ctrlr->opts.num_io_queues = 1024;
 
 	TAILQ_INSERT_TAIL(&g_ut_attached_ctrlrs, ctrlr, tailq);
 

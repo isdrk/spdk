@@ -145,6 +145,7 @@ static struct spdk_bdev_nvme_opts g_opts = {
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
 #define NVME_HOTPLUG_POLL_PERIOD_DEFAULT		100000ULL
 
+static struct spdk_thread *g_io_qpair_thread = NULL;
 static int g_hot_insert_nvme_controller_index = 0;
 static uint64_t g_nvme_hotplug_poll_period_us = NVME_HOTPLUG_POLL_PERIOD_DEFAULT;
 static bool g_nvme_hotplug_enabled = false;
@@ -210,6 +211,26 @@ static int nvme_ctrlr_read_ana_log_page(struct nvme_ctrlr *nvme_ctrlr);
 
 static struct nvme_ns *nvme_ns_alloc(void);
 static void nvme_ns_free(struct nvme_ns *ns);
+
+static struct spdk_thread *
+bdev_nvme_get_next_io_qpair_thread(void)
+{
+	struct spdk_thread *thread;
+
+	pthread_mutex_lock(&g_bdev_nvme_mutex);
+
+	if (g_io_qpair_thread == NULL) {
+		g_io_qpair_thread = spdk_thread_get_app_thread();
+	}
+
+	thread = g_io_qpair_thread;
+
+	g_io_qpair_thread = spdk_thread_get_next_thread(g_io_qpair_thread);
+
+	pthread_mutex_unlock(&g_bdev_nvme_mutex);
+
+	return thread;
+}
 
 static int
 nvme_ns_cmp(struct nvme_ns *ns1, struct nvme_ns *ns2)
@@ -601,6 +622,7 @@ _nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 
 	pthread_mutex_destroy(&nvme_ctrlr->mutex);
 
+	free(nvme_ctrlr->qpair_threads);
 	free(nvme_ctrlr);
 
 	pthread_mutex_lock(&g_bdev_nvme_mutex);
@@ -796,9 +818,14 @@ nvme_io_path_get_ctrlr_channel(struct nvme_io_path *io_path)
 	io_path->ctrlr_ch = spdk_io_channel_get_ctx(ch);
 
 	io_path->qpair = io_path->ctrlr_ch->qpair;
-	assert(io_path->qpair != NULL);
 
-	TAILQ_INSERT_TAIL(&io_path->qpair->io_path_list, io_path, tailq);
+	if (io_path->qpair != NULL) {
+		assert(io_path->qpair->thread == spdk_get_thread());
+		TAILQ_INSERT_TAIL(&io_path->qpair->io_path_list, io_path, tailq);
+	} else {
+		/* Remote qpair will be associated with this io_path later. */
+		TAILQ_INSERT_TAIL(&io_path->ctrlr_ch->io_path_list, io_path, tailq);
+	}
 
 	return 0;
 }
@@ -846,9 +873,25 @@ bdev_nvme_clear_retry_io_path(struct nvme_bdev_channel *nbdev_ch,
 }
 
 static void
+_put_io_channel(void *ctx)
+{
+	struct spdk_io_channel *ch = ctx;
+
+	spdk_put_io_channel(ch);
+}
+
+static void
 nvme_io_path_put_ctrlr_channel(struct nvme_io_path *io_path)
 {
 	struct spdk_io_channel *ch;
+	struct spdk_thread *thread;
+
+	if (io_path->remote_ch) {
+		thread = spdk_io_channel_get_thread(io_path->remote_ch);
+		assert(thread != spdk_get_thread());
+
+		spdk_thread_send_msg(thread, _put_io_channel, io_path->remote_ch);
+	}
 
 	assert(io_path->ctrlr_ch != NULL);
 	ch = spdk_io_channel_from_ctx(io_path->ctrlr_ch);
@@ -875,6 +918,11 @@ _bdev_nvme_delete_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_pat
 
 	STAILQ_REMOVE(&nbdev_ch->io_path_list, io_path, nvme_io_path, stailq);
 	io_path->nbdev_ch = NULL;
+
+	if (io_path->updating) {
+		io_path->pending_delete = true;
+		return;
+	}
 
 	nvme_io_path_put_ctrlr_channel(io_path);
 
@@ -1088,6 +1136,58 @@ nvme_ctrlr_is_available(struct nvme_ctrlr *nvme_ctrlr)
 	return true;
 }
 
+static void
+_bdev_nvme_assign_remote_qpair_done(struct nvme_ctrlr *nvme_ctrlr, void *ctx,
+				    int status)
+{
+	struct nvme_io_path *io_path = ctx;
+
+	io_path->updating = false;
+	if (io_path->pending_delete) {
+		io_path->pending_delete = false;
+
+		nvme_io_path_put_ctrlr_channel(io_path);
+	}
+}
+
+static void
+_bdev_nvme_assign_remote_qpair(struct nvme_ctrlr_channel_iter *i,
+			       struct nvme_ctrlr *nvme_ctrlr,
+			       struct nvme_ctrlr_channel *ctrlr_ch,
+			       void *ctx)
+{
+	struct nvme_io_path *io_path = ctx;
+
+	if (ctrlr_ch->qpair == NULL) {
+		nvme_ctrlr_for_each_channel_continue(i, 0);
+		return;
+	}
+
+	io_path->qpair = ctrlr_ch->qpair;
+
+	io_path->remote_ch = spdk_get_io_channel(nvme_ctrlr);
+	assert(io_path->remote_ch != NULL);
+
+	nvme_ctrlr_for_each_channel_continue(i, -1);
+}
+
+static void
+bdev_nvme_assign_remote_qpair(struct nvme_io_path *io_path)
+{
+	struct nvme_ctrlr *nvme_ctrlr = io_path->nvme_ns->ctrlr;
+
+	if (io_path->updating) {
+		return;
+	}
+
+	io_path->updating = true;
+
+	nvme_ctrlr_for_each_channel(nvme_ctrlr,
+				    _bdev_nvme_assign_remote_qpair,
+				    io_path,
+				    _bdev_nvme_assign_remote_qpair_done);
+}
+
 /* Simulate circular linked list. */
 static inline struct nvme_io_path *
 nvme_io_path_get_next(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_path *prev_path)
@@ -1115,6 +1215,7 @@ _bdev_nvme_find_io_path(struct nvme_bdev_channel *nbdev_ch)
 	io_path = start;
 	do {
 		if (spdk_unlikely(io_path->qpair == NULL)) {
+			bdev_nvme_assign_remote_qpair(io_path);
 			io_path = nvme_io_path_get_next(nbdev_ch, io_path);
 			continue;
 		}
@@ -1796,9 +1897,10 @@ bdev_nvme_clear_io_path_cache(struct nvme_ctrlr_channel_iter *i,
 			      struct nvme_ctrlr_channel *ctrlr_ch,
 			      void *ctx)
 {
-	assert(ctrlr_ch->qpair != NULL);
-
-	_bdev_nvme_clear_io_path_cache(&ctrlr_ch->qpair->io_path_list);
+	if (ctrlr_ch->qpair != NULL) {
+		_bdev_nvme_clear_io_path_cache(&ctrlr_ch->qpair->io_path_list);
+	}
+	_bdev_nvme_clear_io_path_cache(&ctrlr_ch->io_path_list);
 
 	nvme_ctrlr_for_each_channel_continue(i, 0);
 }
@@ -2420,7 +2522,9 @@ bdev_nvme_reset_destroy_qpair(struct nvme_ctrlr_channel_iter *i,
 	struct nvme_qpair *nvme_qpair;
 
 	nvme_qpair = ctrlr_ch->qpair;
-	assert(nvme_qpair != NULL);
+	if (nvme_qpair == NULL) {
+		goto exit;
+	}
 
 	_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 
@@ -2435,9 +2539,11 @@ bdev_nvme_reset_destroy_qpair(struct nvme_ctrlr_channel_iter *i,
 		 */
 		assert(ctrlr_ch->reset_iter == NULL);
 		ctrlr_ch->reset_iter = i;
-	} else {
-		nvme_ctrlr_for_each_channel_continue(i, 0);
+		return;
 	}
+
+exit:
+	nvme_ctrlr_for_each_channel_continue(i, 0);
 }
 
 static void
@@ -2491,7 +2597,11 @@ bdev_nvme_reset_create_qpair(struct nvme_ctrlr_channel_iter *i,
 			     struct nvme_ctrlr_channel *ctrlr_ch,
 			     void *ctx)
 {
-	int rc;
+	int rc = 0;
+
+	if (ctrlr_ch->qpair == NULL) {
+		goto exit;
+	}
 
 	rc = bdev_nvme_create_qpair(ctrlr_ch->qpair);
 	if (rc == 0) {
@@ -2503,9 +2613,11 @@ bdev_nvme_reset_create_qpair(struct nvme_ctrlr_channel_iter *i,
 		 */
 		assert(ctrlr_ch->reset_iter == NULL);
 		ctrlr_ch->reset_iter = i;
-	} else {
-		nvme_ctrlr_for_each_channel_continue(i, rc);
+		return;
 	}
+
+exit:
+	nvme_ctrlr_for_each_channel_continue(i, rc);
 }
 
 static int
@@ -3605,6 +3717,28 @@ nvme_qpair_create(struct nvme_ctrlr *nvme_ctrlr, struct nvme_ctrlr_channel *ctrl
 	return 0;
 }
 
+static bool
+nvme_ctrlr_channel_can_have_qpair(struct nvme_ctrlr *nvme_ctrlr,
+				  struct nvme_ctrlr_channel *ctrlr_ch)
+{
+	struct spdk_thread *thread;
+	uint32_t i;
+
+	thread = spdk_io_channel_get_thread(spdk_io_channel_from_ctx(ctrlr_ch));
+
+	if (nvme_ctrlr->qpair_threads == NULL) {
+		return true;
+	}
+
+	for (i = 0; i < nvme_ctrlr->num_qpair_threads; i++) {
+		if (nvme_ctrlr->qpair_threads[i] == thread) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 static int
 bdev_nvme_create_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 {
@@ -3612,8 +3746,14 @@ bdev_nvme_create_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 	struct nvme_ctrlr_channel *ctrlr_ch = ctx_buf;
 
 	TAILQ_INIT(&ctrlr_ch->pending_resets);
+	TAILQ_INIT(&ctrlr_ch->io_path_list);
 
-	return nvme_qpair_create(nvme_ctrlr, ctrlr_ch);
+	if (nvme_ctrlr_channel_can_have_qpair(nvme_ctrlr, ctrlr_ch)) {
+		return nvme_qpair_create(nvme_ctrlr, ctrlr_ch);
+	} else {
+		nvme_ctrlr_acquire(nvme_ctrlr);
+		return 0;
+	}
 }
 
 static void
@@ -3640,11 +3780,22 @@ nvme_qpair_delete(struct nvme_qpair *nvme_qpair)
 static void
 bdev_nvme_destroy_ctrlr_channel_cb(void *io_device, void *ctx_buf)
 {
+	struct nvme_ctrlr *nvme_ctrlr = io_device;
 	struct nvme_ctrlr_channel *ctrlr_ch = ctx_buf;
 	struct nvme_qpair *nvme_qpair;
+	struct nvme_io_path *io_path, *tmp;
+
+	TAILQ_FOREACH_SAFE(io_path, &ctrlr_ch->io_path_list, tailq, tmp) {
+		TAILQ_REMOVE(&ctrlr_ch->io_path_list, io_path, tailq);
+		nvme_io_path_free(io_path);
+	}
 
 	nvme_qpair = ctrlr_ch->qpair;
-	assert(nvme_qpair != NULL);
+
+	if (nvme_qpair == NULL) {
+		nvme_ctrlr_release(nvme_ctrlr);
+		return;
+	}
 
 	_bdev_nvme_clear_io_path_cache(&nvme_qpair->io_path_list);
 
@@ -4022,6 +4173,8 @@ nvme_ctrlr_info_json(struct spdk_json_write_ctx *w, struct nvme_ctrlr *nvme_ctrl
 	spdk_json_write_named_string(w, "addr", opts->src_addr);
 	spdk_json_write_named_string(w, "svcid", opts->src_svcid);
 	spdk_json_write_object_end(w);
+
+	spdk_json_write_named_uint32(w, "num_io_queues", opts->num_io_queues);
 
 	spdk_json_write_object_end(w);
 }
@@ -5754,6 +5907,29 @@ exit:
 }
 
 static int
+nvme_ctrlr_assign_qpairs(struct nvme_ctrlr *nvme_ctrlr, uint32_t num_io_queues)
+{
+	uint32_t i;
+
+	if (num_io_queues == 0) {
+		return -EINVAL;
+	}
+
+	nvme_ctrlr->qpair_threads = calloc(num_io_queues, sizeof(struct spdk_thread *));
+	if (nvme_ctrlr->qpair_threads == NULL) {
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < num_io_queues; i++) {
+		nvme_ctrlr->qpair_threads[i] = bdev_nvme_get_next_io_qpair_thread();
+	}
+
+	nvme_ctrlr->num_qpair_threads = num_io_queues;
+
+	return 0;
+}
+
+static int
 nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 		  const char *name,
 		  const struct spdk_nvme_transport_id *trid,
@@ -5799,6 +5975,15 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 	nvme_ctrlr->thread = spdk_get_thread();
 	nvme_ctrlr->ctrlr = ctrlr;
 	nvme_ctrlr->ref = 1;
+
+	if (opts != NULL) {
+		if (opts->num_io_queues < spdk_thread_get_count()) {
+			rc = nvme_ctrlr_assign_qpairs(nvme_ctrlr, opts->num_io_queues);
+			if (rc != 0) {
+				goto err;
+			}
+		}
+	}
 
 	if (spdk_nvme_ctrlr_is_ocssd_supported(ctrlr)) {
 		SPDK_ERRLOG("OCSSDs are not supported");

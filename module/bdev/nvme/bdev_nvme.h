@@ -93,6 +93,7 @@ struct nvme_bdev;
 struct nvme_io_path;
 struct nvme_ctrlr_channel_iter;
 struct nvme_bdev_channel_iter;
+struct spdk_thread;
 
 typedef TAILQ_HEAD(, nvme_io_path) nvme_io_path_tailq_t;
 
@@ -130,6 +131,8 @@ struct nvme_ctrlr {
 	struct nvme_ctrlr_opts			opts;
 
 	RB_HEAD(nvme_ns_tree, nvme_ns)		namespaces;
+	struct spdk_thread			**qpair_threads;
+	uint32_t				num_qpair_threads;
 
 	struct spdk_opal_dev			*opal_dev;
 
@@ -205,6 +208,7 @@ struct nvme_qpair {
 struct nvme_ctrlr_channel {
 	struct nvme_qpair		*qpair;
 	TAILQ_HEAD(, spdk_bdev_io)	pending_resets;
+	nvme_io_path_tailq_t		io_path_list;
 
 	struct nvme_ctrlr_channel_iter	*reset_iter;
 	struct spdk_poller		*connect_poller;
@@ -215,6 +219,10 @@ struct nvme_io_path {
 	struct nvme_qpair		*qpair;
 	struct nvme_ctrlr_channel	*ctrlr_ch;
 	STAILQ_ENTRY(nvme_io_path)	stailq;
+
+	struct spdk_io_channel		*remote_ch;
+	bool				updating;
+	bool				pending_delete;
 
 	/* The following are used to update io_path cache of the nvme_bdev_channel. */
 	struct nvme_bdev_channel	*nbdev_ch;
