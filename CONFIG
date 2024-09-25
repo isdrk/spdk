@@ -109,8 +109,6 @@ CONFIG_FC_PATH=
 
 # Enable DOCA STA support for the NVMf RDMA target.
 CONFIG_DOCA_STA=n
-CONFIG_DOCA_STA_INC_DIR=
-CONFIG_DOCA_STA_LIB_DIR=
 
 # Build Ceph RBD support in bdev modules
 # Requires librbd development libraries

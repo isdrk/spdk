@@ -519,20 +519,12 @@ for i in "$@"; do
 			fi
 
 			CONFIG[DOCA_STA]=y
-			CONFIG[DOCA_STA_LIB_DIR]=$doca_libdir
-			CONFIG[DOCA_STA_INC_DIR]=$doca_incdir
 			CFLAGS="${CFLAGS:+$CFLAGS }-DDOCA_ALLOW_EXPERIMENTAL_API -I$doca_incdir"
 			LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$doca_libdir"
 			;;
 		--with-doca-sta)
 			if command -v "pkg-config" > /dev/null 2>&1 && pkg-config --exists doca-common; then
-				doca_libdir=$(pkg-config --variable=libdir doca-sta)
-				doca_libdir=$(readlink -f $doca_libdir)
-				doca_incdir=$(pkg-config --variable=includedir doca-sta)
-				echo "Using DOCA lib dir $doca_libdir"
 				CONFIG[DOCA_STA]=y
-				CONFIG[DOCA_LIB_DIR]=$doca_libdir
-				CONFIG[DOCA_INC_DIR]=$doca_incdir
 				CFLAGS="${CFLAGS:+$CFLAGS }$(pkg-config --cflags doca-sta)"
 				LDFLAGS="${LDFLAGS:+$LDFLAGS }$(pkg-config --libs-only-L doca-sta)"
 			else
@@ -542,8 +534,6 @@ for i in "$@"; do
 			;;
 		--without-doca-sta)
 			CONFIG[DOCA_STA]=n
-			CONFIG[DOCA_STA_LIB_DIR]=
-			CONFIG[DOCA_STA_INC_DIR]=
 			;;
 		--with-daos)
 			CONFIG[DAOS]=y
@@ -1005,15 +995,6 @@ fi
 if [[ "${CONFIG[FC]}" = "y" ]]; then
 	if [[ -n "${CONFIG[FC_PATH]}" ]]; then
 		check_dir "${CONFIG[FC_PATH]}"
-	fi
-fi
-
-if [[ "${CONFIG[DOCA_STA]}" = "y" ]]; then
-	if [[ -n "${CONFIG[DOCA_STA_LIB_DIR]}" ]]; then
-		check_dir "${CONFIG[DOCA_STA_LIB_DIR]}"
-	fi
-	if [[ -n "${CONFIG[DOCA_STA_INC_DIR]}" ]]; then
-		check_dir "${CONFIG[DOCA_STA_INC_DIR]}"
 	fi
 fi
 
