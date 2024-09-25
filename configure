@@ -138,8 +138,8 @@ function usage() {
 	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
 	echo " --with-aio-fsdev          Build aio FSDEV component."
 	echo " --without-aio-fsdev       No path required."
-	echo " --with-doca-sta[=DIR]     Path to doca_sta. Required for nvmf target offload."
-	echo " --without-xlio            Path to custom doca_sta installation directory may be specified."
+	echo " --with-doca[=DIR]         Build with DOCA. Required for NVMF RDMA Target offload."
+	echo " --without-doca            Path to custom DOCA installation directory may be specified."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -496,7 +496,7 @@ for i in "$@"; do
 			CONFIG[FC]=n
 			CONFIG[FC_PATH]=
 			;;
-		--with-doca-sta=*)
+		--with-doca=*)
 			doca_path=$(readlink -f ${i#*=})
 			if [ ! -d "$doca_path" ]; then
 				echo "DOCA directory $doca_path not found, aborting"
@@ -518,22 +518,22 @@ for i in "$@"; do
 				doca_libdir=${doca_libdir}/${arch}
 			fi
 
-			CONFIG[DOCA_STA]=y
+			CONFIG[DOCA]=y
 			CFLAGS="${CFLAGS:+$CFLAGS }-DDOCA_ALLOW_EXPERIMENTAL_API -I$doca_incdir"
 			LDFLAGS="${LDFLAGS:+$LDFLAGS }-L$doca_libdir"
 			;;
-		--with-doca-sta)
+		--with-doca)
 			if command -v "pkg-config" > /dev/null 2>&1 && pkg-config --exists doca-common; then
-				CONFIG[DOCA_STA]=y
-				CFLAGS="${CFLAGS:+$CFLAGS }$(pkg-config --cflags doca-sta)"
-				LDFLAGS="${LDFLAGS:+$LDFLAGS }$(pkg-config --libs-only-L doca-sta)"
+				CONFIG[DOCA]=y
+				CFLAGS="${CFLAGS:+$CFLAGS }$(pkg-config --cflags doca-common)"
+				LDFLAGS="${LDFLAGS:+$LDFLAGS }$(pkg-config --libs-only-L doca-common)"
 			else
-				echo "doca-sta.pc not found, aborting"
+				echo "doca-common.pc not found, aborting"
 				exit 1
 			fi
 			;;
-		--without-doca-sta)
-			CONFIG[DOCA_STA]=n
+		--without-doca)
+			CONFIG[DOCA]=n
 			;;
 		--with-daos)
 			CONFIG[DAOS]=y

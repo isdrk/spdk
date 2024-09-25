@@ -50,9 +50,9 @@ endif
 endif
 
 ifeq ($(CONFIG_RDMA),y)
-ifeq ($(CONFIG_DOCA_STA),y)
+ifeq ($(CONFIG_DOCA),y)
 C_SRCS += rdma_offload.c
-LOCAL_SYS_LIBS += -ldoca_sta -ldoca_common -ldoca_dpa -ldoca_comch -ldoca_rdma
+LOCAL_SYS_LIBS += -ldoca_sta -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common
 endif
 endif
 
