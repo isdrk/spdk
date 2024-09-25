@@ -2155,8 +2155,7 @@ fuse_dispatcher_fsdev_remove_put_channel(struct spdk_io_channel_iter *i)
 static void
 fuse_dispatcher_fsdev_remove_put_channel_done(struct spdk_io_channel_iter *i, int status)
 {
-	struct fuse_io *fuse_io = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	struct spdk_fuse_dispatcher *disp = spdk_io_channel_iter_get_ctx(i);
 
 	if (status) {
 		SPDK_WARNLOG("%s: putting channels failed with %d\n", fuse_dispatcher_name(disp), status);
