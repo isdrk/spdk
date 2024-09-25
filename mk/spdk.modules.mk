@@ -48,12 +48,14 @@ endif
 
 ifeq ($(CONFIG_RDMA),y)
 BLOCKDEV_MODULES_LIST += rdma
+ifeq ($(CONFIG_DOCA),y)
+ifeq ($(CONFIG_FLEXIO),y)
+BLOCKDEV_MODULES_PRIVATE_LIBS += -l:libdoca_sta.a -Wl,--as-needed -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common -lflexio -lstdc++ -lm -Wl,--no-as-needed
+endif
+endif
 BLOCKDEV_MODULES_PRIVATE_LIBS += -libverbs -lrdmacm
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 BLOCKDEV_MODULES_PRIVATE_LIBS += -lmlx5
-endif
-ifeq ($(CONFIG_DOCA),y)
-BLOCKDEV_MODULES_PRIVATE_LIBS += -ldoca_sta -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common
 endif
 endif
 
