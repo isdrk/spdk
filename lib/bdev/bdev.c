@@ -6902,6 +6902,44 @@ bdev_ch_abort_all_qos_allowed_io(struct spdk_bdev_channel *ch)
 }
 
 static void
+bdev_channel_print_io_info(struct spdk_bdev_channel *channel)
+{
+	struct spdk_bdev_io *bio;
+	uint32_t submitted_ios = 0;
+	uint32_t resets = 0;
+	uint32_t aborts = 0;
+	uint32_t nomem_ios = 0;
+	uint64_t now = spdk_get_ticks();
+	uint64_t ticks_hz = spdk_get_ticks_hz();
+	uint64_t max_age_tsc = 0;
+
+	TAILQ_FOREACH(bio, &channel->io_submitted, internal.ch_link) {
+		uint64_t age_tsc = now - bio->internal.submit_tsc;
+
+		SPDK_INFOLOG(bdev, "Submitted IO: bdev %s, ch %p, tid %lu, type %d, age_ms %lu\n",
+			     channel->bdev->name, channel, spdk_thread_get_id(spdk_get_thread()),
+			     bio->type, age_tsc * 1000 / ticks_hz);
+		max_age_tsc = spdk_max(max_age_tsc, age_tsc);
+		submitted_ios++;
+		if (bio->type == SPDK_BDEV_IO_TYPE_RESET) {
+			resets++;
+		} else if (bio->type == SPDK_BDEV_IO_TYPE_ABORT) {
+			aborts++;
+		}
+	}
+
+	TAILQ_FOREACH(bio, &channel->shared_resource->nomem_io, internal.link) {
+		nomem_ios++;
+	}
+
+	SPDK_NOTICELOG("Bdev %s, ch %p, tid %lu, submitted_ios %u, resets %u, aborts %u, "
+		       "max_age_ms %lu, nomem_ios %u, total_rw_ios %lu\n",
+		       channel->bdev->name, channel, spdk_thread_get_id(spdk_get_thread()),
+		       submitted_ios, resets, aborts, max_age_tsc * 1000 / ticks_hz,
+		       nomem_ios, channel->stat->num_read_ops + channel->stat->num_write_ops);
+}
+
+static void
 bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 			  struct spdk_io_channel *ch, void *_ctx)
 {
@@ -6912,6 +6950,8 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 	channel = __io_ch_to_bdev_ch(ch);
 	shared_resource = channel->shared_resource;
 	mgmt_channel = shared_resource->mgmt_ch;
+
+	bdev_channel_print_io_info(channel);
 
 	channel->flags |= BDEV_CH_RESET_IN_PROGRESS;
 
@@ -6972,6 +7012,8 @@ spdk_bdev_reset(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	if (!bdev_io) {
 		return -ENOMEM;
 	}
+
+	SPDK_NOTICELOG("Bdev %s reset, bio %p\n", desc->bdev->name, bdev_io);
 
 	bdev_io->internal.ch = channel;
 	bdev_io->internal.desc = desc;
@@ -7767,6 +7809,9 @@ bdev_reset_complete(struct spdk_bdev *bdev, void *_ctx, int status)
 		bdev_io->u.reset.ch_ref = NULL;
 	}
 
+	SPDK_NOTICELOG("Bdev %s reset complete, bio %p, status %d\n", bdev->name, bdev_io,
+		       bdev_io->internal.status);
+
 	bdev_io_complete(bdev_io);
 
 	spdk_bdev_for_each_channel(bdev, bdev_resubmit_queued_reset, bdev,
@@ -7841,6 +7886,9 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 						   bdev_reset_complete);
 			return;
 		}
+
+		SPDK_NOTICELOG("Bdev %s reset complete, bio %p, status %d\n", bdev->name, bdev_io, status);
+
 	} else {
 		bdev_io_decrement_outstanding(bdev_ch, shared_resource);
 		if (spdk_likely(status == SPDK_BDEV_IO_STATUS_SUCCESS)) {
