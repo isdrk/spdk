@@ -241,11 +241,6 @@ struct spdk_fuse_dispatcher {
 	struct spdk_fsdev_desc *desc;
 
 	/**
-	 * fsdev thread
-	 */
-	struct spdk_thread *fsdev_thread;
-
-	/**
 	 * Major version of the protocol (read-only)
 	 */
 	unsigned proto_major;
@@ -266,40 +261,15 @@ struct spdk_fuse_dispatcher {
 	struct spdk_fsdev_file_object *root_fobject;
 
 	/**
-	 * Event callback
-	 */
-	spdk_fuse_dispatcher_event_cb event_cb;
-
-	/**
-	 * Event callback's context
-	 */
-	void *event_ctx;
-
-	/**
 	 * Negotiated mount flags.
 	 */
 	uint32_t mount_flags;
-
-	/**
-	 * Name of the underlying fsdev
-	 *
-	 * NOTE: must be last
-	 */
-	char fsdev_name[];
 };
-
-struct spdk_fuse_dispatcher_channel {
-	struct spdk_io_channel *fsdev_io_ch;
-};
-
-#define __disp_to_io_dev(disp)	(((char *)disp) + 1)
-#define __disp_from_io_dev(io_dev)	((struct spdk_fuse_dispatcher *)(((char *)io_dev) - 1))
-#define __disp_ch_from_io_ch(io_ch)	((struct spdk_fuse_dispatcher_channel *)spdk_io_channel_get_ctx(io_ch))
 
 static inline const char *
 fuse_dispatcher_name(struct spdk_fuse_dispatcher *disp)
 {
-	return disp->fsdev_name;
+	return spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(disp->desc));
 }
 
 static inline uint64_t
@@ -2154,31 +2124,6 @@ fuse_dispatcher_mount_rollback_msg(void *ctx)
 	fuse_dispatcher_mount_rollback(fuse_io);
 }
 
-static void
-fuse_dispatcher_fsdev_remove_put_channel(struct spdk_io_channel_iter *i)
-{
-	struct spdk_io_channel *io_ch = spdk_io_channel_iter_get_channel(i);
-	struct spdk_fuse_dispatcher_channel *ch = __disp_ch_from_io_ch(io_ch);
-
-	assert(ch->fsdev_io_ch);
-	spdk_put_io_channel(ch->fsdev_io_ch);
-	ch->fsdev_io_ch = NULL;
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-fuse_dispatcher_fsdev_remove_put_channel_done(struct spdk_io_channel_iter *i, int status)
-{
-	struct spdk_fuse_dispatcher *disp = spdk_io_channel_iter_get_ctx(i);
-
-	if (status) {
-		SPDK_WARNLOG("%s: putting channels failed with %d\n", fuse_dispatcher_name(disp), status);
-	}
-
-	disp->event_cb(SPDK_FUSE_DISP_EVENT_FSDEV_REMOVE, disp, disp->event_ctx);
-}
-
 #define FUSE_DOT_PATH_LOOKUP FUSE_EXPORT_SUPPORT
 
 #define MNT_FLAGS_MAP \
@@ -2221,29 +2166,6 @@ fsdev_mount_flags_to_fuse(uint32_t flags)
 #undef MNT_FLAG
 
 	return result;
-}
-
-static void
-fuse_dispatcher_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev,
-			       void *event_ctx)
-{
-	struct spdk_fuse_dispatcher *disp = event_ctx;
-
-	SPDK_NOTICELOG("%s received fsdev event %d\n", fuse_dispatcher_name(disp), type);
-
-	switch (type) {
-	case SPDK_FSDEV_EVENT_REMOVE:
-		SPDK_NOTICELOG("%s received SPDK_FSDEV_EVENT_REMOVE\n", fuse_dispatcher_name(disp));
-		/* Put the channels, to prevent the further IO submission */
-		spdk_for_each_channel(__disp_to_io_dev(disp),
-				      fuse_dispatcher_fsdev_remove_put_channel,
-				      disp,
-				      fuse_dispatcher_fsdev_remove_put_channel_done);
-		break;
-	default:
-		SPDK_NOTICELOG("%s received an unknown fsdev event %d\n", fuse_dispatcher_name(disp), type);
-		break;
-	}
 }
 
 #define SET_MOUNT_FLAG(cond, stage, flag) \
@@ -3742,12 +3664,9 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 	fuse_io->hdr.opcode = fsdev_io_d2h_u32(fuse_io, hdr->opcode);
 
 	if (spdk_unlikely(!fuse_io->ch)) {
-		/* FUSE_INIT is allowed with no channel. It'll open the fsdev and get channels */
-		if (fuse_io->hdr.opcode != FUSE_INIT) {
-			/* The fsdev is not currently active. Complete this request. */
-			SPDK_ERRLOG("IO (%" PRIu32 ") arrived while there's no channel\n", fuse_io->hdr.opcode);
-			goto exit;
-		}
+		/* The fsdev is not currently active. Complete this request. */
+		SPDK_ERRLOG("IO (%" PRIu32 ") arrived while there's no channel\n", fuse_io->hdr.opcode);
+		goto exit;
 	}
 
 	if (spdk_likely(_fuse_op_requires_reply(hdr->opcode))) {
@@ -3794,154 +3713,16 @@ exit:
 	return -EINVAL;
 }
 
-static int
-fuse_dispatcher_channel_create(void *io_device, void *ctx_buf)
-{
-	struct spdk_fuse_dispatcher *disp = __disp_from_io_dev(io_device);
-	struct spdk_fuse_dispatcher_channel *ch = ctx_buf;
 
-	if (disp->desc) {
-		ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
-	}
-
-	return 0;
-}
-
-static void
-fuse_dispatcher_channel_destroy(void *io_device, void *ctx_buf)
-{
-	struct spdk_fuse_dispatcher *disp = __disp_from_io_dev(io_device);
-	struct spdk_fuse_dispatcher_channel *ch = ctx_buf;
-
-	UNUSED(disp);
-
-	if (ch->fsdev_io_ch) {
-		assert(disp->desc);
-		spdk_put_io_channel(ch->fsdev_io_ch);
-		ch->fsdev_io_ch = NULL;
-	}
-}
-
-struct fuse_dispatcher_create_ctx {
-	struct spdk_fuse_dispatcher *disp;
-	spdk_fuse_dispatcher_create_cpl_cb cb;
-	void *cb_arg;
-};
-
-static void
-fuse_dispatcher_get_channel_rollback(struct spdk_io_channel_iter *i)
-{
-	struct spdk_io_channel *io_ch = spdk_io_channel_iter_get_channel(i);
-	struct spdk_fuse_dispatcher_channel *ch = __disp_ch_from_io_ch(io_ch);
-
-	if (ch->fsdev_io_ch) {
-		spdk_put_io_channel(ch->fsdev_io_ch);
-		ch->fsdev_io_ch = NULL;
-	}
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-fuse_dispatcher_get_channel_rollback_done(struct spdk_io_channel_iter *i, int status)
-{
-	struct fuse_dispatcher_create_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (status) {
-		SPDK_WARNLOG("%s: getting channels failed with %d\n", fuse_dispatcher_name(disp), status);
-		spdk_fsdev_close(disp->desc);
-		free(disp);
-		disp = NULL;
-	}
-
-	ctx->cb(ctx->cb_arg, disp);
-	free(ctx);
-}
-
-static void
-fuse_dispatcher_undo_create_get_channel(struct fuse_dispatcher_create_ctx *ctx)
-{
-	spdk_for_each_channel(__disp_to_io_dev(ctx->disp),
-			      fuse_dispatcher_get_channel_rollback,
-			      ctx,
-			      fuse_dispatcher_get_channel_rollback_done);
-
-}
-
-static void
-fuse_dispatcher_get_channel(struct spdk_io_channel_iter *i)
-{
-	struct fuse_dispatcher_create_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_io_channel *io_ch = spdk_io_channel_iter_get_channel(i);
-	struct spdk_fuse_dispatcher_channel *ch = __disp_ch_from_io_ch(io_ch);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	assert(!ch->fsdev_io_ch);
-
-	ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-fuse_dispatcher_get_channel_done(struct spdk_io_channel_iter *i, int status)
-{
-	struct fuse_dispatcher_create_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (status) {
-		SPDK_ERRLOG("%s: getting channels failed with %d\n", fuse_dispatcher_name(disp), status);
-		fuse_dispatcher_undo_create_get_channel(ctx);
-		return;
-	}
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "%s: getting succeeded\n", fuse_dispatcher_name(disp));
-	ctx->cb(ctx->cb_arg, disp);
-	free(ctx);
-}
-
-int
-spdk_fuse_dispatcher_create(const char *fsdev_name, spdk_fuse_dispatcher_event_cb event_cb,
-			    void *event_ctx, spdk_fuse_dispatcher_create_cpl_cb cb, void *cb_arg)
+struct spdk_fuse_dispatcher *
+spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
 {
 	struct spdk_fuse_dispatcher *disp;
-	struct fuse_dispatcher_create_ctx *ctx;
-	char *io_dev_name;
-	size_t fsdev_name_len;
-	int rc;
 
-	if (!fsdev_name || !event_cb || !cb) {
-		SPDK_ERRLOG("Invalid params\n");
-		return -EINVAL;
-	}
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		SPDK_ERRLOG("%s: could not alloc context\n", fsdev_name);
-		return -ENOMEM;
-	}
-
-	io_dev_name = spdk_sprintf_alloc("fuse_disp_%s", fsdev_name);
-	if (!io_dev_name) {
-		SPDK_ERRLOG("Could not format io_dev name (%s)\n", fsdev_name);
-		rc = -ENOMEM;
-		goto io_dev_name_failed;
-	}
-
-	fsdev_name_len = strlen(fsdev_name);
-
-	disp = calloc(1, sizeof(*disp) + fsdev_name_len + 1);
+	disp = calloc(1, sizeof(*disp));
 	if (!disp) {
-		SPDK_ERRLOG("Could not allocate spdk_fuse_dispatcher\n");
-		rc = -ENOMEM;
-		goto disp_alloc_failed;
-	}
-
-	rc = spdk_fsdev_open(fsdev_name, fuse_dispatcher_fsdev_event_cb, disp, &disp->desc);
-	if (rc) {
-		SPDK_ERRLOG("Could not open fsdev %s (err=%d)\n", fsdev_name, rc);
-		goto fsdev_open_failed;
+		SPDK_ERRLOG("could not allocate disp\n");
+		return NULL;
 	}
 
 	pthread_mutex_lock(&g_fuse_mgr.lock);
@@ -3953,47 +3734,18 @@ spdk_fuse_dispatcher_create(const char *fsdev_name, spdk_fuse_dispatcher_event_c
 					  sizeof(struct fuse_io), opts.fsdev_io_cache_size, SPDK_ENV_SOCKET_ID_ANY);
 		if (!g_fuse_mgr.fuse_io_pool) {
 			pthread_mutex_unlock(&g_fuse_mgr.lock);
+			free(disp);
 			SPDK_ERRLOG("Could not create mempool\n");
-			rc = -ENOMEM;
-			goto mempool_create_failed;
+			return NULL;
 		}
 	}
 	g_fuse_mgr.ref_cnt++;
 	pthread_mutex_unlock(&g_fuse_mgr.lock);
 
-	spdk_io_device_register(__disp_to_io_dev(disp),
-				fuse_dispatcher_channel_create, fuse_dispatcher_channel_destroy,
-				sizeof(struct spdk_fuse_dispatcher_channel),
-				io_dev_name);
-
-	free(io_dev_name);
-
-	memcpy(disp->fsdev_name, fsdev_name, fsdev_name_len + 1);
-	disp->event_cb = event_cb;
-	disp->event_ctx = event_ctx;
 	disp->fuse_arch = SPDK_FUSE_ARCH_NATIVE;
-	disp->fsdev_thread = spdk_get_thread();
+	disp->desc = desc;
 
-	ctx->disp = disp;
-	ctx->cb = cb;
-	ctx->cb_arg = cb_arg;
-
-	spdk_for_each_channel(__disp_to_io_dev(disp),
-			      fuse_dispatcher_get_channel,
-			      ctx,
-			      fuse_dispatcher_get_channel_done);
-
-	return 0;
-
-mempool_create_failed:
-	spdk_fsdev_close(disp->desc);
-fsdev_open_failed:
-	free(disp);
-disp_alloc_failed:
-	free(io_dev_name);
-io_dev_name_failed:
-	free(ctx);
-	return rc;
+	return disp;
 }
 
 int
@@ -4013,18 +3765,6 @@ spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_
 	}
 }
 
-const char *
-spdk_fuse_dispatcher_get_fsdev_name(struct spdk_fuse_dispatcher *disp)
-{
-	return fuse_dispatcher_name(disp);
-}
-
-struct spdk_io_channel *
-spdk_fuse_dispatcher_get_io_channel(struct spdk_fuse_dispatcher *disp)
-{
-	return spdk_get_io_channel(__disp_to_io_dev(disp));
-}
-
 int
 spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    struct spdk_io_channel *ch,
@@ -4033,7 +3773,6 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
 	struct fuse_io *fuse_io;
-	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
 
 	fuse_io = spdk_mempool_get(g_fuse_mgr.fuse_io_pool);
 
@@ -4043,7 +3782,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	}
 
 	fuse_io->disp = disp;
-	fuse_io->ch = disp_ch->fsdev_io_ch;
+	fuse_io->ch = ch;
 	fuse_io->in_iov = in_iov;
 	fuse_io->in_iovcnt = in_iovcnt;
 	fuse_io->out_iov = out_iov;
@@ -4059,204 +3798,19 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	return spdk_fuse_dispatcher_handle_fuse_req(disp, fuse_io);
 }
 
-struct fuse_dispatcher_reset_ctx {
-	struct spdk_fuse_dispatcher *disp;
-	spdk_fuse_dispatcher_reset_completion_cb cb;
-	void *cb_arg;
-};
-
-static void
-fuse_dispatcher_reset_get_channel(struct spdk_io_channel_iter *i)
+void
+spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
 {
-	struct fuse_dispatcher_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_io_channel *io_ch = spdk_io_channel_iter_get_channel(i);
-	struct spdk_fuse_dispatcher_channel *ch = __disp_ch_from_io_ch(io_ch);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
+	free(disp);
 
-	if (!ch->fsdev_io_ch) {
-		ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
+	pthread_mutex_lock(&g_fuse_mgr.lock);
+	g_fuse_mgr.ref_cnt--;
+	if (!g_fuse_mgr.ref_cnt) {
+		spdk_mempool_free(g_fuse_mgr.fuse_io_pool);
+		g_fuse_mgr.fuse_io_pool = NULL;
+
 	}
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-fuse_dispatcher_reset_get_channel_done(struct spdk_io_channel_iter *i, int status)
-{
-	struct fuse_dispatcher_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (status) {
-		SPDK_ERRLOG("%s: getting channels failed with %d\n", fuse_dispatcher_name(disp), status);
-		ctx->cb(disp, false, ctx->cb_arg);
-		free(ctx);
-		return;
-	}
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "%s: getting succeeded\n", fuse_dispatcher_name(disp));
-	ctx->cb(disp, true, ctx->cb_arg);
-	free(ctx);
-}
-
-static void
-fuse_dispatcher_reset_completed(struct spdk_fsdev_desc *desc, bool success, void *cb_arg)
-{
-	struct fuse_dispatcher_reset_ctx *ctx = cb_arg;
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (!success) {
-		SPDK_ERRLOG("%s: fsdev reset failed\n", fuse_dispatcher_name(disp));
-		ctx->cb(disp, false, ctx->cb_arg);
-		free(ctx);
-		return;
-	}
-
-	SPDK_NOTICELOG("%s: fsdev reset completed sucessfully\n", fuse_dispatcher_name(disp));
-
-	/* Now restore the channels if needed */
-	spdk_for_each_channel(__disp_to_io_dev(disp),
-			      fuse_dispatcher_reset_get_channel,
-			      ctx,
-			      fuse_dispatcher_reset_get_channel_done);
-}
-
-int
-spdk_fuse_dispatcher_reset(struct spdk_fuse_dispatcher *disp,
-			   spdk_fuse_dispatcher_reset_completion_cb cb, void *cb_arg)
-{
-	struct fuse_dispatcher_reset_ctx *ctx;
-	int rc;
-
-	if (!disp->desc) {
-		SPDK_NOTICELOG("%s: the fsdev is not open\n", fuse_dispatcher_name(disp));
-		cb(disp, true, cb_arg);
-		return 0;
-	}
-
-	if (!spdk_fsdev_reset_supported(spdk_fsdev_desc_get_fsdev(disp->desc))) {
-		SPDK_NOTICELOG("%s: reset is not supported by the fsdev\n", fuse_dispatcher_name(disp));
-		return -ENOTSUP;
-	}
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		SPDK_ERRLOG("cannot allocate context\n");
-		return -ENOMEM;
-	}
-
-	ctx->disp = disp;
-	ctx->cb = cb;
-	ctx->cb_arg = cb_arg;
-
-	SPDK_NOTICELOG("%s: resetting the fsdev\n", fuse_dispatcher_name(disp));
-
-	/* Reset the fsdev */
-	rc = spdk_fsdev_reset(disp->desc, fuse_dispatcher_reset_completed, ctx);
-	if (rc) {
-		SPDK_ERRLOG("%s: spdk_fsdev_reset failed with %d\n", fuse_dispatcher_name(disp), rc);
-		free(ctx);
-		return rc;
-	}
-
-	return 0;
-}
-
-struct fuse_dispatcher_delete_ctx {
-	struct spdk_fuse_dispatcher *disp;
-	spdk_fuse_dispatcher_delete_cpl_cb cb;
-	void *cb_arg;
-};
-
-static void
-fuse_dispatcher_delete_done(struct fuse_dispatcher_delete_ctx *ctx, int status)
-{
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (!status) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "%s: deletion succeeded\n", fuse_dispatcher_name(disp));
-
-		spdk_io_device_unregister(__disp_to_io_dev(disp), NULL);
-
-		free(disp);
-
-		pthread_mutex_lock(&g_fuse_mgr.lock);
-		g_fuse_mgr.ref_cnt--;
-		if (!g_fuse_mgr.ref_cnt) {
-			spdk_mempool_free(g_fuse_mgr.fuse_io_pool);
-			g_fuse_mgr.fuse_io_pool = NULL;
-		}
-		pthread_mutex_unlock(&g_fuse_mgr.lock);
-	} else {
-		SPDK_ERRLOG("%s: deletion failed with %d\n", fuse_dispatcher_name(disp), status);
-	}
-
-	ctx->cb(ctx->cb_arg, (uint32_t)(-status));
-	free(ctx);
-}
-
-static void
-fuse_dispatcher_delete_put_channel(struct spdk_io_channel_iter *i)
-{
-	struct spdk_io_channel *io_ch = spdk_io_channel_iter_get_channel(i);
-	struct spdk_fuse_dispatcher_channel *ch = __disp_ch_from_io_ch(io_ch);
-
-	if (ch->fsdev_io_ch) {
-		spdk_put_io_channel(ch->fsdev_io_ch);
-		ch->fsdev_io_ch = NULL;
-	}
-
-	spdk_for_each_channel_continue(i, 0);
-}
-
-static void
-fuse_dispatcher_delete_put_channel_done(struct spdk_io_channel_iter *i, int status)
-{
-	struct fuse_dispatcher_delete_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct spdk_fuse_dispatcher *disp = ctx->disp;
-
-	if (status) {
-		SPDK_ERRLOG("%s: putting channels failed with %d\n", fuse_dispatcher_name(disp), status);
-		fuse_dispatcher_delete_done(ctx, status);
-		return;
-	}
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "%s: putting channels succeeded. Releasing the fdev\n",
-		      fuse_dispatcher_name(disp));
-
-	spdk_fsdev_close(disp->desc);
-
-	fuse_dispatcher_delete_done(ctx, 0);
-}
-
-int
-spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp,
-			    spdk_fuse_dispatcher_delete_cpl_cb cb, void *cb_arg)
-{
-	struct fuse_dispatcher_delete_ctx *ctx;
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		SPDK_ERRLOG("cannot allocate context\n");
-		return -ENOMEM;
-	}
-
-	ctx->disp = disp;
-	ctx->cb = cb;
-	ctx->cb_arg = cb_arg;
-
-	if (disp->desc) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "%s: fsdev still open. Releasing the channels.\n",
-			      fuse_dispatcher_name(disp));
-
-		spdk_for_each_channel(__disp_to_io_dev(disp),
-				      fuse_dispatcher_delete_put_channel,
-				      ctx,
-				      fuse_dispatcher_delete_put_channel_done);
-	} else {
-		fuse_dispatcher_delete_done(ctx, 0);
-	}
-
-	return 0;
+	pthread_mutex_unlock(&g_fuse_mgr.lock);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fuse_dispatcher)

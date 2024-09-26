@@ -194,79 +194,19 @@ DEFINE_STUB(spdk_fsdev_copy_file_range, int, (struct spdk_fsdev_desc *desc,
 		spdk_fsdev_copy_file_range_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_abort, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg), 0);
+DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
 
-static int g_ut_fsdev_desc;
-
-int
-spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
-		void *event_ctx, struct spdk_fsdev_desc **desc)
-{
-	*desc = (struct spdk_fsdev_desc *)&g_ut_fsdev_desc;
-	ut_call_record_begin(spdk_fsdev_open);
-	ut_call_record_param_str(fsdev_name);
-	ut_call_record_param_ptr(event_cb);
-	ut_call_record_param_ptr(event_ctx);
-	ut_call_record_param_ptr(desc);
-	ut_call_record_end();
-
-	return 0;
-}
-
-static void
-fuse_disp_create_cb(void *cb_arg, struct spdk_fuse_dispatcher *disp)
-{
-	ut_call_record_begin(fuse_disp_create_cb);
-	ut_call_record_param_ptr(cb_arg);
-	ut_call_record_param_ptr(disp);
-	ut_call_record_end();
-}
-
-static void
-fuse_disp_delete_cb(void *cb_arg, int error)
-{
-	ut_call_record_begin(fuse_disp_delete_cb);
-	ut_call_record_param_ptr(cb_arg);
-	ut_call_record_param_int(error);
-	ut_call_record_end();
-}
-
-static void
-fuse_disp_event_cb(enum spdk_fuse_dispatcher_event_type type,
-		   struct spdk_fuse_dispatcher *disp,
-		   void *event_ctx)
-{
-	ut_call_record_begin(fuse_disp_event_cb);
-	ut_call_record_param_int(type);
-	ut_call_record_param_ptr(disp);
-	ut_call_record_param_ptr(event_ctx);
-	ut_call_record_end();
-}
+static struct spdk_fsdev_desc *g_ut_fsdev_desc = (struct spdk_fsdev_desc *)0xBEADFEAD;
 
 static void
 ut_fuse_disp_test_create_delete(void)
 {
 	struct spdk_fuse_dispatcher *disp;
-	int create_cb_arg;
-	int delete_cb_arg;
-	int rc;
 
-	ut_calls_reset();
-	rc = spdk_fuse_dispatcher_create("utfsdev0", fuse_disp_event_cb, NULL, fuse_disp_create_cb,
-					 &create_cb_arg);
-	CU_ASSERT(rc == 0);
-	poll_thread(0);
-	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_open);
-	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, 0), "utfsdev0", UT_CALL_REC_MAX_STR_SIZE));
-	CU_ASSERT(ut_calls_get_func(1) == fuse_disp_create_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &create_cb_arg);
-	disp = (struct spdk_fuse_dispatcher *)ut_calls_param_get_ptr(1, 1);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc);
+	CU_ASSERT(disp != NULL);
 
-	ut_calls_reset();
-	rc = spdk_fuse_dispatcher_delete(disp, fuse_disp_delete_cb, &delete_cb_arg);
-	CU_ASSERT(rc == 0);
-	poll_thread(0);
-	CU_ASSERT(ut_calls_get_func(0) == fuse_disp_delete_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &delete_cb_arg);
+	spdk_fuse_dispatcher_delete(disp);
 }
 
 static int

@@ -10,6 +10,7 @@
 #define SPDK_FUSE_DISPATCHER_H
 
 #include "spdk/stdinc.h"
+#include "spdk/fsdev.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,14 +28,6 @@ enum spdk_fuse_arch {
 };
 
 /**
- * FUSE fsdev dispatcher create completion callback.
- *
- * \param cb_arg Callback argument specified upon create operation.
- * \param disp FUSE fsdev dispatcher object. NULL if creation failed.
- */
-typedef void (*spdk_fuse_dispatcher_create_cpl_cb)(void *cb_arg, struct spdk_fuse_dispatcher *disp);
-
-/**
  * FUSE fsdev dispatcher submit completion callback.
  *
  * \param cb_arg Callback argument specified upon submit operation.
@@ -43,43 +36,13 @@ typedef void (*spdk_fuse_dispatcher_create_cpl_cb)(void *cb_arg, struct spdk_fus
 typedef void (*spdk_fuse_dispatcher_submit_cpl_cb)(void *cb_arg, int error);
 
 /**
- * FUSE fsdev dispatcher delete completion callback.
- *
- * \param cb_arg Callback argument specified upon delete operation.
- * \param error 0 if the operation succeeded, a negative error code otherwise.
- */
-typedef void (*spdk_fuse_dispatcher_delete_cpl_cb)(void *cb_arg, int error);
-
-
-/** Asynchronous event type */
-enum spdk_fuse_dispatcher_event_type {
-	SPDK_FUSE_DISP_EVENT_FSDEV_REMOVE,
-};
-
-/**
- * FUSE fsdev dispatcher event callback.
- *
- * \param type Event type.
- * \param disp FUSE fsdev dispatcher object.
- * \param event_ctx Context for the filesystem device event.
- */
-typedef void (*spdk_fuse_dispatcher_event_cb)(enum spdk_fuse_dispatcher_event_type type,
-		struct spdk_fuse_dispatcher *disp, void *event_ctx);
-
-/**
  * Create a FUSE fsdev dispatcher
  *
- * \param fsdev_name Name of the fsdev to work with.
- * \param event_cb Dispatcher event callback.
- * \param event_ctx Dispatcher event callback's context.
- * \param cb Completion callback.
- * \param cb_arg Context to be passed to the completion callback.
+ * \param desc fsdev descriptor to work with
  *
- * \return 0 on success, a negative error code otherwise.
- * On success, the callback will always be called (even if the request ultimately failed).
+ * \return FUSE fsdev dispatcher object on success, NULL otherwise.
  */
-int spdk_fuse_dispatcher_create(const char *fsdev_name, spdk_fuse_dispatcher_event_cb event_cb,
-				void *event_ctx, spdk_fuse_dispatcher_create_cpl_cb cb, void *cb_arg);
+struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc);
 
 /**
  * Set a FUSE request source's HW architecture.
@@ -92,26 +55,6 @@ int spdk_fuse_dispatcher_create(const char *fsdev_name, spdk_fuse_dispatcher_eve
  * \return 0 on success or -EINVAL if the architecture is not supported
  */
 int spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_arch fuse_arch);
-
-/**
- * Get underlying fsdev name
- *
- * \param disp FUSE fsdev dispatcher object.
- *
- * \return fsdev name
- */
-const char *spdk_fuse_dispatcher_get_fsdev_name(struct spdk_fuse_dispatcher *disp);
-
-/**
- * Obtain an I/O channel for the FUSE fsdev dispatcher object. I/O channels are
- * bound to threads, so the resulting I/O channel may only be used from the thread
- * it was originally obtained from.
- *
- * \param disp FUSE fsdev dispatcher object.
- *
- * \return A handle to the I/O channel or NULL on failure.
- */
-struct spdk_io_channel *spdk_fuse_dispatcher_get_io_channel(struct spdk_fuse_dispatcher *disp);
 
 /**
  * Submit FUSE request
@@ -138,41 +81,11 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
 /**
- * FUSE fsdev dispatcher reset completion callback.
- *
- * \param disp FUSE fsdev dispatcher object.
- * \param success True if reset completed successfully or false if it failed.
- * \param cb_arg Callback argument specified upon reset API call.
- */typedef void (*spdk_fuse_dispatcher_reset_completion_cb)(struct spdk_fuse_dispatcher *disp,
-		bool success, void *cb_arg);
-
-/**
- * Reset a FUSE fsdev dispatcher
- *
- * \param disp FUSE fsdev dispatcher object.
- * \param cb Called when the reset is complete.
- * \param cb_arg Argument passed to cb.
- *
- * \return 0 on success. On success, the callback will always
- * be called (even if the request ultimately failed). Return
- * negated errno on failure, in which case the callback will not be called.
- */
-
-int spdk_fuse_dispatcher_reset(struct spdk_fuse_dispatcher *disp,
-			       spdk_fuse_dispatcher_reset_completion_cb cb, void *cb_arg);
-
-/**
  * Delete a FUSE fsdev dispatcher
  *
  * \param disp FUSE fsdev dispatcher object.
- * \param cb Completion callback.
- * \param cb_arg Context to be passed to the completion callback.
- *
- * \return 0 on success, a negative error code otherwise.
- * On success, the callback will always be called (even if the request ultimately failed).
  */
-int spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp,
-				spdk_fuse_dispatcher_delete_cpl_cb cb, void *cb_arg);
+void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
 
 #ifdef __cplusplus
 }

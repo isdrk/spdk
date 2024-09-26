@@ -31,6 +31,7 @@ struct virtio_fs_endpoint {
 	struct vfu_virtio_endpoint virtio;
 
 	/* virtio_fs specific configurations */
+	struct spdk_fsdev_desc *fsdev_desc;
 	struct spdk_fuse_dispatcher *fuse_disp;
 	struct spdk_thread *init_thread;
 	struct spdk_io_channel *io_channel;
@@ -57,6 +58,12 @@ static inline struct virtio_fs_req *
 to_fs_request(struct vfu_virtio_req *request)
 {
 	return SPDK_CONTAINEROF(request, struct virtio_fs_req, req);
+}
+
+static inline const char *
+virtio_fs_fsdev_name(struct virtio_fs_endpoint *fs_endpoint)
+{
+	return spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs_endpoint->fsdev_desc));
 }
 
 static int
@@ -106,7 +113,7 @@ virtio_fs_start(struct vfu_virtio_endpoint *virtio_endpoint)
 
 	SPDK_DEBUGLOG(vfu_virtio_fs, "%s: starting...\n",
 		      spdk_vfu_get_endpoint_id(virtio_endpoint->endpoint));
-	fs_endpoint->io_channel = spdk_fuse_dispatcher_get_io_channel(fs_endpoint->fuse_disp);
+	fs_endpoint->io_channel = spdk_fsdev_get_io_channel(fs_endpoint->fsdev_desc);
 	if (!fs_endpoint->io_channel) {
 		SPDK_ERRLOG("%s: failed to get primary IO channel\n",
 			    spdk_vfu_get_endpoint_id(virtio_endpoint->endpoint));
@@ -284,114 +291,57 @@ static struct vfu_virtio_ops virtio_fs_ops = {
 	.stop_device = virtio_fs_stop,
 };
 
-static void _vfu_virtio_fs_fuse_disp_delete(void *cb_arg);
-
 static void
-_vfu_virtio_fs_fuse_dispatcher_delete_cpl(void *cb_arg, int error)
+_vfu_virtio_fs_fsdev_close(void *cb_arg)
 {
-	struct spdk_fuse_dispatcher *fuse_disp = cb_arg;
+	struct virtio_fs_endpoint *fs_endpoint = cb_arg;
 
-	if (error) {
-		SPDK_ERRLOG("%s: FUSE dispatcher deletion failed with %d. Retrying...\n",
-			    spdk_fuse_dispatcher_get_fsdev_name(fuse_disp), error);
-		spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fuse_disp_delete, fuse_disp);
-	}
+	spdk_fuse_dispatcher_delete(fs_endpoint->fuse_disp);
+	fs_endpoint->fuse_disp = NULL;
+	SPDK_NOTICELOG("%s: FUSE dispatcher deleted\n", virtio_fs_fsdev_name(fs_endpoint));
 
-	SPDK_NOTICELOG("FUSE dispatcher deleted\n");
+	spdk_fsdev_close(fs_endpoint->fsdev_desc);
+	fs_endpoint->fsdev_desc = NULL;
+	SPDK_NOTICELOG("%s: fsdev closed\n", virtio_fs_fsdev_name(fs_endpoint));
 }
 
 static void
-_vfu_virtio_fs_fuse_disp_delete(void *cb_arg)
-{
-	struct spdk_fuse_dispatcher *fuse_disp = cb_arg;
-	int res;
-
-	SPDK_DEBUGLOG(vfu_virtio_fs, "%s: initiating FUSE dispatcher deletion...\n",
-		      spdk_fuse_dispatcher_get_fsdev_name(fuse_disp));
-
-	res = spdk_fuse_dispatcher_delete(fuse_disp, _vfu_virtio_fs_fuse_dispatcher_delete_cpl, fuse_disp);
-	if (res) {
-		SPDK_ERRLOG("%s: FUSE dispatcher deletion failed with %d. Retrying...\n",
-			    spdk_fuse_dispatcher_get_fsdev_name(fuse_disp), res);
-		spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fuse_disp_delete, fuse_disp);
-	}
-}
-
-static void
-fuse_disp_event_cb(enum spdk_fuse_dispatcher_event_type type, struct spdk_fuse_dispatcher *disp,
-		   void *event_ctx)
+_vfu_virtio_fs_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev,
+			      void *event_ctx)
 {
 	struct virtio_fs_endpoint *fs_endpoint = event_ctx;
 
-	SPDK_DEBUGLOG(vfu_virtio_fs, "%s: FUSE dispatcher event#%d arrived\n",
-		      spdk_fuse_dispatcher_get_fsdev_name(fs_endpoint->fuse_disp), type);
+	SPDK_DEBUGLOG(vfu_virtio_fs, "%s: fsdev event#%d arrived\n",
+		      virtio_fs_fsdev_name(fs_endpoint), type);
 
 	switch (type) {
-	case SPDK_FUSE_DISP_EVENT_FSDEV_REMOVE:
-		SPDK_NOTICELOG("%s: received SPDK_FUSE_DISP_EVENT_FSDEV_REMOVE\n",
-			       spdk_fuse_dispatcher_get_fsdev_name(fs_endpoint->fuse_disp));
+	case SPDK_FSDEV_EVENT_REMOVE:
+		SPDK_NOTICELOG("%s: received SPDK_FSDEV_EVENT_REMOVE\n", virtio_fs_fsdev_name(fs_endpoint));
 		memset(&fs_endpoint->fs_cfg, 0, sizeof(fs_endpoint->fs_cfg));
 
 		if (fs_endpoint->io_channel) {
 			spdk_thread_send_msg(fs_endpoint->virtio.thread, _virtio_fs_stop_msg, fs_endpoint);
 		}
 
-		if (fs_endpoint->fuse_disp) {
-			spdk_thread_send_msg(fs_endpoint->init_thread, _vfu_virtio_fs_fuse_disp_delete,
-					     fs_endpoint->fuse_disp);
-			fs_endpoint->fuse_disp = NULL;
+		if (fs_endpoint->fsdev_desc) {
+			spdk_thread_send_msg(fs_endpoint->init_thread, _vfu_virtio_fs_fsdev_close,
+					     fs_endpoint);
 		}
 		break;
 	default:
 		SPDK_NOTICELOG("%s: unsupported event type %d\n",
-			       spdk_fuse_dispatcher_get_fsdev_name(fs_endpoint->fuse_disp), type);
+			       virtio_fs_fsdev_name(fs_endpoint), type);
 		break;
 	}
 }
 
-struct vfu_virtio_fs_add_fsdev_ctx {
-	struct spdk_vfu_endpoint *endpoint;
-	vfu_virtio_fs_add_fsdev_cpl_cb cb;
-	void *cb_arg;
-};
-
-static void
-fuse_dispatcher_create_cpl(void *cb_arg, struct spdk_fuse_dispatcher *disp)
-{
-	struct vfu_virtio_fs_add_fsdev_ctx *ctx = cb_arg;
-	struct spdk_vfu_endpoint *endpoint = ctx->endpoint;
-	struct vfu_virtio_endpoint *virtio_endpoint;
-	struct virtio_fs_endpoint *fs_endpoint;
-
-	if (!disp) {
-		SPDK_ERRLOG("%s: failed to create SPDK FUSE dispatcher\n",
-			    spdk_vfu_get_endpoint_id(endpoint));
-		ctx->cb(ctx->cb_arg, -EINVAL);
-		free(ctx);
-		return;
-	}
-
-	virtio_endpoint = spdk_vfu_get_endpoint_private(endpoint);
-	fs_endpoint = to_fs_endpoint(virtio_endpoint);
-
-	fs_endpoint->fuse_disp = disp;
-
-	SPDK_DEBUGLOG(vfu_virtio_fs, "%s: FUSE dispatcher created successfully\n",
-		      spdk_fuse_dispatcher_get_fsdev_name(disp));
-
-	ctx->cb(ctx->cb_arg, 0);
-	free(ctx);
-}
-
 int
 vfu_virtio_fs_add_fsdev(const char *name, const char *fsdev_name, const char *tag,
-			uint16_t num_queues, uint16_t qsize, bool packed_ring,
-			vfu_virtio_fs_add_fsdev_cpl_cb cb, void *cb_arg)
+			uint16_t num_queues, uint16_t qsize, bool packed_ring)
 {
 	struct spdk_vfu_endpoint *endpoint;
 	struct vfu_virtio_endpoint *virtio_endpoint;
 	struct virtio_fs_endpoint *fs_endpoint;
-	struct vfu_virtio_fs_add_fsdev_ctx *ctx;
 	size_t tag_len;
 	int ret;
 
@@ -440,23 +390,21 @@ vfu_virtio_fs_add_fsdev(const char *name, const char *fsdev_name, const char *ta
 	memcpy(fs_endpoint->fs_cfg.tag, tag, tag_len);
 	fs_endpoint->init_thread = spdk_get_thread();
 
-	ctx = calloc(1, sizeof(*ctx));
-	if (!ctx) {
-		SPDK_ERRLOG("Failed to allocate context\n");
-		return -ENOMEM;
+	ret = spdk_fsdev_open(fsdev_name, _vfu_virtio_fs_fsdev_event_cb, fs_endpoint,
+			      &fs_endpoint->fsdev_desc);
+	if (ret) {
+		SPDK_ERRLOG("%s: failed to open SPDK FSDEV %s (err=%d)\n", spdk_vfu_get_endpoint_id(endpoint),
+			    fsdev_name, ret);
+		return ret;
 	}
 
-	ctx->endpoint = endpoint;
-	ctx->cb = cb;
-	ctx->cb_arg = cb_arg;
-
-	ret = spdk_fuse_dispatcher_create(fsdev_name, fuse_disp_event_cb, fs_endpoint,
-					  fuse_dispatcher_create_cpl, ctx);
-	if (ret) {
-		SPDK_ERRLOG("Failed to create SPDK FUSE dispatcher for %s (err=%d)\n",
-			    fsdev_name, ret);
-		free(ctx);
-		return ret;
+	fs_endpoint->fuse_disp = spdk_fuse_dispatcher_create(fs_endpoint->fsdev_desc);
+	if (!fs_endpoint->fuse_disp) {
+		SPDK_ERRLOG("%s: failed to create FUSE dispatcher for %s\n", spdk_vfu_get_endpoint_id(endpoint),
+			    fsdev_name);
+		spdk_fsdev_close(fs_endpoint->fsdev_desc);
+		fs_endpoint->fsdev_desc = NULL;
+		return -ENOMEM;
 	}
 
 	return 0;
@@ -491,13 +439,13 @@ vfu_virtio_fs_endpoint_destruct(struct spdk_vfu_endpoint *endpoint)
 	struct vfu_virtio_endpoint *virtio_endpoint = spdk_vfu_get_endpoint_private(endpoint);
 	struct virtio_fs_endpoint *fs_endpoint = to_fs_endpoint(virtio_endpoint);
 
-	if (fs_endpoint->fuse_disp) {
+	if (fs_endpoint->fsdev_desc) {
 		if (fs_endpoint->init_thread == spdk_get_thread()) {
-			_vfu_virtio_fs_fuse_disp_delete(fs_endpoint->fuse_disp);
+			_vfu_virtio_fs_fsdev_close(fs_endpoint);
 		} else {
-			spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fuse_disp_delete, fs_endpoint->fuse_disp);
+			spdk_thread_send_msg(spdk_get_thread(), _vfu_virtio_fs_fsdev_close, fs_endpoint);
+			return -EAGAIN;
 		}
-		fs_endpoint->fuse_disp = NULL;
 	}
 
 	vfu_virtio_endpoint_destruct(&fs_endpoint->virtio);
