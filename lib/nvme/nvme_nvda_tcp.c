@@ -4616,7 +4616,7 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	int rc;
 	struct nvme_tcp_qpair *tqpair;
 	int family;
-	long int port, src_port;
+	long int port, src_port = 0;
 	struct spdk_sock_impl_opts impl_opts;
 	size_t impl_opts_size = sizeof(impl_opts);
 	struct spdk_sock_opts opts;
