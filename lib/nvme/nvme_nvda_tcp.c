@@ -1541,6 +1541,39 @@ fail:
 static void nvme_tcp_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
 
 static void
+nvme_tcp_qpair_print_reqs_info(struct nvme_tcp_qpair *tqpair)
+{
+	struct nvme_tcp_req *tcp_req;
+	uint32_t reqs = 0;
+	uint32_t in_accel = 0;
+	uint64_t now = spdk_get_ticks();
+	uint64_t ticks_hz = spdk_get_ticks_hz();
+	uint64_t max_age_tsc = 0;
+
+	TAILQ_FOREACH(tcp_req, &tqpair->outstanding_reqs, link) {
+		/* Submit tick is only set if timeout callback is registered for controller.
+		 * If timeout is not enabled, submit_tick is zero.
+		 */
+		uint64_t age_tsc = now - (tcp_req->req.submit_tick ? tcp_req->req.submit_tick : now);
+
+		SPDK_INFOLOG(nvme, "Outstanding req: tqpair %p, qid %u, sock 0x%lx, tid %lu, req %p, "
+			     "ordering 0x%x, cb_arg %p, age_ms %lu\n",
+			     tqpair, tqpair->qpair.id, tqpair->xlio_sock,
+			     spdk_thread_get_id(spdk_get_thread()), tcp_req, tcp_req->ordering.raw,
+			     tcp_req->req.cb_arg, age_tsc * 1000 / ticks_hz);
+		max_age_tsc = spdk_max(max_age_tsc, age_tsc);
+		reqs++;
+		if (tcp_req->ordering.bits.in_progress_accel) {
+			in_accel++;
+		}
+	}
+
+	SPDK_NOTICELOG("tqpair %p, qid %u, sock 0x%lx, tid %lu, outstanding_reqs %u, in_accel %u, max_age_ms %lu\n",
+		       tqpair, tqpair->qpair.id, tqpair->xlio_sock, spdk_thread_get_id(spdk_get_thread()),
+		       reqs, in_accel, max_age_tsc * 1000 / ticks_hz);
+}
+
+static void
 nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
@@ -1552,6 +1585,7 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		tqpair->flags.pending_events = false;
 	}
 
+	nvme_tcp_qpair_print_reqs_info(tqpair);
 	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	xlio_sock_release_packets(tqpair);
 
