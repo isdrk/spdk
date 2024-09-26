@@ -2529,6 +2529,7 @@ nvmf_rdma_opts_init(struct spdk_nvmf_transport_opts *opts)
 	opts->buf_cache_size =		SPDK_NVMF_RDMA_DEFAULT_BUFFER_CACHE_SIZE;
 	opts->dif_insert_or_strip =	SPDK_NVMF_RDMA_DIF_INSERT_OR_STRIP;
 	opts->abort_timeout_sec =	SPDK_NVMF_RDMA_DEFAULT_ABORT_TIMEOUT_SEC;
+	opts->msdbd =			NVMF_DEFAULT_MSDBD;
 	opts->transport_specific =      NULL;
 }
 
@@ -2746,6 +2747,13 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 			    SPDK_NVMF_RDMA_ACCEPTOR_BACKLOG);
 		rtransport->rdma_opts.acceptor_backlog = SPDK_NVMF_RDMA_ACCEPTOR_BACKLOG;
 	}
+	if (rtransport->transport.opts.msdbd > NVMF_DEFAULT_MSDBD) {
+		SPDK_WARNLOG("Configured MSDBD %u exceeds max supported value, result is limited by %u\n",
+			     rtransport->transport.opts.msdbd, NVMF_DEFAULT_MSDBD);
+		rtransport->transport.opts.msdbd = NVMF_DEFAULT_MSDBD;
+	} else if (!rtransport->transport.opts.msdbd) {
+		rtransport->transport.opts.msdbd = NVMF_DEFAULT_MSDBD;
+	}
 
 	if (opts->num_shared_buffers < (SPDK_NVMF_MAX_SGL_ENTRIES * 2)) {
 		SPDK_ERRLOG("The number of shared data buffers (%d) is less than"
@@ -2902,6 +2910,9 @@ nvmf_rdma_dump_opts(struct spdk_nvmf_transport *transport, struct spdk_json_writ
 	}
 	spdk_json_write_named_int32(w, "acceptor_backlog", rtransport->rdma_opts.acceptor_backlog);
 	spdk_json_write_named_bool(w, "no_wr_batching", rtransport->rdma_opts.no_wr_batching);
+	if (transport->opts.msdbd != NVMF_DEFAULT_MSDBD) {
+		spdk_json_write_named_bool(w, "msdbd", transport->opts.msdbd);
+	}
 }
 
 static int
@@ -3999,7 +4010,7 @@ static void
 nvmf_rdma_cdata_init(struct spdk_nvmf_transport *transport, struct spdk_nvmf_subsystem *subsystem,
 		     struct spdk_nvmf_ctrlr_data *cdata)
 {
-	cdata->nvmf_specific.msdbd = NVMF_DEFAULT_MSDBD;
+	cdata->nvmf_specific.msdbd = transport->opts.msdbd;
 
 	/* Disable in-capsule data transfer for RDMA controller when dif_insert_or_strip is enabled
 	since in-capsule data only works with NVME drives that support SGL memory layout */

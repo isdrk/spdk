@@ -96,8 +96,12 @@ struct spdk_nvmf_transport_opts {
 
 	/* Hole at bytes 61-63. */
 	uint8_t reserved61[3];
+	/* Maximum SGL Data Block Descriptors
+	 * Value 0 means use default transport-specific value, unlimited value is not supported. The transport may
+	 * limit the configured msdbd by implementation-specific maximum value or ignore this parameter */
+	uint8_t msdbd;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 64, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 65, "Incorrect size");
 
 struct spdk_nvmf_listen_opts {
 	/**
