@@ -420,23 +420,36 @@ nvme_perf_next_sge(void *ref, void **address, uint32_t *length)
 }
 
 static int
-nvme_perf_allocate_iovs(struct perf_task *task, void *buf, uint32_t length)
+nvme_perf_allocate_iovs(struct perf_task *task, uint8_t pattern)
 {
+	void *buf;
 	int iovpos = 0;
 	struct iovec *iov;
-	uint32_t offset = 0;
+	uint32_t offset = 0, max_io_size_bytes;
 
-	task->iovcnt = SPDK_CEIL_DIV(length, (uint64_t)g_io_unit_size);
+	/* maximum extended lba format size from all active namespace,
+	 * it's same with g_io_size_bytes for namespace without metadata.
+	 */
+	max_io_size_bytes = g_io_size_bytes + g_max_io_md_size * g_max_io_size_blocks;
+	buf = spdk_dma_zmalloc(max_io_size_bytes, g_io_align, NULL);
+	if (buf == NULL) {
+		fprintf(stderr, "task->buf spdk_dma_zmalloc failed\n");
+		exit(1);
+	}
+	memset(buf, pattern, max_io_size_bytes);
+
+	task->iovcnt = SPDK_CEIL_DIV(max_io_size_bytes, (uint64_t)g_io_unit_size);
 	task->iovs = calloc(task->iovcnt, sizeof(struct iovec));
 	if (!task->iovs) {
+		spdk_dma_free(buf);
 		return -1;
 	}
 
-	while (length > 0) {
+	while (max_io_size_bytes > 0) {
 		iov = &task->iovs[iovpos];
-		iov->iov_len = spdk_min(length, g_io_unit_size);
+		iov->iov_len = spdk_min(max_io_size_bytes, g_io_unit_size);
 		iov->iov_base = buf + offset;
-		length -= iov->iov_len;
+		max_io_size_bytes -= iov->iov_len;
 		offset += iov->iov_len;
 		iovpos++;
 	}
@@ -829,29 +842,16 @@ static void io_complete(void *ctx, const struct spdk_nvme_cpl *cpl);
 static void
 nvme_setup_payload(struct perf_task *task, uint8_t pattern)
 {
-	uint32_t max_io_size_bytes, max_io_md_size;
-	void *buf;
+	uint32_t max_io_md_size;
 	int rc;
 
 	if (g_zcopy) {
 		return;
 	}
 
-	/* maximum extended lba format size from all active namespace,
-	 * it's same with g_io_size_bytes for namespace without metadata.
-	 */
-	max_io_size_bytes = g_io_size_bytes + g_max_io_md_size * g_max_io_size_blocks;
-	buf = spdk_dma_zmalloc(max_io_size_bytes, g_io_align, NULL);
-	if (buf == NULL) {
-		fprintf(stderr, "task->buf spdk_dma_zmalloc failed\n");
-		exit(1);
-	}
-	memset(buf, pattern, max_io_size_bytes);
-
-	rc = nvme_perf_allocate_iovs(task, buf, max_io_size_bytes);
+	rc = nvme_perf_allocate_iovs(task, pattern);
 	if (rc < 0) {
 		fprintf(stderr, "perf task failed to allocate iovs\n");
-		spdk_dma_free(buf);
 		exit(1);
 	}
 
