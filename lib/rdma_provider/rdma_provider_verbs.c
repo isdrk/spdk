@@ -24,11 +24,11 @@ spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 		.qp_context = qp_attr->qp_context,
 		.send_cq = qp_attr->cq->cq,
 		.recv_cq = qp_attr->cq->cq,
-		.srq = qp_attr->srq->srq,
 		.cap = qp_attr->cap,
 		.qp_type = IBV_QPT_RC
 	};
 
+	attr.srq = qp_attr->srq ? qp_attr->srq->srq : NULL;
 	if (qp_attr->domain_transfer) {
 		SPDK_ERRLOG("verbs provider doesn't support memory domain transfer functionality");
 		return NULL;
