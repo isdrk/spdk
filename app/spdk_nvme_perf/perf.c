@@ -423,6 +423,8 @@ static int
 nvme_perf_allocate_iovs(struct perf_task *task, uint8_t pattern)
 {
 	void *buf;
+	union spdk_nvme_cap_register cap;
+	uint64_t gap_size, gap_size_total;
 	int iovpos = 0;
 	struct iovec *iov;
 	uint32_t offset = 0, max_io_size_bytes;
@@ -431,14 +433,28 @@ nvme_perf_allocate_iovs(struct perf_task *task, uint8_t pattern)
 	 * it's same with g_io_size_bytes for namespace without metadata.
 	 */
 	max_io_size_bytes = g_io_size_bytes + g_max_io_md_size * g_max_io_size_blocks;
-	buf = spdk_dma_zmalloc(max_io_size_bytes, g_io_align, NULL);
+
+	/* Allow the user to configure the gap between iovs. If g_io_align is not set then use gap size aligned on the
+	 * min page size reported by controller to be compliant with NVME PRP disks */
+	if (g_io_align_specified) {
+		gap_size = g_io_align;
+	} else {
+		uint64_t page_size;
+
+		cap = spdk_nvme_ctrlr_get_regs_cap(task->ns_ctx->entry->u.nvme.ctrlr);
+		page_size = (uint64_t)1 << (12 + cap.bits.mpsmin);
+		gap_size = page_size - ((uint64_t)g_io_unit_size % page_size);
+	}
+
+	task->iovcnt = SPDK_CEIL_DIV(max_io_size_bytes, (uint64_t)g_io_unit_size);
+	gap_size_total = (task->iovcnt - 1) * gap_size;
+	buf = spdk_dma_zmalloc(max_io_size_bytes + gap_size_total, g_io_align, NULL);
 	if (buf == NULL) {
 		fprintf(stderr, "task->buf spdk_dma_zmalloc failed\n");
 		exit(1);
 	}
-	memset(buf, pattern, max_io_size_bytes);
+	memset(buf, pattern, max_io_size_bytes + gap_size_total);
 
-	task->iovcnt = SPDK_CEIL_DIV(max_io_size_bytes, (uint64_t)g_io_unit_size);
 	task->iovs = calloc(task->iovcnt, sizeof(struct iovec));
 	if (!task->iovs) {
 		spdk_dma_free(buf);
@@ -450,7 +466,7 @@ nvme_perf_allocate_iovs(struct perf_task *task, uint8_t pattern)
 		iov->iov_len = spdk_min(max_io_size_bytes, g_io_unit_size);
 		iov->iov_base = buf + offset;
 		max_io_size_bytes -= iov->iov_len;
-		offset += iov->iov_len;
+		offset += iov->iov_len + gap_size;
 		iovpos++;
 	}
 
@@ -1708,9 +1724,8 @@ allocate_task(struct ns_worker_ctx *ns_ctx, int queue_depth)
 		exit(1);
 	}
 
-	ns_ctx->entry->fn_table->setup_payload(task, queue_depth % 8 + 1);
-
 	task->ns_ctx = ns_ctx;
+	ns_ctx->entry->fn_table->setup_payload(task, queue_depth % 8 + 1);
 
 	return task;
 }
