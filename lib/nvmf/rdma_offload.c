@@ -3192,6 +3192,37 @@ static void sta_offload_task_destroy_bqueue_complete_err(struct doca_comch_produ
 	destroy_ctx->destroy_completed = true;
 }
 
+static void *
+nvmf_sta_zmalloc(size_t size, size_t align, uint64_t *phys_addr)
+{
+	void *addr;
+
+	addr = spdk_zmalloc(size, align, NULL, SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (!addr) {
+		return NULL;
+	}
+
+	*phys_addr = spdk_vtophys(addr, NULL);
+	if (*phys_addr == SPDK_VTOPHYS_ERROR) {
+		spdk_free(addr);
+		addr = NULL;
+	}
+
+	return addr;
+}
+
+static void
+nvmf_sta_free(void *buf)
+{
+	spdk_free(buf);
+}
+
+static uint64_t
+nvmf_sta_vtophys(void *buf)
+{
+	return spdk_vtophys(buf, NULL);
+}
+
 static int
 nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 {
@@ -3269,6 +3300,12 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 						     sta_offload_task_destroy_bqueue_complete_err);
         if (rc != DOCA_SUCCESS) {
                 SPDK_ERRLOG("Failed to doca_sta_be_task_destroy_queue_set_conf, err: %s", doca_error_get_name(rc));
+                return -EINVAL;
+        }
+
+	rc = doca_sta_mem_allocator_register(rtransport->sta.sta, nvmf_sta_zmalloc, nvmf_sta_free, nvmf_sta_vtophys);
+        if (rc != DOCA_SUCCESS) {
+                SPDK_ERRLOG("Failed to register DOCA STA memory allocator, err: %s", doca_error_get_name(rc));
                 return -EINVAL;
         }
 
