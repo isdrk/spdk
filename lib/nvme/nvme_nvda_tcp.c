@@ -637,8 +637,8 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 	}
 
 	tqpair->flags.closed = 0;
-	SPDK_NOTICELOG("tqpair %p xlio_sock %lx: pd %p, context %p, dev %s, handle %u\n",
-		       tqpair, tqpair->xlio_sock, tqpair->pd,
+	SPDK_NOTICELOG("Created socket: tqpair %p, qid %u, xlio_sock %lx, pd %p, context %p, dev %s, handle %u\n",
+		       tqpair, tqpair->qpair.id, tqpair->xlio_sock, tqpair->pd,
 		       tqpair->pd ? tqpair->pd->context : NULL,
 		       tqpair->pd ? tqpair->pd->context->device->name : "unknown",
 		       tqpair->pd ? tqpair->pd->handle : 0);
@@ -892,8 +892,8 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 
 	switch (event) {
 	case XLIO_SOCKET_EVENT_ESTABLISHED:
-		SPDK_INFOLOG(nvme_xlio, "Connection established (sock=%lx): event=%d value=%d\n",
-			     userdata_sq, event, value);
+		SPDK_INFOLOG(nvme_xlio, "Connection established: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
+			     sock, tqpair, tqpair->qpair.id, event, value);
 		if (!tqpair->flags.connect_notified) {
 			nvme_tcp_qpair_connect_sock_done(tqpair, 0);
 			tqpair->flags.connect_notified = 1;
@@ -902,8 +902,9 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 	case XLIO_SOCKET_EVENT_CLOSED:
 	case XLIO_SOCKET_EVENT_TERMINATED:
 	case XLIO_SOCKET_EVENT_ERROR:
-		SPDK_INFOLOG(nvme_xlio, "Connection closed passively (sock=%lx): event=%d value=%d\n",
-			     userdata_sq, event, value);
+		SPDK_INFOLOG(nvme_xlio,
+			     "Connection closed passively: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
+			     sock, tqpair, tqpair->qpair.id, event, value);
 		if (!tqpair->flags.closed) {
 			tqpair->flags.disconnected = true;
 		}
@@ -914,8 +915,8 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 		}
 		break;
 	default:
-		SPDK_ERRLOG("Unknown Event callback: event=%d value=%d (tqpair=%lx).\n",
-			    event, value, userdata_sq);
+		SPDK_ERRLOG("Unknown Event callback: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
+			    sock, tqpair, tqpair->qpair.id, event, value);
 		break;
 	}
 }
@@ -4539,6 +4540,9 @@ nvme_tcp_qpair_connect_sock_done(struct nvme_tcp_qpair *tqpair, int err)
 	struct spdk_rdma_utils_memory_translation mem_translation = {};
 	char *tcp_mem_domain = getenv("SPDK_NVDA_TCP_USE_TCP_MEM_DOMAIN");
 	int rc;
+
+	SPDK_NOTICELOG("Socket connect done: tqpair %p, qid %u, xlio_sock %lx, err %d\n",
+		       tqpair, tqpair->qpair.id, tqpair->xlio_sock, err);
 
 	assert(tqpair->state == NVME_TCP_QPAIR_STATE_CONNECTING ||
 	       tqpair->state == NVME_TCP_QPAIR_STATE_INVALID);
