@@ -4564,7 +4564,7 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 
 	spdk_json_write_named_object_begin(w, header);
 
-	spdk_json_write_named_object_begin(w, "UMRs");
+	spdk_json_write_named_object_begin(w, "umrs");
 	spdk_json_write_named_uint64(w, "umrs", stats->umrs);
 	spdk_json_write_named_uint64(w, "crypto_umrs", stats->crypto_umrs);
 	spdk_json_write_named_uint64(w, "sig_umrs", stats->sig_umrs);
@@ -4573,13 +4573,13 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 				     stats->crypto_umrs + stats->sig_umrs + stats->sig_crypto_umrs + stats->umrs);
 	spdk_json_write_object_end(w);
 
-	spdk_json_write_named_object_begin(w, "RDMA");
+	spdk_json_write_named_object_begin(w, "rdma");
 	spdk_json_write_named_uint64(w, "read", stats->rdma_reads);
 	spdk_json_write_named_uint64(w, "write", stats->rdma_writes);
 	spdk_json_write_named_uint64(w, "total", stats->rdma_reads + stats->rdma_writes);
 	spdk_json_write_object_end(w);
 
-	spdk_json_write_named_object_begin(w, "Polling");
+	spdk_json_write_named_object_begin(w, "polling");
 	spdk_json_write_named_uint64(w, "polls", stats->polls);
 	spdk_json_write_named_uint64(w, "idle_polls", stats->idle_polls);
 	spdk_json_write_named_uint64(w, "completions", stats->completions);
@@ -4666,7 +4666,7 @@ accel_mlx5_dump_channel_stat_done(struct spdk_io_channel_iter *i, int status)
 		spdk_json_write_array_end(ctx->w);
 	}
 
-	accel_mlx5_dump_stats_json(ctx->w, "Total", &ctx->total);
+	accel_mlx5_dump_stats_json(ctx->w, "total", &ctx->total);
 
 	/* Ends the whole response which was begun in accel_mlx5_dump_stats */
 	spdk_json_write_object_end(ctx->w);

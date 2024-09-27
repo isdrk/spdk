@@ -2477,19 +2477,19 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "Total": {
-      "UMRs": {
+    "total": {
+      "umrs": {
         "crypto_umrs": 1234,
         "sig_umrs": 2345,
         "sig_crypto_umrs": 3456,
         "total": 7035
       },
-      "RDMA": {
+      "rdma": {
         "read": 0,
         "write": 7035,
         "total": 7035
       },
-      "Polling": {
+      "polling": {
         "polls": 1096,
         "idle_polls": 300,
         "completions": 7035,

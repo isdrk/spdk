@@ -146,13 +146,13 @@ validate_crypto_crc_stats() {
 	rpc_sock=$1
 	stats=$($rpc_py -s $rpc_sock accel_mlx5_dump_stats -l total)
 
-	sig_crypto_umrs=$(echo $stats | jq -r '.Total.UMRs.sig_crypto_umrs')
+	sig_crypto_umrs=$(echo $stats | jq -r '.total.umrs.sig_crypto_umrs')
 	if [ "$sig_crypto_umrs" == 0 ]; then
 		echo "Unexpected number of crypto_umrs: $sig_crypto_umrs, expected > 0"
 		return 1
 	fi
-	sig_umrs=$(echo $stats | jq -r '.Total.UMRs.sig_umrs')
-	crypto_umrs=$(echo $stats | jq -r '.Total.UMRs.crypto_umrs')
+	sig_umrs=$(echo $stats | jq -r '.total.umrs.sig_umrs')
+	crypto_umrs=$(echo $stats | jq -r '.total.umrs.crypto_umrs')
 	if ((sig_umrs + crypto_umrs > 0)); then
 		echo "Unexpected number of unmerged UMRs"
 		return 1

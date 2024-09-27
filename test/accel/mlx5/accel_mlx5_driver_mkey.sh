@@ -72,28 +72,28 @@ validate_mkey_stats() {
 	rpc_sock=$1
 	stats=$($rpc_py -s $rpc_sock accel_mlx5_dump_stats -l total)
 
-	val=$(echo $stats | jq -r '.Total.UMRs.umrs')
+	val=$(echo $stats | jq -r '.total.umrs.umrs')
 	if [ "$val" == 0 ]; then
 		echo "Unexpected number of umrs: $val, expected > 0"
 		return 1
 	fi
-	val=$(echo $stats | jq -r '.Total.UMRs.crypto_umrs')
+	val=$(echo $stats | jq -r '.total.umrs.crypto_umrs')
 	if [ "$val" != 0 ]; then
 		echo "Unexpected number of crypto_umrs: $val, expected 0"
 		return 1
 	fi
-	val=$(echo $stats | jq -r '.Total.UMRs.sig_umrs')
+	val=$(echo $stats | jq -r '.total.umrs.sig_umrs')
 	if [ "$val" != 0 ]; then
 		echo "Unexpected number of sig_umrs: $val, expected 0"
 		return 1
 	fi
-	val=$(echo $stats | jq -r '.Total.RDMA.total')
+	val=$(echo $stats | jq -r '.total.rdma.total')
 	if [ "$val" != 0 ]; then
 		echo "Unexpected number of RDMA operations: $val, expected 0"
 		return 1
 	fi
-	val=$(echo $stats | jq -r '.Total.tasks.mkey')
-	if [ $val != 0 ] && [ $val != $(echo $stats | jq -r '.Total.tasks.total') ]; then
+	val=$(echo $stats | jq -r '.total.tasks.mkey')
+	if [ $val != 0 ] && [ $val != $(echo $stats | jq -r '.total.tasks.total') ]; then
 		echo "Unexpected number of mkey tasks: $val, expected > 0 and no other tasks"
 		return 1
 	fi
