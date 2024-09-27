@@ -1,0 +1,85 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+---
+job: doca-nvmf-target-offload-coverity
+
+registry_host: nbu-harbor.gtm.nvidia.com
+registry_path: /swx-storage/doca_nvmf_target_offload
+
+credentials:
+  - {credentialsId: 'snap4_coverity', usernameVariable: 'COV_USER', passwordVariable: 'COV_PASS'}
+
+timeout_minutes: 120
+
+env:
+  DOCA_BUILDER_TAG: '${CI_ENV_DOCA_BUILDER_TAG}'
+  REGISTRY_AUTH_FILE: '${CI_ENV_REGISTRY_AUTH_FILE}'
+  GIT_SSH_COMMAND: '${CI_ENV_GIT_SSH_COMMAND}'
+  STORAGE_DRIVER: '${CI_ENV_STORAGE_DRIVER}'
+
+failFast: false
+kubernetes:
+  cloud: il-ipp-blossom-prod
+  namespace: nbu-swx-storage-devops
+  runAsUser: "6213"
+  runAsGroup: "11429"
+  privileged: true
+  arch_table:
+    aarch64:
+      jnlpImage: '${CI_ENV_JNLP_AARCH64}'
+      dockerImage: '${CI_ENV_DOCKER_AARCH64}'
+
+volumes:
+  - {mountPath: /auto/sw_tools, hostPath: /auto/sw_tools}
+
+empty_volumes:
+  - {mountPath: /var/home/swx-jenkins/.local/share/containers, memory: false}
+
+pvc_volumes:
+  - {claimName: nbu-swx-storage-devops-pvc, mountPath: /mnt/pvc, readOnly: false}
+
+secret_volumes:
+  - {secretName: 'registry-auth-file', mountPath: '/mnt/secret_podman'}
+  - {secretName: 'mellanox-github-rsa', mountPath: '/var/home/swx-jenkins/.ssh'}
+
+runs_on_dockers:
+  - {
+     file: '.ci/Dockerfile.doca', name: 'toolbox', arch: 'aarch64', tag: "${CI_ENV_CI_REV}", 
+     category: 'tool', build_args: "--build-arg DOCA_IMAGE_TAG=${DOCA_BUILDER_TAG} --pull --no-cache"
+    }
+
+steps:
+  - name: Coverity
+    containerSelector: "{name:'toolbox'}"
+    credentialsId: 'snap4_coverity'
+    run: |
+      set -eux
+      [ ! -z "$COV_SERVER_URL" ] || { echo "COV_SERVER_URL is empty!"; exit 1; }
+      [ ! -z "$COV_USER" ] || { echo "COV_USER is empty!"; exit 1; }
+      [ ! -z "$COV_PASS" ] || { echo "COV_PASS is empty!"; exit 1; }
+      [ ! -z "$COV_STREAM" ] || { echo "COV_STREAM is empty!"; exit 1; }
+      .ci/coverity.sh --pre_script 'pwd && ls -la && .ci/dpdk_patch.sh && ./configure --with-rdma=mlx5_dv --with-doca --with-flexio --disable-tests --disable-unit-tests --disable-examples --prefix=/opt' \
+                      --build_script "make -j4" \
+                      --include_files 'lib/nvmf/rdma_offload.c lib/env_dpdk/dmabuf.c' \
+                      --doca-version `echo $DOCA_BUILDER_TAG | grep -o "[0-9]\+\.[0-9]\+\.[0-9]*"` \
+                      --url $COV_SERVER_URL \
+                      --user $COV_USER \
+                      --password $COV_PASS \
+                      --stream $COV_STREAM \
+                      --upload \
+                      --verbose
+    archiveArtifacts: 'cov_build/html/**/*,cov_build/coverity.log,cov_build/*.txt'
+    publishHTML:
+      reportDir: 'cov_build/html'
+      reportFiles: 'index.html'
+      reportName: 'Coverity Report'
+    parallel: true

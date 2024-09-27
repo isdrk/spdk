@@ -2,7 +2,25 @@
 
 // load pipeline functions
 // Requires pipeline-github-lib plugin to load library from github
-@Library('github.com/Mellanox/ci-demo@master')
+@Library('github.com/Mellanox/ci-demo@stable_storage')
 def matrix = new com.mellanox.cicd.Matrix()
 
-matrix.main()
+def label = "worker-${UUID.randomUUID().toString()}"
+
+
+println("Cloud launch on ${label}")
+
+// JNLP location:
+// https://gitlab-master.nvidia.com/nbu-swx/storage/snap-verification/-/blob/master/docker/ci/
+podTemplate(
+    label: label,
+    containers: [
+        containerTemplate(
+            name: 'jnlp',
+            image: 'nbu-harbor.gtm.nvidia.com/swx-storage/arc/amd64/swx-storage-jnlp:20250519-1',
+            args: '${computer.jnlpmac} ${computer.name}'
+        )
+    ]
+) {
+    matrix.startPipeline(label)
+}
