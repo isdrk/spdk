@@ -14,6 +14,7 @@
 #include <doca_sta_subsystem.h>
 #include <doca_sta_io.h>
 #include <doca_sta_io_qp.h>
+#include <doca_sta_io_non_offload.h>
 #include <infiniband/mlx5dv.h>
 
 #include "spdk/stdinc.h"
@@ -5086,6 +5087,50 @@ nvmf_sta_io_disconnect_comp_hadler(struct doca_comch_producer_task_send *task,
 }
 
 static void
+nvmf_sta_io_non_offload_hadler(doca_sta_qp_handle_t qp_handle,
+			       const uint8_t *nvme_cmd,
+			       uint8_t *payload,
+			       uint32_t payload_len,
+			       bool payload_valid,
+			       union doca_data non_offload_user_data)
+{
+	SPDK_ERRLOG("not implemented\n");
+	assert(0);
+}
+
+static void
+nvmf_sta_io_rdma_write_comp(struct doca_comch_producer_task_send *task,
+			    union doca_data task_user_data)
+{
+	SPDK_ERRLOG("not implemented\n");
+	assert(0);
+}
+
+static void
+nvmf_sta_io_rdma_write_error(struct doca_comch_producer_task_send *task,
+			     union doca_data task_user_data)
+{
+	SPDK_ERRLOG("not implemented\n");
+	assert(0);
+}
+
+static void
+nvmf_sta_io_rdma_read_comp(struct doca_comch_producer_task_send *task,
+			   union doca_data task_user_data)
+{
+	SPDK_ERRLOG("not implemented\n");
+	assert(0);
+}
+
+static void
+nvmf_sta_io_rdma_read_error(struct doca_comch_producer_task_send *task,
+			    union doca_data task_user_data)
+{
+	SPDK_ERRLOG("not implemented\n");
+	assert(0);
+}
+
+static void
 nvmf_sta_io_disconnect_error_hadler(struct doca_comch_producer_task_send *task,
 				    union doca_data task_user_data)
 {
@@ -5176,6 +5221,31 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
+
+	udata.ptr = opoller;
+	drc = doca_sta_io_non_offload_register_cb(opoller->sta_io, nvmf_sta_io_non_offload_hadler, udata);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set non-offload handler doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
+	drc = doca_sta_io_task_non_offload_set_rdma_write_send_conf(opoller->sta_io, nvmf_sta_io_rdma_write_comp,
+								    nvmf_sta_io_rdma_write_error);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set rdma_write completio handler doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
+	drc = doca_sta_io_task_non_offload_set_rdma_read_conf(opoller->sta_io, nvmf_sta_io_rdma_read_comp,
+							      nvmf_sta_io_rdma_read_error);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set rdma_read completio handler doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
 	opoller->io_ctx = doca_sta_io_as_doca_ctx(opoller->sta_io);
 	if (!opoller->io_ctx) {
 		SPDK_ERRLOG("Unable to get doca_ctx\n");
