@@ -28,59 +28,18 @@
  * https://kernelnewbies.org/KernelHeaders
  */
 
-#ifndef VFIO_DEVICE_FEATURE
-/**
- * VFIO_DEVICE_FEATURE - _IOWR(VFIO_TYPE, VFIO_BASE + 17,
- *			       struct vfio_device_feature)
- *
- * Get, set, or probe feature data of the device.  The feature is selected
- * using the FEATURE_MASK portion of the flags field.  Support for a feature
- * can be probed by setting both the FEATURE_MASK and PROBE bits.  A probe
- * may optionally include the GET and/or SET bits to determine read vs write
- * access of the feature respectively.  Probing a feature will return success
- * if the feature is supported and all of the optionally indicated GET/SET
- * methods are supported.  The format of the data portion of the structure is
- * specific to the given feature.  The data portion is not required for
- * probing.  GET and SET are mutually exclusive, except for use with PROBE.
- *
- * Return 0 on success, -errno on failure.
- */
-struct vfio_device_feature {
-	__u32	argsz;
-	__u32	flags;
-#define VFIO_DEVICE_FEATURE_MASK	(0xffff) /* 16-bit feature index */
-#define VFIO_DEVICE_FEATURE_GET		(1 << 16) /* Get feature into data[] */
-#define VFIO_DEVICE_FEATURE_SET		(1 << 17) /* Set feature from data[] */
-#define VFIO_DEVICE_FEATURE_PROBE	(1 << 18) /* Probe feature support */
-	__u8	data[];
-};
-
-#define VFIO_DEVICE_FEATURE		_IO(VFIO_TYPE, VFIO_BASE + 17)
-
-#endif /* VFIO_DEVICE_FEATURE */
-
-#ifndef VFIO_DEVICE_FEATURE_DMA_BUF
-/**
- * Upon VFIO_DEVICE_FEATURE_GET create a dma_buf fd for the
- * region selected.
- *
- * open_flags are the typical flags passed to open(2), eg O_RDWR, O_CLOEXEC,
- * etc. offset/length specify a slice of the region to create the dmabuf from.
- * If both are 0 then the whole region is used.
- *
- * Return: The fd number on success, -1 and errno is set on failure.
- */
-struct vfio_device_feature_dma_buf {
+#ifndef VFIO_DEVICE_P2P_DMA_BUF
+struct vfio_device_p2p_dma_buf {
 	__u32 region_index;
 	__u32 open_flags;
 	__u32 offset;
 	__u64 length;
 };
-#define VFIO_DEVICE_FEATURE_DMA_BUF 3
+#define VFIO_DEVICE_P2P_DMA_BUF _IO(VFIO_TYPE, VFIO_BASE + 22)
 
-#endif /* VFIO_DEVICE_FEATURE_DMA_BUF */
+#endif /* VFIO_DEVICE_P2P_DMA_BUF */
 
-#ifndef VFIO_DEVICE_FEATURE_DMA_BUF
+#ifndef VFIO_DEVICE_P2P_DMA_BUF
 int
 spdk_pci_device_create_dmabuf(__attribute__((unused)) struct spdk_pci_device *spdk_dev,
 			      __attribute__((unused)) int bar)
@@ -232,28 +191,22 @@ get_vfio_dev_fd(const char *pci_dev_name)
 static int
 get_vfio_dmabuf_fd(int vfio_dev_fd, int bar)
 {
-	struct vfio_device_feature *feature;
-	struct vfio_device_feature_dma_buf *dmabuf;
-	size_t args_size = sizeof(*feature) + sizeof(*dmabuf);
+	struct vfio_device_p2p_dma_buf *dmabuf_args;
 	int dmabuf_fd;
 
-	feature = calloc(1, args_size);
-	if (!feature) {
+	dmabuf_args = calloc(1, sizeof(*dmabuf_args));
+	if (!dmabuf_args) {
 		return -ENOMEM;
 	}
 
-	feature->argsz = args_size;
-	feature->flags = VFIO_DEVICE_FEATURE_GET | VFIO_DEVICE_FEATURE_DMA_BUF;
+	dmabuf_args->region_index = bar;
+	dmabuf_args->open_flags = O_RDWR;
+	dmabuf_args->offset = 0;
+	dmabuf_args->length = 0;
 
-	dmabuf = (void *)feature->data;
-	dmabuf->region_index = bar;
-	dmabuf->open_flags = O_RDWR;
-	dmabuf->offset = 0;
-	dmabuf->length = 0;
+	dmabuf_fd = ioctl(vfio_dev_fd, VFIO_DEVICE_P2P_DMA_BUF, dmabuf_args);
 
-	dmabuf_fd = ioctl(vfio_dev_fd, VFIO_DEVICE_FEATURE, feature);
-
-	free(feature);
+	free(dmabuf_args);
 
 	return dmabuf_fd;
 }
