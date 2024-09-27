@@ -12,6 +12,7 @@
 #include <doca_sta.h>
 #include <doca_sta_be.h>
 #include <doca_sta_subsystem.h>
+#include <doca_sta_mem.h>
 #include <doca_sta_io.h>
 #include <doca_sta_io_qp.h>
 #include <doca_sta_io_non_offload.h>
@@ -3219,7 +3220,7 @@ nvmf_sta_free(void *buf)
 }
 
 static uint64_t
-nvmf_sta_vtophys(void *buf)
+nvmf_sta_vtophys(const void *buf)
 {
 	return spdk_vtophys(buf, NULL);
 }
