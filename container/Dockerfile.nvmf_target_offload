@@ -1,0 +1,73 @@
+ARG DOCA_IMAGE=nvcr.io/nvstaging/doca/doca
+ARG DOCA_BUILDER_TAG=2.9.0052-devel-ubuntu22.04-arm64
+ARG DOCA_RUNTIME_TAG=2.9.0052-full-rt-ubuntu22.04-arm64
+ARG NVMF_TARGET_OFFLOAD_PATH=/opt/nvidia/nvmf_target_offload
+
+FROM ${DOCA_IMAGE}:${DOCA_BUILDER_TAG} as builder
+ARG DOCA_BUILDER_TAG
+ARG NVMF_TARGET_OFFLOAD_PATH
+ARG NVMF_TARGET_OFFLOAD_BUILD_ARGS
+ARG SIGN_DPA=false
+ARG DPA_SIGN_USER
+ARG DPA_SIGN_PASS
+
+SHELL ["/bin/bash", "-c"]
+
+COPY ./ /build
+WORKDIR /build
+
+# Install dependecies
+RUN apt update && \
+    apt install -y dpkg-dev debhelper patchelf python3-pyelftools \
+                   libfuse3-dev libaio-dev libncurses-dev podman && \
+    apt purge -y spdk*
+
+# Build and install DOCA STA
+RUN set -x; \
+    DOCA_VERSION=$(echo $DOCA_BUILDER_TAG | grep -o "[0-9]\.[0-9]\.[0-9]*") && \
+    wget https://urm.nvidia.com/artifactory/sw-nbu-doca-local/doca-sdk/$(echo $DOCA_VERSION | grep -o "[0-9]\.[0-9]\.[0-9]")/DOCA_${DOCA_VERSION//./-}-1/doca-sdk-sta-${DOCA_VERSION}.tar.gz && \
+    tar xzvf doca-sdk-sta-${DOCA_VERSION}.tar.gz --no-same-owner && \
+    cd doca-sdk-sta-${DOCA_VERSION} && \
+    . ./devtools/public/set_env_variables.sh --deb && \
+    ./devtools/public/doca_package_build.sh --dpu --deb && \
+    cd ../ && \
+    dpkg -i doca-sdk-sta_${DOCA_VERSION}-1_arm64.deb libdoca-sdk-sta-dev_${DOCA_VERSION}-1_arm64.deb
+
+RUN set -eux; \
+    .ci/dpdk_patch.sh && \
+    ./configure --with-rdma=mlx5_dv --with-doca --with-flexio \
+    --disable-tests --disable-unit-tests --disable-examples \
+    --prefix=${NVMF_TARGET_OFFLOAD_PATH} ${NVMF_TARGET_OFFLOAD_BUILD_ARGS} && \
+    make -j && make -j install && \
+    [ "$SIGN_DPA" = "true" ] && echo "\n===== SIGN DPA =====\n"&& \
+    cp sign-tool/build/bf3_dpa/* /usr/bin/ && hash -r && \
+    .ci/sign_dpa.sh ${NVMF_TARGET_OFFLOAD_PATH}/bin/spdk_tgt
+
+FROM ${DOCA_IMAGE}:${DOCA_RUNTIME_TAG}
+ARG NVMF_TARGET_OFFLOAD_PATH
+ARG VERSION
+ARG GIT_COMMIT
+LABEL version=$VERSION
+LABEL git-commit=$GIT_COMMIT
+
+ENV LD_LIBRARY_PATH="${NVMF_TARGET_OFFLOAD_PATH}/lib:$LD_LIBRARY_PATH"
+ENV PYTHONPATH="${NVMF_TARGET_OFFLOAD_PATH}/local/lib/python3.10/dist-packages:$PYTHONPATH"
+ENV PKG_CONFIG_PATH="${NVMF_TARGET_OFFLOAD_PATH}/lib/pkgconfig:$PKG_CONFIG_PATH"
+ENV PATH="${NVMF_TARGET_OFFLOAD_PATH}/bin:$PATH"
+
+RUN apt update && apt install -y supervisor libjson-c5 fuse3
+RUN apt clean && rm -rf /var/lib/apt/lists/*
+RUN dpkg --force-all -r spdk spdk-rpc mlnx-dpdk
+
+COPY --from=builder ${NVMF_TARGET_OFFLOAD_PATH} ${NVMF_TARGET_OFFLOAD_PATH}
+
+COPY ./container/entrypoint.sh /usr/bin/entrypoint.sh
+COPY ./container/set_environment_variables.sh ${NVMF_TARGET_OFFLOAD_PATH}/bin/set_environment_variables.sh
+
+RUN ln -sfT ${NVMF_TARGET_OFFLOAD_PATH}/bin/spdk_rpc ${NVMF_TARGET_OFFLOAD_PATH}/bin/spdk_rpc.py
+
+# Supervisord
+RUN mkdir -p /var/log/supervisor
+COPY ./container/supervisord.conf /etc/supervisor/supervisord.conf
+
+ENTRYPOINT ["supervisord", "-c", "/etc/supervisor/supervisord.conf"]

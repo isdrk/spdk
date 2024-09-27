@@ -1,0 +1,67 @@
+#
+# SPDX-FileCopyrightText: Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+#
+# NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+# property and proprietary rights in and to this material, related
+# documentation and any modifications thereto. Any use, reproduction,
+# disclosure or distribution of this material and related documentation
+# without an express license agreement from NVIDIA CORPORATION or
+# its affiliates is strictly prohibited.
+#
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: doca-nvmf-target-offload
+spec:
+  hostNetwork: true
+  containers:
+  - name: doca-nvmf-target-offload
+    image: nvcr.io/nvstaging/doca/doca_nvmf_target_offload:0.0.1-1-doca2.9.0
+    imagePullPolicy: Always
+    securityContext:
+      privileged: true
+      capabilities:
+        add: ["IPC_LOCK", "SYS_RAWIO", "SYS_NICE"]
+    volumeMounts:
+    - mountPath: /dev/hugepages
+      name: hugepages
+    - mountPath: /dev/shm
+      name: shm
+    - mountPath: /dev/infiniband
+      name: infiniband
+    - mountPath: /dev/vfio
+      name: vfio
+    - mountPath: /etc/nvmf_target_offload
+      name: conf
+    resources:
+      requests:
+        memory: "2Gi"
+        hugepages-2Mi: "4Gi"
+        cpu: "8"
+      limits:
+        memory: "4Gi"
+        hugepages-2Mi: "4Gi"
+        cpu: "8"
+    env:
+      - name: APP_ARGS
+        value: "-m 0xff"
+      #- name: SPDK_RPC_INIT_CONF
+      #  value: "/etc/nvmf_target_offload/spdk_rpc_init.conf"
+  volumes:
+  - name: hugepages
+    emptyDir:
+      medium: HugePages
+  - name: shm
+    hostPath:
+      path: /dev/shm
+  - name: infiniband
+    hostPath:
+      path: /dev/infiniband
+  - name: vfio
+    hostPath:
+      path: /dev/vfio
+  - name: conf
+    hostPath:
+      path: /etc/nvmf_target_offload

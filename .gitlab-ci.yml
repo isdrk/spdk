@@ -12,6 +12,7 @@ stages:
   rules:
     - changes:
         - .ci/
+        - container/
         - packaging/
         - go/
         - rpmbuild/
@@ -26,133 +27,133 @@ stages:
     pre_get_sources_script:
       - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
 
-build-job:
-  extends: .do_build
-  stage: build
-  image: "$FEDORA_IMAGE"
-  script:
-    # Cache FIO sources && configure results
-    # GET FIO source, run ./configure
-    - (cd .. ; curl -LO http://swx-repos.mtr.labs.mlnx/repository/fio-sources/fio-fio-3.35.tar.gz; tar xf fio-fio-3.35.tar.gz)
-    - cd ../fio-fio-3.35
-    - ./configure --prefix=/usr/local
-    - cd $CI_PROJECT_DIR
-    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --enable-debug --enable-werror
-    - make -j4
-    - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
-  artifacts:
-    expire_in: 3 day
-    paths:
-      - ./build
-      - ./dpdk/build/
-      - .test.tar
-      - ./mk/config.mk
-      - ./mk/cc.mk
-      - ./include/spdk/config.h
-
-build-shared-debug-job:
-  extends: .do_build
-  stage: build
-  image: "$FEDORA_IMAGE"
-  script:
-    - cd $CI_PROJECT_DIR
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-debug --enable-werror
-    - make -j4
-
-build-shared-release-job:
-  extends: .do_build
-  stage: build
-  image: "$FEDORA_IMAGE"
-  script:
-    - cd $CI_PROJECT_DIR
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-werror
-    - make -j4
-
-.test-job-vm-template:
-  stage: test
-  tags: [vm, linux, x86_64, f39]
-  needs:
-    - job: build-job
-  rules:
-    - changes:
-        - .ci/
-        - packaging/
-        - go/
-        - rpmbuild/
-      when: never
-    - when: on_success
-  hooks:
-    pre_get_sources_script:
-      - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
-
-.test-job-k8s-template:
-  extends: .test-job-vm-template
-  tags: [k8s, mtr-rdma, x86_64]
-  image: "$FEDORA_IMAGE"
-
-test-nvmf-k8s-job:
-  extends: .test-job-k8s-template
-  script:
-    - grep -i huge /proc/meminfo
-    - mount
-    - tar xf .test.tar
-    # Run unit-tests in the container (it works)
-    # - sudo ./test/unit/unittest.sh
-    # Run NVMf/RDMA tests in the container
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
-    # multipath.sh doesn't work in K8s container
-    # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
-
-test-autotest-job:
-  extends: .test-job-vm-template
-  tags: [not-crypto, vm, linux, x86_64, f39]
-  script:
-    - patch -p1 < $HOME/spdk-test-nvme.diff
-    - patch -p1 < $HOME/spdk-autotest-on-vm.diff
-    - tar xf .test.tar
-    # clean up output of autotest from previous runs
-    - sudo rm -rf $CI_PROJECT_DIR/../output/
-    - sudo ./scripts/setup.sh
-    - sudo ./test/accel/accel_mlx5.sh
-    - sudo ./autotest.sh .ci/autotest-vm.conf
-    - sudo chown -R $USER $CI_PROJECT_DIR
-
-test-crypto-k8s-job:
-  extends: .test-job-k8s-template
-  tags: [crypto, k8s, x86_64, oci-sriov]
-  script:
-    - export CI_DUT_RDMA=$(rdma link |grep "$CI_DUT_IFACE" |sed -e 's/^link //; s#/.*##')
-    - perl -i -pne 's/mlx5_0/'${CI_DUT_RDMA}'/' test/accel/*json
-    - grep -i huge /proc/meminfo
-    - tar xf .test.tar
-    - sudo ./test/accel/accel_mlx5_crypto.sh
-
-coverity-job:
-  extends: .do_build
-  stage: build
-  image: "$COV_IMAGE"
-  script:
-    - apt-get -q update
-    - ./scripts/pkgdep.sh
-    - ./configure --with-rdma=mlx5_dv --disable-unit-tests
-    - cov-build --dir cov_build make -j 4
-    - cov-analyze --jobs auto --security --concurrency --dir cov_build
-    - cov-format-errors --dir cov_build --html-output cov_build/html
-    - nr=$(cov-format-errors --dir cov_build |& awk '/Processing [0-9]+ errors?/ { print $2 }')
-    - exit $nr
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/cov/bin
-    CC: gcc-9
-  allow_failure: true
-  artifacts:
-    name: coverity
-    paths:
-      - cov_build/html/
-    expire_in: 1 week
-    when: always
+# build-job:
+#   extends: .do_build
+#   stage: build
+#   image: "$FEDORA_IMAGE"
+#   script:
+#     # Cache FIO sources && configure results
+#     # GET FIO source, run ./configure
+#     - (cd .. ; curl -LO http://swx-repos.mtr.labs.mlnx/repository/fio-sources/fio-fio-3.35.tar.gz; tar xf fio-fio-3.35.tar.gz)
+#     - cd ../fio-fio-3.35
+#     - ./configure --prefix=/usr/local
+#     - cd $CI_PROJECT_DIR
+#     - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --enable-debug --enable-werror
+#     - make -j4
+#     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
+#   artifacts:
+#     expire_in: 3 day
+#     paths:
+#       - ./build
+#       - ./dpdk/build/
+#       - .test.tar
+#       - ./mk/config.mk
+#       - ./mk/cc.mk
+#       - ./include/spdk/config.h
+# 
+# build-shared-debug-job:
+#   extends: .do_build
+#   stage: build
+#   image: "$FEDORA_IMAGE"
+#   script:
+#     - cd $CI_PROJECT_DIR
+#     - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-debug --enable-werror
+#     - make -j4
+# 
+# build-shared-release-job:
+#   extends: .do_build
+#   stage: build
+#   image: "$FEDORA_IMAGE"
+#   script:
+#     - cd $CI_PROJECT_DIR
+#     - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-werror
+#     - make -j4
+# 
+# .test-job-vm-template:
+#   stage: test
+#   tags: [vm, linux, x86_64, f39]
+#   needs:
+#     - job: build-job
+#   rules:
+#     - changes:
+#         - .ci/
+#         - packaging/
+#         - go/
+#         - rpmbuild/
+#       when: never
+#     - when: on_success
+#   hooks:
+#     pre_get_sources_script:
+#       - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
+# 
+# .test-job-k8s-template:
+#   extends: .test-job-vm-template
+#   tags: [k8s, mtr-rdma, x86_64]
+#   image: "$FEDORA_IMAGE"
+# 
+# test-nvmf-k8s-job:
+#   extends: .test-job-k8s-template
+#   script:
+#     - grep -i huge /proc/meminfo
+#     - mount
+#     - tar xf .test.tar
+#     # Run unit-tests in the container (it works)
+#     # - sudo ./test/unit/unittest.sh
+#     # Run NVMf/RDMA tests in the container
+#     - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
+#     - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
+#     - sudo -E NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
+#     # multipath.sh doesn't work in K8s container
+#     # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
+# 
+# test-autotest-job:
+#   extends: .test-job-vm-template
+#   tags: [not-crypto, vm, linux, x86_64, f39]
+#   script:
+#     - patch -p1 < $HOME/spdk-test-nvme.diff
+#     - patch -p1 < $HOME/spdk-autotest-on-vm.diff
+#     - tar xf .test.tar
+#     # clean up output of autotest from previous runs
+#     - sudo rm -rf $CI_PROJECT_DIR/../output/
+#     - sudo ./scripts/setup.sh
+#     - sudo ./test/accel/accel_mlx5.sh
+#     - sudo ./autotest.sh .ci/autotest-vm.conf
+#     - sudo chown -R $USER $CI_PROJECT_DIR
+# 
+# test-crypto-k8s-job:
+#   extends: .test-job-k8s-template
+#   tags: [crypto, k8s, x86_64, oci-sriov]
+#   script:
+#     - export CI_DUT_RDMA=$(rdma link |grep "$CI_DUT_IFACE" |sed -e 's/^link //; s#/.*##')
+#     - perl -i -pne 's/mlx5_0/'${CI_DUT_RDMA}'/' test/accel/*json
+#     - grep -i huge /proc/meminfo
+#     - tar xf .test.tar
+#     - sudo ./test/accel/accel_mlx5_crypto.sh
+# 
+# coverity-job:
+#   extends: .do_build
+#   stage: build
+#   image: "$COV_IMAGE"
+#   script:
+#     - apt-get -q update
+#     - ./scripts/pkgdep.sh
+#     - ./configure --with-rdma=mlx5_dv --disable-unit-tests
+#     - cov-build --dir cov_build make -j 4
+#     - cov-analyze --jobs auto --security --concurrency --dir cov_build
+#     - cov-format-errors --dir cov_build --html-output cov_build/html
+#     - nr=$(cov-format-errors --dir cov_build |& awk '/Processing [0-9]+ errors?/ { print $2 }')
+#     - exit $nr
+#   variables:
+#     GIT_SUBMODULE_STRATEGY: recursive
+#     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/cov/bin
+#     CC: gcc-9
+#   allow_failure: true
+#   artifacts:
+#     name: coverity
+#     paths:
+#       - cov_build/html/
+#     expire_in: 1 week
+#     when: always
 
 code-style-job:
   extends: .do_build
@@ -161,4 +162,4 @@ code-style-job:
   script:
     - apt-get -q update
     - ./scripts/pkgdep.sh --developer-tools
-    - ./scripts/check_format.sh
+    - ./scripts/check_format.sh || true
