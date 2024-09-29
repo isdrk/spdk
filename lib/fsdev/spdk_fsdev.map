@@ -70,6 +70,8 @@
 	spdk_fsdev_get_device_stat;
 	spdk_fsdev_reset_device_stat;
 	spdk_fsdev_io_type_get_name;
+	spdk_fsdev_reset_supported;
+	spdk_fsdev_reset;
 
 	# Public functions in fsdev_module.h
 	spdk_fsdev_register;
