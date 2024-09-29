@@ -1,18 +1,19 @@
 ---
 workflow:
   rules:
-    - changes:
-      - include/spdk/fsdev.h
-      - include/spdk/fsdev_module.h
-      - include/linux/virtio_fs.h
-      - include/linux/fuse_kernel.h
-      - include/linux/virtio_types.h
-      - python/spdk/rpc/fsdev.py
-      - lib/fsdev/
-      - lib/fuse_dispatcher/
-      - module/event/subsystems/fsdev/
-      - module/fsdev/
-      - test/unit/lib/fsdev/
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - include/spdk/fsdev.h
+        - include/spdk/fsdev_module.h
+        - include/linux/virtio_fs.h
+        - include/linux/fuse_kernel.h
+        - include/linux/virtio_types.h
+        - python/spdk/rpc/fsdev.py
+        - lib/fsdev/**/*
+        - lib/fuse_dispatcher/**/*
+        - module/event/subsystems/fsdev/**/*
+        - module/fsdev/**/*
+        - test/unit/lib/fsdev/**/*
       variables:
         PIPELINE_TYPE: "fsdev"
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
