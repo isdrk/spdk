@@ -603,8 +603,7 @@ struct spdk_nvmf_rdma_bdev_nvme_queue {
 	doca_sta_be_q_handle_t				handle;
 	struct doca_mmap				*sq_mmap;
 	struct doca_mmap				*cq_mmap;
-	struct doca_mmap				*sqdb_mmap;
-	struct doca_mmap				*cqdb_mmap;
+	struct doca_mmap				*db_mmap;
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx	destroy_ctx;
 };
 
@@ -616,8 +615,7 @@ struct spdk_nvmf_rdma_bdev_null_queue {
 	doca_sta_be_q_handle_t				handle;
 	struct doca_mmap				*sq_mmap;
 	struct doca_mmap				*cq_mmap;
-	struct doca_mmap				*sqdb_mmap;
-	struct doca_mmap				*cqdb_mmap;
+	struct doca_mmap				*db_mmap;
 	struct doca_comch_producer_task_send		*destroy_task;
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx	destroy_ctx;
 };
@@ -6828,22 +6826,13 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nv
 		queue->cq_mmap = NULL;
 	}
 
-	if (queue->sqdb_mmap) {
-		drc = doca_mmap_destroy(queue->sqdb_mmap);
+	if (queue->db_mmap) {
+		drc = doca_mmap_destroy(queue->db_mmap);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to destroy SQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
-		queue->sqdb_mmap = NULL;
-	}
-
-	if (queue->cqdb_mmap) {
-		drc = doca_mmap_destroy(queue->cqdb_mmap);
-		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy CQDB doca_mmap: %s\n", doca_error_get_descr(drc));
-			return -1;
-		}
-		queue->cqdb_mmap = NULL;
+		queue->db_mmap = NULL;
 	}
 
 	if (queue->db_dmabuf) {
@@ -6868,6 +6857,10 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	const struct spdk_nvme_transport_id *trid;
 	struct spdk_nvme_io_qpair_opts opts;
 	struct nvme_pcie_qpair *nvme_pqpair;
+	void *db_mmap_addr;
+	size_t db_mmap_len = 64;
+	size_t sq_db_mmap_offset;
+	size_t cq_db_mmap_offset;
 	doca_error_t drc;
 	int rc;
 
@@ -6931,28 +6924,25 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	SPDK_NOTICELOG("Nvme doorbells dmabuf: addr %p, len %lu, fd %d\n",
 		       queue->db_dmabuf->addr, queue->db_dmabuf->length, queue->db_dmabuf->fd);
 
-	/* @todo: can we create mmap for doorbell size only */
-	queue->sqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			   queue->db_dmabuf->addr, queue->db_dmabuf->length,
-			   queue->db_dmabuf->fd, 0);
-	if (!queue->sqdb_mmap) {
-		SPDK_ERRLOG("Failed to create SQDB mmap\n");
+	db_mmap_addr = (void *)((uintptr_t)nvme_pqpair->sq_tdbl & ~(db_mmap_len - 1));
+	sq_db_mmap_offset = (uintptr_t)nvme_pqpair->sq_tdbl - (uintptr_t)db_mmap_addr;
+	cq_db_mmap_offset = (uintptr_t)nvme_pqpair->cq_hdbl - (uintptr_t)db_mmap_addr;
+
+	assert((uintptr_t)nvme_pqpair->sq_tdbl >= (uintptr_t)db_mmap_addr);
+	assert(((uintptr_t)nvme_pqpair->sq_tdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr + db_mmap_len);
+	assert((uintptr_t)nvme_pqpair->cq_hdbl >= (uintptr_t)db_mmap_addr);
+	assert(((uintptr_t)nvme_pqpair->cq_hdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr + db_mmap_len);
+
+	queue->db_mmap = nvmf_rdma_create_doca_mmap(sta->dev, db_mmap_addr, db_mmap_len,
+			   queue->db_dmabuf->fd, (uintptr_t)db_mmap_addr - (uintptr_t)queue->db_dmabuf->addr);
+	if (!queue->db_mmap) {
+		SPDK_ERRLOG("Failed to create DB mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
-	/* @todo: can we create mmap for doorbell size only */
-	queue->cqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev,
-			   queue->db_dmabuf->addr, queue->db_dmabuf->length,
-			   queue->db_dmabuf->fd, 0);
-	if (!queue->cqdb_mmap) {
-		SPDK_ERRLOG("Failed to create CQDB mmap\n");
-		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
-		return -1;
-	}
-
-	drc = doca_sta_be_add_queue(rbdev->handle, queue->sq_mmap, queue->sqdb_mmap, queue->cq_mmap,
-				    queue->cqdb_mmap, &queue->handle);
+	drc = doca_sta_be_add_queue(rbdev->handle, queue->sq_mmap, queue->db_mmap, sq_db_mmap_offset, queue->cq_mmap,
+				    queue->db_mmap, cq_db_mmap_offset, &queue->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
 		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
@@ -6997,22 +6987,13 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nv
 		queue->cq_mmap = NULL;
 	}
 
-	if (queue->sqdb_mmap) {
-		drc = doca_mmap_destroy(queue->sqdb_mmap);
+	if (queue->db_mmap) {
+		drc = doca_mmap_destroy(queue->db_mmap);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to destroy SQDB doca_mmap: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
-		queue->sqdb_mmap = NULL;
-	}
-
-	if (queue->cqdb_mmap) {
-		drc = doca_mmap_destroy(queue->cqdb_mmap);
-		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy CQDB doca_mmap: %s\n", doca_error_get_descr(drc));
-			return -1;
-		}
-		queue->cqdb_mmap = NULL;
+		queue->db_mmap = NULL;
 	}
 
 	spdk_free(queue->sq);
@@ -7073,24 +7054,16 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	queue->sqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sqdb, sizeof(*queue->sqdb),
+	queue->db_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sqdb, sizeof(*queue->sqdb) + sizeof(*queue->cqdb),
 			   -1, 0);
-	if (!queue->sqdb_mmap) {
+	if (!queue->db_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
 		return -1;
 	}
 
-	queue->cqdb_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->cqdb, sizeof(*queue->cqdb),
-			   -1, 0);
-	if (!queue->cqdb_mmap) {
-		SPDK_ERRLOG("Failed to create CQDB mmap\n");
-		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
-		return -1;
-	}
-
-	drc = doca_sta_be_add_queue(bdev->handle, queue->sq_mmap, queue->sqdb_mmap, queue->cq_mmap,
-				    queue->cqdb_mmap, &queue->handle);
+	drc = doca_sta_be_add_queue(bdev->handle, queue->sq_mmap, queue->db_mmap, 0, queue->cq_mmap,
+				    queue->db_mmap, sizeof(*queue->sqdb), &queue->handle);
 	if (drc) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
 		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
