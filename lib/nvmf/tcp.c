@@ -2356,8 +2356,17 @@ nvmf_tcp_h2c_data_hdr_handle(struct spdk_nvmf_tcp_transport *ttransport,
 
 	pdu->req = tcp_req;
 
-	nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
-				  h2c_data->datao, h2c_data->datal);
+	if (tqpair->use_zero_copy_rx) {
+
+		/* As PDU zero copy receive data arrives we'll append to the pdu->data_iov array. After the PDU has been
+		* full received we'll update tcp_req->req.iov.
+		* TODO: DO NOT FORGET ABOUT datao! */
+		pdu->data_iovcnt = 0;
+		pdu->data_len = h2c_data->datal;
+	} else {
+		nvme_tcp_pdu_set_data_buf(pdu, tcp_req->req.iov, tcp_req->req.iovcnt,
+					  h2c_data->datao, h2c_data->datal);
+	}
 	nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PAYLOAD);
 	return;
 
@@ -3043,8 +3052,13 @@ nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 				STAILQ_REMOVE_HEAD(&tqpair->pending_stream, link);
 				tqpair->stream_offset = 0;
 
-				spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
-				STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+				assert(segment->refcnt > 0);
+				segment->refcnt--;
+
+				if (segment->refcnt == 0) {
+					spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+					STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
+				}
 			}
 		}
 	} else {
@@ -3087,7 +3101,7 @@ nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_p
 	assert(tqpair->sock != NULL);
 
 	tcp_req = pdu->req;
-	if (tqpair->use_zero_copy_rx && tcp_req != NULL && tcp_req->has_in_capsule_data) {
+	if (tqpair->use_zero_copy_rx && tcp_req != NULL) {
 		/* We'll do a zero copy recv into the PDU. */
 		return nvme_tcp_read_data_zcopy(tqpair, tcp_req, pdu);
 	}
@@ -3326,16 +3340,24 @@ nvmf_tcp_req_parse_sgl(struct spdk_nvmf_tcp_req *tcp_req,
 			goto fatal_err;
 		}
 
-		/* fill request length and populate iovs */
+		tqpair = SPDK_CONTAINEROF(tcp_req->req.qpair, struct spdk_nvmf_tcp_qpair, qpair);
+
+		/* fill the request length */
 		req->length = length;
 
 		SPDK_DEBUGLOG(nvmf_tcp, "Data requested length= 0x%x\n", length);
 
-		if (spdk_nvmf_request_get_buffers(req, group, transport, length)) {
-			/* No available buffers. Queue this request up. */
-			SPDK_DEBUGLOG(nvmf_tcp, "No available large data buffers. Queueing request %p\n",
-				      tcp_req);
-			return;
+		if (tcp_req->req.xfer != SPDK_NVME_DATA_HOST_TO_CONTROLLER || !tqpair->use_zero_copy_rx) {
+			if (spdk_nvmf_request_get_buffers(req, group, transport, length)) {
+				/* No available buffers. Queue this request up. */
+				SPDK_DEBUGLOG(nvmf_tcp, "No available large data buffers. Queueing request %p\n", tcp_req);
+				return;
+			}
+		} else {
+			/* We'll use zero copy rx buffers as they arrive, so set iovcnt to 0 for now. */
+			req->iovcnt = 0;
+			req->data_from_pool = false;
+			tcp_req->segment_cnt = 0;
 		}
 
 		nvmf_tcp_req_set_state(tcp_req, TCP_REQUEST_STATE_HAVE_BUFFER);
@@ -3678,11 +3700,9 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 		case TCP_REQUEST_STATE_HAVE_BUFFER:
 			spdk_trace_record(TRACE_TCP_REQUEST_STATE_HAVE_BUFFER, tqpair->qpair.trace_id, 0,
 					  (uintptr_t)tcp_req);
-			assert(tqpair->use_zero_copy_rx || tcp_req->req.iovcnt > 0);
-
 			/* If data is transferring from host to controller, we need to do a transfer from the host. */
 			if (tcp_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
-				if (tcp_req->req.data_from_pool) {
+				if (!tcp_req->has_in_capsule_data) {
 					SPDK_DEBUGLOG(nvmf_tcp, "Sending R2T for tcp_req(%p) on tqpair=%p\n", tcp_req, tqpair);
 					nvmf_tcp_send_r2t_pdu(tqpair, tcp_req);
 				} else {
@@ -3801,10 +3821,10 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 
 			if (tcp_req->req.data_from_pool) {
 				spdk_nvmf_request_free_buffers(&tcp_req->req, group, transport);
-			} else if (tcp_req->has_in_capsule_data) {
+			} else if (!tqpair->use_zero_copy_rx) {
 				tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
 
-				if (!tqpair->use_zero_copy_rx) {
+				if (tcp_req->has_in_capsule_data) {
 					if (spdk_unlikely((tcp_req->cmd.opc == SPDK_NVME_OPC_FABRIC || tqpair->qpair.qid == 0) &&
 							  tcp_req->req.length > transport->opts.in_capsule_data_size)) {
 						assert(tgroup->control_msg_list);
@@ -3812,31 +3832,33 @@ nvmf_tcp_req_process(struct spdk_nvmf_tcp_transport *ttransport,
 						nvmf_tcp_control_msg_put(tgroup->control_msg_list,
 									 tcp_req->req.iov[0].iov_base);
 					}
-				} else {
-					struct spdk_nvmf_tcp_stream_segment *segment;
-					uint32_t i;
+				}
+			} else {
+				struct spdk_nvmf_tcp_stream_segment *segment;
+				uint32_t i;
 
-					for (i = 0; i < tcp_req->segment_cnt; i++) {
-						segment = tcp_req->segment_refs[i];
+				tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
 
-						if (segment == NULL) {
-							/* This signals a double buffer */
-							spdk_free(tcp_req->req.iov[i].iov_base);
-						} else {
-							assert(segment->refcnt > 0);
-							segment->refcnt--;
+				for (i = 0; i < tcp_req->segment_cnt; i++) {
+					segment = tcp_req->segment_refs[i];
 
-							if (segment->refcnt == 0) {
-								assert(tgroup != NULL);
-								spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+					if (segment == NULL) {
+						/* This signals a double buffer */
+						spdk_free(tcp_req->req.iov[i].iov_base);
+					} else {
+						assert(segment->refcnt > 0);
+						segment->refcnt--;
 
-								STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
-							}
+						if (segment->refcnt == 0) {
+							assert(tgroup != NULL);
+							spdk_sock_release_buf(tqpair->sock, segment->buf, segment->token);
+
+							STAILQ_INSERT_HEAD(&tgroup->free_segments, segment, link);
 						}
 					}
-
-					tcp_req->segment_cnt = 0;
 				}
+
+				tcp_req->segment_cnt = 0;
 			}
 
 			tcp_req->req.length = 0;
