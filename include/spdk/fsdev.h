@@ -1292,6 +1292,22 @@ int spdk_fsdev_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 typedef void (spdk_fsdev_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
+ * Rename2 API flags.
+ *
+ * SPDK_FSDEV_RENAME_EXCHANGE - Atomically exchange oldpath and newpath. Both pathnames must
+ * exist but may be of different types (e.g., one could be a non-empty directory and the other
+ * a symbolic link).
+ * SPDK_FSDEV_RENAME_NOREPLACE - Don't overwrite newpath of the rename. Return an error if
+ * newpath already exists.
+ * SPDK_FSDEV_RENAME_WHITEOUT - Specifying RENAME_WHITEOUT creates a "whiteout" object at the
+ * source of the rename at the same time as performing the rename. The whole operation is
+ * atomic, so that if the rename succeeds then the whiteout will also have been created.
+ */
+#define SPDK_FSDEV_RENAME_EXCHANGE  (1 << 0)
+#define SPDK_FSDEV_RENAME_NOREPLACE (1 << 1)
+#define SPDK_FSDEV_RENAME_WHITEOUT  (1 << 2)
+
+/**
  * Rename a file
  *
  * \param desc Filesystem device descriptor.

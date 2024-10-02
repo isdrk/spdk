@@ -2704,6 +2704,27 @@ lo_rmdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return res;
 }
 
+#define RENAME2_FLAGS_MAP \
+	RENAME2_FLAG(EXCHANGE)  \
+	RENAME2_FLAG(NOREPLACE) \
+	RENAME2_FLAG(WHITEOUT)
+
+static uint32_t
+fsdev_rename2_flags_to_posix(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define RENAME2_FLAG(name) \
+	if (flags & SPDK_FSDEV_RENAME_##name) { \
+		result |= RENAME_##name;        \
+	}
+
+	RENAME2_FLAGS_MAP;
+
+#undef RENAME2_FLAG
+
+	return result;
+}
 static int
 lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2756,10 +2777,10 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 #else
 		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
-			      new_name, flags);
+			      new_name, fsdev_rename2_flags_to_posix(flags));
 		if (res == -1 && errno == ENOSYS) {
 			SPDK_ERRLOG("SYS_renameat2 returned ENOSYS\n");
-			res = -EINVAL;
+			res = -ENOSYS;
 			goto fop_failed;
 		} else if (res == -1) {
 			res = -errno;

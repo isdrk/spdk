@@ -1470,6 +1470,28 @@ do_rmdir(struct fuse_io *fuse_io)
 	}
 }
 
+#define RENAME2_FLAGS_MAP \
+	RENAME2_FLAG(EXCHANGE)  \
+	RENAME2_FLAG(NOREPLACE) \
+	RENAME2_FLAG(WHITEOUT)
+
+static uint32_t
+fuse_rename2_flags_to_fsdev(uint32_t flags)
+{
+	uint32_t result = 0;
+
+#define RENAME2_FLAG(name) \
+	if (flags & RENAME_##name) {                \
+		result |= SPDK_FSDEV_RENAME_##name; \
+	}
+
+	RENAME2_FLAGS_MAP;
+
+#undef RENAME2_FLAG
+
+	return result;
+}
+
 static void
 do_rename_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
@@ -1506,6 +1528,7 @@ do_rename_common(struct fuse_io *fuse_io, bool version2)
 		}
 		newdir = fsdev_io_d2h_u64(fuse_io, arg->newdir);
 		flags = fsdev_io_d2h_u64(fuse_io, arg->flags);
+		flags = fuse_rename2_flags_to_fsdev(flags);
 	}
 
 	oldname = _fsdev_io_in_arg_get_str(fuse_io);
