@@ -146,6 +146,7 @@ function unittest_util() {
 
 function unittest_fsdev() {
 	$valgrind $testdir/lib/fsdev/fsdev.c/fsdev_ut
+	$valgrind $testdir/lib/fuse_dispatcher/fuse_dispatcher.c/fuse_dispatcher_ut
 }
 
 function unittest_init() {
