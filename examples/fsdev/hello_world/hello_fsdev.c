@@ -39,6 +39,7 @@ struct hello_thread_t {
 	char *file_name;
 	struct spdk_fsdev_file_object *fobject;
 	struct spdk_fsdev_file_handle *fhandle;
+	struct spdk_fsdev_file_attr attr;
 	struct iovec iov[2];
 };
 
@@ -175,6 +176,72 @@ hello_unlink(struct hello_thread_t *hello_thread)
 }
 
 static void
+setattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+		 const struct spdk_fsdev_file_attr *attr)
+{
+	struct hello_thread_t *hello_thread = cb_arg;
+
+	SPDK_NOTICELOG("Setattr complete (status=%d)\n", status);
+	if (!hello_check_complete(hello_thread, status, "setattr")) {
+		return;
+	}
+
+	hello_thread->attr = *attr;
+	hello_unlink(hello_thread);
+}
+
+static void
+hello_setattr(struct hello_thread_t *hello_thread)
+{
+	struct hello_context_t *hello_context = hello_thread->hello_context;
+	int res;
+
+	SPDK_NOTICELOG("Setattr file %s\n", hello_thread->file_name);
+
+	hello_thread->attr.mode &= ~S_IRWXO;
+	res = spdk_fsdev_setattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				 hello_thread->unique, hello_thread->fobject, NULL,
+				 &hello_thread->attr, SPDK_FSDEV_ATTR_MODE,
+				 setattr_complete, hello_thread);
+	if (res) {
+		SPDK_ERRLOG("setattr failed with %d\n", res);
+		hello_thread_done(hello_thread, EIO);
+	}
+}
+
+static void
+getattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+		 const struct spdk_fsdev_file_attr *attr)
+{
+	struct hello_thread_t *hello_thread = cb_arg;
+
+	SPDK_NOTICELOG("Getattr complete (status=%d)\n", status);
+	if (!hello_check_complete(hello_thread, status, "getattr")) {
+		return;
+	}
+
+	hello_thread->attr = *attr;
+	hello_setattr(hello_thread);
+}
+
+static void
+hello_getattr(struct hello_thread_t *hello_thread)
+{
+	struct hello_context_t *hello_context = hello_thread->hello_context;
+	int res;
+
+	SPDK_NOTICELOG("Getattr file %s\n", hello_thread->file_name);
+
+	res = spdk_fsdev_getattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				 hello_thread->unique, hello_thread->fobject, NULL,
+				 getattr_complete, hello_thread);
+	if (res) {
+		SPDK_ERRLOG("getattr failed with %d\n", res);
+		hello_thread_done(hello_thread, EIO);
+	}
+}
+
+static void
 release_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
@@ -185,7 +252,7 @@ release_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
 	}
 
 	hello_thread->fhandle = NULL;
-	hello_unlink(hello_thread);
+	hello_getattr(hello_thread);
 }
 
 static void
