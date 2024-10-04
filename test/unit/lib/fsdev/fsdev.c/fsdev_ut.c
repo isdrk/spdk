@@ -24,6 +24,7 @@
 #define UT_AVALUE "xattr1.val"
 #define UT_NUM_LOOKUPS 11
 #define UT_DATA_SIZE 22
+#define UT_NOTIFY_MAX_DATA_SIZE 4096
 
 #define UT_SUBMIT_IO_NUM_COMMON_PARAMS 4
 
@@ -586,6 +587,7 @@ ut_fsdev_create(const char *name)
 	ufsdev->fsdev.ctxt = ufsdev;
 	ufsdev->fsdev.fn_table = &ut_fdev_fn_table;
 	ufsdev->fsdev.module = &ut_fsdev_module;
+	ufsdev->fsdev.notify_max_data_size = UT_NOTIFY_MAX_DATA_SIZE;
 
 	rc = spdk_fsdev_register(&ufsdev->fsdev);
 	if (rc) {
@@ -1056,6 +1058,9 @@ ut_fsdev_test_notifications(void)
 	SPDK_CU_ASSERT_FATAL(fsdev_desc != NULL);
 	fsdev = spdk_fsdev_desc_get_fsdev(fsdev_desc);
 	SPDK_CU_ASSERT_FATAL(fsdev != NULL);
+
+	CU_ASSERT(spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(fsdev_desc)) ==
+		  UT_NOTIFY_MAX_DATA_SIZE);
 
 	/* No subscriber */
 	ut_calls_reset();

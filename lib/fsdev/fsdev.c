@@ -1075,6 +1075,11 @@ spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
 	return res;
 }
 
+uint32_t
+spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev)
+{
+	return fsdev->notify_max_data_size;
+}
 
 static int
 fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,

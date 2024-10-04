@@ -26,6 +26,7 @@
 	spdk_fsdev_is_recovered;
 	spdk_fsdev_init;
 	spdk_fsdev_cleanup;
+	spdk_fsdev_get_notify_max_data_size;
 	spdk_fsdev_mount;
 	spdk_fsdev_umount;
 	spdk_fsdev_lookup;

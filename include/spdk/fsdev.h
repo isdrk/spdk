@@ -560,6 +560,19 @@ int spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_not
 int spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc);
 
 /**
+ * Get filesystem device maximum notification data size.
+ * It indicates the maximum size of varibale sized data in the notification
+ * and does not include fixed size fields in spdk_fsdev_notify_data structure.
+ * Example of variable sized data is 'name' in SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification.
+ *
+ * \param fsdev Filesystem device to query.
+ *
+ * \return Maximum size of variable sized notification data for this fsdev in bytes.
+ * Zero means that fsdev does not support notifications.
+ */
+uint32_t spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev);
+
+/**
  * Check whether the Filesystem device supports reset.
  *
  * \param fsdev Filesystem device to check.

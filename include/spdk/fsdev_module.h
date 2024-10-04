@@ -177,6 +177,9 @@ struct spdk_fsdev {
 	/** function table for all ops */
 	const struct spdk_fsdev_fn_table *fn_table;
 
+	/** Maximum size of variable sized notification data in bytes. */
+	uint32_t notify_max_data_size;
+
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.
 	 */
