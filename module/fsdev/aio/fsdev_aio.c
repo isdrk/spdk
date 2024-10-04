@@ -2068,7 +2068,7 @@ lo_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 		res = ftruncate(truncfd, attr->size);
 		if (!fhandle) {
-			int saverr = -errno;
+			int saverr = errno;
 			close(truncfd);
 			errno = saverr;
 		}
