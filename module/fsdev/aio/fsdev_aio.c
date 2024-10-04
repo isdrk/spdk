@@ -3130,8 +3130,7 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	ssize_t data_size;
 	int res;
 	int fd = -1;
-	struct aio_fsdev_file_object *fobject = fsdev_aio_get_fobject(vfsdev,
-						fsdev_io->u_in.listxattr.fobject);
+	struct aio_fsdev_file_object *fobject;
 	char *buffer = fsdev_io->u_in.listxattr.buffer;
 	size_t size = fsdev_io->u_in.listxattr.size;
 
@@ -3140,6 +3139,7 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -ENOSYS;
 	}
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.listxattr.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
