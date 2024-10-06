@@ -159,6 +159,9 @@ DEPDIRS-bdev_error := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_iscsi := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_malloc := $(BDEV_DEPS_THREAD) accel dma
 DEPDIRS-bdev_null := $(BDEV_DEPS_THREAD)
+ifeq ($(CONFIG_RDMA),y)
+DEPDIRS-bdev_null += rdma_utils
+endif
 DEPDIRS-bdev_nvme = $(BDEV_DEPS_THREAD) accel keyring nvme trace
 DEPDIRS-bdev_ocf := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_passthru := $(BDEV_DEPS_THREAD)

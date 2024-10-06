@@ -328,7 +328,7 @@ def bdev_malloc_delete(client, name):
 
 
 def bdev_null_create(client, num_blocks, block_size, name, physical_block_size=None, uuid=None, md_size=None,
-                     dif_type=None, dif_is_head_of_md=None, dif_pi_format=None):
+                     dif_type=None, dif_is_head_of_md=None, dif_pi_format=None, zero_copy=None):
     """Construct a null block device.
     Args:
         num_blocks: size of block device in blocks
@@ -340,6 +340,7 @@ def bdev_null_create(client, num_blocks, block_size, name, physical_block_size=N
         dif_type: protection information type (optional)
         dif_is_head_of_md: protection information is in the first 8 bytes of metadata (optional)
         dif_pi_format: protection information format (optional)
+        zero_copy: Enable Zero-copy, use given IB device or leave empty to use default (optional)
     Returns:
         Name of created block device.
     """
@@ -359,6 +360,8 @@ def bdev_null_create(client, num_blocks, block_size, name, physical_block_size=N
         params['dif_is_head_of_md'] = dif_is_head_of_md
     if dif_pi_format is not None:
         params['dif_pi_format'] = dif_pi_format
+    if zero_copy is not None:
+        params['zero_copy'] = zero_copy
     return client.call('bdev_null_create', params)
 
 

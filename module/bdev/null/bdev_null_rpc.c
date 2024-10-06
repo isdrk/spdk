@@ -15,6 +15,7 @@ static void
 free_rpc_construct_null(struct null_bdev_opts *req)
 {
 	free(req->name);
+	free(req->ib_device_name);
 }
 
 static const struct spdk_json_object_decoder rpc_construct_null_decoders[] = {
@@ -27,6 +28,7 @@ static const struct spdk_json_object_decoder rpc_construct_null_decoders[] = {
 	{"dif_type", offsetof(struct null_bdev_opts, dif_type), spdk_json_decode_int32, true},
 	{"dif_is_head_of_md", offsetof(struct null_bdev_opts, dif_is_head_of_md), spdk_json_decode_bool, true},
 	{"dif_pi_format", offsetof(struct null_bdev_opts, dif_pi_format), spdk_json_decode_uint32, true},
+	{"zero_copy", offsetof(struct null_bdev_opts, ib_device_name), spdk_json_decode_string, true},
 };
 
 static void

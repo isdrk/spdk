@@ -485,7 +485,8 @@ if __name__ == "__main__":
                                              md_size=args.md_size,
                                              dif_type=args.dif_type,
                                              dif_is_head_of_md=args.dif_is_head_of_md,
-                                             dif_pi_format=args.dif_pi_format))
+                                             dif_pi_format=args.dif_pi_format,
+                                             zero_copy=args.zero_copy))
 
     p = subparsers.add_parser('bdev_null_create', help='Add a bdev with null backend')
     p.add_argument('name', help='Block device name')
@@ -503,6 +504,8 @@ if __name__ == "__main__":
     p.add_argument('-f', '--dif-pi-format', type=int, choices=[0, 1, 2],
                    help='Protection infromation format. Parameter --dif-type needs to be set together.'
                         '0=16b Guard PI, 1=32b Guard PI, 2=64b Guard PI. Default=0.')
+    p.add_argument('-z', '--zero-copy', nargs='?', default=None, const="",
+                   help='Enable Zero-copy, use given IB device or leave empty to use default')
     p.set_defaults(func=bdev_null_create)
 
     def bdev_null_delete(args):

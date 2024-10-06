@@ -11,9 +11,10 @@
 #include "spdk/json.h"
 #include "spdk/string.h"
 #include "spdk/likely.h"
-
+#include "spdk/dma.h"
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
+#include "spdk/config.h"
 
 #include "bdev_null.h"
 
@@ -21,9 +22,23 @@ struct null_bdev_io {
 	TAILQ_ENTRY(null_bdev_io) link;
 };
 
+#ifdef SPDK_CONFIG_RDMA
+#include <infiniband/verbs.h>
+#include "spdk_internal/rdma_utils.h"
+
+struct null_bdev_domain_ctx {
+	struct spdk_memory_domain			*domain;
+	struct spdk_memory_domain_translation_ctx	translation_ctx;
+	struct ibv_pd					*pd;
+	struct ibv_qp					*qp;
+	bool						use_available_device;
+};
+#endif
+
 struct null_bdev {
 	struct spdk_bdev	bdev;
 	TAILQ_ENTRY(null_bdev)	tailq;
+	struct null_bdev_domain_ctx	*domain_ctx;
 };
 
 struct null_io_channel {
@@ -53,12 +68,195 @@ static struct spdk_bdev_module null_if = {
 
 SPDK_BDEV_MODULE_REGISTER(null, &null_if)
 
+
+#ifdef SPDK_CONFIG_RDMA
+static int
+bdev_null_create_memory_domain(struct null_bdev *null_disk, const char *ib_device_name)
+{
+	struct null_bdev_domain_ctx *domain_ctx;
+	int num_devices = 0, index;
+	struct ibv_context **contexts;
+
+	domain_ctx = calloc(1, sizeof(struct null_bdev_domain_ctx));
+	if (!domain_ctx) {
+		SPDK_ERRLOG("Failed to allocate null domain context\n");
+		goto return_failure;
+	}
+
+	contexts = rdma_get_devices(&num_devices);
+	if (!contexts || num_devices == 0) {
+		SPDK_ERRLOG("Failed to create RDMA devices list\n");
+		goto free_context;
+	}
+
+	if (strlen(ib_device_name)) {
+		for (index = 0; index < num_devices; index++) {
+			if (!strcmp(ib_device_name, ibv_get_device_name(contexts[index]->device))) {
+				break;
+			}
+		}
+
+		if (index == num_devices) {
+			SPDK_ERRLOG("Couldn't find an IB device with the requested name\n");
+			goto free_dev_list;
+		}
+	} else {
+		/*
+		 * If a device name wasn't given, we choose the first device available to us.
+		 */
+		index = 0;
+		domain_ctx->use_available_device = true;
+	}
+
+	domain_ctx->pd = spdk_rdma_utils_get_pd(contexts[index]);
+	if (!domain_ctx->pd) {
+		SPDK_ERRLOG("Failed to alloc pd\n");
+		goto free_dev_list;
+	}
+
+	domain_ctx->qp = calloc(1, sizeof(struct ibv_qp));
+	if (!domain_ctx->qp) {
+		SPDK_ERRLOG("Failed to create qp\n");
+		goto free_pd;
+	}
+
+	/*
+	 * This assignment was added to allow a user of the memory domain to access the PD.
+	 */
+	domain_ctx->qp->pd = domain_ctx->pd;
+	domain_ctx->translation_ctx.size = sizeof(struct spdk_memory_domain_translation_ctx);
+	domain_ctx->translation_ctx.rdma.ibv_qp = domain_ctx->qp;
+
+
+	domain_ctx->domain = spdk_rdma_utils_get_memory_domain(domain_ctx->pd,
+			     SPDK_DMA_DEVICE_TYPE_RDMA);
+	if (!domain_ctx->domain) {
+		SPDK_ERRLOG("Failed to create memory_domain\n");
+		goto free_qp;
+	}
+
+	rdma_free_devices(contexts);
+	null_disk->domain_ctx = domain_ctx;
+	return 0;
+
+free_qp:
+	free(domain_ctx->qp);
+free_pd:
+	spdk_rdma_utils_put_pd(domain_ctx->pd);
+free_dev_list:
+	rdma_free_devices(contexts);
+free_context:
+	free(domain_ctx);
+return_failure:
+	return -ENOMEM;
+}
+
+static void
+bdev_null_destroy_memory_domain(struct null_bdev *null_disk)
+{
+	struct null_bdev_domain_ctx *ctx = null_disk->domain_ctx;
+
+	if (ctx) {
+		spdk_rdma_utils_put_memory_domain(ctx->domain);
+		free(ctx->qp);
+		spdk_rdma_utils_put_pd(ctx->pd);
+		free(ctx);
+	}
+}
+
+
+static int
+bdev_null_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
+{
+	struct null_bdev *null_bdev = (struct null_bdev *)ctx;
+
+	if (null_bdev && null_bdev->domain_ctx && null_bdev->domain_ctx->domain) {
+		if (domains) {
+			domains[0] = null_bdev->domain_ctx->domain;
+		}
+		return 1;
+	}
+	return 0;
+}
+
+static void
+bdev_null_json_write_ib_device_name(struct null_bdev *null_bdev, struct spdk_json_write_ctx *w)
+{
+	if (null_bdev->domain_ctx) {
+		if (null_bdev->domain_ctx->use_available_device == true) {
+			spdk_json_write_named_string(w, "zero_copy", "");
+		} else {
+			spdk_json_write_named_string(w, "zero_copy",
+						     ibv_get_device_name(null_bdev->domain_ctx->pd->context->device));
+		}
+	}
+}
+
+static int
+spdk_memory_domain_translate_data_aux(struct spdk_bdev_io *bdev_io, struct null_bdev *null_bdev,
+				      int i)
+{
+	struct spdk_memory_domain_translation_result translation;
+	struct null_bdev_domain_ctx *ctx;
+
+	if (!null_bdev->domain_ctx) {
+		return -ENOENT;
+	}
+
+	ctx = null_bdev->domain_ctx;
+
+	return spdk_memory_domain_translate_data(bdev_io->u.bdev.memory_domain,
+			bdev_io->u.bdev.memory_domain_ctx,
+			ctx->domain,
+			&ctx->translation_ctx,
+			bdev_io->u.bdev.iovs[i].iov_base,
+			bdev_io->u.bdev.iovs[i].iov_len,
+			&translation);
+}
+
+#else
+
+static int
+bdev_null_create_memory_domain(struct null_bdev *null_disk, const char *ib_device_name)
+{
+	SPDK_ERRLOG("No RDMA support\n");
+	return -ENOTSUP;
+}
+
+static int
+bdev_null_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
+{
+	return 0;
+}
+
+static void
+bdev_null_destroy_memory_domain(struct null_bdev *null_disk)
+{
+}
+
+static void
+bdev_null_json_write_ib_device_name(struct null_bdev *null_bdev, struct spdk_json_write_ctx *w)
+{
+}
+
+static int
+spdk_memory_domain_translate_data_aux(struct spdk_bdev_io *bdev_io, struct null_bdev *null_bdev,
+				      int i)
+{
+	SPDK_ERRLOG("Logical error, this message should never be printed!\n");
+	return -EINVAL;
+}
+
+#endif
+
+
 static int
 bdev_null_destruct(void *ctx)
 {
 	struct null_bdev *bdev = ctx;
 
 	TAILQ_REMOVE(&g_null_bdev_head, bdev, tailq);
+	bdev_null_destroy_memory_domain(bdev);
 	free(bdev->bdev.name);
 	free(bdev);
 
@@ -90,6 +288,7 @@ bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_
 	struct null_bdev_io *null_io = (struct null_bdev_io *)bdev_io->driver_ctx;
 	struct null_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct spdk_bdev *bdev = bdev_io->bdev;
+	struct null_bdev *null_bdev = SPDK_CONTAINEROF(bdev, struct null_bdev, bdev);
 	struct spdk_dif_ctx dif_ctx;
 	struct spdk_dif_error err_blk;
 	int rc;
@@ -143,6 +342,16 @@ bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_
 				return;
 			}
 		}
+		if (bdev_io->u.bdev.memory_domain && bdev_io->u.bdev.memory_domain_ctx) {
+			for (int i = 0; i < bdev_io->u.bdev.iovcnt; i++) {
+				rc = spdk_memory_domain_translate_data_aux(bdev_io, null_bdev, i);
+				if (rc != 0) {
+					SPDK_ERRLOG("Failed to translate data for Read I/O\n");
+					spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
+					return;
+				}
+			}
+		}
 		TAILQ_INSERT_TAIL(&ch->io, null_io, link);
 		break;
 	case SPDK_BDEV_IO_TYPE_WRITE:
@@ -160,6 +369,16 @@ bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_
 					    err_blk.err_offset);
 				spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
 				return;
+			}
+		}
+		if (bdev_io->u.bdev.memory_domain && bdev_io->u.bdev.memory_domain_ctx) {
+			for (int i = 0; i < bdev_io->u.bdev.iovcnt; i++) {
+				rc = spdk_memory_domain_translate_data_aux(bdev_io, null_bdev, i);
+				if (rc != 0) {
+					SPDK_ERRLOG("Failed to translate data for Write I/O\n");
+					spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_FAILED);
+					return;
+				}
 			}
 		}
 		TAILQ_INSERT_TAIL(&ch->io, null_io, link);
@@ -209,6 +428,8 @@ bdev_null_get_io_channel(void *ctx)
 static void
 bdev_null_write_config_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w)
 {
+	struct null_bdev *null_bdev = SPDK_CONTAINEROF(bdev, struct null_bdev, bdev);
+
 	spdk_json_write_object_begin(w);
 
 	spdk_json_write_named_string(w, "method", "bdev_null_create");
@@ -223,6 +444,7 @@ bdev_null_write_config_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *
 	spdk_json_write_named_bool(w, "dif_is_head_of_md", bdev->dif_is_head_of_md);
 	spdk_json_write_named_uint32(w, "dif_pi_format", bdev->dif_pi_format);
 	spdk_json_write_named_uuid(w, "uuid", &bdev->uuid);
+	bdev_null_json_write_ib_device_name(null_bdev, w);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);
@@ -234,6 +456,7 @@ static const struct spdk_bdev_fn_table null_fn_table = {
 	.io_type_supported	= bdev_null_io_type_supported,
 	.get_io_channel		= bdev_null_get_io_channel,
 	.write_config_json	= bdev_null_write_config_json,
+	.get_memory_domains	= bdev_null_get_memory_domains,
 };
 
 /* Use a dummy DIF context to validate DIF configuration of the
@@ -358,8 +581,24 @@ bdev_null_create(struct spdk_bdev **bdev, const struct null_bdev_opts *opts)
 	null_disk->bdev.fn_table = &null_fn_table;
 	null_disk->bdev.module = &null_if;
 
+	if (opts->ib_device_name) {
+		if (opts->dif_type != SPDK_DIF_DISABLE) {
+			SPDK_ERRLOG("Null memory domains while DIF is enabled is not supported\n");
+			free(null_disk->bdev.name);
+			free(null_disk);
+			return -EINVAL;
+		}
+		rc = bdev_null_create_memory_domain(null_disk, opts->ib_device_name);
+		if (rc) {
+			free(null_disk->bdev.name);
+			free(null_disk);
+			return rc;
+		}
+	}
+
 	rc = spdk_bdev_register(&null_disk->bdev);
 	if (rc) {
+		bdev_null_destroy_memory_domain(null_disk);
 		free(null_disk->bdev.name);
 		free(null_disk);
 		return rc;

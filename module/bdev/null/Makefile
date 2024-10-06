@@ -12,6 +12,10 @@ SO_MINOR := 0
 C_SRCS = bdev_null.c bdev_null_rpc.c
 LIBNAME = bdev_null
 
+ifeq ($(CONFIG_RDMA),y)
+LOCAL_SYS_LIBS += -libverbs
+endif
+
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
 include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
