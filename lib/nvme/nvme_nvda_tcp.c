@@ -700,10 +700,16 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 {
 	int rc, shared_stats;
 	assert(tqpair->consumed_packets == 0);
+	assert(tqpair->flags.closed == 0);
 
+	/* Mark socket as closed because xlio_socket_destroy() may generate CLOSED event.
+	 * We don't want to start another disconnect procedure in xlio_sock_event_cb().
+	 */
+	tqpair->flags.closed = 1;
 	rc = xlio_socket_destroy(tqpair->xlio_sock);
 	if (rc) {
 		SPDK_WARNLOG("Fail to destroy socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+		tqpair->flags.closed = 0;
 		return rc;
 	}
 	SPDK_INFOLOG(nvme_xlio, "tqpair %p socket 0x%lx is destroyed\n",
@@ -716,7 +722,6 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	shared_stats = tqpair->flags.shared_stats;
 	tqpair->flags_raw = 0;
 	tqpair->flags.shared_stats = shared_stats;
-	tqpair->flags.closed = 1;
 	tqpair->xlio_sock = 0;
 
 	return 0;
@@ -912,6 +917,14 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 		if (!tqpair->flags.connect_notified) {
 			nvme_tcp_qpair_connect_sock_done(tqpair, -1);
 			tqpair->flags.connect_notified = 1;
+		} else if (spdk_likely(tqpair->group) && !tqpair->flags.closed && !tqpair->flags.pending_events) {
+			/* "disconnected" flag is only checked when reading pdu. We may have nothing to read.
+			 * So, add qpair to pending events list to quickly detect disconnect.
+			 */
+			struct nvme_tcp_poll_group *group = tqpair->group;
+
+			tqpair->flags.pending_events = true;
+			TAILQ_INSERT_TAIL(&group->pending_events, tqpair, link);
 		}
 		break;
 	default:
