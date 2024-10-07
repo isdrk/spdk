@@ -4515,12 +4515,16 @@ static void
 nvme_tcp_qpair_process_pending_events(struct nvme_tcp_qpair *tqpair)
 {
 	int32_t num_completions;
+	uint32_t num_free_entries;
 	struct nvme_tcp_poll_group *group = tqpair->group;
 
 	if (tqpair->flags.needs_resubmit) {
 		tqpair->flags.needs_resubmit = false;
+		num_free_entries = tqpair->num_entries - tqpair->stats->outstanding_reqs;
 		SPDK_DEBUGLOG(nvme, "tqpair %p %u\n", tqpair, tqpair->qpair.id);
-		nvme_qpair_resubmit_requests(&tqpair->qpair, tqpair->num_entries - tqpair->stats->outstanding_reqs);
+		if (num_free_entries > 0) {
+			nvme_qpair_resubmit_requests(&tqpair->qpair, num_free_entries);
+		}
 	}
 
 	if (spdk_unlikely(tqpair->flags.has_accel_nomem_pdus)) {
