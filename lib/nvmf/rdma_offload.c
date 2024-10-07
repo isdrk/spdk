@@ -7340,6 +7340,7 @@ spdk_nvmf_rdma_ns_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 
 	drc = doca_sta_subsystem_add_ns(rsubsystem->handle,
 					rns->fe_ns_id,
+					spdk_bdev_get_block_size(ns->bdev),
 					rns->be_ns_id,
 					rns->rbdev->handle,
 					&rns->handle);
