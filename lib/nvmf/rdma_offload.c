@@ -3219,9 +3219,18 @@ nvmf_sta_free(void *buf)
 }
 
 static uint64_t
-nvmf_sta_vtophys(const void *buf)
+nvmf_sta_vtophys(const void *buf, uint32_t size)
 {
-	return spdk_vtophys(buf, NULL);
+	uint64_t translated_size = size;
+	uint64_t addr;
+
+	addr = spdk_vtophys(buf, &translated_size);
+
+	if (addr == SPDK_VTOPHYS_ERROR || translated_size != size) {
+		return DOCA_STA_VTOPHYS_ERROR;
+	}
+
+	return addr;
 }
 
 static int
