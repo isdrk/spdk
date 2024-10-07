@@ -115,7 +115,7 @@ test-nvmf-k8s-job:
     - mount
     - tar xf .test.tar
     # Run unit-tests in the container (it works)
-    # - sudo ./test/unit/unittest.sh
+    - sudo ./test/unit/unittest.sh
     # Run NVMf/RDMA tests in the container
     - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
     - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
