@@ -769,7 +769,8 @@ lo_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto bad_fhandle;
 	}
 
-	file_handle_unref(fhandle);
+	file_handle_unref(fhandle); /* lo_opendir() */
+	file_handle_unref(fhandle); /* this call */
 	res = 0;
 
 	/*
