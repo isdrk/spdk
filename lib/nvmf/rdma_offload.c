@@ -6795,6 +6795,7 @@ nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 static int
 nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 {
+	struct nvme_pcie_qpair *nvme_pqpair;
 	doca_error_t drc;
 	int rc;
 
@@ -6841,6 +6842,19 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nv
 	}
 
 	if (queue->nvme_qpair) {
+		/*
+		 * The NVMe CQ is polled during the removal to handle all outstanding completions.
+		 * Completions produced by the offload have no context in the software and cause
+		 * errors.
+		 *
+		 * Setting no_deletion_notification_needed is not enough to solve the issue because
+		 * we still reach assert(0) in nvme_pcie_qpair_process_completions().
+		 *
+		 * Clear the NVMe CQ before the removal to avoid errors.
+		 */
+		nvme_pqpair = nvme_pcie_qpair(queue->nvme_qpair);
+		memset(nvme_pqpair->cpl, 0, nvme_pqpair->num_entries * sizeof(struct spdk_nvme_cpl));
+
 		spdk_nvme_ctrlr_free_io_qpair(queue->nvme_qpair);
 		queue->nvme_qpair = NULL;
 	}
