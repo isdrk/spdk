@@ -1365,6 +1365,7 @@ nvmf_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 		oqpair->destruct_channel = NULL;
 	}
 
+	RB_REMOVE(offload_qpairs_tree, &poller->qpairs, oqpair);
 	free(oqpair);
 
 	return 0;
