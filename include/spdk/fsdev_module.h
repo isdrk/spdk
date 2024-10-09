@@ -244,6 +244,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *parent_fobject;
 			char *name;
 			mode_t mode;
+			uint32_t umask;
 			dev_t rdev;
 			uid_t euid;
 			gid_t egid;
@@ -252,6 +253,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *parent_fobject;
 			char *name;
 			mode_t mode;
+			uint32_t umask;
 			uid_t euid;
 			gid_t egid;
 		} mkdir;

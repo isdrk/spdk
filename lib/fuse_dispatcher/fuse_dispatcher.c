@@ -1364,8 +1364,8 @@ do_mknod(struct fuse_io *fuse_io)
 
 	err = spdk_fsdev_mknod(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
-			       fsdev_io_d2h_u32(fuse_io, arg->rdev), fuse_io->hdr.uid, fuse_io->hdr.gid,
-			       do_mknod_cpl_clb, fuse_io);
+			       fsdev_io_d2h_u32(fuse_io, arg->rdev), fsdev_io_d2h_u32(fuse_io, arg->umask),
+			       fuse_io->hdr.uid, fuse_io->hdr.gid, do_mknod_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}
@@ -1408,7 +1408,8 @@ do_mkdir(struct fuse_io *fuse_io)
 
 	err = spdk_fsdev_mkdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io, arg->mode),
-			       fuse_io->hdr.uid, fuse_io->hdr.gid, do_mkdir_cpl_clb, fuse_io);
+			       fsdev_io_d2h_u32(fuse_io, arg->umask), fuse_io->hdr.uid, fuse_io->hdr.gid,
+			       do_mkdir_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
 	}

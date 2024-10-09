@@ -391,7 +391,7 @@ hello_mknod(void *ctx)
 
 	res = spdk_fsdev_mknod(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			       hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0, 0, mknod_complete, hello_thread);
+			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0022, 0, 0, mknod_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("mknod failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);

@@ -600,7 +600,7 @@ _spdk_fsdev_mknod_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		 struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-		 uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg)
+		 uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -618,6 +618,7 @@ spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 
 	fsdev_io->u_in.mknod.parent_fobject = parent_fobject;
 	fsdev_io->u_in.mknod.mode = mode;
+	fsdev_io->u_in.mknod.umask = umask;
 	fsdev_io->u_in.mknod.rdev = rdev;
 	fsdev_io->u_in.mknod.euid = euid;
 	fsdev_io->u_in.mknod.egid = egid;
@@ -642,7 +643,7 @@ _spdk_fsdev_mkdir_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		 struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-		 uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg)
+		 uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -660,6 +661,7 @@ spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 
 	fsdev_io->u_in.mkdir.parent_fobject = parent_fobject;
 	fsdev_io->u_in.mkdir.mode = mode;
+	fsdev_io->u_in.mkdir.umask = umask;
 	fsdev_io->u_in.mkdir.euid = euid;
 	fsdev_io->u_in.mkdir.egid = egid;
 

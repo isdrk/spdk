@@ -218,6 +218,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_str(fsdev_io->u_in.mknod.name);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.mode);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.rdev);
+		ut_call_record_param_int(fsdev_io->u_in.mknod.umask);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.euid);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.egid);
 		fsdev_io->u_out.mknod.fobject = UT_FOBJECT + 1;
@@ -227,6 +228,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.mkdir.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.mkdir.name);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.mode);
+		ut_call_record_param_int(fsdev_io->u_in.mkdir.umask);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.euid);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.egid);
 		fsdev_io->u_out.mkdir.fobject = UT_FOBJECT + 1;
@@ -1341,8 +1343,8 @@ ut_fsdev_mknod_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50, 100, 200,
-				ut_fsdev_mknod_cpl_cb, status);
+	return spdk_fsdev_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50,
+				0022, 100, 200, ut_fsdev_mknod_cpl_cb, status);
 }
 
 static void
@@ -1353,14 +1355,15 @@ ut_fsdev_mknod_check_clb(void)
 			   UT_CALL_REC_MAX_STR_SIZE));
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 0x1111);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 50);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 100);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 200);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 0022);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 100);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 6) == 200);
 }
 
 static void
 ut_fsdev_test_mknod(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MKNOD, 0, 6, ut_fsdev_mknod_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKNOD, 0, 7, ut_fsdev_mknod_execute_clb,
 			 ut_fsdev_mknod_check_clb);
 }
 
@@ -1379,8 +1382,8 @@ ut_fsdev_mkdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 100, 200,
-				ut_fsdev_mkdir_cpl_cb, status);
+	return spdk_fsdev_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111,
+				0022, 100, 200, ut_fsdev_mkdir_cpl_cb, status);
 }
 
 static void
@@ -1390,14 +1393,15 @@ ut_fsdev_mkdir_check_clb(void)
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
 			   UT_CALL_REC_MAX_STR_SIZE));
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 0x1111);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 100);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 200);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 0022);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 100);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 200);
 }
 
 static void
 ut_fsdev_test_mkdir(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MKDIR, 0, 5, ut_fsdev_mkdir_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKDIR, 0, 6, ut_fsdev_mkdir_execute_clb,
 			 ut_fsdev_mkdir_check_clb);
 }
 

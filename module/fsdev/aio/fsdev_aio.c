@@ -2165,8 +2165,6 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	UNUSED(umask);
-
 	err = lo_change_cred(&new_cred, &old_cred);
 	if (err) {
 		SPDK_ERRLOG("CREATE: cannot change credentials\n");
@@ -2175,7 +2173,7 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	flags = update_open_flags(vfsdev, flags);
 
-	fd = openat(parent_fobject->fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, mode);
+	fd = openat(parent_fobject->fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, (mode & ~umask));
 	err = fd == -1 ? -errno : 0;
 	lo_restore_cred(&old_cred);
 
@@ -2493,7 +2491,7 @@ fop_failed:
 static int
 lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *parent_fobject,
 		 const char *name, mode_t mode, dev_t rdev, const char *link, uid_t euid, gid_t egid,
-		 struct aio_fsdev_file_object **pfobject, struct spdk_fsdev_file_attr *attr)
+		 uint32_t umask, struct aio_fsdev_file_object **pfobject, struct spdk_fsdev_file_attr *attr)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
@@ -2517,7 +2515,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 	}
 
 	if (S_ISDIR(mode)) {
-		res = mkdirat(parent_fobject->fd, name, mode);
+		res = mkdirat(parent_fobject->fd, name, (mode & ~umask));
 	} else if (S_ISLNK(mode)) {
 		if (link) {
 			res = symlinkat(link, parent_fobject->fd, name);
@@ -2525,8 +2523,10 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 			SPDK_ERRLOG("NULL link pointer\n");
 			errno = EINVAL;
 		}
+	} else if (S_ISFIFO(mode)) {
+		res = mkfifoat(parent_fobject->fd, name, (mode & ~umask));
 	} else {
-		res = mknodat(parent_fobject->fd, name, mode, rdev);
+		res = mknodat(parent_fobject->fd, name, (mode & ~umask), rdev);
 	}
 	saverr = -errno;
 
@@ -2556,6 +2556,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.mknod.name;
 	mode_t mode = fsdev_io->u_in.mknod.mode;
+	uint32_t umask = fsdev_io->u_in.mknod.umask;
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
 	uid_t euid = fsdev_io->u_in.mknod.euid;
 	gid_t egid = fsdev_io->u_in.mknod.egid;
@@ -2569,7 +2570,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
-			      &fobject, &fsdev_io->u_out.mknod.attr);
+			      umask, &fobject, &fsdev_io->u_out.mknod.attr);
 	if (!rc) {
 		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
@@ -2585,6 +2586,7 @@ lo_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *parent_fobject;
 	char *name = fsdev_io->u_in.mkdir.name;
 	mode_t mode = fsdev_io->u_in.mkdir.mode;
+	uint32_t umask = fsdev_io->u_in.mkdir.umask;
 	uid_t euid = fsdev_io->u_in.mkdir.euid;
 	gid_t egid = fsdev_io->u_in.mkdir.egid;
 	struct aio_fsdev_file_object *fobject = NULL;
@@ -2597,7 +2599,7 @@ lo_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, S_IFDIR | mode, 0, NULL, euid, egid,
-			      &fobject, &fsdev_io->u_out.mkdir.attr);
+			      umask, &fobject, &fsdev_io->u_out.mkdir.attr);
 	if (!rc) {
 		fsdev_io->u_out.mkdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
@@ -2624,7 +2626,7 @@ lo_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, target, S_IFLNK, 0, linkpath, euid, egid,
-			      &fobject, &fsdev_io->u_out.symlink.attr);
+			      0, &fobject, &fsdev_io->u_out.symlink.attr);
 	if (!rc) {
 		fsdev_io->u_out.symlink.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}

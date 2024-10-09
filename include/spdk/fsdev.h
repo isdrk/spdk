@@ -1169,6 +1169,7 @@ typedef void (spdk_fsdev_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param name File name to create.
  * \param mode File type and mode with which to create the new file.
  * \param rdev The device number (only valid if created file is a device)
+ * \param umask Creation mask.
  * \param euid Effective user ID of the calling process.
  * \param egid Effective group ID of the calling process.
  * \param cb_fn Completion callback.
@@ -1182,7 +1183,7 @@ typedef void (spdk_fsdev_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-		     uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg);
+		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a directory operation completion callback
@@ -1206,6 +1207,7 @@ typedef void (spdk_fsdev_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param parent_fobject Parent directory
  * \param name Directory name to create.
  * \param mode Directory type and mode with which to create the new directory.
+ * \param umask Creation mask.
  * \param euid Effective user ID of the calling process.
  * \param egid Effective group ID of the calling process.
  * \param cb_fn Completion callback.
@@ -1219,7 +1221,7 @@ typedef void (spdk_fsdev_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-		     uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg);
+		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg);
 
 
 /**
