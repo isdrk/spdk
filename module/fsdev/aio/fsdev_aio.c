@@ -2282,7 +2282,6 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
-	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	size_t size = fsdev_io->u_in.read.size;
 	uint64_t offs = fsdev_io->u_in.read.offs;
@@ -2315,17 +2314,10 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return IO_STATUS_ASYNC;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.read.fobject);
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
 	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		res = -EINVAL;
-		goto bad_fhandle;
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, lo_read_cb, fsdev_io, fhandle->fd, offs, size, outvec,
@@ -2338,9 +2330,38 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	res = IO_STATUS_ASYNC;
 
 	file_handle_unref(fhandle);
-bad_fhandle:
-	file_object_unref(fobject, 1);
 	return res;
+}
+
+static int
+clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
+{
+	struct spdk_fsdev_file_attr st;
+	mode_t new_mode;
+	int fd, error;
+
+	error = file_object_fill_attr(fobject, &st);
+	if (error) {
+		return error;
+	}
+
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		error = -errno;
+		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
+			    vfsdev->proc_self_fd, fobject->fd_str, O_RDWR, error);
+		return error;
+	}
+
+	new_mode = st.mode & ~(S_ISGID | S_ISUID);
+	error = fchmod(fd, new_mode);
+	if (error == -1) {
+		error = -errno;
+		SPDK_ERRLOG("Failed to fchmod(%d, %o) with err=%d\n", fd, new_mode, error);
+	}
+	close(fd);
+
+	return error;
 }
 
 static void
@@ -2355,6 +2376,42 @@ lo_write_cb(void *ctx, uint32_t data_size, int error)
 
 	fsdev_io->u_out.write.data_size = data_size;
 
+	/**
+	 * POSIX compliance: Clear the SUID/SGID bits on a successful write by a non-owner.
+	 *
+	 * The file owner cannot be correctly checked here, as the file was created with
+	 * the UID/GID of the FUSE connection (0/0 by default). In principle, there is
+	 * a way to set the FUSE mount UID/GID for new files using the mount options
+	 * "user_id" and "group_id". However, since these options are configured once at
+	 * mount time, any runtime changes to the UID/GID for specific file creation
+	 * do not apply to newly created files.
+	 *
+	 * Therefore, we clear the SUID/SGID bits on every successful write. Some
+	 * filesystems implement this behavior, and it doesn't conflict with other POSIX
+	 * requirements.
+	 *
+	 * Errors are ignored. Failure to clear these bits results in POSIX non-compliance,
+	 * but this is not critical in this context.
+	 *
+	 * Since lo_write() does not use an AIO object, calling fsdev_aio_get_fobject()
+	 * is acceptable as this operation is not performed twice.
+	 */
+	if (!error) {
+		struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+		struct aio_fsdev_file_object *fobject;
+
+		fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
+		if (fobject) {
+			error = clear_suid_sgid(vfsdev, fobject);
+			if (error) {
+				SPDK_ERRLOG("Failed to clear suid/sgid on successfull "
+					    "write with err=%d - ignoriing\n", error);
+			}
+			file_object_unref(fobject, 1);
+			error = 0;
+		}
+	}
+
 	spdk_fsdev_io_complete(fsdev_io, error);
 }
 
@@ -2364,7 +2421,6 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
-	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	size_t size = fsdev_io->u_in.write.size;
 	uint64_t offs = fsdev_io->u_in.write.offs;
@@ -2396,17 +2452,10 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return IO_STATUS_ASYNC;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
 	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		res = -EINVAL;
-		goto bad_fhandle;
+		return -EINVAL;
 	}
 
 	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, lo_write_cb, fsdev_io,
@@ -2419,8 +2468,6 @@ lo_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	res = IO_STATUS_ASYNC;
 
 	file_handle_unref(fhandle);
-bad_fhandle:
-	file_object_unref(fobject, 1);
 	return res;
 }
 
