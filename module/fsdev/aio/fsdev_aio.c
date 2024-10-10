@@ -2151,8 +2151,8 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		.euid = fsdev_io->u_in.create.euid,
 		.egid = fsdev_io->u_in.create.egid,
 	};
-	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
+	struct aio_fsdev_file_object *fobject = NULL;
 	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_out.create.attr;
 
 	if (!is_safe_path_component(name)) {
@@ -2183,16 +2183,27 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	/* Fixup mode, openat() ignores some bits important for POSIX compliance. */
+	err = fchmod(fd, (mode & ~umask));
+	if (err == -1) {
+		err = -errno;
+		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
+		goto fop_failed;
+	}
+
 	err = lo_do_lookup(vfsdev, parent_fobject, name, &fobject, attr);
 	if (err) {
 		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
 		goto fop_failed;
 	}
+	attr->mode = (mode & ~umask);
 
 	fhandle = file_handle_create(fobject, fd);
 	if (!fhandle) {
-		SPDK_ERRLOG("cannot create a file handle (fd=%d)\n", fd);
-		goto fop_failed;
+		err = -ENOMEM;
+		SPDK_ERRLOG("CREATE: failed to create a file handle (fd=%d) with %d\n",
+			    fd, err);
+		goto fh_failed;
 	}
 
 	fd = -1; /* the fd is now attached to the fhandle, so we don't want to close it */
@@ -2205,6 +2216,10 @@ lo_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	err = 0;
 
+fh_failed:
+	if (err) {
+		file_object_unref(fobject, 1);
+	}
 fop_failed:
 	if (fd >= 0) {
 		close(fd);
