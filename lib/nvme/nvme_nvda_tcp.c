@@ -722,6 +722,7 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	shared_stats = tqpair->flags.shared_stats;
 	tqpair->flags_raw = 0;
 	tqpair->flags.shared_stats = shared_stats;
+	tqpair->flags.closed = 1;
 	tqpair->xlio_sock = 0;
 
 	return 0;
