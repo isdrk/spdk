@@ -134,6 +134,11 @@ struct spdk_fsdev_fn_table {
 	 * (most likely another nested object).
 	 */
 	int (*dump_info_json)(void *ctx, struct spdk_json_write_ctx *w);
+
+	/**
+	 * Enable or disable notifications.
+	 */
+	int (*set_notifications)(void *ctx, bool enabled);
 };
 
 /**
@@ -190,6 +195,12 @@ struct spdk_fsdev {
 
 		/** List of open descriptors for this filesystem device. */
 		TAILQ_HEAD(, spdk_fsdev_desc) open_descs;
+
+		/** Notifications callback. */
+		spdk_fsdev_notify_cb_t notify_cb;
+
+		/** Notifications callback context. */
+		void *notify_ctx;
 
 		TAILQ_ENTRY(spdk_fsdev) link;
 

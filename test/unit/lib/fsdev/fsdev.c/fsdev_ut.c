@@ -509,6 +509,16 @@ ut_fsdev_reset(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	return ut_reset_desired_err;
 }
 
+static int
+ut_fsdev_set_notifications(void *ctx, bool enabled)
+{
+	ut_call_record_begin(ut_fsdev_set_notifications);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(enabled);
+	ut_call_record_end();
+	return 0;
+}
+
 static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.destruct		= ut_fsdev_destruct,
 	.submit_request		= ut_fsdev_submit_request,
@@ -516,6 +526,7 @@ static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.write_config_json	= ut_fsdev_write_config_json,
 	.get_memory_domains	= ut_fsdev_get_memory_domains,
 	.reset			= ut_fsdev_reset,
+	.set_notifications	= ut_fsdev_set_notifications,
 };
 
 static void
@@ -988,6 +999,68 @@ ut_fsdev_test_reset_module_reset_fails(void)
 {
 	/* Test with a module that fails to reset */
 	ut_fsdev_do_test_reset(true, false);
+}
+
+static void
+ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
+		   void *ctx,
+		   const struct spdk_fsdev_notify_data *notify_data,
+		   spdk_fsdev_notify_reply_cb_t reply_cb,
+		   void *reply_ctx)
+{
+	ut_call_record_begin(ut_fsdev_notify_cb);
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_hash(notify_data, sizeof(*notify_data));
+	ut_call_record_param_ptr(reply_cb);
+	ut_call_record_param_ptr(reply_ctx);
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_test_notifications(void)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_fsdev_desc *fsdev_desc;
+	struct spdk_fsdev *fsdev;
+	int notify_ctx;
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	SPDK_CU_ASSERT_FATAL(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	SPDK_CU_ASSERT_FATAL(fsdev_desc != NULL);
+	fsdev = spdk_fsdev_desc_get_fsdev(fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(fsdev != NULL);
+
+	/* Enable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == true);
+
+	/* Enable notifications twice should fail */
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == -EALREADY);
+
+	/* Disable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == false);
+
+	/* Disable notifications twice should fail */
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == -EALREADY);
+
+	spdk_fsdev_close(fsdev_desc);
+	ut_fsdev_destroy(utfsdev);
 }
 
 typedef int (*execute_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
@@ -2485,6 +2558,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_fails);
+	CU_ADD_TEST(suite, ut_fsdev_test_notifications);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_ok);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_err);
 	CU_ADD_TEST(suite, ut_fsdev_test_umount);
