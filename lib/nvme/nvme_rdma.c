@@ -2154,10 +2154,14 @@ nvme_rdma_qpair_destroy(struct nvme_rdma_qpair *rqpair)
 
 	if (rqpair->poller) {
 		struct nvme_rdma_poll_group     *group;
+		int num_wc_decrement = spdk_min(rqpair->poller->required_num_wc, WC_PER_QPAIR(rqpair->num_entries));
 
 		assert(qpair->poll_group);
 		group = nvme_rdma_poll_group(qpair->poll_group);
 
+		SPDK_DEBUGLOG(nvme, "cq %p required_wc %d, reduce by %d\n", rqpair->poller->cq,
+			      rqpair->poller->required_num_wc, num_wc_decrement);
+		rqpair->poller->required_num_wc -= num_wc_decrement;
 		nvme_rdma_poll_group_put_poller(group, rqpair->poller);
 
 		rqpair->poller = NULL;
