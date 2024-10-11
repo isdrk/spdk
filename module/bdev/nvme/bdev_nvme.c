@@ -3197,14 +3197,14 @@ _bdev_nvme_reset_io(struct nvme_io_path *io_path, struct nvme_bdev_io *bio)
 	struct spdk_bdev_io *bdev_io;
 	int rc;
 
+	assert(bio->io_path == NULL);
+	bio->io_path = io_path;
+
 	rc = nvme_ctrlr_op(io_path->nvme_ns->ctrlr, NVME_CTRLR_OP_RESET,
 			   bdev_nvme_reset_io_continue, bio);
 	if (rc != 0 && rc != -EBUSY) {
 		return rc;
 	}
-
-	assert(bio->io_path == NULL);
-	bio->io_path = io_path;
 
 	if (rc == -EBUSY) {
 		ctrlr_ch = io_path->ctrlr_ch;
