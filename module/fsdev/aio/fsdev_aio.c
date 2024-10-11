@@ -2563,6 +2563,21 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 		return res;
 	}
 
+	/*
+	 * Fixup the mode, functions creating files above ignore some bits important
+	 * for POSIX compliance.
+	 */
+	if (!S_ISLNK(mode)) {
+		res = fchmodat(vfsdev->proc_self_fd, (*pfobject)->fd_str, (mode & ~umask), 0);
+		if (res == -1) {
+			res = -errno;
+			SPDK_ERRLOG("lo_mknod_symlink mode fixup failed with %d\n", res);
+			file_object_unref(*pfobject, 1);
+			return res;
+		}
+		attr->mode = (mode & ~umask);
+	}
+
 	SPDK_DEBUGLOG(fsdev_aio, "lo_mknod_symlink(%s " FOBJECT_FMT ") -> " FOBJECT_FMT ")\n",
 		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(*pfobject));
 
