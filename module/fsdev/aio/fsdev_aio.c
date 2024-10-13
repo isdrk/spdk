@@ -2989,6 +2989,12 @@ fop_failed:
 	return res;
 }
 
+static inline char *
+fobject_procname(struct aio_fsdev_file_object *fobject)
+{
+	return spdk_sprintf_alloc("/proc/self/fd/%d", fobject->fd);
+}
+
 #define XATTR_FLAGS_MAP \
 	XATTR_FLAG(XATTR_CREATE) \
 	XATTR_FLAG(XATTR_REPLACE)
@@ -3015,12 +3021,12 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int fd = -1;
 	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.setxattr.name;
 	char *value = fsdev_io->u_in.setxattr.value;
 	uint32_t size = fsdev_io->u_in.setxattr.size;
 	uint64_t flags = fsdev_io->u_in.setxattr.flags;
+	char *procname = NULL;
 	static const char *acl_access_name = "system.posix_acl_access";
 
 	if (!vfsdev->opts.xattr_enabled) {
@@ -3041,15 +3047,14 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
-		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
-	if (fd < 0) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+	procname = fobject_procname(fobject);
+	if (!procname) {
+		SPDK_ERRLOG("cannot format procname\n");
+		res = -ENOMEM;
 		goto fop_failed;
 	}
 
-	res = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
+	res = setxattr(procname, name, value, size, fsdev_xattr_flags_to_posix(flags));
 	if (res == -1) {
 		res = -errno;
 		if (res == -ENOTSUP) {
@@ -3073,7 +3078,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 
 		new_mode = st.mode & ~S_ISGID;
-		res = fchmod(fd, new_mode);
+		res = fchmod(fobject->fd, new_mode);
 		if (res == -1) {
 			SPDK_WARNLOG("Failed to clean SGID on behalf of changed '%s' with errno=%d - ignoring.\n",
 				     acl_access_name, -errno);
@@ -3087,9 +3092,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		      FOBJECT_ARGS(fobject), name, value, size, flags);
 
 fop_failed:
-	if (fd >= 0) {
-		close(fd);
-	}
+	free(procname);
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3099,7 +3102,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int fd = -1;
+	char *procname = NULL;
 	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.getxattr.name;
 	void *buffer = fsdev_io->u_in.getxattr.buffer;
@@ -3124,23 +3127,22 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
-		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
-	if (fd < 0) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+	procname = fobject_procname(fobject);
+	if (!procname) {
+		SPDK_ERRLOG("cannot format procname\n");
+		res = -ENOMEM;
 		goto fop_failed;
 	}
 
-	value_size = fgetxattr(fd, name, buffer, size);
+	value_size = getxattr(procname, name, buffer, size);
 	if (value_size == -1) {
 		res = -errno;
 		if (res == -ENODATA) {
-			SPDK_INFOLOG(fsdev_aio, "fgetxattr: no extended attribute '%s' found\n", name);
+			SPDK_INFOLOG(fsdev_aio, "getxattr: no extended attribute '%s' found\n", name);
 		} else if (res == -ENOTSUP) {
-			SPDK_INFOLOG(fsdev_aio, "fgetxattr: extended attributes are not supported or disabled\n");
+			SPDK_INFOLOG(fsdev_aio, "getxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("fgetxattr failed with errno=%d\n", res);
+			SPDK_ERRLOG("getxattr failed with errno=%d\n", res);
 		}
 
 		goto fop_failed;
@@ -3154,9 +3156,7 @@ lo_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
 
 fop_failed:
-	if (fd >= 0) {
-		close(fd);
-	}
+	free(procname);
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3167,7 +3167,7 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	ssize_t data_size;
 	int res;
-	int fd = -1;
+	char *procname = NULL;
 	struct aio_fsdev_file_object *fobject;
 	char *buffer = fsdev_io->u_in.listxattr.buffer;
 	size_t size = fsdev_io->u_in.listxattr.size;
@@ -3190,21 +3190,20 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
-		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
-	if (fd < 0) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+	procname = fobject_procname(fobject);
+	if (!procname) {
+		SPDK_ERRLOG("cannot format procname\n");
+		res = -ENOMEM;
 		goto fop_failed;
 	}
 
-	data_size = flistxattr(fd, buffer, size);
+	data_size = listxattr(procname, buffer, size);
 	if (data_size == -1) {
 		res = -errno;
 		if (res == -ENOTSUP) {
-			SPDK_INFOLOG(fsdev_aio, "flistxattr: extended attributes are not supported or disabled\n");
+			SPDK_INFOLOG(fsdev_aio, "listxattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("flistxattr failed with errno=%d\n", res);
+			SPDK_ERRLOG("listxattr failed with errno=%d\n", res);
 		}
 		goto fop_failed;
 	}
@@ -3217,9 +3216,7 @@ lo_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		      FOBJECT_ARGS(fobject), data_size);
 
 fop_failed:
-	if (fd >= 0) {
-		close(fd);
-	}
+	free(procname);
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3229,7 +3226,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	int fd = -1;
+	char *procname = NULL;
 	struct aio_fsdev_file_object *fobject;
 	char *name = fsdev_io->u_in.removexattr.name;
 
@@ -3251,23 +3248,22 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str,
-		    O_RDONLY | (fobject->is_dir ? O_DIRECTORY : 0));
-	if (fd < 0) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed with errno=%d\n", res);
+	procname = fobject_procname(fobject);
+	if (!procname) {
+		SPDK_ERRLOG("cannot format procname\n");
+		res = -ENOMEM;
 		goto fop_failed;
 	}
 
-	res = fremovexattr(fd, name);
+	res = removexattr(procname, name);
 	if (res == -1) {
 		res = -errno;
 		if (res == -ENODATA) {
-			SPDK_INFOLOG(fsdev_aio, "fremovexattr: no extended attribute '%s' found\n", name);
+			SPDK_INFOLOG(fsdev_aio, "removexattr: no extended attribute '%s' found\n", name);
 		} else if (res == -ENOTSUP) {
-			SPDK_INFOLOG(fsdev_aio, "fremovexattr: extended attributes are not supported or disabled\n");
+			SPDK_INFOLOG(fsdev_aio, "removexattr: extended attributes are not supported or disabled\n");
 		} else {
-			SPDK_ERRLOG("fremovexattr failed with errno=%d\n", res);
+			SPDK_ERRLOG("removexattr failed with errno=%d\n", res);
 		}
 		goto fop_failed;
 	}
@@ -3277,9 +3273,7 @@ lo_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		      FOBJECT_ARGS(fobject), name);
 
 fop_failed:
-	if (fd >= 0) {
-		close(fd);
-	}
+	free(procname);
 	file_object_unref(fobject, 1);
 	return res;
 }
