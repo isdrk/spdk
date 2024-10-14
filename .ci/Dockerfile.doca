@@ -40,7 +40,7 @@ RUN set -eux; \
 
 ### NGC-CLI ###
 RUN set -eux; \
-    if [ $(uname -m) = "aarch64"]; then \
+    if [ $(uname -m) = "aarch64" ]; then \
         NGC_CLI_URL="https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/${NGC_CLI_VER}/files/ngccli_arm64.zip"; \
     else \
         NGC_CLI_URL="https://api.ngc.nvidia.com/v2/resources/nvidia/ngc-apps/ngc_cli/versions/${NGC_CLI_VER}/files/ngccli_linux.zip"; \
