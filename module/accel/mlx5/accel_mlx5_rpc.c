@@ -7,17 +7,36 @@
 
 #include "accel_mlx5.h"
 
+
+static int
+decode_split_mb_blocks(const struct spdk_json_val *val, void *out)
+{
+	SPDK_WARNLOG("split_mb_blocks is deprecated and will be removed soon. Please use crypto_split_blocks instead\n");
+
+	return spdk_json_decode_uint32(val, out);
+}
+
+static int
+decode_siglast(const struct spdk_json_val *val, void *out)
+{
+	SPDK_WARNLOG("siglast option is no longer supported, please stop using it\n");
+
+	return 0;
+}
+
 static const struct spdk_json_object_decoder rpc_mlx5_module_decoder[] = {
 	{"qp_size", offsetof(struct accel_mlx5_attr, qp_size), spdk_json_decode_uint16, true},
 	{"cq_size", offsetof(struct accel_mlx5_attr, cq_size), spdk_json_decode_uint16, true},
 	{"num_requests", offsetof(struct accel_mlx5_attr, num_requests), spdk_json_decode_uint32, true},
 	{"crypto_split_blocks", offsetof(struct accel_mlx5_attr, crypto_split_blocks), spdk_json_decode_uint32, true},
+	{"split_mb_blocks", offsetof(struct accel_mlx5_attr, crypto_split_blocks), decode_split_mb_blocks, true},
 	{"allowed_devs", offsetof(struct accel_mlx5_attr, allowed_devs), spdk_json_decode_string, true},
 	{"qp_per_domain", offsetof(struct accel_mlx5_attr, qp_per_domain), spdk_json_decode_bool, true},
 	{"enable_driver", offsetof(struct accel_mlx5_attr, enable_driver), spdk_json_decode_bool, true},
 	{"enable_module", offsetof(struct accel_mlx5_attr, enable_module), spdk_json_decode_bool, true},
 	{"disable_signature", offsetof(struct accel_mlx5_attr, disable_signature), spdk_json_decode_bool, true},
-	{"disable_crypto", offsetof(struct accel_mlx5_attr, disable_crypto), spdk_json_decode_bool, true}
+	{"disable_crypto", offsetof(struct accel_mlx5_attr, disable_crypto), spdk_json_decode_bool, true},
+	{"siglast", 0, decode_siglast, true},
 };
 
 static void
