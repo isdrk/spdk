@@ -519,7 +519,7 @@ struct spdk_nvmf_offload_qpair {
 
 	/* Indicate that nvmf_rdma_close_qpair is called */
 	bool					to_close;
-	struct doca_comch_producer_task_send	*destroy_task;
+	struct doca_sta_producer_task_send	*destroy_task;
 
 	RB_ENTRY(spdk_nvmf_offload_qpair)       node;
 };
@@ -616,7 +616,7 @@ struct spdk_nvmf_rdma_bdev_null_queue {
 	struct doca_mmap				*sq_mmap;
 	struct doca_mmap				*cq_mmap;
 	struct doca_mmap				*db_mmap;
-	struct doca_comch_producer_task_send		*destroy_task;
+	struct doca_sta_producer_task_send		*destroy_task;
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx	destroy_ctx;
 };
 
@@ -645,7 +645,7 @@ struct spdk_nvmf_rdma_ns {
 	doca_sta_ns_handle_t			handle;
 	uint32_t				fe_ns_id;
 	uint32_t				be_ns_id;
-	struct doca_comch_producer_task_send	*delete_task;
+	struct doca_sta_producer_task_send	*delete_task;
 	bool					delete_started;
 	bool					delete_completed;
 	bool					delete_failed;
@@ -3154,41 +3154,41 @@ nvmf_rdma_sta_state_changed_cb(const union doca_data user_data,
 }
 
 
-static void sta_offload_task_detach_ns_complete(struct doca_comch_producer_task_send *task,
+static void sta_offload_task_detach_ns_complete(struct doca_sta_producer_task_send *task,
                                                 union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	rns->delete_completed = true;
 	rns->handle = 0;
 }
 
-static void sta_offload_task_detach_ns_complete_err(struct doca_comch_producer_task_send *task,
+static void sta_offload_task_detach_ns_complete_err(struct doca_sta_producer_task_send *task,
                                                     union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	rns->delete_failed = true;
 	rns->delete_completed = true;
 }
 
-static void sta_offload_task_destroy_bqueue_complete(struct doca_comch_producer_task_send *task,
+static void sta_offload_task_destroy_bqueue_complete(struct doca_sta_producer_task_send *task,
                                                 union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	destroy_ctx->destroy_completed = true;
 }
 
-static void sta_offload_task_destroy_bqueue_complete_err(struct doca_comch_producer_task_send *task,
+static void sta_offload_task_destroy_bqueue_complete_err(struct doca_sta_producer_task_send *task,
                                                     union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	destroy_ctx->destroy_failed = true;
 	destroy_ctx->destroy_completed = true;
 }
@@ -5085,18 +5085,19 @@ nvmf_sta_io_state_changed_cb(const union doca_data user_data,
 }
 
 static void
-nvmf_sta_io_disconnect_comp_hadler(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_disconnect_comp_hadler(struct doca_sta_producer_task_send *task,
 				   union doca_data task_user_data)
 {
 	struct spdk_nvmf_offload_qpair *oqpair = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	SPDK_DEBUGLOG(rdma_offload, "Disconect task completed for IO QP 0x%lx\n", oqpair->handle);
 	nvmf_offload_qpair_destroy(oqpair);
 }
 
 static void
 nvmf_sta_io_non_offload_hadler(doca_sta_qp_handle_t qp_handle,
+			       union doca_data user_data,
 			       const uint8_t *nvme_cmd,
 			       uint8_t *payload,
 			       uint32_t payload_len,
@@ -5108,7 +5109,7 @@ nvmf_sta_io_non_offload_hadler(doca_sta_qp_handle_t qp_handle,
 }
 
 static void
-nvmf_sta_io_rdma_write_comp(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_rdma_write_comp(struct doca_sta_producer_task_send *task,
 			    union doca_data task_user_data)
 {
 	SPDK_ERRLOG("not implemented\n");
@@ -5116,7 +5117,7 @@ nvmf_sta_io_rdma_write_comp(struct doca_comch_producer_task_send *task,
 }
 
 static void
-nvmf_sta_io_rdma_write_error(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_rdma_write_error(struct doca_sta_producer_task_send *task,
 			     union doca_data task_user_data)
 {
 	SPDK_ERRLOG("not implemented\n");
@@ -5124,7 +5125,7 @@ nvmf_sta_io_rdma_write_error(struct doca_comch_producer_task_send *task,
 }
 
 static void
-nvmf_sta_io_rdma_read_comp(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_rdma_read_comp(struct doca_sta_producer_task_send *task,
 			   union doca_data task_user_data)
 {
 	SPDK_ERRLOG("not implemented\n");
@@ -5132,7 +5133,7 @@ nvmf_sta_io_rdma_read_comp(struct doca_comch_producer_task_send *task,
 }
 
 static void
-nvmf_sta_io_rdma_read_error(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_rdma_read_error(struct doca_sta_producer_task_send *task,
 			    union doca_data task_user_data)
 {
 	SPDK_ERRLOG("not implemented\n");
@@ -5140,12 +5141,12 @@ nvmf_sta_io_rdma_read_error(struct doca_comch_producer_task_send *task,
 }
 
 static void
-nvmf_sta_io_disconnect_error_hadler(struct doca_comch_producer_task_send *task,
+nvmf_sta_io_disconnect_error_hadler(struct doca_sta_producer_task_send *task,
 				    union doca_data task_user_data)
 {
 	struct spdk_nvmf_offload_qpair *oqpair = task_user_data.ptr;
 
-	doca_task_free(doca_comch_producer_task_send_as_task(task));
+	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	SPDK_ERRLOG("Disconect task failed for IO QP 0x%lx\n", oqpair->handle);
 }
 
@@ -5780,7 +5781,7 @@ nvmf_rdma_close_qpair_offload(struct spdk_nvmf_qpair *qpair, bool qpair_initiali
 		return;
 	}
 
-	doca_task = doca_comch_producer_task_send_as_task(oqpair->destroy_task);
+	doca_task = doca_sta_producer_send_task_as_task(oqpair->destroy_task);
 	if (!doca_task) {
 		SPDK_ERRLOG("Failed to get doca_task\n");
 		return;
@@ -6764,7 +6765,7 @@ nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 			    doca_sta_be_q_handle_t handle,
 			    struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx)
 {
-	struct doca_comch_producer_task_send *destroy_task;
+	struct doca_sta_producer_task_send *destroy_task;
 	struct doca_task *doca_task;
 	union doca_data task_user_data;
 	doca_error_t drc;
@@ -6778,7 +6779,7 @@ nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	doca_task = doca_comch_producer_task_send_as_task(destroy_task);
+	doca_task = doca_sta_producer_send_task_as_task(destroy_task);
 	if (!doca_task) {
 		SPDK_ERRLOG("Failed to get doca_task\n");
 		return -1;
@@ -7291,7 +7292,7 @@ spdk_nvmf_rdma_ns_destroy(struct spdk_nvmf_rdma_ns *rns)
 			rns->delete_started = false;
 			return -1;
 		}
-		drc = doca_task_submit(doca_comch_producer_task_send_as_task(rns->delete_task));
+		drc = doca_task_submit(doca_sta_producer_send_task_as_task(rns->delete_task));
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to submit DOCA task: %s\n", doca_error_get_descr(drc));
 			rns->delete_started = false;
