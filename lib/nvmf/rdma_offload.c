@@ -6326,33 +6326,75 @@ static int
 nvmf_rdma_qpair_get_peer_trid(struct spdk_nvmf_qpair *qpair,
 			      struct spdk_nvme_transport_id *trid)
 {
+	struct spdk_nvmf_common_qpair	*cqpair;
 	struct spdk_nvmf_rdma_qpair	*rqpair;
+	struct spdk_nvmf_offload_qpair	*oqpair;
+	struct rdma_cm_id		*cm_id;
 
-	rqpair = nvmf_rdma_qpair_get(qpair);
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
 
-	return nvmf_rdma_trid_from_cm_id(rqpair->cm_id, trid, true);
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		rqpair = nvmf_rdma_qpair_get(qpair);
+		cm_id = rqpair->cm_id;
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		oqpair = nvmf_offload_qpair_get(qpair);
+		cm_id = oqpair->cm_id;
+	} else {
+		SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+		return -EINVAL;
+	}
+
+	return nvmf_rdma_trid_from_cm_id(cm_id, trid, true);
 }
 
 static int
 nvmf_rdma_qpair_get_local_trid(struct spdk_nvmf_qpair *qpair,
 			       struct spdk_nvme_transport_id *trid)
 {
+	struct spdk_nvmf_common_qpair	*cqpair;
 	struct spdk_nvmf_rdma_qpair	*rqpair;
+	struct spdk_nvmf_offload_qpair	*oqpair;
+	struct rdma_cm_id		*cm_id;
 
-	rqpair = nvmf_rdma_qpair_get(qpair);
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
 
-	return nvmf_rdma_trid_from_cm_id(rqpair->cm_id, trid, false);
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		rqpair = nvmf_rdma_qpair_get(qpair);
+		cm_id = rqpair->cm_id;
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		oqpair = nvmf_offload_qpair_get(qpair);
+		cm_id = oqpair->cm_id;
+	} else {
+		SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+		return -EINVAL;
+	}
+
+	return nvmf_rdma_trid_from_cm_id(cm_id, trid, false);
 }
 
 static int
 nvmf_rdma_qpair_get_listen_trid(struct spdk_nvmf_qpair *qpair,
 				struct spdk_nvme_transport_id *trid)
 {
+	struct spdk_nvmf_common_qpair	*cqpair;
 	struct spdk_nvmf_rdma_qpair	*rqpair;
+	struct spdk_nvmf_offload_qpair	*oqpair;
+	struct rdma_cm_id		*listen_id;
 
-	rqpair = nvmf_rdma_qpair_get(qpair);
+	cqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_common_qpair, qpair);
 
-	return nvmf_rdma_trid_from_cm_id(rqpair->listen_id, trid, false);
+	if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_RDMA) {
+		rqpair = nvmf_rdma_qpair_get(qpair);
+		listen_id = rqpair->listen_id;
+	} else if (cqpair->type == SPDK_NVMF_COMMON_QPAIR_OFFLOAD) {
+		oqpair = nvmf_offload_qpair_get(qpair);
+		listen_id = oqpair->listen_id;
+	} else {
+		SPDK_ERRLOG("Unknown qpair type %d\n", cqpair->type);
+		return -EINVAL;
+	}
+
+	return nvmf_rdma_trid_from_cm_id(listen_id, trid, false);
 }
 
 static void
