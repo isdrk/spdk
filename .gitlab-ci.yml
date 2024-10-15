@@ -37,9 +37,6 @@ stages:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     GIT_SUBMODULE_DEPTH: 1
-  hooks:
-    pre_get_sources_script:
-      - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
 
 build-job:
   extends: .do_build
@@ -99,9 +96,6 @@ build-shared-release-job:
       when: manual
       allow_failure: true
     - when: on_success
-  hooks:
-    pre_get_sources_script:
-      - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/dpdk.git".insteadOf https://github.com/spdk/dpdk.git
 
 .test-job-k8s-template:
   extends: .test-job-vm-template
