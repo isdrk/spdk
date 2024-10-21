@@ -36,6 +36,7 @@
 
 #define NVME_TCP_MAX_R2T_DEFAULT		1
 #define DEFAULT_ZCOPY_THRESHOLD			512
+#define NVDA_TCP_PACKET_POOL_SHARED		UINT32_MAX
 
 struct xlio_sock_packet {
 	struct xlio_buf *xlio_buf;
@@ -317,14 +318,17 @@ xlio_sock_alloc_buffers_pool(uint32_t buffers_pool_size)
 }
 
 static struct xlio_packets_pool *
-xlio_sock_get_packets_pool(uint32_t packets_pool_size)
+xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
 {
 	struct xlio_packets_pool *pool;
 	uint32_t i, current_core = spdk_env_get_current_core();
 
+	assert(current_core != NVDA_TCP_PACKET_POOL_SHARED);
+
 	pthread_mutex_lock(&g_xlio_pool_mutex);
 	STAILQ_FOREACH(pool, &g_xlio_packets_pools, link) {
-		if (pool->core_id == current_core) {
+		if ((!shared && pool->core_id == current_core) || (shared &&
+				pool->core_id == NVDA_TCP_PACKET_POOL_SHARED)) {
 			pthread_mutex_unlock(&g_xlio_pool_mutex);
 			return pool;
 		}
@@ -350,7 +354,7 @@ xlio_sock_get_packets_pool(uint32_t packets_pool_size)
 	}
 
 	STAILQ_INSERT_HEAD(&g_xlio_packets_pools, pool, link);
-	pool->core_id = current_core;
+	pool->core_id = shared ? NVDA_TCP_PACKET_POOL_SHARED : current_core;
 	pthread_mutex_unlock(&g_xlio_pool_mutex);
 	SPDK_NOTICELOG("Create xlio pool, packets_pool_size %u on core %u\n",
 		       packets_pool_size, current_core);
@@ -374,7 +378,8 @@ xlio_sock_alloc(struct nvme_tcp_qpair *tqpair, struct spdk_sock_impl_opts *xlio_
 		return -ENODEV;
 	}
 
-	tqpair->xlio_packets_pool = xlio_sock_get_packets_pool(xlio_opts->packets_pool_size);
+	tqpair->xlio_packets_pool = xlio_sock_get_packets_pool(xlio_opts->packets_pool_size,
+				    tqpair->qpair.id == 0);
 	if (!tqpair->xlio_packets_pool) {
 		SPDK_ERRLOG("Failed to allocated packets pool for tqpair %p\n", tqpair);
 		return -ENOMEM;
@@ -1118,7 +1123,7 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 	TAILQ_INIT(&group->pending_events);
 
 	if (num_packets) {
-		group->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets);
+		group->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets, false);
 		if (!group->xlio_packets_pool) {
 			return -ENOMEM;
 		}
