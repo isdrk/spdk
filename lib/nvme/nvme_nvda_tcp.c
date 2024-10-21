@@ -68,7 +68,6 @@ struct nvme_tcp_poll_group {
 	xlio_poll_group_t				xgroup;
 
 	TAILQ_HEAD(pending_recv_head, nvme_tcp_qpair)	pending_events;
-	struct xlio_packets_pool			*xlio_packets_pool;
 	struct spdk_sock_impl_opts			impl_opts;
 	union {
 		struct {
@@ -1102,7 +1101,6 @@ static int
 xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 {
 	size_t impl_opts_size = sizeof(group->impl_opts);
-	uint32_t num_packets;
 	uint32_t num_buffers;
 	int rc;
 
@@ -1117,17 +1115,9 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 	if (rc) {
 		return rc;
 	}
-	num_packets = group->impl_opts.packets_pool_size;
 	num_buffers = group->impl_opts.buffers_pool_size;
 
 	TAILQ_INIT(&group->pending_events);
-
-	if (num_packets) {
-		group->xlio_packets_pool = xlio_sock_get_packets_pool(num_packets, false);
-		if (!group->xlio_packets_pool) {
-			return -ENOMEM;
-		}
-	}
 
 	if (num_buffers && xlio_sock_alloc_buffers_pool(num_buffers)) {
 		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
