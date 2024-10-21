@@ -3993,14 +3993,15 @@ nvmf_parse_rdma_device_list(const char *rdma_devices_str, char ***rdma_devices, 
 		return -ENOMEM;
 	}
 
-	i = 0;
+	i = 1;
 	tmp = str;
 	while ((tmp = strchr(tmp, ',')) != NULL) {
+		tmp++;
 		i++;
 	}
 
 	devices = calloc(i, sizeof(char *));
-	if (!*devices) {
+	if (!devices) {
 		free(str);
 		return -ENOMEM;
 	}
