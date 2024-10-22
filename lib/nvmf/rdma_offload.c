@@ -4797,6 +4797,7 @@ nvmf_rdma_rescan_devices(struct spdk_nvmf_rdma_transport *rtransport)
 	int				num_dev = 0;
 	bool				new_create = false, has_new_device = false;
 	struct ibv_context		*tmp_verbs = NULL;
+	int				j;
 
 	/* do not rescan when any device is destroying, or context may be freed when
 	 * regenerating the poll fds.
@@ -4835,6 +4836,17 @@ nvmf_rdma_rescan_devices(struct spdk_nvmf_rdma_transport *rtransport)
 	contexts = rdma_get_devices(NULL);
 
 	for (i = 0; contexts && contexts[i] != NULL; i++) {
+		for (j = 0; j < rtransport->rdma_opts.num_rdma_devices; j++) {
+			if (strcmp(ibv_get_device_name(contexts[i]->device),
+				   rtransport->rdma_opts.rdma_devices[j]) == 0) {
+				break;
+			}
+		}
+		if (j == rtransport->rdma_opts.num_rdma_devices) {
+			SPDK_DEBUGLOG(rdma_offload, "Skip ibv device %s because it not in the allowed list\n",
+				      ibv_get_device_name(contexts[i]->device));
+			continue;
+		}
 		new_create |= nvmf_rdma_check_devices_context(rtransport, contexts[i]);
 	}
 
