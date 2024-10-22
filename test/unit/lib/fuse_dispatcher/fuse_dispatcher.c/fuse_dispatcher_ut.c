@@ -56,7 +56,7 @@ DEFINE_STUB(spdk_fsdev_lseek, int, (struct spdk_fsdev_desc *desc, struct spdk_io
 DEFINE_STUB(spdk_fsdev_poll, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				   uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				   struct spdk_fsdev_file_handle *fhandle, uint32_t events,
-				   spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg), 0);
+				   bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_readlink, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				       uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				       spdk_fsdev_readlink_cpl_cb cb_fn, void *cb_arg), 0);
@@ -75,7 +75,7 @@ DEFINE_STUB(spdk_fsdev_setlk, int, (struct spdk_fsdev_desc *desc, struct spdk_io
 				    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				    struct spdk_fsdev_file_handle *fhandle,
 				    const struct spdk_fsdev_file_lock *lock_to_acquire,
-				    uint64_t owner, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_symlink, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique,
 				      struct spdk_fsdev_file_object *parent_fobject, const char *target,

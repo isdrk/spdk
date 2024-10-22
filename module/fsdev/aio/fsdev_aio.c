@@ -1171,10 +1171,11 @@ posix_events_to_fsdev(short events)
 
 
 static int
-lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+lo_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	short posix_events = fsdev_events_to_posix(fsdev_io->u_in.poll.events);
@@ -1208,6 +1209,16 @@ lo_poll(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	/*
+	 * Wait is set and there are no events -> wait for the fhandle to
+	 * become ready to perform I/O
+	 */
+	if (res == 0 && fsdev_io->u_in.poll.wait) {
+		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+		res = IO_STATUS_ASYNC;
+		goto fop_failed;
+	}
+
+	/*
 	 * The fsdev API expects -EAGAIN for no-events case and 0 for
 	 * the case any events available.
 	 */
@@ -1224,6 +1235,13 @@ fop_failed:
 bad_fhandle:
 	file_object_unref(fobject, 1);
 	return res;
+}
+
+static int
+lo_poll(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+	return lo_do_poll(ch, fsdev_io);
 }
 
 static struct aio_ioctl_unrest aio_unrest;
@@ -1662,11 +1680,12 @@ bad_fhandle:
  * tutorial of how it can be implemented.
  */
 static int
-lo_setlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+lo_do_setlk(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
 	struct flock posix_lock;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.setlk.lock;
@@ -1704,7 +1723,13 @@ lo_setlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			res = -EAGAIN;
 			goto fop_failed;
 		}
-		return res;
+
+		if (res == -EAGAIN && fsdev_io->u_in.setlk.wait) {
+			TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+			res = IO_STATUS_ASYNC;
+		}
+
+		goto fop_failed;
 	}
 
 	res = 0;
@@ -1716,6 +1741,14 @@ fop_failed:
 bad_fhandle:
 	file_object_unref(fobject, 1);
 	return res;
+}
+
+static int
+lo_setlk(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
+{
+	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
+
+	return lo_do_setlk(ch, fsdev_io);
 }
 
 /*
@@ -3605,6 +3638,26 @@ bad_fhandle_in:
 #endif
 }
 
+static void
+aio_io_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
+{
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
+
+	switch (type) {
+	case SPDK_FSDEV_IO_READ:
+	case SPDK_FSDEV_IO_WRITE:
+		/* The IO is currently in the kernel. All we can is to try to cancel it. */
+		spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+		break;
+	default:
+		/* The IO is in our queue. Remove and complete it. */
+		TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
+		spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+		break;
+	}
+}
+
 static int
 lo_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -3615,7 +3668,7 @@ lo_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
 		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
-			spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+			aio_io_cancel(ch, vfsdev_io);
 			return 0;
 		}
 	}
@@ -3641,6 +3694,33 @@ aio_io_poll(void *arg)
 		spdk_fsdev_io_complete(fsdev_io, 0);
 		res = SPDK_POLLER_BUSY;
 	}
+
+#define RETRY_IO(retry_func) \
+		TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link); \
+		res = retry_func(ch, fsdev_io); \
+		if (res != IO_STATUS_ASYNC) { \
+			spdk_fsdev_io_complete(fsdev_io, res); \
+		} \
+		res = SPDK_POLLER_BUSY;
+
+
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+		enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
+
+		switch (type) {
+		case SPDK_FSDEV_IO_POLL:
+			RETRY_IO(lo_do_poll);
+			break;
+		case SPDK_FSDEV_IO_SETLK:
+			RETRY_IO(lo_do_setlk);
+			break;
+		default:
+			break;
+		}
+	}
+
+#undef RETRY_IO
 
 	return res;
 }
@@ -3961,14 +4041,14 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
-	struct aio_fsdev_io *vfsdev_io;
+	struct aio_fsdev_io *vfsdev_io, *tmp;
 
-	/* The IO is currently in the kernel. All we can is to try to cancel it. */
-	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
+	/* We use TAILQ_FOREACH_SAFE as aio_io_cancel can remove the IO from the queue */
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
 		/* We only must cancel the IOs which belong to our aio_fsdev. */
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
-			spdk_aio_mgr_cancel(ch->mgr, vfsdev_io->aio);
+			aio_io_cancel(ch, vfsdev_io);
 		}
 	}
 

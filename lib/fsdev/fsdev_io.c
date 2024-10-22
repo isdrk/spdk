@@ -170,7 +170,7 @@ int
 spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		struct spdk_fsdev_file_handle *fhandle, uint32_t events,
-		spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg)
+		bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -183,6 +183,7 @@ spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.poll.fobject = fobject;
 	fsdev_io->u_in.poll.fhandle = fhandle;
 	fsdev_io->u_in.poll.events = events;
+	fsdev_io->u_in.poll.wait = wait;
 
 	fsdev_io_submit(fsdev_io);
 	return 0;
@@ -564,7 +565,7 @@ spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		 struct spdk_fsdev_file_handle *fhandle,
 		 const struct spdk_fsdev_file_lock *lock_to_acquire,
-		 uint64_t owner, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg)
+		 uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -579,6 +580,7 @@ spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.setlk.fhandle = fhandle;
 	fsdev_io->u_in.setlk.lock = *lock_to_acquire;
 	fsdev_io->u_in.setlk.owner = owner;
+	fsdev_io->u_in.setlk.wait = wait;
 
 	fsdev_io_submit(fsdev_io);
 	return 0;

@@ -163,9 +163,6 @@ struct fuse_io {
 	struct fuse_in_header hdr;
 	bool in_hdr_with_data;
 
-	/* Link to the in-progress requests list for poll and setlkw. */
-	TAILQ_ENTRY(fuse_io) wait_link;
-
 	union {
 		struct {
 			struct spdk_thread *thread;
@@ -293,12 +290,6 @@ struct spdk_fuse_dispatcher {
 
 struct spdk_fuse_dispatcher_channel {
 	struct spdk_io_channel *fsdev_io_ch;
-
-	/* The poller that implements "waiting" for setlkw and poll operations. */
-	struct spdk_poller *wait_poller;
-
-	/* List of in-progress "waiting" fuse_io. */
-	TAILQ_HEAD(, fuse_io) wait_list;
 };
 
 #define __disp_to_io_dev(disp)	(((char *)disp) + 1)
@@ -2748,23 +2739,8 @@ static void
 do_setlkw_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *)cb_arg;
-	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
-	bool was_empty = TAILQ_EMPTY(&disp_ch->wait_list);
 
-	/*
-	 * Here -EAGAIN is signaled for conflicting lock - continue and add the request
-	 * to the wait list.
-	 */
-	if (status == -EAGAIN) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "Conflicting lock encountered. Adding setlkw "
-			      "fuse_io=%p to wait list on ch=%p.\n", fuse_io, disp_ch);
-		TAILQ_INSERT_TAIL(&disp_ch->wait_list, fuse_io, wait_link);
-		if (was_empty) {
-			spdk_poller_resume(disp_ch->wait_poller);
-		}
-	} else {
-		fuse_dispatcher_io_complete_err(fuse_io, status);
-	}
+	fuse_dispatcher_io_complete_err(fuse_io, status);
 }
 
 static void
@@ -2827,7 +2803,7 @@ do_setlk(struct fuse_io *fuse_io)
 			return;
 		}
 		err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner,
+				       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner, false,
 				       do_setlk_cpl_clb, fuse_io);
 	}
 
@@ -2865,7 +2841,7 @@ do_setlkw(struct fuse_io *fuse_io)
 	 */
 	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 			       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
-			       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner,
+			       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner, true,
 			       do_setlkw_cpl_clb, fuse_io);
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -3334,71 +3310,14 @@ out_err:
 	}
 }
 
-static void do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch,
-			    int status, uint32_t revents);
-
-static int
-fuse_wait_poller_cb(void *arg)
-{
-	int err;
-	struct spdk_fuse_dispatcher_channel *ch = arg;
-	struct fuse_io *fuse_io, *tmp_fuse_io;
-	bool was_empty = TAILQ_EMPTY(&ch->wait_list);
-
-	TAILQ_FOREACH_SAFE(fuse_io, &ch->wait_list, wait_link, tmp_fuse_io) {
-		SPDK_DEBUGLOG(fuse_dispatcher, "Removing fuse_io=(%p/%d) from wait list on ch=%p and "
-			      "requesting fsdev op.\n", fuse_io, fuse_io->hdr.opcode, ch);
-		TAILQ_REMOVE(&ch->wait_list, fuse_io, wait_link);
-
-		if (fuse_io->hdr.opcode == FUSE_POLL) {
-			err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
-					      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
-			if (err) {
-				fuse_dispatcher_io_complete_err(fuse_io, err);
-			}
-		} else if (fuse_io->hdr.opcode == FUSE_SETLKW) {
-			err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
-					       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner,
-					       do_setlkw_cpl_clb, fuse_io);
-			if (err) {
-				fuse_dispatcher_io_complete_err(fuse_io, err);
-			}
-		} else {
-			SPDK_ERRLOG("Unexpected fuse_io=(%p/%d) in wait poller.\n", fuse_io, fuse_io->hdr.opcode);
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		}
-	}
-
-	if (TAILQ_EMPTY(&ch->wait_list)) {
-		spdk_poller_pause(ch->wait_poller);
-	}
-
-	return was_empty ? SPDK_POLLER_IDLE : SPDK_POLLER_BUSY;
-}
-
 static void
 do_poll_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t revents)
 {
 	struct fuse_io *fuse_io = cb_arg;
-	struct spdk_fuse_dispatcher_channel *disp_ch = __disp_ch_from_io_ch(ch);
-	bool was_empty = TAILQ_EMPTY(&disp_ch->wait_list);
 
 	if (status == 0) {
 		/* Events available, completing the operation. */
 		fuse_dispatcher_io_complete_poll(fuse_io, revents);
-	} else if (status == -EAGAIN) {
-		/*
-		 * No events available - return fuse_io into the poller
-		 * processing list.
-		 */
-		SPDK_DEBUGLOG(fuse_dispatcher, "No poll events available. Adding poll "
-			      "fuse_io=%p to wait list on ch=%p.\n", fuse_io, disp_ch);
-		TAILQ_INSERT_TAIL(&disp_ch->wait_list, fuse_io, wait_link);
-		if (was_empty) {
-			spdk_poller_resume(disp_ch->wait_poller);
-		}
 	} else {
 		fuse_dispatcher_io_complete_err(fuse_io, status);
 	}
@@ -3422,7 +3341,7 @@ do_poll(struct fuse_io *fuse_io)
 
 	err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 			      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
-			      fuse_io->u.poll.events, do_poll_cpl_clb, fuse_io);
+			      fuse_io->u.poll.events, true, do_poll_cpl_clb, fuse_io);
 
 	if (err) {
 		fuse_dispatcher_io_complete_err(fuse_io, err);
@@ -3878,18 +3797,12 @@ exit:
 static int
 fuse_dispatcher_channel_create(void *io_device, void *ctx_buf)
 {
-	struct spdk_fuse_dispatcher	*disp = __disp_from_io_dev(io_device);
-	struct spdk_fuse_dispatcher_channel	*ch = ctx_buf;
+	struct spdk_fuse_dispatcher *disp = __disp_from_io_dev(io_device);
+	struct spdk_fuse_dispatcher_channel *ch = ctx_buf;
 
 	if (disp->desc) {
 		ch->fsdev_io_ch = spdk_fsdev_get_io_channel(disp->desc);
 	}
-
-	TAILQ_INIT(&ch->wait_list);
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "Registering wait poller on ch=%p.\n", ch);
-	ch->wait_poller = SPDK_POLLER_REGISTER(fuse_wait_poller_cb, ch, 0);
-	spdk_poller_pause(ch->wait_poller);
 
 	return 0;
 }
@@ -3897,13 +3810,10 @@ fuse_dispatcher_channel_create(void *io_device, void *ctx_buf)
 static void
 fuse_dispatcher_channel_destroy(void *io_device, void *ctx_buf)
 {
-	struct spdk_fuse_dispatcher	*disp = __disp_from_io_dev(io_device);
-	struct spdk_fuse_dispatcher_channel	*ch = ctx_buf;
+	struct spdk_fuse_dispatcher *disp = __disp_from_io_dev(io_device);
+	struct spdk_fuse_dispatcher_channel *ch = ctx_buf;
 
 	UNUSED(disp);
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "Unregistering wait poller on ch=%p.\n", ch);
-	spdk_poller_unregister(&ch->wait_poller);
 
 	if (ch->fsdev_io_ch) {
 		assert(disp->desc);

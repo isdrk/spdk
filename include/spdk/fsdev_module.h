@@ -413,6 +413,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint32_t events;
+			bool wait;
 		} poll;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -435,6 +436,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_handle *fhandle;
 			struct spdk_fsdev_file_lock lock;
 			uint64_t owner;
+			bool wait;
 		} setlk;
 	} u_in;
 

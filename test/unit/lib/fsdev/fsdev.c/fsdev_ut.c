@@ -429,6 +429,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.poll.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.poll.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.poll.events);
+		ut_call_record_param_int(fsdev_io->u_in.poll.wait);
 		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
@@ -452,6 +453,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fobject);
 		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fhandle);
 		ut_call_record_param_int(fsdev_io->u_in.setlk.owner);
+		ut_call_record_param_int(fsdev_io->u_in.setlk.wait);
 		break;
 	case __SPDK_FSDEV_IO_LAST:
 	default:
@@ -2175,7 +2177,7 @@ ut_fsdev_poll_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *c
 			     struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	return spdk_fsdev_poll(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-			       SPDK_FSDEV_POLLIN, ut_fsdev_poll_cpl_cb, status);
+			       SPDK_FSDEV_POLLIN, false, ut_fsdev_poll_cpl_cb, status);
 }
 
 static void
@@ -2184,12 +2186,13 @@ ut_fsdev_poll_check_clb(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == SPDK_FSDEV_POLLIN);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == false);
 }
 
 static void
 ut_fsdev_test_poll(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_POLL, 0, 3, ut_fsdev_poll_execute_op_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_POLL, 0, 4, ut_fsdev_poll_execute_op_clb,
 			 ut_fsdev_poll_check_clb);
 }
 
@@ -2449,7 +2452,7 @@ ut_fsdev_setlk_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	return spdk_fsdev_setlk(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
-				&ut_fsdev_lock, 42, ut_fsdev_setlk_cpl_cb, status);
+				&ut_fsdev_lock, 42, true, ut_fsdev_setlk_cpl_cb, status);
 }
 
 static void
@@ -2458,12 +2461,13 @@ ut_fsdev_setlk_check_clb(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
 	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 42);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == true);
 }
 
 static void
 ut_fsdev_test_setlk(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_SETLK, 0, 3, ut_fsdev_setlk_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SETLK, 0, 4, ut_fsdev_setlk_execute_clb,
 			 ut_fsdev_setlk_check_clb);
 }
 

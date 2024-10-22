@@ -929,6 +929,7 @@ typedef void (spdk_fsdev_poll_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param fobject File object.
  * \param fhandle File handle.
  * \param events Events we are interested in. See spdk_fsdev_poll_event_type.
+ * \param wait true to wait for the fhandle to become ready to perform I/O, false otherwise
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -939,7 +940,7 @@ typedef void (spdk_fsdev_poll_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 int spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		    struct spdk_fsdev_file_handle *fhandle, uint32_t events,
-		    spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg);
+		    bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read symbolic link operation completion callback
@@ -1103,6 +1104,7 @@ typedef void (spdk_fsdev_setlk_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  * \param fhandle File handle.
  * \param lock_to_acquire Lock params we use to acquire the lock.
  * \param owner Used for lock ownership checks.
+ * \param wait true to wait for that lock to be released, false otherwise.
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1119,7 +1121,7 @@ int spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle,
 		     const struct spdk_fsdev_file_lock *lock_to_acquire,
-		     uint64_t owner, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg);
+		     uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a symbolic link
