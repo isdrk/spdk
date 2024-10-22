@@ -4608,8 +4608,10 @@ nvmf_rdma_stop_listen_ex(struct spdk_nvmf_transport *transport,
 				      port->trid->traddr, port->trid->trsvcid, need_retry);
 			TAILQ_REMOVE(&rtransport->ports, port, link);
 			rdma_destroy_id(port->id);
-			nvmf_rdma_subsystem_dev_put(port->subsystem_device);
-			port->subsystem_device = NULL;
+			if (port->subsystem_device) {
+				nvmf_rdma_subsystem_dev_put(port->subsystem_device);
+				port->subsystem_device = NULL;
+			}
 			port->id = NULL;
 			port->device = NULL;
 			if (need_retry) {
