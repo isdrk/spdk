@@ -54,7 +54,7 @@ ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-nvme += rdma_provider rdma_utils
 endif
 ifeq ($(CONFIG_XLIO),y)
-DEPDIRS-nvme += xlio accel
+DEPDIRS-nvme += xlio accel thread
 DEPDIRS-xlio += log
 endif
 
