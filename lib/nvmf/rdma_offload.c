@@ -2237,7 +2237,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 		rc = nvmf_request_get_stripped_buffers(req, &rgroup->group,
 						       &rtransport->transport, req->dif.orig_length);
 		if (rc != 0) {
-			SPDK_INFOLOG(rdma, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
+			SPDK_INFOLOG(rdma_offload, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
 		}
 	}
 
@@ -2342,7 +2342,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 		rc = nvmf_request_get_stripped_buffers(req, &rgroup->group,
 						       &rtransport->transport, req->dif.orig_length);
 		if (rc != 0) {
-			SPDK_INFOLOG(rdma, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
+			SPDK_INFOLOG(rdma_offload, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
 		}
 	}
 
@@ -4263,7 +4263,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		rtransport->rdma_opts.num_rdma_devices = 1;
 	}
 
-	SPDK_INFOLOG(rdma, "*** RDMA Transport Init ***\n"
+	SPDK_INFOLOG(rdma_offload, "*** RDMA Transport Init ***\n"
 		     "  Transport opts:  max_ioq_depth=%d, max_io_size=%d,\n"
 		     "  max_io_qpairs_per_ctrlr=%d, io_unit_size=%d,\n"
 		     "  in_capsule_data_size=%d, max_aq_depth=%d,\n"
