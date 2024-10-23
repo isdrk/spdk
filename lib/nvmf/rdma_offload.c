@@ -1523,24 +1523,23 @@ nvmf_offload_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 				     &accept_data, sizeof(accept_data),
 				     oqpair->rsubsystem ? oqpair->rsubsystem->handle : 0,
 				     &oqpair->handle);
+	/*
+	 * DOCA STA will call rdma_destroy_id for cm_id. It happens
+	 * regardless of the doca_sta_io_qp_connect() return code.
+	 */
+	oqpair->cm_id = NULL;
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Cannot connect offload qpair: %s\n", doca_error_get_descr(drc));
-		goto error;
+		return -1;
 	}
 
 	drc = doca_sta_io_qp_connect_established(opoller->sta_io, oqpair->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to establish connection: %s\n", doca_error_get_descr(drc));
-		goto error;
+		return -1;
 	}
 
-
 	return 0;
-
-error:
-	rdma_destroy_id(oqpair->cm_id);
-	oqpair->cm_id = NULL;
-	return -1;
 }
 
 /* Append the given recv wr structure to the resource structs outstanding recvs list. */
@@ -6606,8 +6605,9 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 
 		switch (oqpair->state) {
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_INIT:
-			assert(oqpair->cm_id);
-			nvmf_rdma_event_reject(oqpair->cm_id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
+			if (oqpair->cm_id) {
+				nvmf_rdma_event_reject(oqpair->cm_id, SPDK_NVMF_RDMA_ERROR_NO_RESOURCES);
+			}
 			oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_READY_TO_FREE;
 			break;
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_CONNECTED:
@@ -6642,8 +6642,6 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 			assert(0);
 			break;
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_DISCONNECTED:
-			// The disconnect task destroyed cm_id.
-			oqpair->cm_id = NULL;
 			oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINING;
 			break;
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINING:
