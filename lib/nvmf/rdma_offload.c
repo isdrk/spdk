@@ -1775,6 +1775,29 @@ nvmf_rdma_event_reject(struct rdma_cm_id *id, enum spdk_nvmf_rdma_transport_erro
 	rdma_reject(id, &rej_data, sizeof(rej_data));
 }
 
+static struct spdk_nvmf_rdma_subsystem *
+nvmf_rdma_find_subsystem(struct spdk_nvmf_rdma_transport *rtransport)
+{
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	int num_subsystems = 0;
+
+	if (TAILQ_EMPTY(&rtransport->subsystems)) {
+		SPDK_ERRLOG("Subsystem list is empty\n");
+		return NULL;
+	}
+
+	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+		num_subsystems++;
+	}
+
+	if (num_subsystems != 1) {
+		SPDK_ERRLOG("%d subsystems are configured but DOCA STA supports only 1\n");
+		return NULL;
+	}
+
+	return TAILQ_FIRST(&rtransport->subsystems);
+}
+
 static int
 nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *event)
 {
@@ -1906,6 +1929,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 		oqpair->max_read_depth = max_read_depth;
 		oqpair->cm_id = event->id;
 		oqpair->listen_id = event->listen_id;
+		oqpair->rsubsystem = nvmf_rdma_find_subsystem(rtransport);
 		STAILQ_INIT(&oqpair->pending_rdma_read_queue);
 		STAILQ_INIT(&oqpair->pending_rdma_write_queue);
 		STAILQ_INIT(&oqpair->pending_rdma_send_queue);
