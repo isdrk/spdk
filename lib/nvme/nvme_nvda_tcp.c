@@ -4379,35 +4379,12 @@ nvme_tcp_qpair_check_timeout(struct spdk_nvme_qpair *qpair)
 static int nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr,
 		struct spdk_nvme_qpair *qpair);
 
-static int
-nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
+static inline int
+nvme_tcp_qpair_process_completions_common(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 	uint32_t reaped;
 	int rc;
-
-	if (spdk_unlikely(qpair->poll_group == NULL &&
-			  tqpair->state >= NVME_TCP_QPAIR_STATE_SOCK_CONNECTED)) {
-		if (tqpair->flags.closed) {
-			if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING) {
-				SPDK_ERRLOG("tqpair=%p sock 0x%lx is closed: errno %d(%s)\n",
-					    tqpair, tqpair->xlio_sock, errno, spdk_strerror(errno));
-			}
-			if (spdk_unlikely(tqpair->qpair.ctrlr->timeout_enabled)) {
-				nvme_tcp_qpair_check_timeout(qpair);
-			}
-			if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
-				if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
-					nvme_transport_ctrlr_disconnect_qpair_done(qpair);
-				}
-				return 0;
-			}
-			goto fail;
-		} else if (tqpair->flags.pending_send) {
-			xlio_socket_flush(tqpair->xlio_sock);
-			tqpair->flags.pending_send = false;
-		}
-	}
 
 	if (max_completions == 0) {
 		max_completions = spdk_max(tqpair->num_entries, 1);
@@ -4454,6 +4431,49 @@ fail:
 		nvme_ctrlr_disconnect_qpair(qpair);
 	}
 	return -ENXIO;
+}
+
+static int
+nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_completions)
+{
+	struct nvme_tcp_qpair *tqpair;
+	int rc = 0;
+
+	if (spdk_likely(!nvme_qpair_is_admin_queue(qpair))) {
+		return nvme_tcp_qpair_process_completions_common(qpair, max_completions);
+	}
+
+	tqpair = nvme_tcp_qpair(qpair);
+
+	if (tqpair->state >= NVME_TCP_QPAIR_STATE_SOCK_CONNECTED) {
+		if (tqpair->flags.closed) {
+			if (nvme_qpair_get_state(qpair) != NVME_QPAIR_DISCONNECTING) {
+				SPDK_ERRLOG("tqpair=%p sock 0x%lx is closed: errno %d(%s)\n",
+					    tqpair, tqpair->xlio_sock, errno, spdk_strerror(errno));
+			}
+			if (spdk_unlikely(tqpair->qpair.ctrlr->timeout_enabled)) {
+				nvme_tcp_qpair_check_timeout(qpair);
+			}
+			if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
+				if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
+					nvme_transport_ctrlr_disconnect_qpair_done(qpair);
+				}
+				goto out;
+			}
+			qpair->transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_UNKNOWN;
+			nvme_transport_ctrlr_disconnect_qpair(qpair->ctrlr, qpair);
+			rc = -ENXIO;
+			goto out;
+		} else if (tqpair->flags.pending_send) {
+			xlio_socket_flush(tqpair->xlio_sock);
+			tqpair->flags.pending_send = false;
+		}
+	}
+
+	rc = nvme_tcp_qpair_process_completions_common(qpair, max_completions);
+
+out:
+	return rc;
 }
 
 static inline void
