@@ -824,8 +824,17 @@ packets_next_chunk(struct nvme_tcp_qpair *tqpair,
 }
 
 static int
-poll_no_group_socket(struct nvme_tcp_qpair *tqpair)
+poll_admin_socket(struct nvme_tcp_qpair *tqpair)
 {
+	assert(nvme_qpair_is_admin_queue(&tqpair->qpair));
+
+	if (!spdk_spin_held(&g_xlio_admin_group_lock)) {
+		SPDK_ERRLOG("qpair %p sock %"PRIx64" cb out of lock\n", tqpair, (uint64_t)tqpair->xlio_sock);
+		/* Function below may print just addresses in shared build, but still better than nothing */
+		spdk_print_backtrace(SPDK_LOG_ERROR);
+		assert(0);
+	}
+
 	xlio_poll_group_poll(g_xlio_admin_group.xlio_group);
 
 	if (STAILQ_EMPTY(&tqpair->received_packets)) {
@@ -843,8 +852,8 @@ xlio_sock_readv(struct nvme_tcp_qpair *tqpair, struct iovec *iovs, int iovcnt)
 	size_t offset = 0;
 
 	if (STAILQ_EMPTY(&tqpair->received_packets)) {
-		if (spdk_unlikely(!tqpair->group)) {
-			ret = poll_no_group_socket(tqpair);
+		if (spdk_unlikely(nvme_qpair_is_admin_queue(&tqpair->qpair))) {
+			ret = poll_admin_socket(tqpair);
 			if (ret < 0) {
 				if (tqpair->flags.disconnected) {
 					return 0;
@@ -1219,8 +1228,8 @@ xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct xlio_sock
 	*sock_buf = NULL;
 
 	if (STAILQ_EMPTY(&tqpair->received_packets)) {
-		if (spdk_unlikely(!tqpair->group)) {
-			ret = poll_no_group_socket(tqpair);
+		if (spdk_unlikely(nvme_qpair_is_admin_queue(&tqpair->qpair))) {
+			ret = poll_admin_socket(tqpair);
 			if (ret < 0) {
 				if (tqpair->flags.disconnected) {
 					return 0;
