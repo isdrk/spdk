@@ -29,8 +29,8 @@ env:
   DOCKER_REGISTRY_HOST: "nvcr.io"
   DOCKER_REGISTRY_PATH: "nvstaging/doca"
   DOCA_IMAGE: "nvcr.io/nvstaging/doca/doca"
-  DOCA_BUILDER_TAG: "2.9.0065-devel-ubuntu22.04-arm64"
-  DOCA_RUNTIME_TAG: "2.9.0065-full-rt-ubuntu22.04-arm64"
+  DOCA_BUILDER_TAG: "2.9.0072-devel-ubuntu22.04-arm64"
+  DOCA_RUNTIME_TAG: "2.9.0072-full-rt-ubuntu22.04-arm64"
   artifact_properties: '/mnt/pvc/doca-sta-artifact.properties'
   REGISTRY_AUTH_FILE: '/mnt/secret_podman/config_podman.json'
   GIT_SSH_COMMAND: 'ssh -o StrictHostKeyChecking=no'
@@ -64,7 +64,7 @@ secret_volumes:
 
 runs_on_dockers:
   - {
-     file: '.ci/Dockerfile.doca', name: 'doca_ci', arch: 'aarch64', tag: "14102024-1",
+     file: '.ci/Dockerfile.doca', name: 'doca_ci', arch: 'aarch64', tag: "23102024-1",
      build_args: '--build-arg DOCA_IMAGE_TAG=$DOCA_BUILDER_TAG --pull --no-cache'
     }
 
