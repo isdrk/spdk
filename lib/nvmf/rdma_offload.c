@@ -766,11 +766,32 @@ struct rdma_transport_opts {
 	int		num_rdma_devices;
 };
 
+struct nvmf_rdma_sta_caps {
+	uint32_t max_devs;
+	uint32_t max_eus;
+	uint32_t max_connected_qps;
+	uint32_t max_subsys;
+	uint32_t max_ns_per_subsys;
+	uint32_t max_qps;
+	uint32_t max_io_threads;
+	uint32_t max_io_size;
+	uint32_t max_ios;
+	uint32_t max_io_queue_size;
+	uint32_t min_ioccsz;
+	uint32_t max_ioccsz;
+	uint32_t min_iorcsz;
+	uint32_t max_iorcsz;
+	uint32_t max_icdoff;
+	uint32_t max_be;
+	uint32_t max_qs_per_be;
+};
+
 struct spdk_nvmf_rdma_sta {
 	struct doca_pe				*pe;
 	struct doca_dev				*dev;
 	struct doca_sta				*sta;
 	struct doca_ctx				*ctx;
+	struct nvmf_rdma_sta_caps		caps;
 	enum doca_ctx_states			state;
 	TAILQ_HEAD(, spdk_nvmf_rdma_bdev)	bdevs;
 };
@@ -1810,7 +1831,11 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	SPDK_DEBUGLOG(rdma_offload,
 		      "Local NIC Max Send/Recv Queue Depth: %d Max Read/Write Queue Depth: %d\n",
 		      port->device->attr.max_qp_wr, port->device->attr.max_qp_rd_atom);
-	max_queue_depth = spdk_min(max_queue_depth, port->device->attr.max_qp_wr);
+	if (private_data->qid == 0) {
+		max_queue_depth = spdk_min(max_queue_depth, port->device->attr.max_qp_wr);
+	} else {
+		max_queue_depth = spdk_min(max_queue_depth, rtransport->sta.caps.max_io_queue_size);
+	}
 	max_read_depth = spdk_min(max_read_depth, port->device->attr.max_qp_init_rd_atom);
 
 	/* Next check the remote NIC's hardware limitations */
@@ -3801,6 +3826,104 @@ nvmf_sta_vtophys(const void *buf, uint32_t size)
 }
 
 static int
+nvmf_rdma_sta_get_caps(struct doca_sta *sta, struct nvmf_rdma_sta_caps *caps)
+{
+	doca_error_t drc;
+
+	drc = doca_sta_cap_get_max_devs(&caps->max_devs);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_devs(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_num_eus_available(sta, &caps->max_eus);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_num_eus_available(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_num_connected_qp_per_eu(sta, &caps->max_connected_qps);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_num_connected_qp_per_eu(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_subsys(&caps->max_subsys);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_subsys(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_io_threads(&caps->max_io_threads);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_io_threads(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_io_size(&caps->max_io_size);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_io_size(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_io_num_per_dev(sta, &caps->max_ios);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_io_num_per_dev(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_io_queue_size(sta, &caps->max_io_queue_size);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_io_queue_size(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_min_ioccsz(&caps->min_ioccsz);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_min_ioccsz(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_ioccsz(&caps->max_ioccsz);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_ioccsz(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_min_iorcsz(&caps->min_iorcsz);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_min_iorcsz(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_iorcsz(&caps->max_iorcsz);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_iorcsz(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_icdoff(&caps->max_icdoff);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_icdoff(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_be(&caps->max_be);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_be(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	drc = doca_sta_cap_get_max_qs_per_be(&caps->max_qs_per_be);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("doca_sta_cap_get_max_qs_per_be(): %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
 nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 {
 	struct spdk_nvmf_rdma_device *device;
@@ -3907,6 +4030,10 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 			SPDK_NOTICELOG("Wrong DOCA STA state %s\n", nvmf_rdma_sta_state_to_str(rtransport->sta.state));
 			return -EINVAL;
 		}
+	}
+
+	if (nvmf_rdma_sta_get_caps(rtransport->sta.sta, &rtransport->sta.caps)) {
+		return -1;
 	}
 
 	return 0;
