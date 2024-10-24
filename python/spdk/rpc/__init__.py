@@ -28,6 +28,7 @@ from . import nvme
 from . import nvmf
 from . import subsystem
 from . import trace
+from . import tgt_ofld
 from . import vhost
 from . import vmd
 from . import sock
