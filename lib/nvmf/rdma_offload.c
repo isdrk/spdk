@@ -552,8 +552,8 @@ struct nvmf_sta_non_offload_resources {
 	union nvmf_c2h_msg			*cpls;
 
 	/* Queue to track free requests */
-	STAILQ_HEAD(,nvmf_non_offload_request)	free_queue;
-	STAILQ_HEAD(,nvmf_non_offload_request)	incoming_queue;
+	STAILQ_HEAD(, nvmf_non_offload_request)	free_queue;
+	STAILQ_HEAD(, nvmf_non_offload_request)	incoming_queue;
 };
 
 struct spdk_nvmf_offload_poller;
@@ -711,7 +711,7 @@ struct spdk_nvmf_rdma_bdev {
 	int				refs;
 	doca_sta_be_handle_t		handle;
 	enum spdk_nvmf_rdma_bdev_type	type;
-	uint32_t			null_ns_id; // is not relevant for SPDK_NVMF_RDMA_NS_BE_TYPE_NVME
+	uint32_t			null_ns_id; /* is not relevant for SPDK_NVMF_RDMA_NS_BE_TYPE_NVME */
 	int num_queues;
 	union {
 		struct spdk_nvmf_rdma_bdev_nvme_queue *nvme_queue;
@@ -882,7 +882,8 @@ static bool nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtranspor
 				      struct spdk_nvmf_rdma_request *rdma_req);
 
 static int
-nvmf_offload_qpair_compare(struct spdk_nvmf_offload_qpair *oqpair1, struct spdk_nvmf_offload_qpair *oqpair2)
+nvmf_offload_qpair_compare(struct spdk_nvmf_offload_qpair *oqpair1,
+			   struct spdk_nvmf_offload_qpair *oqpair2)
 {
 	return oqpair1->handle < oqpair2->handle ? -1 : oqpair1->handle > oqpair2->handle;
 }
@@ -904,10 +905,10 @@ static int nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev);
 static void nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair);
 
 static void nvmf_sta_io_disconnect_comp_hadler(struct doca_sta_producer_task_send *task,
-					       union doca_data task_user_data);
+		union doca_data task_user_data);
 
 static void nvmf_sta_io_disconnect_error_hadler(struct doca_sta_producer_task_send *task,
-						union doca_data task_user_data);
+		union doca_data task_user_data);
 
 static inline int
 nvmf_rdma_check_ibv_state(enum ibv_qp_state state)
@@ -971,7 +972,8 @@ nvmf_rdma_update_ibv_state(struct spdk_nvmf_rdma_qpair *rqpair) {
 	rc = nvmf_rdma_check_ibv_state(new_state);
 	if (rc)
 	{
-		SPDK_ERRLOG("QP#%d: bad state updated: %u, maybe hardware issue\n", rqpair->common.qpair.qid, new_state);
+		SPDK_ERRLOG("QP#%d: bad state updated: %u, maybe hardware issue\n", rqpair->common.qpair.qid,
+			    new_state);
 		/*
 		 * IBV_QPS_UNKNOWN undefined if lib version smaller than libibverbs-1.1.8
 		 * IBV_QPS_UNKNOWN is the enum element after IBV_QPS_ERR
@@ -2561,7 +2563,8 @@ nvmf_rdma_check_fused_ordering(struct spdk_nvmf_rdma_transport *rtransport,
 {
 	enum spdk_nvme_cmd_fuse last, next;
 
-	last = rqpair->fused_first ? rqpair->fused_first->common.req.cmd->nvme_cmd.fuse : SPDK_NVME_CMD_FUSE_NONE;
+	last = rqpair->fused_first ? rqpair->fused_first->common.req.cmd->nvme_cmd.fuse :
+	       SPDK_NVME_CMD_FUSE_NONE;
 	next = rdma_req->common.req.cmd->nvme_cmd.fuse;
 
 	assert(last != SPDK_NVME_CMD_FUSE_SECOND);
@@ -3123,7 +3126,18 @@ nvmf_non_offload_request_parse_sgl(struct nvmf_non_offload_request *non_offload_
 
 static struct spdk_nvmf_rdma_subsystem *
 nvmf_rdma_subsystem_find(struct spdk_nvmf_rdma_transport *rtransport,
-			 const struct spdk_nvmf_subsystem *subsystem);
+			 const struct spdk_nvmf_subsystem *subsystem)
+{
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+
+	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+		if (subsystem_cmp(rsubsystem->subsystem, subsystem) == 0) {
+			break;
+		}
+	}
+
+	return rsubsystem;
+}
 
 static int
 nvmf_sta_fabric_connect(struct nvmf_non_offload_request *non_offload_req)
@@ -3190,10 +3204,10 @@ nvmf_non_offload_request_transfer_in(struct nvmf_non_offload_request *non_offloa
 
 	SPDK_DEBUGLOG(rdma_offload, "RDMA_READ task, req %p\n", non_offload_req);
 	drc = doca_sta_io_task_non_offload_rdma_read_alloc_init(oqpair->opoller->sta_io,
-								task_user_data,
-								oqpair->handle,
-								non_offload_req->sta_context,
-								&non_offload_req->task);
+			task_user_data,
+			oqpair->handle,
+			non_offload_req->sta_context,
+			&non_offload_req->task);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to allocate RDMA_READ task: %s\n", doca_error_get_descr(drc));
 		return -1;
@@ -3210,7 +3224,8 @@ nvmf_non_offload_request_transfer_in(struct nvmf_non_offload_request *non_offloa
 }
 
 static int
-nvmf_non_offload_request_transfer_out(struct nvmf_non_offload_request *non_offload_req, int *data_posted)
+nvmf_non_offload_request_transfer_out(struct nvmf_non_offload_request *non_offload_req,
+				      int *data_posted)
 {
 	struct spdk_nvmf_request	*req;
 	struct spdk_nvme_cpl		*rsp;
@@ -3231,19 +3246,19 @@ nvmf_non_offload_request_transfer_out(struct nvmf_non_offload_request *non_offlo
 		*data_posted = 1;
 		SPDK_DEBUGLOG(rdma_offload, "RDMA_READ and SEND task, req %p\n", non_offload_req);
 		drc = doca_sta_io_task_non_offload_rdma_write_send_alloc_init(oqpair->opoller->sta_io,
-									      task_user_data,
-									      oqpair->handle,
-									      (uint8_t *)rsp,
-									      non_offload_req->sta_context,
-									      &non_offload_req->task);
+				task_user_data,
+				oqpair->handle,
+				(uint8_t *)rsp,
+				non_offload_req->sta_context,
+				&non_offload_req->task);
 	} else {
 		SPDK_DEBUGLOG(rdma_offload, "SEND task, req %p\n", non_offload_req);
 		drc = doca_sta_io_task_non_offload_rdma_send_alloc_init(oqpair->opoller->sta_io,
-									task_user_data,
-									oqpair->handle,
-									(uint8_t *)rsp,
-									non_offload_req->sta_context,
-									&non_offload_req->task);
+				task_user_data,
+				oqpair->handle,
+				(uint8_t *)rsp,
+				non_offload_req->sta_context,
+				&non_offload_req->task);
 	}
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to allocate task: %s\n", doca_error_get_descr(drc));
@@ -3260,8 +3275,7 @@ nvmf_non_offload_request_transfer_out(struct nvmf_non_offload_request *non_offlo
 	return 0;
 }
 
-static int
-nvmf_non_offload_request_free(struct nvmf_non_offload_request *non_offload_req);
+static int nvmf_non_offload_request_free(struct nvmf_non_offload_request *non_offload_req);
 
 static bool
 nvmf_sta_io_non_offload_request_process(struct nvmf_non_offload_request *non_offload_req)
@@ -3475,8 +3489,8 @@ nvmf_sta_io_non_offload_request_process(struct nvmf_non_offload_request *non_off
 				non_offload_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			} else {
 				non_offload_req->state = data_posted ?
-								 RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST :
-								 RDMA_REQUEST_STATE_COMPLETING;
+							 RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST :
+							 RDMA_REQUEST_STATE_COMPLETING;
 			}
 			break;
 		case RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST:
@@ -3770,8 +3784,9 @@ nvmf_rdma_sta_state_changed_cb(const union doca_data user_data,
 }
 
 
-static void sta_offload_task_detach_ns_complete(struct doca_sta_producer_task_send *task,
-                                                union doca_data task_user_data)
+static void
+sta_offload_task_detach_ns_complete(struct doca_sta_producer_task_send *task,
+				    union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
 
@@ -3780,8 +3795,9 @@ static void sta_offload_task_detach_ns_complete(struct doca_sta_producer_task_se
 	rns->handle = 0;
 }
 
-static void sta_offload_task_detach_ns_complete_err(struct doca_sta_producer_task_send *task,
-                                                    union doca_data task_user_data)
+static void
+sta_offload_task_detach_ns_complete_err(struct doca_sta_producer_task_send *task,
+					union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_ns *rns = task_user_data.ptr;
 
@@ -3790,8 +3806,9 @@ static void sta_offload_task_detach_ns_complete_err(struct doca_sta_producer_tas
 	rns->delete_completed = true;
 }
 
-static void sta_offload_task_destroy_bqueue_complete(struct doca_sta_producer_task_send *task,
-                                                union doca_data task_user_data)
+static void
+sta_offload_task_destroy_bqueue_complete(struct doca_sta_producer_task_send *task,
+		union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
 
@@ -3799,8 +3816,9 @@ static void sta_offload_task_destroy_bqueue_complete(struct doca_sta_producer_ta
 	destroy_ctx->destroy_completed = true;
 }
 
-static void sta_offload_task_destroy_bqueue_complete_err(struct doca_sta_producer_task_send *task,
-                                                    union doca_data task_user_data)
+static void
+sta_offload_task_destroy_bqueue_complete_err(struct doca_sta_producer_task_send *task,
+		union doca_data task_user_data)
 {
 	struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx = task_user_data.ptr;
 
@@ -4012,32 +4030,33 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 	}
 
 	rc = doca_sta_subsystem_task_rm_ns_set_conf(rtransport->sta.sta,
-						    sta_offload_task_detach_ns_complete,
-						    sta_offload_task_detach_ns_complete_err);
-        if (rc != DOCA_SUCCESS) {
-                SPDK_ERRLOG("Failed to subsystem_task_rm_ns_set_conf, err: %s", doca_error_get_name(rc));
-                return -EINVAL;
-        }
+			sta_offload_task_detach_ns_complete,
+			sta_offload_task_detach_ns_complete_err);
+	if (rc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to subsystem_task_rm_ns_set_conf, err: %s", doca_error_get_name(rc));
+		return -EINVAL;
+	}
 
 	rc = doca_sta_be_task_destroy_queue_set_conf(rtransport->sta.sta,
-						     sta_offload_task_destroy_bqueue_complete,
-						     sta_offload_task_destroy_bqueue_complete_err);
-        if (rc != DOCA_SUCCESS) {
-                SPDK_ERRLOG("Failed to doca_sta_be_task_destroy_queue_set_conf, err: %s", doca_error_get_name(rc));
-                return -EINVAL;
-        }
+			sta_offload_task_destroy_bqueue_complete,
+			sta_offload_task_destroy_bqueue_complete_err);
+	if (rc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to doca_sta_be_task_destroy_queue_set_conf, err: %s", doca_error_get_name(rc));
+		return -EINVAL;
+	}
 
-	rc = doca_sta_mem_allocator_register(rtransport->sta.sta, nvmf_sta_zmalloc, nvmf_sta_free, nvmf_sta_vtophys);
-        if (rc != DOCA_SUCCESS) {
-                SPDK_ERRLOG("Failed to register DOCA STA memory allocator, err: %s", doca_error_get_name(rc));
-                return -EINVAL;
-        }
+	rc = doca_sta_mem_allocator_register(rtransport->sta.sta, nvmf_sta_zmalloc, nvmf_sta_free,
+					     nvmf_sta_vtophys);
+	if (rc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to register DOCA STA memory allocator, err: %s", doca_error_get_name(rc));
+		return -EINVAL;
+	}
 
 	rc = doca_sta_set_max_sta_io(rtransport->sta.sta, spdk_env_get_core_count());
-        if (rc != DOCA_SUCCESS) {
-                SPDK_ERRLOG("Failed to set max_sta_io: %s", doca_error_get_name(rc));
-                return -EINVAL;
-        }
+	if (rc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to set max_sta_io: %s", doca_error_get_name(rc));
+		return -EINVAL;
+	}
 
 	rc = doca_ctx_start(rtransport->sta.ctx);
 	if (DOCA_IS_ERROR(rc)) {
@@ -4070,7 +4089,7 @@ nvmf_doca_log_level_decode(const char *name, enum doca_log_level *level)
 		const char *name;
 		const enum doca_log_level value;
 	};
-       static const struct log_level log_levels[] = {
+	static const struct log_level log_levels[] = {
 		{ .name = "disable",	.value = DOCA_LOG_LEVEL_DISABLE },
 		{ .name = "critical",	.value = DOCA_LOG_LEVEL_CRIT },
 		{ .name = "error",	.value = DOCA_LOG_LEVEL_ERROR },
@@ -4080,17 +4099,17 @@ nvmf_doca_log_level_decode(const char *name, enum doca_log_level *level)
 		{ .name = "trace",	.value = DOCA_LOG_LEVEL_TRACE },
 		{ .name = NULL,		.value = 0 },
 	};
-       const struct log_level *log_level;
+	const struct log_level *log_level;
 
-       for (log_level = log_levels; log_level->name != NULL; log_level++) {
-	       if (strcmp(name, log_level->name) == 0) {
-		       *level = log_level->value;
-		       return 0;
-	       }
-       }
+	for (log_level = log_levels; log_level->name != NULL; log_level++) {
+		if (strcmp(name, log_level->name) == 0) {
+			*level = log_level->value;
+			return 0;
+		}
+	}
 
-       SPDK_ERRLOG("Unknown log level %s\n", name);
-       return -1;
+	SPDK_ERRLOG("Unknown log level %s\n", name);
+	return -1;
 }
 
 static int
@@ -4109,31 +4128,24 @@ nvmf_enable_doca_log(const char *log_level_name)
 			return -1;
 		}
 	}
-/*
-	// We do not use DOCA logs functionality for applications. We only need logs from DOCA libs.
-	drc = doca_log_backend_create_standard();
-	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("Failed to create DOCA log backend: %s\n", doca_error_get_descr(drc));
-	        return -1;
-	}
-*/
 	/* Register a logger backend for internal SDK errors and warnings */
-        drc = doca_log_backend_create_with_file_sdk(stderr, &sta_lib_log);
-        if (DOCA_IS_ERROR(drc)) {
+	drc = doca_log_backend_create_with_file_sdk(stderr, &sta_lib_log);
+	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to create DOCA log backend for SDK: %s\n", doca_error_get_descr(drc));
-                return -1;
+		return -1;
 	}
-        drc = doca_log_backend_set_sdk_level(sta_lib_log, log_level);
-        if (DOCA_IS_ERROR(drc)) {
+	drc = doca_log_backend_set_sdk_level(sta_lib_log, log_level);
+	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to set log level for DOCA log backend: %s\n", doca_error_get_descr(drc));
-                return -1;
+		return -1;
 	}
 
 	return 0;
 }
 
 static int
-nvmf_parse_rdma_device_list(const char *rdma_devices_str, char ***rdma_devices, int *num_rdma_devices)
+nvmf_parse_rdma_device_list(const char *rdma_devices_str, char ***rdma_devices,
+			    int *num_rdma_devices)
 {
 	char *str, *tmp, **devices;
 	int i;
@@ -5114,21 +5126,24 @@ nvmf_offload_qpair_process_pending(struct spdk_nvmf_offload_qpair *oqpair, bool 
 	struct nvmf_sta_non_offload_resources *resources;
 
 	/* First process requests which are waiting for response to be sent */
-	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_send_queue, state_link, non_offload_req_tmp) {
+	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_send_queue, state_link,
+			    non_offload_req_tmp) {
 		if (nvmf_sta_io_non_offload_request_process(non_offload_req) == false && drain == false) {
 			break;
 		}
 	}
 
 	/* We process I/O in the data transfer pending queue at the highest priority. */
-	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_read_queue, state_link, non_offload_req_tmp) {
+	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_read_queue, state_link,
+			    non_offload_req_tmp) {
 		if (nvmf_sta_io_non_offload_request_process(non_offload_req) == false && drain == false) {
 			break;
 		}
 	}
 
 	/* Then RDMA writes since reads have stronger restrictions than writes */
-	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_write_queue, state_link, non_offload_req_tmp) {
+	STAILQ_FOREACH_SAFE(non_offload_req, &oqpair->pending_rdma_write_queue, state_link,
+			    non_offload_req_tmp) {
 		if (nvmf_sta_io_non_offload_request_process(non_offload_req) == false && drain == false) {
 			break;
 		}
@@ -6065,7 +6080,7 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		return -EINVAL;
 	}
 	drc = doca_sta_io_task_disconnect_set_conf(opoller->sta_io, nvmf_sta_io_disconnect_comp_hadler,
-						   nvmf_sta_io_disconnect_error_hadler);
+			nvmf_sta_io_disconnect_error_hadler);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to set disconnect handlers for doca_sta_io: %s\n", doca_error_get_descr(drc));
 		nvmf_offload_poller_destroy(opoller);
@@ -6080,18 +6095,21 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		return -EINVAL;
 	}
 
-	drc = doca_sta_io_task_non_offload_set_rdma_write_send_conf(opoller->sta_io, nvmf_sta_io_rdma_write_comp,
-								    nvmf_sta_io_rdma_write_error);
+	drc = doca_sta_io_task_non_offload_set_rdma_write_send_conf(opoller->sta_io,
+			nvmf_sta_io_rdma_write_comp,
+			nvmf_sta_io_rdma_write_error);
 	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("Failed to set rdma_write completio handler doca_sta_io: %s\n", doca_error_get_descr(drc));
+		SPDK_ERRLOG("Failed to set rdma_write completio handler doca_sta_io: %s\n",
+			    doca_error_get_descr(drc));
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
 
 	drc = doca_sta_io_task_non_offload_set_rdma_read_conf(opoller->sta_io, nvmf_sta_io_rdma_read_comp,
-							      nvmf_sta_io_rdma_read_error);
+			nvmf_sta_io_rdma_read_error);
 	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("Failed to set rdma_read completio handler doca_sta_io: %s\n", doca_error_get_descr(drc));
+		SPDK_ERRLOG("Failed to set rdma_read completio handler doca_sta_io: %s\n",
+			    doca_error_get_descr(drc));
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
@@ -6476,7 +6494,7 @@ nvmf_rdma_poll_group_remove_rdma_qpair(struct spdk_nvmf_transport_poll_group *gr
 
 static int
 nvmf_rdma_poll_group_remove_offload_qpair(struct spdk_nvmf_transport_poll_group *group,
-					  struct spdk_nvmf_qpair *qpair)
+		struct spdk_nvmf_qpair *qpair)
 {
 	struct spdk_nvmf_offload_qpair *oqpair;
 
@@ -6539,8 +6557,9 @@ nvmf_non_offload_request_free(struct nvmf_non_offload_request *non_offload_req)
 static int
 nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req)
 {
-	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rdma_req->common.req.qpair->transport,
-			struct spdk_nvmf_rdma_transport, transport);
+	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(
+				rdma_req->common.req.qpair->transport,
+				struct spdk_nvmf_rdma_transport, transport);
 	struct spdk_nvmf_rdma_qpair *rqpair = nvmf_rdma_qpair_get(rdma_req->common.req.qpair);
 
 	/*
@@ -6583,8 +6602,9 @@ nvmf_rdma_offload_request_free(struct spdk_nvmf_request *req)
 static int
 nvmf_rdma_request_complete(struct spdk_nvmf_rdma_request *rdma_req)
 {
-	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rdma_req->common.req.qpair->transport,
-			struct spdk_nvmf_rdma_transport, transport);
+	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(
+				rdma_req->common.req.qpair->transport,
+				struct spdk_nvmf_rdma_transport, transport);
 	struct spdk_nvmf_rdma_qpair     *rqpair = nvmf_rdma_qpair_get(rdma_req->common.req.qpair);
 
 	if (rqpair->ibv_state != IBV_QPS_ERR) {
@@ -6764,9 +6784,9 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_CONNECTED:
 			task_user_data.ptr = oqpair;
 			drc = doca_sta_io_task_disconnect_alloc_init(oqpair->opoller->sta_io,
-								     task_user_data,
-								     oqpair->handle,
-								     &oqpair->destroy_task);
+					task_user_data,
+					oqpair->handle,
+					&oqpair->destroy_task);
 			if (DOCA_IS_ERROR(drc)) {
 				SPDK_ERRLOG("Failed to alloc disconnect task for offload QP 0x%lx: %s\n",
 					    oqpair->handle, doca_error_get_descr(drc));
@@ -7686,21 +7706,6 @@ nvmf_rdma_subsystem_is_busy(struct spdk_nvmf_rdma_subsystem *rsubsystem)
 	return !TAILQ_EMPTY(&rsubsystem->namespaces) || !TAILQ_EMPTY(&rsubsystem->devices);
 }
 
-static struct spdk_nvmf_rdma_subsystem *
-nvmf_rdma_subsystem_find(struct spdk_nvmf_rdma_transport *rtransport,
-			 const struct spdk_nvmf_subsystem *subsystem)
-{
-	struct spdk_nvmf_rdma_subsystem *rsubsystem;
-
-	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
-		if (subsystem_cmp(rsubsystem->subsystem, subsystem) == 0) {
-			break;
-		}
-	}
-
-	return rsubsystem;
-}
-
 static void
 nvmf_rdma_subsystem_dev_destroy(struct spdk_nvmf_rdma_subsystem_dev *sdev)
 {
@@ -7793,24 +7798,6 @@ nvmf_rdma_subsystem_add_port(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 	return 0;
 }
 
-/*
-static void
-nvmf_rdma_subsystem_del_dev(struct spdk_nvmf_rdma_subsystem *rsubsystem, struct spdk_nvmf_rdma_device *device)
-{
-	struct nvmf_rdma_subsystem_dev *sdev;
-	int rc;
-
-	sdev = nvmf_rdma_subsystem_dev_find(rsubsystem, device);
-	if (!sdev) {
-		SPDK_ERRLOG("Device does not exists in subsystem\n");
-		return -EINVAL;
-	}
-	nvmf_rdma_subsystem_dev_put(sdev);
-
-	return 0;
-}
-*/
-
 static int
 nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
 			   const struct spdk_nvmf_subsystem *subsystem,
@@ -7899,7 +7886,8 @@ nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 }
 
 static int
-nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
+nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
+				  struct spdk_nvmf_rdma_bdev_nvme_queue *queue)
 {
 	struct nvme_pcie_qpair *nvme_pqpair;
 	doca_error_t drc;
@@ -8049,19 +8037,22 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	cq_db_mmap_offset = (uintptr_t)nvme_pqpair->cq_hdbl - (uintptr_t)db_mmap_addr;
 
 	assert((uintptr_t)nvme_pqpair->sq_tdbl >= (uintptr_t)db_mmap_addr);
-	assert(((uintptr_t)nvme_pqpair->sq_tdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr + db_mmap_len);
+	assert(((uintptr_t)nvme_pqpair->sq_tdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr +
+	       db_mmap_len);
 	assert((uintptr_t)nvme_pqpair->cq_hdbl >= (uintptr_t)db_mmap_addr);
-	assert(((uintptr_t)nvme_pqpair->cq_hdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr + db_mmap_len);
+	assert(((uintptr_t)nvme_pqpair->cq_hdbl + sizeof(uint32_t)) <= (uintptr_t)db_mmap_addr +
+	       db_mmap_len);
 
 	queue->db_mmap = nvmf_rdma_create_doca_mmap(sta->dev, db_mmap_addr, db_mmap_len,
-			   queue->db_dmabuf->fd, (uintptr_t)db_mmap_addr - (uintptr_t)queue->db_dmabuf->addr);
+			 queue->db_dmabuf->fd, (uintptr_t)db_mmap_addr - (uintptr_t)queue->db_dmabuf->addr);
 	if (!queue->db_mmap) {
 		SPDK_ERRLOG("Failed to create DB mmap\n");
 		nvmf_rdma_bdev_nvme_queue_destroy(sta, queue);
 		return -1;
 	}
 
-	drc = doca_sta_be_add_queue(rbdev->handle, queue->sq_mmap, queue->db_mmap, sq_db_mmap_offset, queue->cq_mmap,
+	drc = doca_sta_be_add_queue(rbdev->handle, queue->sq_mmap, queue->db_mmap, sq_db_mmap_offset,
+				    queue->cq_mmap,
 				    queue->db_mmap, cq_db_mmap_offset, &queue->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to add queue to doca_sta_be: %s\n", doca_error_get_descr(drc));
@@ -8075,7 +8066,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 }
 
 static int
-nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_sta *sta, struct spdk_nvmf_rdma_bdev_null_queue *queue)
+nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
+				  struct spdk_nvmf_rdma_bdev_null_queue *queue)
 {
 	int rc;
 	doca_error_t drc;
@@ -8174,8 +8166,9 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	queue->db_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sqdb, sizeof(*queue->sqdb) + sizeof(*queue->cqdb),
-			   -1, 0);
+	queue->db_mmap = nvmf_rdma_create_doca_mmap(sta->dev, queue->sqdb,
+			 sizeof(*queue->sqdb) + sizeof(*queue->cqdb),
+			 -1, 0);
 	if (!queue->db_mmap) {
 		SPDK_ERRLOG("Failed to create SQDB mmap\n");
 		nvmf_rdma_bdev_null_queue_destroy(sta, queue);
@@ -8381,7 +8374,7 @@ spdk_nvmf_rdma_ns_destroy(struct spdk_nvmf_rdma_ns *rns)
 		task_user_data.ptr = rns;
 
 		drc = doca_sta_subsystem_task_rm_ns_alloc_init(rns->rsubsystem->handle, rns->handle,
-							       task_user_data, &rns->delete_task);
+				task_user_data, &rns->delete_task);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to alloc DOCA task: %s\n", doca_error_get_descr(drc));
 			rns->delete_started = false;
