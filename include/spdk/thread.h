@@ -1068,6 +1068,8 @@ struct spdk_spinlock {
 	pthread_spinlock_t spinlock;
 	struct spdk_thread *thread;
 	struct spdk_spinlock_internal *internal;
+	uint32_t lock_count;
+	bool recursive;
 	bool initialized;
 	bool destroyed;
 };
@@ -1078,6 +1080,16 @@ struct spdk_spinlock {
  * \param sspin The SPDK spinlock to initialize.
  */
 void spdk_spin_init(struct spdk_spinlock *sspin);
+
+/**
+ * Initialize a recursive spdk_spinlock.
+ *
+ * It can be locked several times by the same thread. It should be unlocked by the same amount that it is locked for
+ * release.
+ *
+ * \param sspin The SPDK spinlock to initialize.
+ */
+void spdk_spin_init_recursive(struct spdk_spinlock *sspin);
 
 /**
  * Destroy an spdk_spinlock.

@@ -3279,6 +3279,21 @@ spdk_spin_init(struct spdk_spinlock *sspin)
 	SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
 	sspin_init_internal(sspin);
 	SSPIN_GET_STACK(sspin, init);
+	sspin->recursive = false;
+	sspin->initialized = true;
+}
+
+void
+spdk_spin_init_recursive(struct spdk_spinlock *sspin)
+{
+	int rc;
+
+	memset(sspin, 0, sizeof(*sspin));
+	rc = pthread_spin_init(&sspin->spinlock, PTHREAD_PROCESS_PRIVATE);
+	SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
+	sspin_init_internal(sspin);
+	SSPIN_GET_STACK(sspin, init);
+	sspin->recursive = true;
 	sspin->initialized = true;
 }
 
@@ -3308,13 +3323,16 @@ spdk_spin_lock(struct spdk_spinlock *sspin)
 	SPIN_ASSERT_LOG_STACKS(!sspin->destroyed, SPIN_ERR_DESTROYED, sspin);
 	SPIN_ASSERT_LOG_STACKS(sspin->initialized, SPIN_ERR_NOT_INITIALIZED, sspin);
 	SPIN_ASSERT_LOG_STACKS(thread != NULL, SPIN_ERR_NOT_SPDK_THREAD, sspin);
-	SPIN_ASSERT_LOG_STACKS(thread != sspin->thread, SPIN_ERR_DEADLOCK, sspin);
+	SPIN_ASSERT_LOG_STACKS(thread != sspin->thread || sspin->recursive, SPIN_ERR_DEADLOCK, sspin);
 
-	rc = pthread_spin_lock(&sspin->spinlock);
-	SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
+	if (!sspin->recursive || thread != sspin->thread) {
+		rc = pthread_spin_lock(&sspin->spinlock);
+		sspin->thread = thread;
+		SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
+	}
 
-	sspin->thread = thread;
 	sspin->thread->lock_count++;
+	sspin->lock_count++;
 
 	SSPIN_GET_STACK(sspin, lock);
 }
@@ -3331,13 +3349,18 @@ spdk_spin_unlock(struct spdk_spinlock *sspin)
 	SPIN_ASSERT_LOG_STACKS(thread == sspin->thread, SPIN_ERR_WRONG_THREAD, sspin);
 
 	SPIN_ASSERT_LOG_STACKS(thread->lock_count > 0, SPIN_ERR_LOCK_COUNT, sspin);
+	SPIN_ASSERT_LOG_STACKS(sspin->lock_count > 0, SPIN_ERR_LOCK_COUNT, sspin);
 	thread->lock_count--;
-	sspin->thread = NULL;
+	sspin->lock_count--;
 
-	SSPIN_GET_STACK(sspin, unlock);
+	if (!sspin->recursive || sspin->lock_count == 0) {
+		sspin->thread = NULL;
 
-	rc = pthread_spin_unlock(&sspin->spinlock);
-	SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
+		SSPIN_GET_STACK(sspin, unlock);
+
+		rc = pthread_spin_unlock(&sspin->spinlock);
+		SPIN_ASSERT_LOG_STACKS(rc == 0, SPIN_ERR_PTHREAD, sspin);
+	}
 }
 
 bool

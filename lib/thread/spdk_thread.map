@@ -70,6 +70,7 @@
 	spdk_interrupt_mode_enable;
 	spdk_interrupt_mode_is_enabled;
 	spdk_spin_init;
+	spdk_spin_init_recursive;
 	spdk_spin_destroy;
 	spdk_spin_lock;
 	spdk_spin_unlock;

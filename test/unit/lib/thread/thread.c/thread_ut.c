@@ -1928,6 +1928,142 @@ spdk_spin(void)
 }
 
 static void
+spdk_spin_recursive(void)
+{
+	struct spdk_spinlock lock;
+
+	g_spin_abort_fn = ut_track_abort;
+
+	/* Do not need to be on an SPDK thread to initialize an spdk_spinlock */
+	g_spin_err_count = 0;
+	spdk_spin_init_recursive(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Trying to take a lock while not on an SPDK thread is an error */
+	g_spin_err_count = 0;
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 1);
+	CU_ASSERT(g_spin_err == SPIN_ERR_NOT_SPDK_THREAD);
+
+	/* Trying to check if a lock is held while not on an SPDK thread is an error */
+	g_spin_err_count = 0;
+	spdk_spin_held(&lock);
+	CU_ASSERT(g_spin_err_count == 1);
+	CU_ASSERT(g_spin_err == SPIN_ERR_NOT_SPDK_THREAD);
+
+	/* Do not need to be on an SPDK thread to destroy an spdk_spinlock */
+	g_spin_err_count = 0;
+	spdk_spin_destroy(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	allocate_threads(2);
+	set_thread(0);
+
+	/* Can initialize an spdk_spinlock on an SPDK thread */
+	g_spin_err_count = 0;
+	spdk_spin_init_recursive(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Can take spinlock */
+	g_spin_err_count = 0;
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Can release spinlock */
+	g_spin_err_count = 0;
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Can take spin lock recursively */
+	g_spin_err_count = 0;
+	g_spin_err = SPIN_ERR_NONE;
+	CU_ASSERT(lock.lock_count == 0);
+	spdk_spin_lock(&lock);
+	CU_ASSERT(lock.lock_count == 1);
+	CU_ASSERT(g_spin_err_count == 0);
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	CU_ASSERT(lock.lock_count == 2);
+
+	/* Unlock once, the lock must be still held */
+	g_spin_err_count = 0;
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(lock.lock_count == 1);
+	CU_ASSERT(spdk_spin_held(&lock) == true);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Cannot unlock from wrong thread */
+	set_thread(1);
+	g_spin_err_count = 0;
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 1);
+	CU_ASSERT(g_spin_err == SPIN_ERR_WRONG_THREAD);
+	set_thread(0);
+
+	/* Unlock one more time, spin is released */
+	g_spin_err_count = 0;
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(lock.lock_count == 0);
+	CU_ASSERT(spdk_spin_held(&lock) == false);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Cannot release the same lock twice */
+	g_spin_err_count = 0;
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 1);
+	CU_ASSERT(g_spin_err == SPIN_ERR_WRONG_THREAD);
+
+	/* A lock that is not held is properly recognized */
+	g_spin_err_count = 0;
+	CU_ASSERT(!spdk_spin_held(&lock));
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* A lock that is held is recognized as held by only the thread that holds it. */
+	set_thread(1);
+	g_spin_err_count = 0;
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	CU_ASSERT(spdk_spin_held(&lock));
+	CU_ASSERT(g_spin_err_count == 0);
+	set_thread(0);
+	CU_ASSERT(!spdk_spin_held(&lock));
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* After releasing, no one thinks it is held */
+	set_thread(1);
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	CU_ASSERT(!spdk_spin_held(&lock));
+	CU_ASSERT(g_spin_err_count == 0);
+	set_thread(0);
+	CU_ASSERT(!spdk_spin_held(&lock));
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Destroying a lock that is held is an error. */
+	set_thread(0);
+	g_spin_err_count = 0;
+	spdk_spin_lock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	spdk_spin_destroy(&lock);
+	CU_ASSERT(g_spin_err_count == 1);
+	CU_ASSERT(g_spin_err == SPIN_ERR_LOCK_HELD);
+	g_spin_err_count = 0;
+	spdk_spin_unlock(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+
+	/* Clean up */
+	g_spin_err_count = 0;
+	spdk_spin_destroy(&lock);
+	CU_ASSERT(g_spin_err_count == 0);
+	free_threads();
+	g_spin_abort_fn = __posix_abort;
+}
+
+static void
 for_each_channel_and_thread_exit_race(void)
 {
 	struct spdk_io_channel *ch1, *ch2;
@@ -2198,6 +2334,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, multi_timed_pollers_have_same_expiration);
 	CU_ADD_TEST(suite, io_device_lookup);
 	CU_ADD_TEST(suite, spdk_spin);
+	CU_ADD_TEST(suite, spdk_spin_recursive);
 	CU_ADD_TEST(suite, for_each_channel_and_thread_exit_race);
 	CU_ADD_TEST(suite, for_each_thread_and_thread_exit_race);
 	CU_ADD_TEST(suite, poller_get_name);
