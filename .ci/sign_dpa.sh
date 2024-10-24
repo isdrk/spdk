@@ -12,12 +12,15 @@
 export VAULT_ROLE_CREDS="${DPA_SIGN_USER}:${DPA_SIGN_PASS}"
 
 APP_PATH=$1
+APP=$(basename ${APP_PATH})
 SIGN_TOOL="/usr/bin/bf3_dpa_sign.sh"
 
 [ ! -f "${SIGN_TOOL}" ] && { echo "[ERROR]: ${SIGN_TOOL} doesn't exist!"; exit 1; }
 
 sed -i 's|docker run --rm -t|podman run --pid=host --network=host --uts=host --rm -t|' "${SIGN_TOOL}"
 
+cp ${APP_PATH} /tmp/
 # run bf3_dpa_sign.sh to sign it
-bf3_dpa_sign.sh -f $APP_PATH --platform ARM --prod -d 'Signing NVMF TARGET OFFLOAD APP' -o $APP_PATH
+bf3_dpa_sign.sh -f /tmp/${APP} --platform ARM --prod -d 'Signing NVMF TARGET OFFLOAD APP' -o /tmp/${APP}.signed
+cp -f /tmp/${APP}.signed $APP_PATH
 chmod +x $APP_PATH
