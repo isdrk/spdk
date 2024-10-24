@@ -1791,7 +1791,7 @@ nvmf_rdma_find_subsystem(struct spdk_nvmf_rdma_transport *rtransport)
 	}
 
 	if (num_subsystems != 1) {
-		SPDK_ERRLOG("%d subsystems are configured but DOCA STA supports only 1\n");
+		SPDK_ERRLOG("%d subsystems are configured but DOCA STA supports only 1\n", num_subsystems);
 		return NULL;
 	}
 
