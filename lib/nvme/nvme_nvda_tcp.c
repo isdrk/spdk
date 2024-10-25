@@ -705,6 +705,7 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	int rc, shared_stats;
 	assert(tqpair->consumed_packets == 0);
 	assert(tqpair->flags.closed == 0);
+	assert(!nvme_qpair_is_admin_queue(&tqpair->qpair) || spdk_spin_held(&g_xlio_admin_group_lock));
 
 	/* Mark socket as closed because xlio_socket_destroy() may generate CLOSED event.
 	 * We don't want to start another disconnect procedure in xlio_sock_event_cb().
@@ -738,6 +739,8 @@ xlio_sock_get_packet(struct nvme_tcp_qpair *tqpair)
 	struct xlio_sock_packet *packet = STAILQ_FIRST(&tqpair->xlio_packets_pool->free_packets);
 	static bool not_enough_packets = false;
 
+	assert(!nvme_qpair_is_admin_queue(&tqpair->qpair) || spdk_spin_held(&g_xlio_admin_group_lock));
+
 	if (spdk_likely(packet)) {
 		STAILQ_REMOVE_HEAD(&tqpair->xlio_packets_pool->free_packets, link);
 	} else {
@@ -759,6 +762,7 @@ xlio_sock_free_packet(struct nvme_tcp_qpair *tqpair, struct xlio_sock_packet *pa
 {
 	SPDK_DEBUGLOG(nvme_xlio, "tqpair %p xlio_sock 0x%lx: free xlio buf %p\n",
 		      tqpair, tqpair->xlio_sock, packet->xlio_buf);
+	assert(!nvme_qpair_is_admin_queue(&tqpair->qpair) || spdk_spin_held(&g_xlio_admin_group_lock));
 	assert(packet->refs == 0);
 	xlio_socket_buf_free(tqpair->xlio_sock, packet->xlio_buf);
 
@@ -1636,6 +1640,11 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 {
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
 	struct nvme_tcp_poll_group *group;
+	bool need_lock = nvme_qpair_is_admin_queue(qpair);
+
+	if (need_lock) {
+		spdk_spin_lock(&g_xlio_admin_group_lock);
+	}
 
 	if (tqpair->flags.pending_events) {
 		group = nvme_tcp_poll_group(qpair->poll_group);
@@ -1658,14 +1667,23 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	TAILQ_INIT(&tqpair->send_queue);
 
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_QUIESCING);
+
+	if (need_lock) {
+		spdk_spin_unlock(&g_xlio_admin_group_lock);
+	}
 }
 
 static int
 nvme_tcp_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_tcp_qpair *tqpair;
+	bool need_lock;
 
 	assert(qpair != NULL);
+	need_lock = nvme_qpair_is_admin_queue(qpair);
+	if (need_lock) {
+		spdk_spin_lock(&g_xlio_admin_group_lock);
+	}
 	tqpair = nvme_tcp_qpair(qpair);
 	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	assert(TAILQ_EMPTY(&tqpair->outstanding_reqs));
@@ -1679,6 +1697,10 @@ nvme_tcp_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_q
 	spdk_rdma_utils_free_mem_map(&tqpair->mem_map);
 	spdk_rdma_utils_put_memory_domain(tqpair->memory_domain);
 	spdk_free(tqpair);
+
+	if (need_lock) {
+		spdk_spin_unlock(&g_xlio_admin_group_lock);
+	}
 
 	return 0;
 }
@@ -2493,6 +2515,7 @@ nvme_tcp_qpair_free_request(struct spdk_nvme_qpair *qpair,
 	int rc = 0;
 
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
+	assert(!nvme_qpair_is_admin_queue(qpair));
 
 	assert(qpair != NULL);
 	tqpair = nvme_tcp_qpair(qpair);
@@ -3006,9 +3029,17 @@ static void
 nvme_tcp_c2h_term_req_payload_handle(struct nvme_tcp_qpair *tqpair,
 				     struct nvme_tcp_pdu *pdu)
 {
+	bool need_lock = nvme_qpair_is_admin_queue(&tqpair->qpair);
+
+	if (need_lock) {
+		spdk_spin_lock(&g_xlio_admin_group_lock);
+	}
 	nvme_tcp_c2h_term_req_dump(&tqpair->ctrl_hdr.term_req);
 	nvme_tcp_qpair_abort_reqs(&tqpair->qpair, 0);
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_QUIESCING);
+	if (need_lock) {
+		spdk_spin_unlock(&g_xlio_admin_group_lock);
+	}
 }
 
 static void
