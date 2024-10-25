@@ -1,0 +1,23 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "fsdev",
+      "config": [
+        {
+          "method": "fsdev_aio_create",
+          "params": {
+            "name": "Aio0",
+            "root_path": "/tmp/fsdev"
+          }
+        },
+        {
+          "method": "fsdev_passthru_ext_create",
+          "params": {
+            "name": "Pt0",
+            "base_fsdev_name": "Aio0"
+          }
+        }
+      ]
+    }
+  ]
+}
