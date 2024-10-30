@@ -121,6 +121,12 @@ struct spdk_fsdev_fn_table {
 	int (*reset)(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg);
 
 	/**
+	 * Check whether the device state was recovered upon creation. Optional - may be NULL.
+	 * NULL means that the device does not support recovery.
+	 */
+	bool (*is_recovered)(void *ctx);
+
+	/**
 	 * Output driver-specific information to a JSON stream. Optional - may be NULL.
 	 *
 	 * The JSON write context will be initialized with an open object, so the fsdev

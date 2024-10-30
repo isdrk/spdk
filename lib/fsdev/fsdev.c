@@ -1030,6 +1030,12 @@ spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev)
 	return fsdev->fn_table->reset ? true : false;
 }
 
+bool
+spdk_fsdev_is_recovered(struct spdk_fsdev *fsdev)
+{
+	return fsdev->fn_table->is_recovered ? fsdev->fn_table->is_recovered(fsdev->ctxt) : false;
+}
+
 void
 spdk_fsdev_get_io_stat(struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch,
 		       struct spdk_fsdev_io_stat *stat)
