@@ -39,10 +39,14 @@ typedef void (*spdk_fuse_dispatcher_submit_cpl_cb)(void *cb_arg, int error);
  * Create a FUSE fsdev dispatcher
  *
  * \param desc fsdev descriptor to work with
+ * \param recovery_mode true if the dispatcher's state should be recovered, false otherwise.
+ *
+ * NOTE: \p recovery_mode is ignored if rmem pool functionality is disabled
  *
  * \return FUSE fsdev dispatcher object on success, NULL otherwise.
  */
-struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc);
+struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
+		bool recovery_mode);
 
 /**
  * Set a FUSE request source's HW architecture.

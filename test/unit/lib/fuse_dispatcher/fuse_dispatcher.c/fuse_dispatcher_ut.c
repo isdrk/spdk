@@ -14,6 +14,7 @@
 #include "spdk/log.h"
 #include "spdk/fsdev.h"
 #include "spdk/fuse_dispatcher.h"
+#include "spdk/rmem.h"
 
 #define UT_UNIQUE 0xBEADBEAD
 #define UT_FOBJECT ((struct spdk_fsdev_file_object *)0xDEADDEAD)
@@ -196,6 +197,17 @@ DEFINE_STUB(spdk_fsdev_abort, int, (struct spdk_fsdev_desc *desc, struct spdk_io
 				    uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
 
+DEFINE_STUB(spdk_rmem_is_enabled, bool, (void), false);
+DEFINE_STUB(spdk_rmem_pool_create, struct spdk_rmem_pool *, (const char *name, uint32_t entry_size,
+		uint32_t num_entries, uint32_t ext_num_entries), NULL);
+DEFINE_STUB(spdk_rmem_pool_restore, struct spdk_rmem_pool *, (const char *name, uint32_t entry_size,
+		spdk_rmem_pool_restore_entry_cb clb, void *ctx), NULL);
+DEFINE_STUB(spdk_rmem_pool_get, struct spdk_rmem_entry *, (struct spdk_rmem_pool *pool), NULL);
+DEFINE_STUB_V(spdk_rmem_entry_write, (struct spdk_rmem_entry *entry, const void *buf));
+DEFINE_STUB(spdk_rmem_entry_read, bool, (struct spdk_rmem_entry *entry, void *buf), false);
+DEFINE_STUB_V(spdk_rmem_entry_release, (struct spdk_rmem_entry *entry));
+DEFINE_STUB_V(spdk_rmem_pool_destroy, (struct spdk_rmem_pool *pool));
+
 static struct spdk_fsdev_desc *g_ut_fsdev_desc = (struct spdk_fsdev_desc *)0xBEADFEAD;
 
 static void
@@ -203,7 +215,7 @@ ut_fuse_disp_test_create_delete(void)
 {
 	struct spdk_fuse_dispatcher *disp;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
 	CU_ASSERT(disp != NULL);
 
 	spdk_fuse_dispatcher_delete(disp);

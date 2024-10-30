@@ -14,6 +14,7 @@
 #include "spdk/thread.h"
 #include "spdk/likely.h"
 #include "spdk/fuse_dispatcher.h"
+#include "spdk/rmem.h"
 #include "linux/fuse_kernel.h"
 
 #ifndef UNUSED
@@ -222,6 +223,12 @@ struct fuse_io {
 	} u;
 };
 
+struct fuse_disp_recovery_data {
+	uint32_t proto_major;
+	uint32_t proto_minor;
+	uint64_t root_fobject;
+};
+
 struct spdk_fuse_dispatcher {
 	/**
 	 * fsdev descriptor
@@ -231,12 +238,12 @@ struct spdk_fuse_dispatcher {
 	/**
 	 * Major version of the protocol (read-only)
 	 */
-	unsigned proto_major;
+	uint32_t proto_major;
 
 	/**
 	 * Minor version of the protocol (read-only)
 	 */
-	unsigned proto_minor;
+	uint32_t proto_minor;
 
 	/**
 	 * FUSE request source's architecture
@@ -252,6 +259,16 @@ struct spdk_fuse_dispatcher {
 	 * Negotiated mount flags.
 	 */
 	uint32_t mount_flags;
+
+	/**
+	 * Recovery memory pool.
+	 */
+	struct spdk_rmem_pool *rmem_pool;
+
+	/**
+	 * Recovery memory entry (data).
+	 */
+	struct spdk_rmem_entry *rmem_data;
 };
 
 static inline const char *
@@ -334,7 +351,7 @@ fsdev_io_h2d_u64(struct fuse_io *fuse_io, uint64_t v)
 	return v;
 }
 
-static inline unsigned
+static inline uint32_t
 fsdev_io_proto_minor(struct fuse_io *fuse_io)
 {
 	return fuse_io->disp->proto_minor;
@@ -452,6 +469,20 @@ _fuse_op_requires_reply(uint32_t opcode)
 		return false;
 	default:
 		return true;
+	}
+}
+
+static void
+fuse_dispatcher_update_rmem(struct spdk_fuse_dispatcher *disp)
+{
+	if (disp->rmem_data) {
+		struct fuse_disp_recovery_data data = {
+			.proto_major = disp->proto_major,
+			.proto_minor = disp->proto_minor,
+			.root_fobject = (uint64_t)(uintptr_t)disp->root_fobject,
+		};
+
+		spdk_rmem_entry_write(disp->rmem_data, &data);
 	}
 }
 
@@ -2300,6 +2331,9 @@ do_mount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
+	/* Save the negotiated state */
+	fuse_dispatcher_update_rmem(disp);
+
 	fuse_dispatcher_io_complete_ok(fuse_io, fuse_io->u.init.out_len);
 }
 
@@ -3324,6 +3358,10 @@ do_umount_cpl_clb(void *cb_arg, struct spdk_io_channel *ch)
 	disp->proto_major = disp->proto_minor = 0;
 	disp->root_fobject = NULL;
 	SPDK_DEBUGLOG(fuse_dispatcher, "%s unmounted\n", fuse_dispatcher_name(disp));
+
+	/* Save the state */
+	fuse_dispatcher_update_rmem(disp);
+
 	fuse_dispatcher_io_complete_err(fuse_io, 0);
 }
 
@@ -3695,9 +3733,100 @@ exit:
 	return -EINVAL;
 }
 
+static bool
+fuse_dispatcher_create_rmem(struct spdk_fuse_dispatcher *disp, char *rmem_pool_name)
+{
+	disp->rmem_pool = spdk_rmem_pool_create(rmem_pool_name, sizeof(struct fuse_disp_recovery_data),
+						1, 1);
+	if (!disp->rmem_pool) {
+		SPDK_ERRLOG("%s: failed to create rmem pool", rmem_pool_name);
+		return false;
+	}
+
+	disp->rmem_data = spdk_rmem_pool_get(disp->rmem_pool);
+	if (!disp->rmem_data) {
+		SPDK_ERRLOG("%s: failed to get rmem_data\n", rmem_pool_name);
+		spdk_rmem_pool_destroy(disp->rmem_pool);
+		return false;
+	}
+
+	/* Save the initial state */
+	fuse_dispatcher_update_rmem(disp);
+
+	SPDK_NOTICELOG("%s: rmem pool created succesfully\n", rmem_pool_name);
+	return true;
+}
+
+static int
+fuse_dispatcher_rmem_restore_block_cb(struct spdk_rmem_entry *entry, void *ctx)
+{
+	struct fuse_disp_recovery_data data;
+	struct spdk_fuse_dispatcher *disp = ctx;
+
+	if (disp->rmem_data) {
+		SPDK_ERRLOG("%s: data has already been restored. Duplicated entry?\n",
+			    fuse_dispatcher_name(disp));
+		return -EIO;
+	}
+
+	if (!spdk_rmem_entry_read(entry, &data)) {
+		SPDK_ERRLOG("%s: failed to read restored entry\n",
+			    fuse_dispatcher_name(disp));
+		return -ENODATA;
+	}
+
+	disp->rmem_data = entry;
+	disp->proto_major = data.proto_major;
+	disp->proto_minor = data.proto_minor;
+	disp->root_fobject = (struct spdk_fsdev_file_object *)(uintptr_t)data.root_fobject;
+
+	SPDK_NOTICELOG("%s: data restored: proto_major=%u proto_minor=%u root_fobject=0x%p\n",
+		       fuse_dispatcher_name(disp), disp->proto_major, disp->proto_minor, disp->root_fobject);
+
+	return 0;
+}
+
+static bool
+fuse_dispatcher_recover_rmem(struct spdk_fuse_dispatcher *disp, char *rmem_pool_name)
+{
+	disp->rmem_pool = spdk_rmem_pool_restore(rmem_pool_name, sizeof(struct fuse_disp_recovery_data),
+			  fuse_dispatcher_rmem_restore_block_cb, disp);
+	if (!disp->rmem_pool) {
+		SPDK_ERRLOG("%s: failed to restore rmem pool\n", rmem_pool_name);
+		return false;
+	}
+
+	SPDK_NOTICELOG("%s: rmem pool restored successfully\n", rmem_pool_name);
+	return true;
+}
+
+static bool
+fuse_dispatcher_init_rmem(struct spdk_fuse_dispatcher *disp, bool recovery_mode)
+{
+	bool res = false;
+	char *rmem_pool_name;
+
+	if (!spdk_rmem_is_enabled()) {
+		SPDK_NOTICELOG("rmem is disabled\n");
+		return true;
+	}
+
+	rmem_pool_name = spdk_sprintf_alloc("fuse_disp_%s", fuse_dispatcher_name(disp));
+	if (!rmem_pool_name) {
+		SPDK_ERRLOG("could not allocate pool name for %s\n", fuse_dispatcher_name(disp));
+		return false;
+	}
+
+	res = recovery_mode ? fuse_dispatcher_recover_rmem(disp, rmem_pool_name) :
+	      fuse_dispatcher_create_rmem(disp, rmem_pool_name);
+
+	free(rmem_pool_name);
+
+	return res;
+}
 
 struct spdk_fuse_dispatcher *
-spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
+spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode)
 {
 	struct spdk_fuse_dispatcher *disp;
 
@@ -3709,6 +3838,12 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
 
 	disp->fuse_arch = SPDK_FUSE_ARCH_NATIVE;
 	disp->desc = desc;
+
+	if (!fuse_dispatcher_init_rmem(disp, recovery_mode)) {
+		SPDK_ERRLOG("could not create or restore rmem pool for %s\n", fuse_dispatcher_name(disp));
+		free(disp);
+		return NULL;
+	}
 
 	return disp;
 }
@@ -3770,6 +3905,11 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 void
 spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
 {
+	if (disp->rmem_data) {
+		assert(disp->rmem_pool != NULL);
+		spdk_rmem_entry_release(disp->rmem_data);
+		spdk_rmem_pool_destroy(disp->rmem_pool);
+	}
 	free(disp);
 }
 
