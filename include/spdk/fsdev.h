@@ -473,6 +473,14 @@ typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, boo
 int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
 
 /**
+ * Check whether the Filesystem device supports reset.
+ *
+ * \param fsdev Filesystem device to check.
+ * \return true if support, false otherwise.
+ */
+bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
+
+/**
  * Return I/O statistics for this channel.
  *
  * \param fsdev Filesystem device.
@@ -524,14 +532,6 @@ typedef void (*spdk_fsdev_reset_device_stat_cb)(struct spdk_fsdev *fsdev,
  */
 void spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev,  spdk_fsdev_reset_device_stat_cb cb,
 				  void *cb_arg);
-
-/**
- * Check whether the Filesystem device supports reset.
- *
- * \param fsdev Filesystem device to check.
- * \return true if support, false otherwise.
- */
-bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
 
 /* Valid flags to set in spdk_fsdev_setattr */
 #define SPDK_FSDEV_ATTR_MODE		(1 << 0)
