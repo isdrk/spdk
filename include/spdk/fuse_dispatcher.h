@@ -57,6 +57,13 @@ struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc 
 int spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_arch fuse_arch);
 
 /**
+ * Get the size of the io_ctx buffer.
+ *
+ * \return The size of struct fuse_io
+ */
+size_t spdk_fuse_dispatcher_get_io_ctx_size(void);
+
+/**
  * Submit FUSE request
  *
  * \param disp FUSE fsdev dispatcher object.
@@ -77,7 +84,7 @@ int spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_f
 int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 					struct spdk_io_channel *ch,
 					struct iovec *in_iov, int in_iovcnt,
-					struct iovec *out_iov, int out_iovcnt,
+					struct iovec *out_iov, int out_iovcnt, void *io_ctx,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
 /**

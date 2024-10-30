@@ -117,18 +117,6 @@ fsdev_d2h_open_flags(enum spdk_fuse_arch fuse_arch, uint32_t flags, uint32_t *tr
 	return res;
 }
 
-struct spdk_fuse_mgr {
-	struct spdk_mempool *fuse_io_pool;
-	uint32_t ref_cnt;
-	pthread_mutex_t lock;
-};
-
-static struct spdk_fuse_mgr g_fuse_mgr = {
-	.fuse_io_pool = NULL,
-	.ref_cnt = 0,
-	.lock = PTHREAD_MUTEX_INITIALIZER,
-};
-
 struct fuse_forget_data {
 	uint64_t ino;
 	uint64_t nlookup;
@@ -574,11 +562,6 @@ fuse_dispatcher_io_complete_final(struct fuse_io *fuse_io, int error)
 {
 	spdk_fuse_dispatcher_submit_cpl_cb cpl_cb = fuse_io->cpl_cb;
 	void *cpl_cb_arg = fuse_io->cpl_cb_arg;
-
-	/* NOTE: it's important to free fuse_io before the completion callback,
-	 * as the callback can destroy the dispatcher
-	 */
-	spdk_mempool_put(g_fuse_mgr.fuse_io_pool, fuse_io);
 
 	cpl_cb(cpl_cb_arg, error);
 }
@@ -3709,7 +3692,6 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 	return 0;
 
 exit:
-	spdk_mempool_put(g_fuse_mgr.fuse_io_pool, fuse_io);
 	return -EINVAL;
 }
 
@@ -3724,23 +3706,6 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
 		SPDK_ERRLOG("could not allocate disp\n");
 		return NULL;
 	}
-
-	pthread_mutex_lock(&g_fuse_mgr.lock);
-	if (!g_fuse_mgr.ref_cnt) {
-		struct spdk_fsdev_opts opts;
-		spdk_fsdev_get_opts(&opts, sizeof(opts));
-
-		g_fuse_mgr.fuse_io_pool = spdk_mempool_create("FUSE_disp_ios", opts.fsdev_io_pool_size,
-					  sizeof(struct fuse_io), opts.fsdev_io_cache_size, SPDK_ENV_SOCKET_ID_ANY);
-		if (!g_fuse_mgr.fuse_io_pool) {
-			pthread_mutex_unlock(&g_fuse_mgr.lock);
-			free(disp);
-			SPDK_ERRLOG("Could not create mempool\n");
-			return NULL;
-		}
-	}
-	g_fuse_mgr.ref_cnt++;
-	pthread_mutex_unlock(&g_fuse_mgr.lock);
 
 	disp->fuse_arch = SPDK_FUSE_ARCH_NATIVE;
 	disp->desc = desc;
@@ -3765,19 +3730,23 @@ spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_
 	}
 }
 
+size_t
+spdk_fuse_dispatcher_get_io_ctx_size(void)
+{
+	return sizeof(struct fuse_io);
+}
+
 int
 spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    struct spdk_io_channel *ch,
 				    struct iovec *in_iov, int in_iovcnt,
-				    struct iovec *out_iov, int out_iovcnt,
+				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
-	struct fuse_io *fuse_io;
-
-	fuse_io = spdk_mempool_get(g_fuse_mgr.fuse_io_pool);
+	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
 
 	if (!fuse_io) {
-		SPDK_ERRLOG("We ran out of FUSE IOs\n");
+		SPDK_ERRLOG("Invalid argument, fuse_io is NULL\n");
 		return -ENOBUFS;
 	}
 
@@ -3802,15 +3771,6 @@ void
 spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
 {
 	free(disp);
-
-	pthread_mutex_lock(&g_fuse_mgr.lock);
-	g_fuse_mgr.ref_cnt--;
-	if (!g_fuse_mgr.ref_cnt) {
-		spdk_mempool_free(g_fuse_mgr.fuse_io_pool);
-		g_fuse_mgr.fuse_io_pool = NULL;
-
-	}
-	pthread_mutex_unlock(&g_fuse_mgr.lock);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fuse_dispatcher)

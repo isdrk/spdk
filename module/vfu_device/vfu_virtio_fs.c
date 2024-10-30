@@ -45,6 +45,7 @@ struct virtio_fs_endpoint {
 struct virtio_fs_req {
 	volatile uint32_t *status;
 	struct virtio_fs_endpoint *endpoint;
+	void *io_ctx;
 	/* KEEP req at last */
 	struct vfu_virtio_req req;
 };
@@ -215,7 +216,7 @@ virtio_fs_process_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_vi
 	out_iovcnt = req->iovcnt - in_iovcnt;
 
 	spdk_fuse_dispatcher_submit_request(fs_endpoint->fuse_disp, fs_endpoint->io_channel,
-					    in_iov, in_iovcnt, out_iov, out_iovcnt,
+					    in_iov, in_iovcnt, out_iov, out_iovcnt, fs_req->io_ctx,
 					    virtio_fs_fuse_req_done, fs_req);
 	return 0;
 }
@@ -245,6 +246,12 @@ virtio_fs_alloc_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_virt
 		return NULL;
 	}
 
+	fs_req->io_ctx = calloc(1, spdk_fuse_dispatcher_get_io_ctx_size());
+	if (fs_req->io_ctx) {
+		free(fs_req);
+		return NULL;
+	}
+
 	return &fs_req->req;
 }
 
@@ -254,6 +261,7 @@ virtio_fs_free_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_virti
 {
 	struct virtio_fs_req *fs_req = to_fs_request(req);
 
+	free(fs_req->io_ctx);
 	free(fs_req);
 }
 
