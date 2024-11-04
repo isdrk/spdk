@@ -285,6 +285,20 @@ void spdk_memory_domain_set_memzero(struct spdk_memory_domain *domain,
 				    spdk_memory_domain_memzero_cb memzero_cb);
 
 /**
+ * Set a new context for memory domain.
+ *
+ * The new_ctx pointer replaces original context passed in \ref spdk_memory_domain_create. Its size must be less than
+ * or equal to the size of original user context. All calls of \ref spdk_memory_domain_get_user_context return a
+ * pointer to an updated context.
+ *
+ * \param domain Memory domain
+ * \param new_ctx Context to set
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_memory_domain_set_context(struct spdk_memory_domain *domain,
+				   struct spdk_memory_domain_ctx *new_ctx);
+
+/**
  * Get the context passed by the user in \ref spdk_memory_domain_create
  *
  * \param domain Memory domain

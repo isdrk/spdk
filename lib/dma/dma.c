@@ -194,6 +194,42 @@ spdk_memory_domain_set_memzero(struct spdk_memory_domain *domain,
 	domain->memzero_cb = memzero_cb;
 }
 
+int
+spdk_memory_domain_set_context(struct spdk_memory_domain *domain,
+			       struct spdk_memory_domain_ctx *new_ctx)
+{
+	size_t ctx_size, user_ctx_size = 0;
+	void *ctx;
+
+	if (!domain || !new_ctx || !new_ctx->size) {
+		return -EINVAL;
+	}
+	if (domain->user_ctx_size) {
+		if (new_ctx->user_ctx_size > domain->user_ctx_size) {
+			return -EINVAL;
+		}
+		user_ctx_size = domain->user_ctx_size;
+	}
+
+	ctx = calloc(1, sizeof(*domain->ctx));
+	if (!ctx) {
+		SPDK_ERRLOG("Failed to allocate memory");
+		return -ENOMEM;
+	}
+	free(domain->ctx);
+	domain->ctx = ctx;
+	ctx_size = spdk_min(sizeof(*domain->ctx), new_ctx->size);
+	memcpy(domain->ctx, new_ctx, ctx_size);
+	domain->ctx->size = ctx_size;
+
+	if (user_ctx_size) {
+		memcpy(domain->user_ctx, new_ctx->user_ctx, new_ctx->user_ctx_size);
+		domain->user_ctx_size = user_ctx_size;
+	}
+
+	return 0;
+}
+
 struct spdk_memory_domain_ctx *
 spdk_memory_domain_get_context(struct spdk_memory_domain *domain)
 {
