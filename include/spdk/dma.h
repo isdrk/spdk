@@ -197,6 +197,8 @@ struct spdk_memory_domain_rdma_ctx {
 	size_t size;
 	/** Opaque handle for ibv_pd */
 	void *ibv_pd;
+	/** Opaque handle for RDMA qpair, real type is implementation specific */
+	void *qp;
 };
 
 struct spdk_memory_domain_ctx {
