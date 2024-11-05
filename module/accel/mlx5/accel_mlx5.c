@@ -4884,27 +4884,15 @@ accel_mlx5_ch_get_dev_by_pd(struct accel_mlx5_io_channel *accel_ch, struct ibv_p
 }
 
 static inline int
-accel_mlx5_task_assign_qp_by_domain_pd(struct accel_mlx5_task *task,
-				       struct accel_mlx5_io_channel *acce_ch, struct spdk_memory_domain *domain)
+accel_mlx5_task_assign_qp_by_pd(struct accel_mlx5_task *task,
+				struct accel_mlx5_io_channel *accel_ch,
+				struct ibv_pd *pd)
 {
-	struct spdk_memory_domain_rdma_ctx *domain_ctx;
 	struct accel_mlx5_dev *dev;
-	struct ibv_pd *domain_pd;
-	size_t ctx_size;
 
-	domain_ctx = spdk_memory_domain_get_user_context(domain, &ctx_size);
-	if (spdk_unlikely(!domain_ctx || domain_ctx->size != ctx_size)) {
-		SPDK_ERRLOG("no domain context or wrong size, ctx ptr %p, size %zu\n", domain_ctx, ctx_size);
-		return -ENOTSUP;
-	}
-	domain_pd = domain_ctx->ibv_pd;
-	if (spdk_unlikely(!domain_pd)) {
-		SPDK_ERRLOG("no destination domain PD, task %p", task);
-		return -ENOTSUP;
-	}
-	dev = accel_mlx5_ch_get_dev_by_pd(acce_ch, domain_pd);
+	dev = accel_mlx5_ch_get_dev_by_pd(accel_ch, pd);
 	if (spdk_unlikely(!dev)) {
-		SPDK_ERRLOG("No dev for PD %p dev %s\n", domain_pd, domain_pd->context->device->name);
+		SPDK_ERRLOG("No dev for PD %p dev %s\n", pd, pd->context->device->name);
 		return -ENODEV;
 	}
 
@@ -4924,15 +4912,49 @@ accel_mlx5_task_assign_qp_by_domain_pd(struct accel_mlx5_task *task,
 }
 
 static inline int
+accel_mlx5_task_assign_qp_by_domain_pd(struct accel_mlx5_task *task,
+				       struct accel_mlx5_io_channel *accel_ch, struct spdk_memory_domain *domain)
+{
+	struct spdk_memory_domain_rdma_ctx *domain_ctx;
+	struct ibv_pd *domain_pd;
+	size_t ctx_size;
+
+	domain_ctx = spdk_memory_domain_get_user_context(domain, &ctx_size);
+	if (spdk_unlikely(!domain_ctx || domain_ctx->size != ctx_size)) {
+		SPDK_ERRLOG("no domain context or wrong size, ctx ptr %p, size %zu\n", domain_ctx, ctx_size);
+		return -ENOTSUP;
+	}
+	domain_pd = domain_ctx->ibv_pd;
+	if (spdk_unlikely(!domain_pd)) {
+		SPDK_ERRLOG("no destination domain PD, task %p", task);
+		return -ENOTSUP;
+	}
+
+	return accel_mlx5_task_assign_qp_by_pd(task, accel_ch, domain_pd);
+}
+
+static inline int
 accel_mlx5_task_merge_copy_crypto(struct accel_mlx5_task *crypto, struct accel_mlx5_task *copy,
 				  struct accel_mlx5_io_channel *ch,
 				  struct spdk_memory_domain *domain_override, void *domain_ctx_override)
 {
+	struct spdk_memory_domain_rdma_ctx *domain_ctx;
 	struct spdk_accel_task *crypto_base = &crypto->base;
 	struct spdk_accel_task *copy_base = &copy->base;
+	size_t ctx_size;
 	int rc;
 
-	rc = accel_mlx5_task_assign_qp_by_domain_pd(crypto, ch, domain_override);
+	domain_ctx = spdk_memory_domain_get_user_context(domain_override, &ctx_size);
+	if (spdk_unlikely(!domain_ctx || domain_ctx->size != ctx_size)) {
+		SPDK_ERRLOG("no domain context or wrong size, ctx ptr %p, size %zu\n", domain_ctx, ctx_size);
+		return -ENOTSUP;
+	}
+	if (spdk_unlikely(!domain_ctx->ibv_pd)) {
+		SPDK_ERRLOG("no destination domain PD, task %p", crypto);
+		return -ENOTSUP;
+	}
+
+	rc = accel_mlx5_task_assign_qp_by_pd(crypto, ch, domain_ctx->ibv_pd);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
