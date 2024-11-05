@@ -2891,15 +2891,13 @@ accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
+accel_mlx5_crypto_mkey_task_init_common(struct accel_mlx5_task *mlx5_task,
+					struct accel_mlx5_dev *dev)
 {
 	struct spdk_mlx5_crypto_dek_data dek_data = {};
 	struct spdk_accel_task *task = &mlx5_task->base;
-	struct accel_mlx5_qp *qp = mlx5_task->qp;
-	struct accel_mlx5_dev *dev = qp->dev;
 	uint32_t num_blocks;
 	int rc;
-	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
 	bool crypto_key_ok;
 
 	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
@@ -2959,13 +2957,30 @@ accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 		return -ENOMEM;
 	}
 	mlx5_task->num_ops = 1;
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
+
+	rc = accel_mlx5_crypto_mkey_task_init_common(mlx5_task, dev);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+
 	if (spdk_unlikely(qp_slot == 0)) {
 		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
 		return -ENOMEM;
 	}
 
 	SPDK_DEBUGLOG(accel_mlx5, "crypto_mkey task num_blocks %u, src_len %zu\n", mlx5_task->num_reqs,
-		      task->nbytes);
+		      mlx5_task->base.nbytes);
 
 	return 0;
 }
