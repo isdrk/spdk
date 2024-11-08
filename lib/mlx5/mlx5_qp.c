@@ -615,6 +615,7 @@ spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *mlx5_qp, struct rdma_cm_id *cm_id)
 	if (rc) {
 		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_RTS) failed, rc %d\n", rc);
 	}
+	mlx5_qp->cached_extra_flags = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
 
 	return rc;
 

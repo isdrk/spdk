@@ -263,6 +263,7 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t s
 	}
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+	flags |= qp->extra_flags;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
@@ -271,6 +272,7 @@ spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t s
 		mlx5_dma_xfer_wrap_around(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_WRITE, flags, wrid,
 					  bb_count);
 	}
+	qp->extra_flags = 0;
 
 	return 0;
 }
@@ -295,6 +297,7 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sg
 	}
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+	flags |= qp->extra_flags;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid, bb_count);
@@ -302,6 +305,7 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sg
 		mlx5_dma_xfer_wrap_around(qp, sge, sge_count, dstaddr, rkey, MLX5_OPCODE_RDMA_READ, flags, wrid,
 					  bb_count);
 	}
+	qp->extra_flags = 0;
 
 	return 0;
 }

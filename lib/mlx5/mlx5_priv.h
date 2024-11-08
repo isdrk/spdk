@@ -101,6 +101,10 @@ struct spdk_mlx5_qp {
 	uint16_t max_recv_sge;
 	uint16_t rx_available;
 	uint8_t sigmode;
+	/* flags below are used to automatically add a fence to rdma operations which follow UMR. Applicable to
+	 * connected qpairs. */
+	uint8_t extra_flags;
+	uint8_t cached_extra_flags;
 	bool aes_xts_inc_64;
 };
 

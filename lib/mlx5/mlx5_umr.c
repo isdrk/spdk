@@ -836,6 +836,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1008,6 +1009,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1165,6 +1167,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1361,6 +1364,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
