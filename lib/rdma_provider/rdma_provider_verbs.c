@@ -384,3 +384,23 @@ spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entrie
 
 	return ibv_poll_cq(rdma_cq->cq, num_entries, wc);
 }
+
+int
+spdk_rdma_provider_set_opts(const struct spdk_rdma_provider_opts *opts)
+{
+	return -ENOTSUP;
+}
+
+int
+spdk_rdma_provider_get_opts(struct spdk_rdma_provider_opts *opts, size_t opts_size)
+{
+	return -ENOTSUP;
+}
+
+struct spdk_json_write_ctx;
+
+void
+spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
+{
+
+}
