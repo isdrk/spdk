@@ -121,8 +121,6 @@ test-autotest-job:
   extends: .test-job-vm-template
   tags: [not-crypto, vm, linux, x86_64, f39]
   script:
-    - patch -p1 < $HOME/spdk-test-nvme.diff
-    - patch -p1 < $HOME/spdk-autotest-on-vm.diff
     - tar xf .test.tar
     # clean up output of autotest from previous runs
     - sudo rm -rf $CI_PROJECT_DIR/../output/

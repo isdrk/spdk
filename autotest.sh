@@ -91,7 +91,7 @@ if hash lcov && ! [[ "$CC_TYPE" == *"clang"* ]]; then
 		"
 	export LCOV="lcov $LCOV_OPTS --no-external"
 	# Print lcov version to log
-	$LCOV -v
+	$LCOV --version
 	# zero out coverage data
 	$LCOV -q -c -i -t "Baseline" -d $src -o $out/cov_base.info
 fi
@@ -224,7 +224,8 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 			run_test "nvme_pmr" $rootdir/test/nvme/nvme_pmr.sh
 		fi
 
-		run_test "nvme_scc" $rootdir/test/nvme/nvme_scc.sh
+		# FIXME: Test requiers QEMU Emulated NVMe or NVMe with Simple Copy support
+		# run_test "nvme_scc" $rootdir/test/nvme/nvme_scc.sh
 
 		if [[ $SPDK_TEST_NVME_BP -eq 1 ]]; then
 			run_test "nvme_bp" $rootdir/test/nvme/nvme_bp.sh
