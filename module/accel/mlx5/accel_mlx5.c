@@ -73,6 +73,7 @@ enum accel_mlx5_opcode {
 	ACCEL_MLX5_OPC_COPY,
 	ACCEL_MLX5_OPC_CRYPTO,
 	ACCEL_MLX5_OPC_CRYPTO_MKEY,
+	ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP,
 	ACCEL_MLX5_OPC_MKEY,
 	ACCEL_MLX5_OPC_CRC32C,
 	ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C,
@@ -167,6 +168,9 @@ struct accel_mlx5_task {
 			uint64_t iv;
 			uint16_t block_size;
 		} crc_decrypt;
+		struct {
+			struct spdk_mlx5_qp *ext_qp;
+		} crypto_external_qp;
 	};
 	union {
 		uint8_t raw;
@@ -372,7 +376,8 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 	SPDK_DEBUGLOG(accel_mlx5, "Fail task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
 
 	if (task->num_ops) {
-		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO || task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY) {
+		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO || task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY ||
+		    task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, task->mkeys, task->num_ops);
 		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
@@ -839,7 +844,8 @@ accel_mlx5_memory_domain_transfer(struct accel_mlx5_task *task)
 	struct accel_mlx5_dev *dev = task->qp->dev;
 	int rc;
 
-	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY || task->mlx5_opcode == ACCEL_MLX5_OPC_MKEY);
+	assert(task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY ||
+	       task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP || task->mlx5_opcode == ACCEL_MLX5_OPC_MKEY);
 	/* UMR is an offset in the addess space, so the start address is 0 */
 	translation.iov.iov_base = NULL;
 	translation.iov.iov_len = base->nbytes;
@@ -2962,6 +2968,24 @@ accel_mlx5_crypto_mkey_task_init_common(struct accel_mlx5_task *mlx5_task,
 }
 
 static inline int
+accel_mlx5_crypto_mkey_ext_qp_task_init(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+
+	rc = accel_mlx5_crypto_mkey_task_init_common(mlx5_task, dev);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+
+	SPDK_DEBUGLOG(accel_mlx5, "crypto_mkey_ext_qp task num_blocks %u, src_len %zu\n",
+		      mlx5_task->num_reqs, mlx5_task->base.nbytes);
+
+	return 0;
+}
+
+static inline int
 accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 {
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
@@ -2983,6 +3007,98 @@ accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 		      mlx5_task->base.nbytes);
 
 	return 0;
+}
+
+static inline int
+accel_mlx5_crypto_mkey_ext_qp_task_process(struct accel_mlx5_task *mlx5_task)
+{
+	struct spdk_mlx5_umr_crypto_attr cattr;
+	struct spdk_mlx5_umr_attr umr_attr;
+	struct accel_mlx5_sge sge;
+	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	uint32_t block_size, length, remaining, num_blocks, mkey;
+	int rc;
+
+	if (spdk_unlikely(!mlx5_task->num_ops)) {
+		return -EINVAL;
+	}
+	SPDK_DEBUGLOG(accel_mlx5, "begin, task %p, dst_domain_ctx %p\n", mlx5_task,
+		      mlx5_task->base.dst_domain_ctx);
+
+	num_blocks = mlx5_task->num_blocks;
+	block_size = task->block_size;
+	mkey = mlx5_task->mkeys[0]->mkey;
+	length = task->nbytes;
+	SPDK_DEBUGLOG(accel_mlx5, "task %p, src sge, domain %p, len %u\n", task, task->src_domain, length);
+	rc = accel_mlx5_fill_block_sge(qp, sge.src_sge, &mlx5_task->src, task->src_domain,
+				       task->src_domain_ctx, 0, length, &remaining);
+	if (spdk_unlikely(rc <= 0)) {
+		if (rc == 0) {
+			rc = -EINVAL;
+		}
+		SPDK_ERRLOG("failed set src sge, rc %d\n", rc);
+		return rc;
+	}
+	sge.src_sge_count = rc;
+	if (spdk_unlikely(remaining)) {
+		SPDK_ERRLOG("task %p, can't handle fragmented payload, remaining %u\n", task, remaining);
+		return -ERANGE;
+	}
+	cattr.xts_iv = task->iv + mlx5_task->num_processed_blocks;
+	cattr.keytag = 0;
+	cattr.dek_obj_id = mlx5_task->dek_obj_id;
+	cattr.tweak_mode = mlx5_task->tweak_mode;
+	cattr.enc_order = mlx5_task->enc_order;
+	cattr.bs_selector = bs_to_bs_selector(block_size);
+	if (spdk_unlikely(!cattr.bs_selector)) {
+		SPDK_ERRLOG("unsupported block size %u\n", block_size);
+		return -EINVAL;
+	}
+	umr_attr.mkey = mkey;
+	umr_attr.sge = sge.src_sge;
+
+	SPDK_DEBUGLOG(accel_mlx5,
+		      "task %p: bs %u, iv %"PRIu64", enc_on_tx %d, tweak_mode %d, len %u, dv_mkey %x, blocks %u\n",
+		      mlx5_task, task->block_size, cattr.xts_iv, mlx5_task->enc_order, cattr.tweak_mode,
+		      length, mkey, num_blocks);
+
+	umr_attr.sge_count = sge.src_sge_count;
+	umr_attr.umr_len = length;
+	mlx5_task->num_processed_blocks += num_blocks;
+
+	rc = spdk_mlx5_umr_configure_crypto(mlx5_task->crypto_external_qp.ext_qp, &umr_attr, &cattr, 0, 0);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+	dev->stats.crypto_umrs++;
+	mlx5_task->num_submitted_reqs++;
+
+	SPDK_DEBUGLOG(accel_mlx5, "end, task %p, dst_domain_ctx %p\n", mlx5_task,
+		      mlx5_task->base.dst_domain_ctx);
+
+	accel_mlx5_memory_domain_transfer(mlx5_task);
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_crypto_mkey_ext_qp_task_continue(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+	int rc;
+
+	/* We can only be here if mkey pool was empty */
+	assert(mlx5_task->num_ops == 0);
+	rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
+	if (spdk_unlikely(rc)) {
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		return -ENOMEM;
+	}
+	mlx5_task->num_ops = 1;
+
+	return accel_mlx5_crypto_mkey_ext_qp_task_process(mlx5_task);
 }
 
 static inline int
@@ -3249,6 +3365,12 @@ static struct accel_mlx5_task_ops g_accel_mlx5_tasks_ops[] = {
 		.init = accel_mlx5_crypto_mkey_task_init,
 		.process = accel_mlx5_crypto_mkey_task_process,
 		.cont = accel_mlx5_crypto_mkey_task_continue,
+		.complete = accel_mlx5_crypto_mkey_task_complete,
+	},
+	[ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP] = {
+		.init = accel_mlx5_crypto_mkey_ext_qp_task_init,
+		.process = accel_mlx5_crypto_mkey_ext_qp_task_process,
+		.cont = accel_mlx5_crypto_mkey_ext_qp_task_continue,
 		.complete = accel_mlx5_crypto_mkey_task_complete,
 	},
 	[ACCEL_MLX5_OPC_MKEY] = {
@@ -4608,6 +4730,8 @@ accel_mlx5_dump_stats_json(struct spdk_json_write_ctx *w, const char *header,
 	spdk_json_write_named_uint64(w, "copy", stats->opcodes[ACCEL_MLX5_OPC_COPY]);
 	spdk_json_write_named_uint64(w, "crypto", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO]);
 	spdk_json_write_named_uint64(w, "crypto_mkey", stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_MKEY]);
+	spdk_json_write_named_uint64(w, "crypto_mkey_ext_qp",
+				     stats->opcodes[ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP]);
 	spdk_json_write_named_uint64(w, "mkey", stats->opcodes[ACCEL_MLX5_OPC_MKEY]);
 	spdk_json_write_named_uint64(w, "crc32c", stats->opcodes[ACCEL_MLX5_OPC_CRC32C]);
 	spdk_json_write_named_uint64(w, "encrypt_crc", stats->opcodes[ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C]);
@@ -4980,7 +5104,12 @@ accel_mlx5_task_merge_copy_crypto(struct accel_mlx5_task *crypto, struct accel_m
 	crypto_base->dst_domain = domain_override;
 	crypto_base->dst_domain_ctx = domain_ctx_override;
 	accel_mlx5_task_reset(crypto);
-	crypto->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_MKEY;
+	if (domain_ctx->qp) {
+		crypto->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP;
+		crypto->crypto_external_qp.ext_qp = domain_ctx->qp;
+	} else {
+		crypto->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_MKEY;
+	}
 	crypto->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
 	crypto->needs_data_transfer = 1;
 	crypto->inplace = 1;
