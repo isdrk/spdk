@@ -55,6 +55,7 @@ function gen_bdevperf_json() {
 
 validate_crypto_umr_stats() {
 	rpc_sock=$1
+	local expected_task=$2
 	stats=$($rpc_py -s $rpc_sock accel_mlx5_dump_stats -l total)
 
 	val=$(echo $stats | jq -r '.total.umrs.crypto_umrs')
@@ -72,11 +73,12 @@ validate_crypto_umr_stats() {
 		echo "Unexpected number of RDMA operations: $val, expected 0"
 		return 1
 	fi
-	val=$(echo $stats | jq -r '.total.tasks.crypto_mkey')
+	val=$(echo $stats | jq -r ".total.tasks.${expected_task}")
 	if [ $val != 0 ] && [ $val != $(echo $stats | jq -r '.total.tasks.total') ]; then
-		echo "Unexpected number of tasks operations: $val, expected > 0 and no other tasks"
+		echo "Unexpected number of ${expected_task} tasks: $val, expected > 0 and no other tasks"
 		return 1
 	fi
+	return 0
 }
 
 if [ "$TEST_TRANSPORT" != "rdma" ]; then
@@ -84,10 +86,20 @@ if [ "$TEST_TRANSPORT" != "rdma" ]; then
 fi
 
 function aes_xts_test() {
+	support_offload_on_qp=${1:-0}
+	if [ "$support_offload_on_qp" == 0 ]; then
+		support_offload_on_qp_str="--disable-offload-on-qp"
+		expected_task="crypto_mkey"
+	else
+		support_offload_on_qp_str="--enable-offload-on-qp"
+		expected_task="crypto_mkey_ext_qp"
+	fi
+
 	nvmfappstart -m 0xf0 --wait-for-rpc
 
 	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
 	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init
 	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
 	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
@@ -110,7 +122,15 @@ function aes_xts_test() {
 	testdma_pid=$!
 	waitforlisten $testdma_pid $app_sock
 	sleep 5
-	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR $expected_task
+	sleep 1
+	wait $testdma_pid || true
+
+	$testdma --json <(gen_bdevperf_json) -q 64 -o 16384 -O 11 -t 10 -w randrw -M 50 -m 0xf -r $app_sock -b "Nvme0n1" -f -x translate -Y 50000 &
+	testdma_pid=$!
+	waitforlisten $testdma_pid $app_sock
+	sleep 5
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR $expected_task
 	sleep 1
 	wait $testdma_pid || true
 
@@ -120,7 +140,7 @@ function aes_xts_test() {
 	bdev_perf_pid=$!
 	waitforlisten $bdev_perf_pid $app_sock
 	sleep 5
-	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR $expected_task
 	sleep 1
 	killprocess $nvmfpid
 	wait $bdev_perf_pid || true
@@ -129,6 +149,7 @@ function aes_xts_test() {
 	# Test small qp size and number of MRs
 	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices --qp-size 16 --cq-size 8 --num-requests 16
 	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init
 	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
 	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
@@ -142,7 +163,7 @@ function aes_xts_test() {
 	bdev_perf_pid=$!
 	waitforlisten $bdev_perf_pid $app_sock
 	sleep 5
-	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR $expected_task
 	sleep 1
 	killprocess $nvmfpid
 	wait $bdev_perf_pid || true
@@ -151,6 +172,7 @@ function aes_xts_test() {
 	# Test with malloc bdev with disabled accel sequence. In that case generic bdev layer handles the sequence
 	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
 	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init
 	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
 	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0 --disable-accel-support
@@ -162,11 +184,12 @@ function aes_xts_test() {
 
 	$bdevperf --json <(gen_bdevperf_json) -q 64 -o 65536 -t 5 -w verify -m 0xf -r $app_sock
 	killprocess $nvmfpid
+	sleep 1
 }
 
 nvmftestinit
-
-aes_xts_test
+aes_xts_test 0
+aes_xts_test 1
 
 nvmftestfini
 
