@@ -198,6 +198,49 @@ struct spdk_mlx5_umr_trans_sig_attr {
 	bool check_gen; /* Set to true for the last UMR to generate signature */
 };
 
+enum spdk_mlx5_sig_t10dif_flags {
+	SPDK_MLX5_SIG_T10DIF_FLAGS_REF_REMAP = 1 << 0,
+	SPDK_MLX5_SIG_T10DIF_FLAGS_APP_ESCAPE = 1 << 1,
+	SPDK_MLX5_SIG_T10DIF_FLAGS_APP_REF_ESCAPE = 1 << 2,
+};
+
+struct spdk_mlx5_sig_t10dif {
+	uint32_t ref_tag;
+	uint16_t app_tag;
+	uint16_t apptag_mask;
+	uint16_t flags;
+};
+
+enum spdk_mlx5_sig_type {
+	SPDK_MLX5_SIG_TYPE_NONE = 0,
+	SPDK_MLX5_SIG_TYPE_T10DIF,
+};
+
+struct spdk_mlx5_sig_block_domain {
+	uint8_t sig_type;
+	uint8_t bs_selector;
+	uint32_t psv_index;
+	union {
+		struct spdk_mlx5_sig_t10dif dif;
+	} sig;
+};
+
+enum spdk_mlx5_sig_mask {
+	SPDK_MLX5_SIG_MASK_T10DIF_GUARD = 0xc0,
+	SPDK_MLX5_SIG_MASK_T10DIF_APPTAG = 0x30,
+	SPDK_MLX5_SIG_MASK_T10DIF_REFTAG = 0x0f,
+};
+
+struct spdk_mlx5_umr_block_sig_attr {
+	struct spdk_mlx5_sig_block_domain mem;
+	struct spdk_mlx5_sig_block_domain wire;
+	uint32_t flags;
+	/* Number of sigerr completions receivd on the UMR */
+	uint32_t sigerr_count;
+	uint8_t check_mask;
+	uint8_t copy_mask;
+};
+
 struct spdk_mlx5_device_crypto_caps {
 	bool wrapped_crypto_operational;
 	bool wrapped_crypto_going_to_commissioning;
@@ -566,6 +609,26 @@ int spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
 		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 		uint64_t wr_id, uint32_t flags);
+
+/**
+ * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with T10 DIF capabilities.
+ *
+ * Besides signature capabilities, it allows to gather memory chunks into virtually contig (from the NIC point of view)
+ * memory space with start address 0. The user must ensure that \b qp's capacity is enough to perform this operation.
+ *
+ * \param qp Qpair to be used for UMR configuration. If RDMA operation which references this UMR is used on the same \b qp
+ * then it is not necessary to wait for the UMR configuration to complete. Instead, first RDMA operation after UMR
+ * configuration must have flag SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE set to 1
+ * \param umr_attr Common UMR attributes, describe memory layout
+ * \param sig_attr Signature UMR attributes
+ * \param wr_id wrid which is returned in the CQE
+ * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion; Any of SPDK_MLX5_WQE_CTRL_FENCE* or 0
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_umr_configure_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				      struct spdk_mlx5_umr_block_sig_attr *sig_attr, uint64_t wr_id,
+				      uint32_t flags);
+
 /**
  * Return a NULL terminated array of devices which support crypto operation on Nvidia NICs
  *

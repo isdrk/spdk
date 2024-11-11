@@ -20,7 +20,7 @@
 #define MLX5_CRYPTO_BSF_SIZE_WITH_SIG (0x3)
 
 #define MLX5_SIG_BSF_SIZE_32B (0x1)
-#define MLX5_SIG_BSF_SIZE_32B (0x1)
+#define MLX5_SIG_BSF_SIZE_64B (0x2)
 #define MLX5_SIG_BSF_SIZE_WITH_CRYPTO (0x3)
 /* Transaction Format Selector */
 #define MLX5_SIG_BSF_TFS_CRC32C (64)
@@ -30,6 +30,14 @@
 #define MLX5_SIG_BSF_EXT_M_T_INIT (1u << 25)
 #define MLX5_SIG_BSF_EXT_W_T_CHECK_GEN (1u << 28)
 #define MLX5_SIG_BSF_EXT_W_T_INIT (1u << 29)
+/* Inline Section */
+#define MLX5_SIG_BSF_INL_VALID (1u << 15)
+#define MLX5_SIG_BSF_REFRESH_DIF (1u << 14)
+#define MLX5_SIG_BSF_REPEAT_BLOCK (1u << 7)
+#define MLX5_SIG_BSF_INC_REFTAG (1u << 6)
+#define MLX5_SIG_BSF_APPTAG_ESCAPE (0x1)
+#define MLX5_SIG_BSF_APPREF_ESCAPE (0x2)
+#define MLX5_SIG_BSF_T10DIF_CRC (0x1)
 
 RB_HEAD(mlx5_mkeys_tree, spdk_mlx5_mkey_pool_obj);
 
@@ -754,6 +762,82 @@ mlx5_set_umr_trans_sig_bsf_seg_with_crypto(struct mlx5_sig_bsf_seg *bsf,
 }
 
 static inline void
+mlx5_umr_fill_block_sig_bsf_inl(struct mlx5_sig_bsf_inl *inl,
+				struct spdk_mlx5_sig_block_domain *domain)
+{
+	struct spdk_mlx5_sig_t10dif *dif = &domain->sig.dif;
+
+	inl->vld_refresh = htobe16(MLX5_SIG_BSF_INL_VALID | MLX5_SIG_BSF_REFRESH_DIF);
+	inl->dif_apptag = htobe16(dif->app_tag);
+	inl->dif_reftag = htobe32(dif->ref_tag);
+	inl->rp_inv_seed = MLX5_SIG_BSF_REPEAT_BLOCK;
+	inl->sig_type = MLX5_SIG_BSF_T10DIF_CRC;
+
+	if (dif->flags & SPDK_MLX5_SIG_T10DIF_FLAGS_REF_REMAP) {
+		inl->dif_inc_ref_guard_check |= MLX5_SIG_BSF_INC_REFTAG;
+	}
+
+	if (dif->flags & SPDK_MLX5_SIG_T10DIF_FLAGS_APP_REF_ESCAPE) {
+		inl->dif_inc_ref_guard_check |= MLX5_SIG_BSF_APPREF_ESCAPE;
+	} else if (dif->flags & SPDK_MLX5_SIG_T10DIF_FLAGS_APP_ESCAPE) {
+		inl->dif_inc_ref_guard_check |= MLX5_SIG_BSF_APPTAG_ESCAPE;
+	}
+
+	inl->dif_app_bitmask_check = htobe16(dif->apptag_mask);
+}
+
+static inline void
+mlx5_set_umr_block_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
+			       struct spdk_mlx5_umr_block_sig_attr *attr)
+{
+	struct mlx5_sig_bsf_basic *basic = &bsf->basic;
+	struct spdk_mlx5_sig_block_domain *mem = &attr->mem;
+	struct spdk_mlx5_sig_block_domain *wire = &attr->wire;
+
+	memset(bsf, 0, sizeof(*bsf));
+
+	basic->bsf_size_sbs = MLX5_SIG_BSF_SIZE_64B << 6;
+	basic->raw_data_size = htobe32(UINT32_MAX);
+
+	basic->check_byte_mask = attr->check_mask;
+
+	switch (mem->sig_type) {
+	case SPDK_MLX5_SIG_TYPE_NONE:
+		break;
+	case SPDK_MLX5_SIG_TYPE_T10DIF:
+		basic->mem.bs_selector = mem->bs_selector;
+		basic->m_bfs_psv = htobe32(mem->psv_index);
+		mlx5_umr_fill_block_sig_bsf_inl(&bsf->m_inl, mem);
+		break;
+	default:
+		break;
+	}
+
+	switch (wire->sig_type) {
+	case SPDK_MLX5_SIG_TYPE_NONE:
+		break;
+	case SPDK_MLX5_SIG_TYPE_T10DIF:
+		if (mem->bs_selector == wire->bs_selector &&
+		    mem->sig_type == wire->sig_type) {
+			basic->wire.copy_byte_mask |= MLX5DV_SIG_MASK_T10DIF_GUARD;
+			if (mem->sig.dif.app_tag == wire->sig.dif.app_tag) {
+				basic->wire.copy_byte_mask |= MLX5DV_SIG_MASK_T10DIF_APPTAG;
+			}
+			if (mem->sig.dif.ref_tag == wire->sig.dif.ref_tag) {
+				basic->wire.copy_byte_mask |= MLX5DV_SIG_MASK_T10DIF_REFTAG;
+			}
+		} else {
+			basic->wire.bs_selector = wire->bs_selector;
+		}
+		basic->w_bfs_psv = htobe32(wire->psv_index);
+		mlx5_umr_fill_block_sig_bsf_inl(&bsf->w_inl, wire);
+		break;
+	default:
+		break;
+	}
+}
+
+static inline void
 mlx5_umr_configure_with_wrap_around_crypto(struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id,
 		uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
@@ -1398,6 +1482,127 @@ mlx5_umr_configure_full_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 	qp->tx_available -= umr_wqe_n_bb;
 }
 
+static inline void
+mlx5_umr_configure_with_wrap_around_block_sig(struct spdk_mlx5_qp *qp,
+		struct spdk_mlx5_umr_attr *umr_attr,
+		struct spdk_mlx5_umr_block_sig_attr *sig_attr, uint64_t wr_id,
+		uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb,
+		uint32_t mtt_size)
+{
+	struct mlx5_hw_qp *hw = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_ctrl_seg *gen_ctrl;
+	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
+	struct mlx5_wqe_mkey_context_seg *mkey;
+	struct mlx5_wqe_umr_klm_seg *klm;
+	struct mlx5_sig_bsf_seg *bsf;
+	uint8_t fm_ce_se;
+	uint32_t pi, to_end;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	/*
+	 * sizeof(gen_ctrl) + sizeof(umr_ctrl) == MLX5_SEND_WQE_BB,
+	 * so do not need to worry about wqe buffer wrap around.
+	 *
+	 * build genenal ctrl segment
+	 */
+	gen_ctrl = ctrl;
+	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
+			  hw->qp_num, fm_ce_se,
+			  SPDK_CEIL_DIV(wqe_size, 16), 0,
+			  htobe32(umr_attr->mkey));
+
+	/* build umr ctrl segment */
+	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
+	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
+	mlx5_set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
+	mlx5_set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(struct mlx5_sig_bsf_seg));
+
+	/* build mkey context segment */
+	mkey = mlx5_qp_get_next_wqebb(hw, &to_end, ctrl);
+	mlx5_set_umr_mkey_seg(mkey, umr_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
+
+	klm = mlx5_qp_get_next_wqebb(hw, &to_end, mkey);
+	bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
+
+	mlx5_set_umr_block_sig_bsf_seg(bsf, sig_attr);
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, umr_wqe_n_bb, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	assert(qp->tx_available >= umr_wqe_n_bb);
+	qp->tx_available -= umr_wqe_n_bb;
+}
+
+static inline void
+mlx5_umr_configure_full_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				  struct spdk_mlx5_umr_block_sig_attr *sig_attr, uint64_t wr_id,
+				  uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb,
+				  uint32_t mtt_size)
+{
+	struct mlx5_hw_qp *hw = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_ctrl_seg *gen_ctrl;
+	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
+	struct mlx5_wqe_mkey_context_seg *mkey;
+	struct mlx5_wqe_umr_klm_seg *klm;
+	struct mlx5_sig_bsf_seg *bsf;
+	uint8_t fm_ce_se;
+	uint32_t pi;
+	uint32_t i;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+	gen_ctrl = ctrl;
+	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
+			  hw->qp_num, fm_ce_se,
+			  SPDK_CEIL_DIV(wqe_size, 16), 0,
+			  htobe32(umr_attr->mkey));
+
+	/* build umr ctrl segment */
+	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
+	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
+	mlx5_set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
+	mlx5_set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(struct mlx5_sig_bsf_seg));
+
+	/* build mkey context segment */
+	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
+	memset(mkey, 0, sizeof(*mkey));
+	mlx5_set_umr_mkey_seg_mtt(mkey, umr_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
+
+	klm = (struct mlx5_wqe_umr_klm_seg *)(mkey + 1);
+	for (i = 0; i < umr_attr->sge_count; i++) {
+		mlx5_set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
+		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
+		klm = klm + 1;
+	}
+	/* fill PAD if existing */
+	/* PAD entries is to make whole mtt aligned to 64B(MLX5_SEND_WQE_BB),
+	 * So it will not happen warp around during fill PAD entries. */
+	for (; i < mtt_size; i++) {
+		memset(klm, 0, sizeof(*klm));
+		klm = klm + 1;
+	}
+
+	bsf = (struct mlx5_sig_bsf_seg *)klm;
+	mlx5_set_umr_block_sig_bsf_seg(bsf, sig_attr);
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, umr_wqe_n_bb, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	assert(qp->tx_available >= umr_wqe_n_bb);
+	qp->tx_available -= umr_wqe_n_bb;
+}
+
 int
 spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr,
@@ -1451,6 +1656,58 @@ spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 		mlx5_umr_configure_full_trans_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
 				wqe_size,
 				umr_wqe_n_bb, mtt_size);
+	}
+
+	return 0;
+}
+
+int
+spdk_mlx5_umr_configure_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				  struct spdk_mlx5_umr_block_sig_attr *sig_attr, uint64_t wr_id,
+				  uint32_t flags)
+{
+	struct mlx5_hw_qp *hw = &qp->hw;
+	uint32_t pi, to_end, umr_wqe_n_bb;
+	uint32_t wqe_size, mtt_size;
+	uint32_t inline_klm_size;
+
+	if (!spdk_unlikely(umr_attr->sge_count)) {
+		return -EINVAL;
+	}
+
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	/*
+	 * UMR WQE LAYOUT:
+	 * -----------------------------------------------------------------------
+	 * | gen_ctrl | umr_ctrl | mkey_ctx | inline klm mtt | inline sig bsf |
+	 * -----------------------------------------------------------------------
+	 *   16bytes    48bytes    64bytes   sg_count*16 bytes      64 bytes
+	 *
+	 * Note: size of inline klm mtt should be aligned to 64 bytes.
+	 */
+	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) +
+		   sizeof(struct mlx5_wqe_mkey_context_seg);
+	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
+	inline_klm_size = mtt_size * sizeof(struct mlx5_wqe_umr_klm_seg);
+	wqe_size += inline_klm_size;
+	wqe_size += sizeof(struct mlx5_sig_bsf_seg);
+
+	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
+		return -ENOMEM;
+	}
+	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
+		return -E2BIG;
+	}
+
+	if (spdk_unlikely(to_end < wqe_size)) {
+		mlx5_umr_configure_with_wrap_around_block_sig(qp, umr_attr, sig_attr, wr_id,
+				flags, wqe_size, umr_wqe_n_bb, mtt_size);
+	} else {
+		mlx5_umr_configure_full_block_sig(qp, umr_attr, sig_attr, wr_id, flags,
+						  wqe_size, umr_wqe_n_bb, mtt_size);
 	}
 
 	return 0;

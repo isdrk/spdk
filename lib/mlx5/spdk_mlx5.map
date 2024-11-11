@@ -34,6 +34,7 @@
     spdk_mlx5_umr_configure_crypto;
     spdk_mlx5_umr_configure_trans_sig;
     spdk_mlx5_umr_configure_trans_sig_crypto;
+    spdk_mlx5_umr_configure_block_sig;
     spdk_mlx5_umr_configure;
 
     spdk_mlx5_create_psv;
