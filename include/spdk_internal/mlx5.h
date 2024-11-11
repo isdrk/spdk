@@ -518,13 +518,13 @@ int spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv);
  *
  * \param qp qp to be used to re-initialize PSV after error
  * \param psv_index index of the PSV object
- * \param crc_seed CRC32C seed to be used for initialization
+ * \param transient_signature Intermediate signature state
  * \param wrid wrid which is returned in the CQE
  * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion or 0
  * \return 0 on success, negated errno on failure
  */
-int spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index, uint32_t crc_seed,
-			 uint64_t wr_id, uint32_t flags);
+int spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index,
+			 uint64_t transient_signature, uint64_t wr_id, uint32_t flags);
 
 /**
  * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with CRC32C capabilities.

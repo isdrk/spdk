@@ -1795,6 +1795,14 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	return 0;
 }
 
+static inline uint64_t
+accel_mlx5_get_transient_signature_crc(struct accel_mlx5_task *mlx5_task)
+{
+	uint64_t crc_seed = *mlx5_task->base.crc_dst;
+
+	return crc_seed << 32;
+}
+
 static inline int
 accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 {
@@ -1808,6 +1816,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	bool copy_crc_op = (mlx5_task->base.op_code == SPDK_ACCEL_OPC_COPY_CRC32C);
 	struct ibv_sge *sge;
 	uint16_t sge_count;
+	uint64_t ts;
 	int rc;
 
 	assert(accel_mlx5_dev_get_available_slots(dev, qp) > 1);
@@ -1859,7 +1868,8 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	sge[sge_count++].length = sizeof(uint32_t);
 
 	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
-		rc = spdk_mlx5_qp_set_psv(qp->qp, mlx5_task->psv->psv_index, *mlx5_task->base.crc_dst, 0, 0);
+		ts = accel_mlx5_get_transient_signature_crc(mlx5_task);
+		rc = spdk_mlx5_qp_set_psv(qp->qp, mlx5_task->psv->psv_index, ts, 0, 0);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
@@ -1990,6 +2000,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	struct ibv_sge sge[ACCEL_MLX5_MAX_SGE];
 	struct spdk_memory_domain *domain;
 	void *domain_ctx;
+	uint64_t ts;
 
 	assert(qp_slot > 1);
 	num_ops = spdk_min(num_ops, qp_slot >> 1);
@@ -2069,7 +2080,8 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	}
 
 	if (spdk_unlikely(mlx5_task->psv->bits.error)) {
-		rc = spdk_mlx5_qp_set_psv(qp->qp, mlx5_task->psv->psv_index, *mlx5_task->base.crc_dst, 0, 0);
+		ts = accel_mlx5_get_transient_signature_crc(mlx5_task);
+		rc = spdk_mlx5_qp_set_psv(qp->qp, mlx5_task->psv->psv_index, ts, 0, 0);
 		if (spdk_unlikely(rc)) {
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;

@@ -1516,8 +1516,8 @@ spdk_mlx5_destroy_psv(struct spdk_mlx5_psv *psv)
 }
 
 int
-spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index, uint32_t crc_seed, uint64_t wr_id,
-		     uint32_t flags)
+spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index,
+		     uint64_t transient_signature, uint64_t wr_id, uint32_t flags)
 {
 	struct mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, wqe_size, wqe_n_bb;
@@ -1525,7 +1525,6 @@ spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index, uint32_t crc_s
 	struct mlx5_wqe_ctrl_seg *gen_ctrl;
 	struct mlx5_wqe_set_psv_seg *psv;
 	uint8_t fm_ce_se;
-	uint64_t transient_signature = (uint64_t)crc_seed << 32;
 
 	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_set_psv_seg);
 	/* The size of SET_PSV WQE is constant and smaller than WQE BB. */

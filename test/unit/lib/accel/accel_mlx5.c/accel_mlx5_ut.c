@@ -74,7 +74,7 @@ DEFINE_STUB(spdk_mlx5_umr_configure_sig_crypto, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 		uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_qp_set_psv, int, (struct spdk_mlx5_qp *dv_qp, uint32_t psv_index,
-					uint32_t crc_seed, uint64_t wr_id, uint32_t flags), 0);
+					uint64_t transient_signature, uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_umr_configure_sig, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id,
 		uint32_t flags), 0);
