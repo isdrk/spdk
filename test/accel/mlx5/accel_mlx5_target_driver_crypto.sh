@@ -83,84 +83,90 @@ if [ "$TEST_TRANSPORT" != "rdma" ]; then
 	exit 0
 fi
 
+function aes_xts_test() {
+	nvmfappstart -m 0xf0 --wait-for-rpc
+
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py framework_start_init
+	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
+	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
+	$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
+	$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
+	$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
+	$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
+	$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
+
+	sleep 1
+
+	$bdevperf --json <(gen_bdevperf_json) -q 64 -o 4096 -t 5 -w randrw -M 50 -m 0xf -r $app_sock
+	$bdevperf --json <(gen_bdevperf_json) -q 64 -o 65536 -t 5 -w verify -m 0xf -r $app_sock
+	$nvmeperf -q 64 -o 4096 -O 500 -w randrw -M 50 -t 5 -r "trtype:$TEST_TRANSPORT  traddr:$NVMF_FIRST_TARGET_IP trsvcid:$NVMF_PORT adrfam:ipv4" -c 0xf
+
+	# Test mkey corruption. From my observation, HW doesn't verify the mkey when registering UMR, so it allows us
+	# to send an invalid mkey to the target. Later target receives a WC with "remote access error" status and handles
+	# requests which are in the process of transferring data to/from accel
+	$testdma --json <(gen_bdevperf_json) -q 64 -o 4096 -t 10 -w randrw -M 50 -m 0xf -r $app_sock -b "Nvme0n1" -f -x translate -Y 50000 &
+	testdma_pid=$!
+	waitforlisten $testdma_pid $app_sock
+	sleep 5
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	sleep 1
+	wait $testdma_pid || true
+
+	## By killing the target, we trigger qpair disconnect with outstanding IOs and test that nvme_rdma<->accel_mlx5
+	## interaction works well. No hang or crash expected.
+	$bdevperf --json <(gen_bdevperf_json) -q 64 -o 4096 -t 60 -w rw -M 50 -m 0xf -r $app_sock &
+	bdev_perf_pid=$!
+	waitforlisten $bdev_perf_pid $app_sock
+	sleep 5
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	sleep 1
+	killprocess $nvmfpid
+	wait $bdev_perf_pid || true
+
+	nvmfappstart -m 0x20 --wait-for-rpc
+	# Test small qp size and number of MRs
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices --qp-size 16 --cq-size 8 --num-requests 16
+	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py framework_start_init
+	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
+	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
+	$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
+	$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
+	$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
+	$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
+	$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
+
+	$bdevperf --json <(gen_bdevperf_json) -q 128 -o 4096 -t 10 -w verify -m 0x2 -r $app_sock &
+	bdev_perf_pid=$!
+	waitforlisten $bdev_perf_pid $app_sock
+	sleep 5
+	validate_crypto_umr_stats $DEFAULT_RPC_ADDR
+	sleep 1
+	killprocess $nvmfpid
+	wait $bdev_perf_pid || true
+
+	nvmfappstart -m 0xf0 --wait-for-rpc
+	# Test with malloc bdev with disabled accel sequence. In that case generic bdev layer handles the sequence
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+	$rpc_py bdev_set_options --disable-auto-examine
+	$rpc_py framework_start_init
+	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
+	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0 --disable-accel-support
+	$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
+	$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
+	$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
+	$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
+	$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
+
+	$bdevperf --json <(gen_bdevperf_json) -q 64 -o 65536 -t 5 -w verify -m 0xf -r $app_sock
+	killprocess $nvmfpid
+}
+
 nvmftestinit
-nvmfappstart -m 0xf0 --wait-for-rpc
 
-$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
-$rpc_py bdev_set_options --disable-auto-examine
-$rpc_py framework_start_init
-$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
-$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
-$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
-$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
-$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
-$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
-$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
-
-sleep 1
-
-$bdevperf --json <(gen_bdevperf_json) -q 64 -o 4096 -t 5 -w randrw -M 50 -m 0xf -r $app_sock
-$bdevperf --json <(gen_bdevperf_json) -q 64 -o 65536 -t 5 -w verify -m 0xf -r $app_sock
-$nvmeperf -q 64 -o 4096 -O 500 -w randrw -M 50 -t 5 -r "trtype:$TEST_TRANSPORT  traddr:$NVMF_FIRST_TARGET_IP trsvcid:$NVMF_PORT adrfam:ipv4" -c 0xf
-
-# Test mkey corruption. From my observation, HW doesn't verify the mkey when registering UMR, so it allows us
-# to send an invalid mkey to the target. Later target receives a WC with "remote access error" status and handles
-# requests which are in the process of transferring data to/from accel
-$testdma --json <(gen_bdevperf_json) -q 64 -o 4096 -t 10 -w randrw -M 50 -m 0xf -r $app_sock -b "Nvme0n1" -f -x translate -Y 50000 &
-testdma_pid=$!
-waitforlisten $testdma_pid $app_sock
-sleep 5
-validate_crypto_umr_stats $DEFAULT_RPC_ADDR
-sleep 1
-wait $testdma_pid || true
-
-## By killing the target, we trigger qpair disconnect with outstanding IOs and test that nvme_rdma<->accel_mlx5
-## interaction works well. No hang or crash expected.
-$bdevperf --json <(gen_bdevperf_json) -q 64 -o 4096 -t 60 -w rw -M 50 -m 0xf -r $app_sock &
-bdev_perf_pid=$!
-waitforlisten $bdev_perf_pid $app_sock
-sleep 5
-validate_crypto_umr_stats $DEFAULT_RPC_ADDR
-sleep 1
-killprocess $nvmfpid
-wait $bdev_perf_pid || true
-
-nvmfappstart -m 0x20 --wait-for-rpc
-# Test small qp size and number of MRs
-$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices --qp-size 16 --cq-size 8 --num-requests 16
-$rpc_py bdev_set_options --disable-auto-examine
-$rpc_py framework_start_init
-$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
-$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
-$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
-$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
-$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
-$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
-$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
-
-$bdevperf --json <(gen_bdevperf_json) -q 128 -o 4096 -t 10 -w verify -m 0x2 -r $app_sock &
-bdev_perf_pid=$!
-waitforlisten $bdev_perf_pid $app_sock
-sleep 5
-validate_crypto_umr_stats $DEFAULT_RPC_ADDR
-sleep 1
-killprocess $nvmfpid
-wait $bdev_perf_pid || true
-
-nvmfappstart -m 0xf0 --wait-for-rpc
-# Test with malloc bdev with disabled accel sequence. In that case generic bdev layer handles the sequence
-$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
-$rpc_py bdev_set_options --disable-auto-examine
-$rpc_py framework_start_init
-$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0
-$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0 --disable-accel-support
-$rpc_py accel_crypto_key_create -c AES_XTS -k 00112233445566778899001122334455 -e 11223344556677889900112233445500 -n test_dek
-$rpc_py bdev_crypto_create Malloc0 Crypto0 -n test_dek
-$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a
-$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Crypto0
-$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
-
-$bdevperf --json <(gen_bdevperf_json) -q 64 -o 65536 -t 5 -w verify -m 0xf -r $app_sock
+aes_xts_test
 
 nvmftestfini
 
