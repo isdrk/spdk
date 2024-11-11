@@ -1715,9 +1715,20 @@ accel_mlx5_advance_iovec(struct iovec *iov, uint32_t iovcnt, size_t *iov_offset,
 }
 
 static inline void
-accel_mlx5_crc_task_complete(struct accel_mlx5_task *mlx5_task)
+accel_mlx5_sig_task_complete(struct accel_mlx5_task *mlx5_task, int status)
 {
 	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
+
+	/* Normal task completion without allocated mkeys is not possible */
+	assert(mlx5_task->num_ops);
+	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
+	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+	spdk_accel_task_complete(&mlx5_task->base, status);
+}
+
+static inline void
+accel_mlx5_crc_task_complete(struct accel_mlx5_task *mlx5_task)
+{
 	int sigerr = 0;
 
 	if (mlx5_task->base.op_code != SPDK_ACCEL_OPC_CHECK_CRC32C &&
@@ -1726,11 +1737,8 @@ accel_mlx5_crc_task_complete(struct accel_mlx5_task *mlx5_task)
 	} else {
 		sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
 	}
-	/* Normal task completion without allocated mkeys is not possible */
-	assert(mlx5_task->num_ops);
-	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
-	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
-	spdk_accel_task_complete(&mlx5_task->base, sigerr);
+
+	accel_mlx5_sig_task_complete(mlx5_task, sigerr);
 }
 
 static inline int
@@ -2216,7 +2224,7 @@ accel_mlx5_crc_task_process(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
-accel_mlx5_task_alloc_crc_ctx(struct accel_mlx5_task *task, struct spdk_mlx5_mkey_pool *pool)
+accel_mlx5_task_alloc_sig_ctx(struct accel_mlx5_task *task, struct spdk_mlx5_mkey_pool *pool)
 {
 	struct accel_mlx5_qp *qp = task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
@@ -2249,7 +2257,7 @@ accel_mlx5_crc_task_continue(struct accel_mlx5_task *task)
 	int rc;
 
 	if (task->num_ops == 0) {
-		rc = accel_mlx5_task_alloc_crc_ctx(task, dev->sig_mkeys);
+		rc = accel_mlx5_task_alloc_sig_ctx(task, dev->sig_mkeys);
 		if (spdk_unlikely(rc != 0)) {
 			return rc;
 		}
@@ -2401,7 +2409,7 @@ accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 				      mlx5_task->dst.iov, mlx5_task->dst.iovcnt, task->op_code);
 	}
 
-	rc = accel_mlx5_task_alloc_crc_ctx(mlx5_task, dev->sig_mkeys);
+	rc = accel_mlx5_task_alloc_sig_ctx(mlx5_task, dev->sig_mkeys);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
@@ -2430,7 +2438,7 @@ accel_mlx5_crypto_crc_task_continue_init(struct accel_mlx5_task *task)
 	int rc;
 
 	if (task->num_ops == 0) {
-		rc = accel_mlx5_task_alloc_crc_ctx(task, dev->crypto_sig_mkeys);
+		rc = accel_mlx5_task_alloc_sig_ctx(task, dev->crypto_sig_mkeys);
 		if (spdk_unlikely(rc != 0)) {
 			return rc;
 		}
@@ -2935,7 +2943,7 @@ accel_mlx5_encrypt_and_crc_task_init(struct accel_mlx5_task *mlx5_task)
 	/* We stored all necessary info about next task, now we can complete it to re-use as fast as possible */
 	spdk_accel_task_complete(task_crc, 0);
 
-	rc = accel_mlx5_task_alloc_crc_ctx(mlx5_task, dev->crypto_sig_mkeys);
+	rc = accel_mlx5_task_alloc_sig_ctx(mlx5_task, dev->crypto_sig_mkeys);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
@@ -3035,7 +3043,7 @@ accel_mlx5_crc_and_decrypt_task_init(struct accel_mlx5_task *mlx5_task)
 	/* We stored all necessary info about next task, now we can complete it to re-use as fast as possible */
 	spdk_accel_task_complete(task_crypto, 0);
 
-	rc = accel_mlx5_task_alloc_crc_ctx(mlx5_task, dev->crypto_sig_mkeys);
+	rc = accel_mlx5_task_alloc_sig_ctx(mlx5_task, dev->crypto_sig_mkeys);
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
