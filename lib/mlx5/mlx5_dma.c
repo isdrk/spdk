@@ -385,7 +385,7 @@ mlx5_dma_send_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t
 
 static inline int
 mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int opcode,
-	     uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
+	     uint32_t imm, uint64_t wrid, uint32_t flags)
 {
 	struct mlx5_hw_qp *hw_qp = &qp->hw;
 	uint32_t to_end, pi, bb_count;
@@ -405,9 +405,9 @@ mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
-		mlx5_dma_send_full(qp, sge, num_sge, opcode, flags, invalidate_rkey, wrid, bb_count);
+		mlx5_dma_send_full(qp, sge, num_sge, opcode, flags, imm, wrid, bb_count);
 	} else {
-		mlx5_dma_send_wrap_around(qp, sge, num_sge, opcode, flags, invalidate_rkey, wrid,
+		mlx5_dma_send_wrap_around(qp, sge, num_sge, opcode, flags, imm, wrid,
 					  bb_count);
 	}
 
@@ -425,7 +425,8 @@ int
 spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
 		      uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
 {
-	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND_INVAL, invalidate_rkey, wrid, flags);
+	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND_INVAL, htobe32(invalidate_rkey), wrid,
+			    flags);
 }
 
 int
