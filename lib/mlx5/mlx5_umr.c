@@ -600,10 +600,9 @@ mlx5_set_umr_mkey_seg(struct mlx5_wqe_mkey_context_seg *mkey,
 }
 
 static void
-mlx5_set_umr_mkey_seg_sig(struct mlx5_wqe_mkey_context_seg *mkey,
-			  struct spdk_mlx5_umr_sig_attr *sig_attr)
+mlx5_set_umr_mkey_seg_sig(struct mlx5_wqe_mkey_context_seg *mkey, uint32_t sigerr_count)
 {
-	mkey->flags_pd = htobe32((sig_attr->sigerr_count & 1) << 26);
+	mkey->flags_pd = htobe32((sigerr_count & 1) << 26);
 }
 
 static inline void
@@ -967,7 +966,7 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 	/* build mkey context segment */
 	mkey = mlx5_qp_get_next_wqebb(hw, &to_end, ctrl);
 	mlx5_set_umr_mkey_seg(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
 
 	klm = mlx5_qp_get_next_wqebb(hw, &to_end, mkey);
 	bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
@@ -1018,7 +1017,7 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
 	memset(mkey, 0, sizeof(*mkey));
 	mlx5_set_umr_mkey_seg_mtt(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
 
 	klm = (struct mlx5_wqe_umr_klm_seg *)(mkey + 1);
 	for (i = 0; i < umr_attr->sge_count; i++) {
@@ -1298,7 +1297,7 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp,
 	/* build mkey context segment */
 	mkey = mlx5_qp_get_next_wqebb(hw, &to_end, ctrl);
 	mlx5_set_umr_mkey_seg(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
 
 	/* build KLM */
 	klm = mlx5_qp_get_next_wqebb(hw, &to_end, mkey);
@@ -1361,7 +1360,7 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
 	memset(mkey, 0, sizeof(*mkey));
 	mlx5_set_umr_mkey_seg_mtt(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr);
+	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
 
 	klm = (struct mlx5_wqe_umr_klm_seg *)(mkey + 1);
 	for (i = 0; i < umr_attr->sge_count; i++) {
