@@ -3893,6 +3893,22 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-d', '--backend-dir', help="Directory where rmem_pool stores backend files", required=False)
     p.set_defaults(func=rmem_enable)
 
+    def rdma_provider_get_opts(args):
+        print_dict(rpc.rdma_provider.rdma_provider_get_opts(args.client))
+
+    p = subparsers.add_parser('rdma_provider_get_opts', help='Get RDMA provider options')
+    p.set_defaults(func=rdma_provider_get_opts)
+
+    def rdma_provider_set_opts(args):
+        rpc.rdma_provider.rdma_provider_set_opts(args.client, support_offload_on_qp=args.support_offload_on_qp)
+
+    p = subparsers.add_parser('rdma_provider_set_opts', help='Set RDMA provider options.')
+    p.add_argument('--enable-offload-on-qp', dest='support_offload_on_qp', action='store_true', default=None,
+                   help="Enable HW offloads on network QP")
+    p.add_argument('--disable-offload-on-qp', dest='support_offload_on_qp', action='store_false', default=None,
+                   help="Enable HW offloads on network QP")
+    p.set_defaults(func=rdma_provider_set_opts)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))

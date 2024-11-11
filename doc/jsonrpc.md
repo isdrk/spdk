@@ -13614,3 +13614,68 @@ Example response:
   }
 }
 ~~~
+
+### rdma_provider_get_opts {#rdma_provider_get_opts}
+
+Get rdma_provider options.
+
+#### Parameters
+
+None
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_get_opts",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "support_offload_on_qp": true
+  }
+}
+~~~
+
+### rdma_provider_set_opts {#rdma_provider_set_opts}
+
+Set rdma_provider options.
+
+#### Parameters
+
+Name                    | Optional | Type | Description
+----------------------- |----------|------| -----------
+support_offload_on_qp   | Optional | bool | Enable or disable support of HW offloads on network QP.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_set_opts",
+  "id": 1,
+  "params": {
+    "support_offload_on_qp": true
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
