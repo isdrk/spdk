@@ -188,6 +188,16 @@ test-virtio-fs-app:
     - when: manual
       allow_failure: true
   script:
+    - |
+      if [ x"$VIRTIO_FS_CI_WEBREPO_URL" != x"" ]; then
+        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$CI_COMMIT_REF_NAME.json || true
+        if [ -f ci-$CI_COMMIT_REF_NAME.json ]; then
+          VIRTIO_FS_TARGET_REF=$(cat ci-$CI_COMMIT_REF_NAME.json | jq .spdk.app_ref)
+          echo ci-$CI_COMMIT_REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        else
+          echo ci-$CI_COMMIT_REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        fi
+      fi
     - >
       curl -s --header "PRIVATE-TOKEN: $VIRTIO_FS_TARGET_API_TOKEN" --request POST
       --form token=$VIRTIO_FS_TARGET_TRIGGER_TOKEN --form ref=$VIRTIO_FS_TARGET_REF
