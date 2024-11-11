@@ -706,9 +706,9 @@ mlx5_get_crc32c_tfs(uint32_t seed)
 }
 
 static inline void
-_mlx5_set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
-			  struct spdk_mlx5_umr_sig_attr *attr,
-			  uint8_t bsf_size)
+_mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
+				struct spdk_mlx5_umr_trans_sig_attr *attr,
+				uint8_t bsf_size)
 {
 	uint32_t tfs_psv;
 	uint32_t init_gen;
@@ -740,17 +740,17 @@ _mlx5_set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 }
 
 static inline void
-mlx5_set_umr_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
-			 struct spdk_mlx5_umr_sig_attr *attr)
+mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
+			       struct spdk_mlx5_umr_trans_sig_attr *attr)
 {
-	_mlx5_set_umr_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_32B);
+	_mlx5_set_umr_trans_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_32B);
 }
 
 static inline void
-mlx5_set_umr_sig_bsf_seg_with_crypto(struct mlx5_sig_bsf_seg *bsf,
-				     struct spdk_mlx5_umr_sig_attr *attr)
+mlx5_set_umr_trans_sig_bsf_seg_with_crypto(struct mlx5_sig_bsf_seg *bsf,
+		struct spdk_mlx5_umr_trans_sig_attr *attr)
 {
-	_mlx5_set_umr_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_WITH_CRYPTO);
+	_mlx5_set_umr_trans_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_WITH_CRYPTO);
 }
 
 static inline void
@@ -924,10 +924,10 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 }
 
 static inline void
-mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
-					struct spdk_mlx5_umr_attr *umr_attr,
-					struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id,
-					uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
+mlx5_umr_configure_with_wrap_around_trans_sig(struct spdk_mlx5_qp *dv_qp,
+		struct spdk_mlx5_umr_attr *umr_attr,
+		struct spdk_mlx5_umr_trans_sig_attr *sig_attr, uint64_t wr_id,
+		uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
 {
 	struct mlx5_hw_qp *hw = &dv_qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
@@ -971,7 +971,7 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 	klm = mlx5_qp_get_next_wqebb(hw, &to_end, mkey);
 	bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
 
-	mlx5_set_umr_sig_bsf_seg(bsf, sig_attr);
+	mlx5_set_umr_trans_sig_bsf_seg(bsf, sig_attr);
 
 	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
@@ -981,10 +981,10 @@ mlx5_umr_configure_with_wrap_around_sig(struct spdk_mlx5_qp *dv_qp,
 }
 
 static inline void
-mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_attr *umr_attr,
-			    struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id,
-			    uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb,
-			    uint32_t mtt_size)
+mlx5_umr_configure_full_trans_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_attr *umr_attr,
+				  struct spdk_mlx5_umr_trans_sig_attr *sig_attr, uint64_t wr_id,
+				  uint32_t flags, uint32_t wqe_size, uint32_t umr_wqe_n_bb,
+				  uint32_t mtt_size)
 {
 	struct mlx5_hw_qp *hw = &dv_qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
@@ -1034,7 +1034,7 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 	}
 
 	bsf = (struct mlx5_sig_bsf_seg *)klm;
-	mlx5_set_umr_sig_bsf_seg(bsf, sig_attr);
+	mlx5_set_umr_trans_sig_bsf_seg(bsf, sig_attr);
 
 	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
 
@@ -1044,8 +1044,9 @@ mlx5_umr_configure_full_sig(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5_umr_att
 }
 
 int
-spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-			    struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags)
+spdk_mlx5_umr_configure_trans_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				  struct spdk_mlx5_umr_trans_sig_attr *sig_attr, uint64_t wr_id,
+				  uint32_t flags)
 {
 	struct mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
@@ -1085,11 +1086,11 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_sig(qp, umr_attr, sig_attr, wr_id, flags, wqe_size,
-							umr_wqe_n_bb, mtt_size);
+		mlx5_umr_configure_with_wrap_around_trans_sig(qp, umr_attr, sig_attr, wr_id, flags,
+				wqe_size, umr_wqe_n_bb, mtt_size);
 	} else {
-		mlx5_umr_configure_full_sig(qp, umr_attr, sig_attr, wr_id, flags, wqe_size, umr_wqe_n_bb,
-					    mtt_size);
+		mlx5_umr_configure_full_trans_sig(qp, umr_attr, sig_attr, wr_id, flags, wqe_size,
+						  umr_wqe_n_bb, mtt_size);
 	}
 
 	return 0;
@@ -1252,9 +1253,9 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 }
 
 static inline void
-mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp,
+mlx5_umr_configure_with_wrap_around_trans_sig_crypto(struct spdk_mlx5_qp *dv_qp,
 		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_sig_attr *sig_attr,
+		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
 		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 		uint64_t wr_id, uint32_t flags, uint32_t wqe_size,
 		uint32_t umr_wqe_n_bb, uint32_t mtt_size)
@@ -1304,7 +1305,7 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp,
 	sig_bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
 
 	/* build signature BSF */
-	mlx5_set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
+	mlx5_set_umr_trans_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
 
 	/* build crypto BSF */
 	crypto_bsf = mlx5_qp_get_next_wqebb(hw, &to_end, sig_bsf);
@@ -1323,10 +1324,11 @@ mlx5_umr_configure_with_wrap_around_sig_crypto(struct spdk_mlx5_qp *dv_qp,
 }
 
 static inline void
-mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-				   struct spdk_mlx5_umr_sig_attr *sig_attr,
-				   struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags,
-				   uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
+mlx5_umr_configure_full_trans_sig_crypto(struct spdk_mlx5_qp *qp,
+		struct spdk_mlx5_umr_attr *umr_attr,
+		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
+		struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags,
+		uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
 {
 	struct mlx5_hw_qp *hw = &qp->hw;
 	struct mlx5_wqe_ctrl_seg *ctrl;
@@ -1378,7 +1380,7 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 
 	/* build signature BSF */
 	sig_bsf = (struct mlx5_sig_bsf_seg *)klm;
-	mlx5_set_umr_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
+	mlx5_set_umr_trans_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
 
 	/* build crypto BSF */
 	crypto_bsf = (struct mlx5_crypto_bsf_seg *)(sig_bsf + 1);
@@ -1397,10 +1399,11 @@ mlx5_umr_configure_full_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 }
 
 int
-spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-				   struct spdk_mlx5_umr_sig_attr *sig_attr,
-				   struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-				   uint64_t wr_id, uint32_t flags)
+spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
+		struct spdk_mlx5_umr_attr *umr_attr,
+		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
+		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
+		uint64_t wr_id, uint32_t flags)
 {
 	struct mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
@@ -1441,11 +1444,13 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	}
 
 	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
+		mlx5_umr_configure_with_wrap_around_trans_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id,
+				flags,
 				wqe_size, umr_wqe_n_bb, mtt_size);
 	} else {
-		mlx5_umr_configure_full_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags, wqe_size,
-						   umr_wqe_n_bb, mtt_size);
+		mlx5_umr_configure_full_trans_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
+				wqe_size,
+				umr_wqe_n_bb, mtt_size);
 	}
 
 	return 0;

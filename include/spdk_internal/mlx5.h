@@ -185,7 +185,7 @@ enum spdk_mlx5_umr_sig_domain {
 	SPDK_MLX5_UMR_SIG_DOMAIN_WIRE
 };
 
-struct spdk_mlx5_umr_sig_attr {
+struct spdk_mlx5_umr_trans_sig_attr {
 	uint32_t seed;
 	/* Index of the PSV used by this UMR */
 	uint32_t psv_index;
@@ -541,8 +541,9 @@ int spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index,
  * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion; Any of SPDK_MLX5_WQE_CTRL_FENCE* or 0
  * \return 0 on success, negated errno on failure
  */
-int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-				struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags);
+int spdk_mlx5_umr_configure_trans_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				      struct spdk_mlx5_umr_trans_sig_attr *sig_attr, uint64_t wr_id,
+				      uint32_t flags);
 
 /**
  * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with crypto and CRC32C capabilities.
@@ -560,10 +561,11 @@ int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_at
  * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion; Any of SPDK_MLX5_WQE_CTRL_FENCE* or 0
  * \return 0 on success, negated errno on failure
  */
-int spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-				       struct spdk_mlx5_umr_sig_attr *sig_attr,
-				       struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-				       uint64_t wr_id, uint32_t flags);
+int spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
+		struct spdk_mlx5_umr_attr *umr_attr,
+		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
+		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
+		uint64_t wr_id, uint32_t flags);
 /**
  * Return a NULL terminated array of devices which support crypto operation on Nvidia NICs
  *

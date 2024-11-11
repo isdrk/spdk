@@ -1268,7 +1268,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct spdk_mlx5_umr_crypto_attr cattr;
-	struct spdk_mlx5_umr_sig_attr sattr;
+	struct spdk_mlx5_umr_trans_sig_attr sattr;
 	struct spdk_mlx5_umr_attr umr_attr;
 	uint32_t remaining;
 	uint32_t umr_sge_count;
@@ -1353,7 +1353,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	umr_attr.sge_count = umr_sge_count;
 	umr_attr.sge = sgl->src_sge;
 
-	return spdk_mlx5_umr_configure_sig_crypto(qp->qp, &umr_attr, &sattr, &cattr, 0, 0);
+	return spdk_mlx5_umr_configure_trans_sig_crypto(qp->qp, &umr_attr, &sattr, &cattr, 0, 0);
 }
 
 static inline int
@@ -1739,7 +1739,7 @@ accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct ibv_
 				  enum spdk_mlx5_umr_sig_domain sig_domain, uint32_t umr_len,
 				  bool sig_init, bool sig_check_gen)
 {
-	struct spdk_mlx5_umr_sig_attr sattr = {
+	struct spdk_mlx5_umr_trans_sig_attr sattr = {
 		.seed = mlx5_task->base.seed ^ UINT32_MAX,
 		.psv_index = mlx5_task->psv->psv_index,
 		.domain = sig_domain,
@@ -1755,7 +1755,7 @@ accel_mlx5_crc_task_configure_umr(struct accel_mlx5_task *mlx5_task, struct ibv_
 		.sge = sge,
 	};
 
-	return spdk_mlx5_umr_configure_sig(mlx5_task->qp->qp, &umr_attr, &sattr, 0, 0);
+	return spdk_mlx5_umr_configure_trans_sig(mlx5_task->qp->qp, &umr_attr, &sattr, 0, 0);
 }
 
 static inline int
