@@ -4909,7 +4909,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	int reaped, i;
 	int count = 0;
 	int rc;
-	bool error = false;
+	bool error = false, fail_data_transfer = false;
 	uint64_t poll_tsc = spdk_get_ticks();
 
 	if (spdk_unlikely(rpoller->need_destroy)) {
@@ -5025,7 +5025,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 							nvmf_rdma_request_process(rtransport, rdma_req);
 							break;
 						}
-						SPDK_DEBUGLOG(rdma, "req %p, transfer_tcp_cb %p\n", rdma_req, rdma_req->transfer_cpl_cb);
+						SPDK_DEBUGLOG(rdma, "req %p, transfer_cpl_cb %p\n", rdma_req, rdma_req->transfer_cpl_cb);
 						if (rdma_req->transfer_cpl_cb) {
 							/* We need to wait for bdev layer to call req_complete */
 							rdma_req->state = RDMA_REQUEST_STATE_EXECUTING;
@@ -5064,13 +5064,17 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 							STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
 						}
 						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-						nvmf_rdma_request_process(rtransport, rdma_req);
+						if (rdma_req->transfer_cpl_cb) {
+							/* Request will be completed by ctrlr */
+							fail_data_transfer = true;
+						} else {
+							nvmf_rdma_request_process(rtransport, rdma_req);
+						}
 					}
 				} else if (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) {
 					/* We can receive completion for WRITE as part of accel sequence handling */
 					if (rdma_req->num_outstanding_data_wr == 0 && rdma_req->transfer_cpl_cb) {
-						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-						nvmf_rdma_request_process(rtransport, rdma_req);
+						fail_data_transfer = true;
 					}
 				}
 			}
@@ -5090,6 +5094,14 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			if (spdk_nvmf_qpair_is_active(&rqpair->qpair)) {
 				/* Disconnect the connection. */
 				spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+			}
+			if (fail_data_transfer) {
+				fail_data_transfer = false;
+				/* Completion of the data transfer triggers IO completion in the controller.
+				 * As result, if qpair is in the process of disconnect and that was the last outstanding IO,
+				 * the qpair can be destroyed via qpair_fini callback. We must not reference qpair after
+				 * completing data transfer in error path to avoid heap-use after free or double free */
+				nvmf_rdma_req_finish_data_transfer(rdma_req, -EIO);
 			} else {
 				nvmf_rdma_destroy_drained_qpair(rqpair);
 			}
