@@ -4939,6 +4939,10 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	for (i = 0; i < reaped; i++) {
 
 		rdma_wr = (struct spdk_nvmf_rdma_wr *)wc[i].wr_id;
+		if (spdk_unlikely(!rdma_wr)) {
+			assert(wc[i].status != IBV_WC_SUCCESS);
+			continue;
+		}
 
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_SEND:
