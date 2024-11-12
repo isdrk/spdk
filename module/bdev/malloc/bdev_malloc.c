@@ -22,6 +22,7 @@ struct malloc_disk {
 	void				*malloc_md_buf;
 	bool				enable_io_channel_weight;
 	bool				disable_accel_support;
+	bool				disable_verify_pi;
 	TAILQ_ENTRY(malloc_disk)	link;
 };
 
@@ -193,6 +194,8 @@ malloc_done(void *ref, int status)
 {
 	struct malloc_task *task = (struct malloc_task *)ref;
 	struct spdk_bdev_io *bdev_io = spdk_bdev_io_from_ctx(task);
+	struct spdk_bdev *bdev = bdev_io->bdev;
+	struct malloc_disk *disk = bdev->ctxt;
 	int rc;
 
 	if (status != 0) {
@@ -209,18 +212,18 @@ malloc_done(void *ref, int status)
 		return;
 	}
 
-	if (bdev_io->bdev->dif_type != SPDK_DIF_DISABLE &&
+	if (bdev->dif_type != SPDK_DIF_DISABLE && !disk->disable_verify_pi &&
 	    task->status == SPDK_BDEV_IO_STATUS_SUCCESS) {
 		switch (bdev_io->type) {
 		case SPDK_BDEV_IO_TYPE_READ:
-			if (!spdk_bdev_io_hide_metadata(bdev_io)) {
+			if (!spdk_bdev_io_hide_metadata(bdev_io) || disk->disable_accel_support) {
 				rc = malloc_verify_pi_io_buf(bdev_io);
 			} else {
 				rc = 0;
 			}
 			break;
 		case SPDK_BDEV_IO_TYPE_WRITE:
-			if (!spdk_bdev_io_hide_metadata(bdev_io)) {
+			if (!spdk_bdev_io_hide_metadata(bdev_io) || disk->disable_accel_support) {
 				rc = 0;
 			} else {
 				rc = malloc_verify_pi_malloc_buf(bdev_io);
@@ -504,7 +507,8 @@ static int
 _bdev_malloc_submit_request(struct malloc_channel *mch, struct spdk_bdev_io *bdev_io)
 {
 	struct malloc_task *task = (struct malloc_task *)bdev_io->driver_ctx;
-	struct malloc_disk *disk = bdev_io->bdev->ctxt;
+	struct spdk_bdev *bdev = bdev_io->bdev;
+	struct malloc_disk *disk = bdev->ctxt;
 	uint32_t block_size = bdev_io->bdev->blocklen;
 	int rc;
 
@@ -524,8 +528,8 @@ _bdev_malloc_submit_request(struct malloc_channel *mch, struct spdk_bdev_io *bde
 			return 0;
 		}
 
-		if (bdev_io->bdev->dif_type != SPDK_DIF_DISABLE &&
-		    spdk_bdev_io_hide_metadata(bdev_io)) {
+		if (bdev_io->bdev->dif_type != SPDK_DIF_DISABLE && !disk->disable_verify_pi &&
+		    spdk_bdev_io_hide_metadata(bdev_io) && !disk->disable_accel_support) {
 			rc = malloc_verify_pi_malloc_buf(bdev_io);
 			if (rc != 0) {
 				malloc_complete_task(task, mch, SPDK_BDEV_IO_STATUS_FAILED);
@@ -537,8 +541,8 @@ _bdev_malloc_submit_request(struct malloc_channel *mch, struct spdk_bdev_io *bde
 		return 0;
 
 	case SPDK_BDEV_IO_TYPE_WRITE:
-		if (bdev_io->bdev->dif_type != SPDK_DIF_DISABLE &&
-		    !spdk_bdev_io_hide_metadata(bdev_io)) {
+		if (bdev->dif_type != SPDK_DIF_DISABLE && !disk->disable_verify_pi &&
+		    (!spdk_bdev_io_hide_metadata(bdev_io) || disk->disable_accel_support)) {
 			rc = malloc_verify_pi_io_buf(bdev_io);
 			if (rc != 0) {
 				malloc_complete_task(task, mch, SPDK_BDEV_IO_STATUS_FAILED);
@@ -697,10 +701,6 @@ static bool
 bdev_malloc_accel_sequence_supported(void *ctx, enum spdk_bdev_io_type type)
 {
 	struct malloc_disk *malloc_disk = ctx;
-
-	if (malloc_disk->disk.dif_type != SPDK_DIF_DISABLE) {
-		return false;
-	}
 
 	if (malloc_disk->disable_accel_support) {
 		return false;
@@ -933,6 +933,7 @@ create_malloc_disk(struct spdk_bdev **bdev, const struct malloc_bdev_opts *opts)
 
 	mdisk->enable_io_channel_weight = opts->enable_io_channel_weight;
 	mdisk->disable_accel_support = opts->disable_accel_support;
+	mdisk->disable_verify_pi = opts->disable_verify_pi;
 
 	mdisk->disk.max_copy = 0;
 	mdisk->disk.ctxt = mdisk;

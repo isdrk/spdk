@@ -27,6 +27,7 @@ struct malloc_bdev_opts {
 	enum spdk_dif_pi_format dif_pi_format;
 	bool enable_io_channel_weight;
 	bool disable_accel_support;
+	bool disable_verify_pi;
 };
 
 int create_malloc_disk(struct spdk_bdev **bdev, const struct malloc_bdev_opts *opts);

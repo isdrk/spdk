@@ -265,7 +265,7 @@ def bdev_ocf_flush_status(client, name):
 
 def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None, name=None, uuid=None, optimal_io_boundary=None,
                        md_size=None, md_interleave=None, dif_type=None, dif_is_head_of_md=None, dif_pi_format=None,
-                       enable_io_channel_weight=None, disable_accel_support=None):
+                       enable_io_channel_weight=None, disable_accel_support=None, disable_verify_pi=None):
     """Construct a malloc block device.
     Args:
         num_blocks: size of block device in blocks
@@ -281,6 +281,7 @@ def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None,
         dif_pi_format: protection information format (optional)
         enable_io_channel_weight: Enable IO channel weight (optional)
         disable_accel_support: Don't report support of accel sequence (optional)
+        disable_verify_pi: Disable T10 PI verification (optional)
 
     Returns:
         Name of created block device.
@@ -310,6 +311,8 @@ def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None,
         params['enable_io_channel_weight'] = enable_io_channel_weight
     if disable_accel_support:
         params['disable_accel_support'] = disable_accel_support
+    if disable_verify_pi:
+        params['disable_verify_pi'] = disable_verify_pi
 
     return client.call('bdev_malloc_create', params)
 
