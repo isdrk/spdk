@@ -175,6 +175,22 @@ code-style-job:
     - ./scripts/pkgdep.sh --developer-tools
     - ./scripts/check_format.sh
 
+external-code-test-job:
+  extends: .test-job-vm-template
+  tags: [not-crypto, vm, linux, x86_64, f39]
+  rules:
+    - if: $PIPELINE_TYPE == "fsdev"
+      when: on_success
+    - when: manual
+      allow_failure: true
+  script:
+    # clean up output from previous runs
+    - sudo rm -rf $CI_PROJECT_DIR/../output/
+    # clean up previous build to have a clean new one
+    - rm -rf ./mk/config.mk
+    - rm -rf ./build
+    - ./test/external_code/test_make.sh ./
+
 test-virtio-fs-app:
   stage: test
   tags: [k8s, mtr-rdma, x86_64]
