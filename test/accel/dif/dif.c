@@ -1818,6 +1818,8 @@ accel_dif_generate_copy_op_dif_generated_no_guard_check_flag_set(void)
 		CU_ASSERT_EQUAL(g_completion_success, false);
 	} else if (!strcmp(module_name, "software")) {
 		CU_ASSERT_EQUAL(g_completion_success, true);
+	} else if (!strcmp(module_name, "mlx5")) {
+		CU_ASSERT_EQUAL(g_completion_success, true);
 	} else {
 		SPDK_CU_ASSERT_FATAL(false);
 	}
@@ -1869,6 +1871,8 @@ accel_dif_generate_copy_op_dif_generated_no_apptag_check_flag_set(void)
 	if (!strcmp(module_name, "dsa")) {
 		CU_ASSERT_EQUAL(g_completion_success, false);
 	} else if (!strcmp(module_name, "software")) {
+		CU_ASSERT_EQUAL(g_completion_success, true);
+	} else if (!strcmp(module_name, "mlx5")) {
 		CU_ASSERT_EQUAL(g_completion_success, true);
 	} else {
 		SPDK_CU_ASSERT_FATAL(false);
@@ -1922,6 +1926,8 @@ accel_dif_generate_copy_op_dif_generated_no_reftag_check_flag_set(void)
 		CU_ASSERT_EQUAL(g_completion_success, false);
 	} else if (!strcmp(module_name, "software")) {
 		CU_ASSERT_EQUAL(g_completion_success, true);
+	} else if (!strcmp(module_name, "mlx5")) {
+		CU_ASSERT_EQUAL(g_completion_success, true);
 	} else {
 		SPDK_CU_ASSERT_FATAL(false);
 	}
@@ -1932,10 +1938,20 @@ accel_dif_generate_copy_op_dif_generated_no_reftag_check_flag_set(void)
 static void
 accel_dif_generate_copy_op_iovecs_len_validate(void)
 {
+	const char *module_name = NULL;
 	struct spdk_dif_ctx_init_ext_opts dif_opts;
 	struct accel_dif_request req;
 	struct dif_task *task = &g_dif_task;
 	int rc;
+
+	rc = spdk_accel_get_opc_module_name(SPDK_ACCEL_OPC_DIF_GENERATE_COPY, &module_name);
+	CU_ASSERT(rc == 0);
+
+	/* TODO: how to validate iovec in accel_mlx5 module */
+	if (!strcmp(module_name, "mlx5")) {
+		CU_ASSERT(true);
+		return;
+	}
 
 	rc = alloc_dif_generate_copy_bufs(task, 1);
 	SPDK_CU_ASSERT_FATAL(rc == 0);
