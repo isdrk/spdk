@@ -3170,6 +3170,24 @@ nvmf_sta_fabric_connect(struct nvmf_non_offload_request *non_offload_req)
 	return 0;
 }
 
+static inline doca_error_t
+submit_doca_task(struct doca_task *task)
+{
+	doca_error_t drc;
+
+	/*
+	 * The submit task function can return DOCA_ERROR_AGAIN when several
+	 * threads submit tasks to the same DPA EU. Multiple submit calls are
+	 * synchronized by atomic operations. Immediate retry is a recommended
+	 * way to handle DOCA_ERROR_AGAIN.
+	 */
+	do {
+		drc = doca_task_submit(task);
+	} while (drc == DOCA_ERROR_AGAIN);
+
+	return drc;
+}
+
 static int
 nvmf_non_offload_request_transfer_in(struct nvmf_non_offload_request *non_offload_req)
 {
@@ -3191,7 +3209,7 @@ nvmf_non_offload_request_transfer_in(struct nvmf_non_offload_request *non_offloa
 		return -1;
 	}
 
-	drc = doca_task_submit(doca_sta_producer_send_task_as_task(non_offload_req->task));
+	drc = submit_doca_task(doca_sta_producer_send_task_as_task(non_offload_req->task));
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to submit RDMA_READ task: %s\n", doca_error_get_descr(drc));
 		doca_task_free(doca_sta_producer_send_task_as_task(non_offload_req->task));
@@ -3243,7 +3261,7 @@ nvmf_non_offload_request_transfer_out(struct nvmf_non_offload_request *non_offlo
 		return -1;
 	}
 
-	drc = doca_task_submit(doca_sta_producer_send_task_as_task(non_offload_req->task));
+	drc = submit_doca_task(doca_sta_producer_send_task_as_task(non_offload_req->task));
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to submit RDMA_READ task: %s\n", doca_error_get_descr(drc));
 		doca_task_free(doca_sta_producer_send_task_as_task(non_offload_req->task));
@@ -6770,7 +6788,7 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 					    oqpair->handle, doca_error_get_descr(drc));
 				break;
 			}
-			drc = doca_task_submit(doca_sta_producer_send_task_as_task(oqpair->destroy_task));
+			drc = submit_doca_task(doca_sta_producer_send_task_as_task(oqpair->destroy_task));
 			if (DOCA_IS_ERROR(drc)) {
 				SPDK_ERRLOG("Failed to submit disconnect task for IO QP 0x%lx: %s\n",
 					    oqpair->handle, doca_error_get_descr(drc));
@@ -7845,7 +7863,7 @@ nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	drc = doca_task_submit(doca_task);
+	drc = submit_doca_task(doca_task);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to submit be destroy queue task: %s\n", doca_error_get_descr(drc));
 		doca_task_free(doca_task);
@@ -8358,7 +8376,7 @@ spdk_nvmf_rdma_ns_destroy(struct spdk_nvmf_rdma_ns *rns)
 			rns->delete_started = false;
 			return -1;
 		}
-		drc = doca_task_submit(doca_sta_producer_send_task_as_task(rns->delete_task));
+		drc = submit_doca_task(doca_sta_producer_send_task_as_task(rns->delete_task));
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to submit DOCA task: %s\n", doca_error_get_descr(drc));
 			rns->delete_started = false;
