@@ -125,8 +125,9 @@ struct nvme_tcp_qpair {
 			uint16_t pending_send: 1;
 			uint16_t disconnected: 1;
 			uint16_t closed: 1;
+			uint16_t stop_receiving: 1;
 			uint16_t connect_notified: 1;
-			uint16_t reserved : 3;
+			uint16_t reserved : 2;
 		} flags;
 		uint16_t flags_raw;
 	};
@@ -652,6 +653,7 @@ static void xlio_sock_free_packet(struct nvme_tcp_qpair *tqpair, struct xlio_soc
 static void
 xlio_sock_release_packets(struct nvme_tcp_qpair *tqpair)
 {
+	tqpair->flags.stop_receiving = 1;
 	while (!STAILQ_EMPTY(&tqpair->received_packets)) {
 		struct xlio_sock_packet *packet = STAILQ_FIRST(&tqpair->received_packets);
 
@@ -963,16 +965,20 @@ xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t 
 	packet->iov.iov_base = data;
 	assert(len != 0);
 	packet->iov.iov_len = len;
-	packet->refs = 1;
-	STAILQ_INSERT_TAIL(&tqpair->received_packets, packet, link);
 	tqpair->consumed_packets++;
+	if (spdk_unlikely(tqpair->flags.stop_receiving)) {
+		xlio_sock_free_packet(tqpair, packet);
+	} else {
+		packet->refs = 1;
+		STAILQ_INSERT_TAIL(&tqpair->received_packets, packet, link);
 
-	/* If the socket does not already have recv pending, add it now */
-	if (spdk_likely(tqpair->group) && !tqpair->flags.pending_events) {
-		struct nvme_tcp_poll_group *group = tqpair->group;
+		/* If the socket does not already have recv pending, add it now */
+		if (spdk_likely(tqpair->group) && !tqpair->flags.pending_events) {
+			struct nvme_tcp_poll_group *group = tqpair->group;
 
-		tqpair->flags.pending_events = true;
-		TAILQ_INSERT_TAIL(&group->pending_events, tqpair, link);
+			tqpair->flags.pending_events = true;
+			TAILQ_INSERT_TAIL(&group->pending_events, tqpair, link);
+		}
 	}
 }
 
