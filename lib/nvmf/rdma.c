@@ -366,6 +366,7 @@ struct spdk_nvmf_rdma_qpair {
 
 	bool					ibv_in_error_state;
 	bool					start_accel_sequence;
+	bool					in_destroy;
 
 	RB_ENTRY(spdk_nvmf_rdma_qpair)		node;
 
@@ -3691,11 +3692,16 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
+	if (rqpair->in_destroy) {
+		return;
+	}
+	rqpair->in_destroy = true;
+
 	nvmf_rdma_qpair_process_pending(rtransport, rqpair, true);
 
 	/* nvmf_rdma_close_qpair is not called */
 	if (!rqpair->to_close) {
-		return;
+		goto again;
 	}
 
 	/* device is already destroyed and we should force destroy this qpair. */
@@ -3706,21 +3712,25 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 
 	/* In non SRQ path, we will reach rqpair->max_queue_depth. In SRQ path, we will get the last_wqe event. */
 	if (rqpair->current_send_depth != 0) {
-		return;
+		goto again;
 	}
 
 	if (rqpair->srq == NULL && rqpair->current_recv_depth != rqpair->max_queue_depth) {
-		return;
+		goto again;
 	}
 
 	if (rqpair->srq != NULL && rqpair->last_wqe_reached == false &&
 	    !nvmf_rdma_can_ignore_last_wqe_reached(rqpair->device)) {
-		return;
+		goto again;
 	}
 
 	assert(rqpair->qpair.state == SPDK_NVMF_QPAIR_ERROR);
 
 	nvmf_rdma_qpair_destroy(rqpair);
+
+	return;
+again:
+	rqpair->in_destroy = false;
 }
 
 static int
