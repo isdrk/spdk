@@ -27,6 +27,21 @@ static TAILQ_HEAD(, spdk_rmem_pool)	g_pools;
 static char				*g_backend_dir_name = NULL;
 static int				g_backend_dir = -1;
 
+/* NOTE: The RMEM_DBG_DO_CRASH macro and enum rmem_dbg_crash_point are only used in
+ * the test/rmem_pool/rmem_pool_write_crash_test - the SPDK rmem_pool write crash test
+ * For normal compilation the RMEM_DBG_DO_CRASH() is defined as empty.
+ */
+#ifdef RMEM_DBG_DO_CRASH
+enum rmem_dbg_crash_point {
+	RMEM_DBG_CRASH_POINT_OLD_COPY,
+	RMEM_DBG_CRASH_POINT_BOTH_COPIES,
+	RMEM_DBG_CRASH_POINT_NEW_COPY,
+	__RMEM_DBG_CRASH_POINT_LAST
+};
+#else
+#define RMEM_DBG_DO_CRASH(x)
+#endif
+
 struct rmem_pool_hdr {
 	uint16_t hdr_size;
 	uint16_t version;
@@ -631,13 +646,19 @@ spdk_rmem_entry_write(struct spdk_rmem_entry *entry, const void *buf)
 	 */
 	rmem_entry_set_state(old_hdr, true, new_entry->idx);
 
+	RMEM_DBG_DO_CRASH(RMEM_DBG_CRASH_POINT_OLD_COPY);
+
 	/* Mark new copy valid.
 	 * NOTE: if the app crashes after this step, the new copy will prevail as it's already been marked as valid
 	 */
 	rmem_entry_set_state(new_hdr, true, INVALID_MIRROR_IDX);
 
+	RMEM_DBG_DO_CRASH(RMEM_DBG_CRASH_POINT_BOTH_COPIES);
+
 	/* Finally, release the old copy by marking it as invalid and resetting the mirror index */
 	rmem_entry_set_state(old_hdr, false, INVALID_MIRROR_IDX);
+
+	RMEM_DBG_DO_CRASH(RMEM_DBG_CRASH_POINT_NEW_COPY);
 
 	/* Swap indexes, so the entry object will now point to the mirror index */
 	old_entry_idx = entry->idx;

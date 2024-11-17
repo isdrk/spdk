@@ -75,6 +75,19 @@ coredump_filter() {
 }
 
 filter_process() {
+	local excl_binaries=() bin
+
+	# rmem_pool testers simulate crashes to test recovery, so ignore them
+	excl_binaries+=("rmem_pool_test")
+	excl_binaries+=("rmem_pool_write_crash_test*")
+	# Add more if needed
+
+	for bin in "${excl_binaries[@]}"; do
+		# The below SC is intentional
+		# shellcheck disable=SC2053
+		[[ ${exe_path##*/} == $bin ]] && return 1
+	done
+
 	# Did the process sit in our repo?
 	[[ $cwd_path == "$rootdir"* ]] && return 0
 
@@ -83,7 +96,7 @@ filter_process() {
 	[[ ${maps[*]} == *"$rootdir/build/fio/spdk_bdev"* ]] && return 0
 
 	# Do we depend on it?
-	local crit_binaries=() bin
+	local crit_binaries=()
 
 	crit_binaries+=("nvme")
 	crit_binaries+=("qemu-system*")
