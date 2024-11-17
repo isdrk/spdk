@@ -3879,6 +3879,19 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-n', '--name', help="Name of the bdev")
     p.set_defaults(func=bdev_set_rw)
 
+    def rmem_get_config(args):
+        print_json(rpc.rmem.rmem_get_config(args.client))
+
+    p = subparsers.add_parser('rmem_get_config', help='Get the rmem config')
+    p.set_defaults(func=rmem_get_config)
+
+    def rmem_enable(args):
+        print_json(rpc.rmem.rmem_enable(args.client, backend_dir=args.backend_dir))
+
+    p = subparsers.add_parser('rmem_enable', help='Enable rmem if --backend-dir is specified or disable it otherwise')
+    p.add_argument('-d', '--backend-dir', help="Directory where rmem_pool stores backend files", required=False)
+    p.set_defaults(func=rmem_enable)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))

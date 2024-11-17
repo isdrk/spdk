@@ -36,6 +36,7 @@ from . import iobuf
 from . import dpdk_cryptodev
 from . import mlx5
 from . import client as rpc_client
+from . import rmem
 
 
 def framework_start_init(client):

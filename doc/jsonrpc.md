@@ -13547,3 +13547,70 @@ Example response:
   "result": true
 }
 ~~~
+
+### rmem_enable {#rmem_enable}
+
+Enable/disable the Recovery Memory functionality.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+backend_dir             | Optional | string      | Path on the system directory to be used to store the memory files. If not specified, disables the Recovery Memory functionality.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rmem_enable",
+  "id": 8,
+  "params": {
+    "backend_dir": "/tmp/rmem"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": true
+}
+~~~
+
+### rmem_get_config {#rmem_get_config}
+
+Get the Recovery Memory config.
+
+NOTE: the Recovery Memory functionality is disabled if `backend_dir` is `null`.
+
+#### Parameters
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rmem_get_config",
+  "id": 1,
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "params": {
+    "backend_dir": "/tmp/rmem"
+  }
+}
+~~~

@@ -1,0 +1,20 @@
+{
+	global:
+
+	# public functions
+	spdk_rmem_init;
+	spdk_rmem_fini;
+	spdk_rmem_is_enabled;
+	spdk_rmem_enable;
+	spdk_rmem_subsystem_config_json;
+	spdk_rmem_pool_create;
+	spdk_rmem_pool_restore;
+	spdk_rmem_pool_destroy;
+	spdk_rmem_pool_get;
+	spdk_rmem_entry_write;
+	spdk_rmem_entry_read;
+	spdk_rmem_entry_release;
+	spdk_rmem_pool_num_entries;
+
+	local: *;
+};
