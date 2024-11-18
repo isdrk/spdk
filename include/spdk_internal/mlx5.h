@@ -100,6 +100,26 @@ struct spdk_mlx5_cq_completion {
 	int status;
 };
 
+enum {
+	SPDK_MLX5_SIGERR_CQE_SYNDROME_REFTAG = 1 << 11,
+	SPDK_MLX5_SIGERR_CQE_SYNDROME_APPTAG = 1 << 12,
+	SPDK_MLX5_SIGERR_CQE_SYNDROME_GUARD = 1 << 13,
+
+	SPDK_MLX5_SIGERR_CQE_SIG_TYPE_BLOCK = 0,
+	SPDK_MLX5_SIGERR_CQE_SIG_TYPE_TRASACTION = 1,
+};
+
+union spdk_mlx5_cq_error {
+	struct spdk_mlx5_sig_err {
+		uint16_t syndrome;
+		uint64_t expected;
+		uint64_t actual;
+		uint64_t offset;
+		uint8_t sig_type;
+		uint8_t domain;
+	} sigerr;
+};
+
 struct spdk_mlx5_mkey_pool;
 
 enum spdk_mlx5_mkey_pool_flags {
@@ -376,11 +396,13 @@ void spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp);
  *
  * \param cq Completion Queue
  * \param comp Array of completions to be filled by this function
+ * \param err_info Array of errors to be filled only if error occurred
  * \param max_completions
  * \return 0 on success, negated errno on failure
  */
 int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
-				  struct spdk_mlx5_cq_completion *comp, int max_completions);
+				  struct spdk_mlx5_cq_completion *comp,
+				  union spdk_mlx5_cq_error *err, int max_completions);
 
 /**
  * Poll Completion Queue, save up to \b num_entries into \b wc array

@@ -20,7 +20,7 @@ DEFINE_STUB(spdk_mlx5_crypto_keytag_create, int, (struct spdk_mlx5_crypto_dek_cr
 		struct spdk_mlx5_crypto_keytag **out), 0);
 DEFINE_STUB_V(spdk_mlx5_crypto_keytag_destroy, (struct spdk_mlx5_crypto_keytag *keytag));
 DEFINE_STUB(spdk_mlx5_cq_poll_completions, int, (struct spdk_mlx5_cq *cq,
-		struct spdk_mlx5_cq_completion *comp, int max_completions), 0);
+		struct spdk_mlx5_cq_completion *comp, union spdk_mlx5_cq_error *err, int max_completions), 0);
 DEFINE_STUB(spdk_mlx5_qp_create, int, (struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 				       struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out), 0);
 DEFINE_STUB(spdk_mlx5_qp_get_verbs_qp, struct ibv_qp *, (struct spdk_mlx5_qp *qp), 0);
