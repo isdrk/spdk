@@ -78,7 +78,7 @@ hello_app_done(struct hello_context_t *hello_context, int rc)
 }
 
 static void
-umount_complete(void *cb_arg, struct spdk_io_channel *ch)
+umount_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_context_t *hello_context = cb_arg;
 
@@ -145,7 +145,7 @@ hello_check_complete(struct hello_thread_t *hello_thread, int status, const char
 }
 
 static void
-unlink_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
+unlink_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -176,8 +176,7 @@ hello_unlink(struct hello_thread_t *hello_thread)
 }
 
 static void
-setattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-		 const struct spdk_fsdev_file_attr *attr)
+setattr_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -186,7 +185,7 @@ setattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	hello_thread->attr = *attr;
+	hello_thread->attr = fsdev_io->u_out.setattr.attr;
 	hello_unlink(hello_thread);
 }
 
@@ -210,8 +209,7 @@ hello_setattr(struct hello_thread_t *hello_thread)
 }
 
 static void
-getattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-		 const struct spdk_fsdev_file_attr *attr)
+getattr_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -220,7 +218,7 @@ getattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	hello_thread->attr = *attr;
+	hello_thread->attr = fsdev_io->u_out.getattr.attr;
 	hello_setattr(hello_thread);
 }
 
@@ -242,7 +240,7 @@ hello_getattr(struct hello_thread_t *hello_thread)
 }
 
 static void
-release_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
+release_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -273,18 +271,19 @@ hello_release(struct hello_thread_t *hello_thread)
 }
 
 static void
-read_complete(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t data_size)
+read_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 	uint8_t data = spdk_env_get_current_core();
 	uint32_t i;
 
-	SPDK_NOTICELOG("Read complete (status=%d, %" PRIu32 "bytes read)\n", status, data_size);
+	SPDK_NOTICELOG("Read complete (status=%d, %" PRIu32 "bytes read)\n", status,
+		       fsdev_io->u_out.read.data_size);
 	if (!hello_check_complete(hello_thread, status, "read")) {
 		return;
 	}
 
-	assert(data_size == DATA_SIZE);
+	assert(fsdev_io->u_out.read.data_size == DATA_SIZE);
 
 	for (i = 0; i < DATA_SIZE; ++i) {
 		if (hello_thread->buf[i] != data) {
@@ -323,16 +322,17 @@ hello_read(struct hello_thread_t *hello_thread)
 }
 
 static void
-write_complete(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t data_size)
+write_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
-	SPDK_NOTICELOG("Write complete (status=%d, %" PRIu32 "bytes written)\n", status, data_size);
+	SPDK_NOTICELOG("Write complete (status=%d, %" PRIu32 "bytes written)\n", status,
+		       fsdev_io->u_out.write.data_size);
 	if (!hello_check_complete(hello_thread, status, "write")) {
 		return;
 	}
 
-	assert(data_size == DATA_SIZE);
+	assert(fsdev_io->u_out.write.data_size == DATA_SIZE);
 	hello_read(hello_thread);
 }
 
@@ -363,8 +363,7 @@ hello_write(struct hello_thread_t *hello_thread)
 }
 
 static void
-fopen_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-	       struct spdk_fsdev_file_handle *fhandle)
+fopen_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -373,7 +372,7 @@ fopen_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	hello_thread->fhandle = fhandle;
+	hello_thread->fhandle = fsdev_io->u_out.open.fhandle;
 	hello_write(hello_thread);
 }
 
@@ -395,8 +394,7 @@ hello_open(struct hello_thread_t *hello_thread)
 }
 
 static void
-lookup_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+lookup_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -405,7 +403,7 @@ lookup_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	assert(hello_thread->fobject == fobject);
+	assert(hello_thread->fobject == fsdev_io->u_out.lookup.fobject);
 	hello_open(hello_thread);
 }
 
@@ -427,8 +425,7 @@ hello_lookup(struct hello_thread_t *hello_thread)
 }
 
 static void
-mknod_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-	       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+mknod_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
 
@@ -437,7 +434,7 @@ mknod_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	hello_thread->fobject = fobject;
+	hello_thread->fobject = fsdev_io->u_out.mknod.fobject;
 	hello_lookup(hello_thread);
 }
 
@@ -531,9 +528,7 @@ hello_create_threads(struct hello_context_t *hello_context)
 }
 
 static void
-mount_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-	       const struct spdk_fsdev_mount_opts *opts,
-	       struct spdk_fsdev_file_object *root_fobject)
+mount_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct hello_context_t *hello_context = cb_arg;
 
@@ -544,7 +539,7 @@ mount_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
 		return;
 	}
 
-	hello_context->root_fobject = root_fobject;
+	hello_context->root_fobject = fsdev_io->u_out.mount.root_fobject;
 
 	hello_create_threads(hello_context);
 }

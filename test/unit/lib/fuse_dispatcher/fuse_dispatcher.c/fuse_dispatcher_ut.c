@@ -17,6 +17,8 @@
 #include "spdk/rmem.h"
 #include "linux/fuse_kernel.h"
 
+#include "lib/fuse_dispatcher/fuse_dispatcher.c"
+
 #define UT_UNIQUE 0xBEADBEAD
 #define UT_FSDEV_NAME "utfsdev0"
 #define UT_FOBJECT ((struct spdk_fsdev_file_object *)0xDEADDEAD)
@@ -35,165 +37,165 @@ DEFINE_STUB(spdk_fsdev_reset_supported, bool, (struct spdk_fsdev *fsdev), true);
 DEFINE_STUB(spdk_fsdev_get_notify_max_data_size, uint32_t, (const struct spdk_fsdev *fsdev), 0);
 DEFINE_STUB(spdk_fsdev_syncfs, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique, struct spdk_fsdev_file_object *fobject,
-				     spdk_fsdev_syncfs_cpl_cb cb_fn, void *cb_arg), 0);
+				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_lookup, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
 				     struct spdk_fsdev_file_object *parent_fobject, const char *name,
-				     spdk_fsdev_lookup_cpl_cb cb_fn, void *cb_arg), 0);
+				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_access, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique, struct spdk_fsdev_file_object *fobject,
-				     uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_access_cpl_cb cb_fn,
+				     uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_cpl_cb cb_fn,
 				     void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_forget, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
 				     struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
-				     spdk_fsdev_forget_cpl_cb cb_fn, void *cb_arg), 0);
+				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_lseek, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				    struct spdk_fsdev_file_handle *fhandle, off_t offset,
-				    enum spdk_fsdev_seek_whence whence, spdk_fsdev_lseek_cpl_cb cb_fn,
+				    enum spdk_fsdev_seek_whence whence, spdk_fsdev_cpl_cb cb_fn,
 				    void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_poll, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				   uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				   struct spdk_fsdev_file_handle *fhandle, uint32_t events,
-				   bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg), 0);
+				   bool wait, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_readlink, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				       uint64_t unique, struct spdk_fsdev_file_object *fobject,
-				       spdk_fsdev_readlink_cpl_cb cb_fn, void *cb_arg), 0);
+				       spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_ioctl, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				    struct spdk_fsdev_file_handle *fhandle, uint32_t request,
 				    uint64_t arg, struct iovec *in_iov, uint32_t in_iovcnt,
 				    struct iovec *out_iov, uint32_t out_iovcnt,
-				    spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg), 0);
+				    spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_getlk, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				    struct spdk_fsdev_file_handle *fhandle,
 				    const struct spdk_fsdev_file_lock *lock_to_check,
-				    uint64_t owner, spdk_fsdev_getlk_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint64_t owner, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_setlk, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				    struct spdk_fsdev_file_handle *fhandle,
 				    const struct spdk_fsdev_file_lock *lock_to_acquire,
-				    uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint64_t owner, bool wait, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_symlink, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique,
 				      struct spdk_fsdev_file_object *parent_fobject, const char *target,
 				      const char *linkpath, uid_t euid, gid_t egid,
-				      spdk_fsdev_symlink_cpl_cb cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_mknod, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-				    uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_mkdir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-				    uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_unlink, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
 				     struct spdk_fsdev_file_object *parent_fobject, const char *name,
-				     spdk_fsdev_unlink_cpl_cb cb_fn, void *cb_arg), 0);
+				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_rmdir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *parent_fobject, const char *name,
-				    spdk_fsdev_rmdir_cpl_cb cb_fn, void *cb_arg), 0);
+				    spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_rename, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
 				     struct spdk_fsdev_file_object *parent_fobject, const char *name,
 				     struct spdk_fsdev_file_object *new_parent_fobject, const char *new_name,
-				     uint32_t flags, spdk_fsdev_rename_cpl_cb cb_fn, void *cb_arg), 0);
+				     uint32_t flags, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_link, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				   uint64_t unique,
 				   struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_object *new_parent_fobject,
-				   const char *name, spdk_fsdev_link_cpl_cb cb_fn, void *cb_arg), 0);
+				   const char *name, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_statfs, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
-				     struct spdk_fsdev_file_object *fobject, spdk_fsdev_statfs_cpl_cb cb_fn, void *cb_arg), 0);
+				     struct spdk_fsdev_file_object *fobject, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_setxattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				       uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, const char *value,
-				       size_t size, uint64_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg), 0);
+				       size_t size, uint64_t flags, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_getxattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				       uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, void *buffer,
-				       size_t size, spdk_fsdev_getxattr_cpl_cb cb_fn, void *cb_arg), 0);
+				       size_t size, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_listxattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 					uint64_t unique, struct spdk_fsdev_file_object *fobject, char *buffer, size_t size,
-					spdk_fsdev_listxattr_cpl_cb cb_fn, void *cb_arg), 0);
+					spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_removexattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name,
-		spdk_fsdev_removexattr_cpl_cb cb_fn, void *cb_arg), 0);
+		spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_fopen, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
-				    struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_fopen_cpl_cb cb_fn,
+				    struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_cpl_cb cb_fn,
 				    void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_create, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique,
 				     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, uint32_t flags,
 				     mode_t umask, uid_t euid, gid_t egid,
-				     spdk_fsdev_create_cpl_cb cb_fn, void *cb_arg), 0);
+				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_release, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique,
 				      struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-				      spdk_fsdev_release_cpl_cb cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_getattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-				      spdk_fsdev_getattr_cpl_cb cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_setattr, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique,
 				      struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 				      const struct spdk_fsdev_file_attr *attr, uint32_t to_set,
-				      spdk_fsdev_setattr_cpl_cb cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_read, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				   uint64_t unique,
 				   struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 				   size_t size, uint64_t offs, uint32_t flags,
 				   struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
-				   spdk_fsdev_read_cpl_cb cb_fn, void *cb_arg), 0);
+				   spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_write, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, size_t size,
 				    uint64_t offs, uint64_t flags,
 				    const struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
-				    spdk_fsdev_write_cpl_cb cb_fn, void *cb_arg), 0);
+				    spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_fsync, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, bool datasync,
-				    spdk_fsdev_fsync_cpl_cb cb_fn, void *cb_arg), 0);
+				    spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_flush, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-				    spdk_fsdev_flush_cpl_cb cb_fn,
+				    spdk_fsdev_cpl_cb cb_fn,
 				    void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_opendir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique, struct spdk_fsdev_file_object *fobject, uint32_t flags,
-				      spdk_fsdev_opendir_cpl_cb cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_readdir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				      uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 				      uint64_t offset,
-				      spdk_fsdev_readdir_entry_cb entry_cb_fn, spdk_fsdev_readdir_cpl_cb cpl_cb_fn, void *cb_arg), 0);
+				      spdk_fsdev_readdir_entry_cb entry_cb_fn, spdk_fsdev_cpl_cb cpl_cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_releasedir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		spdk_fsdev_releasedir_cpl_cb cb_fn, void *cb_arg), 0);
+		spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_fsyncdir, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				       uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 				       bool datasync,
-				       spdk_fsdev_fsyncdir_cpl_cb cb_fn, void *cb_arg), 0);
+				       spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_flock, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				    uint64_t unique,
 				    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-				    enum spdk_fsdev_file_lock_op operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg), 0);
+				    enum spdk_fsdev_file_lock_op operation, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_fallocate, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 					uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 					int mode, off_t offset, off_t length,
-					spdk_fsdev_fallocate_cpl_cb cb_fn, void *cb_arg), 0);
+					spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_copy_file_range, int, (struct spdk_fsdev_desc *desc,
 		struct spdk_io_channel *ch,
 		uint64_t unique,
 		struct spdk_fsdev_file_object *fobject_in, struct spdk_fsdev_file_handle *fhandle_in, off_t off_in,
 		struct spdk_fsdev_file_object *fobject_out, struct spdk_fsdev_file_handle *fhandle_out,
 		off_t off_out, size_t len, uint32_t flags,
-		spdk_fsdev_copy_file_range_cpl_cb cb_fn, void *cb_arg), 0);
+		spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_abort, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-				    uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg), 0);
+				    uint64_t unique_to_abort, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
 
 DEFINE_STUB(spdk_rmem_get_backend_dir, const char *, (void), NULL);
@@ -214,7 +216,7 @@ static struct spdk_fsdev_desc *g_ut_fsdev_desc = (struct spdk_fsdev_desc *)0xBEA
 int
 spdk_fsdev_mount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		 uint64_t unique, const struct spdk_fsdev_mount_opts *opts,
-		 spdk_fsdev_mount_cpl_cb cb_fn, void *cb_arg)
+		 spdk_fsdev_cpl_cb cb_fn, void *cb_arg)
 {
 	ut_call_record_begin(spdk_fsdev_mount);
 	ut_call_record_param_ptr(desc);
@@ -230,7 +232,7 @@ spdk_fsdev_mount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 
 int
 spdk_fsdev_umount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-		  uint64_t unique, spdk_fsdev_umount_cpl_cb cb_fn, void *cb_arg)
+		  uint64_t unique, spdk_fsdev_cpl_cb cb_fn, void *cb_arg)
 {
 	ut_call_record_begin(spdk_fsdev_umount);
 	ut_call_record_param_ptr(desc);
@@ -275,11 +277,6 @@ ut_fuse_disp_test_create_delete(void)
 	spdk_fuse_dispatcher_delete(disp);
 }
 
-struct fuse_notify_reply_in {
-	int32_t error; /* 0 on success, negated errno for error */
-	uint32_t padding;
-};
-
 struct fuse_in {
 	struct fuse_in_header hdr;
 	union {
@@ -317,8 +314,9 @@ ut_fuse_disp_test_init_destroy(void)
 	struct fuse_out init_out;
 	struct iovec out_iov = { .iov_base = &init_out };
 	struct spdk_fsdev_mount_opts opts = {};
-	spdk_fsdev_mount_cpl_cb *mount_cb_fn;
-	spdk_fsdev_umount_cpl_cb *umount_cb_fn;
+	spdk_fsdev_cpl_cb *mount_cb_fn;
+	spdk_fsdev_cpl_cb *umount_cb_fn;
+	struct spdk_fsdev_io fsdev_io = {};
 	void *cb_arg;
 	int rc;
 
@@ -358,7 +356,8 @@ ut_fuse_disp_test_init_destroy(void)
 	opts.max_xfer_size = 131072;
 	/* POSIX_ACL is not supported by fsdev */
 	opts.flags &= ~SPDK_FSDEV_MOUNT_POSIX_ACL;
-	mount_cb_fn(cb_arg, io_channel, 0, &opts, UT_FOBJECT);
+	fsdev_io.u_out.mount.opts = opts;
+	mount_cb_fn(cb_arg, 0, &fsdev_io);
 	CU_ASSERT(ut_calls_get_func(0) == request_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &request_cb_arg);
 	CU_ASSERT(ut_calls_param_get_int(0, 1) == 0);
@@ -396,7 +395,7 @@ ut_fuse_disp_test_init_destroy(void)
 	cb_arg = ut_calls_param_get_ptr(0, 4);
 
 	ut_calls_reset();
-	umount_cb_fn(cb_arg, io_channel);
+	umount_cb_fn(cb_arg, 0, NULL);
 	CU_ASSERT(ut_calls_get_func(0) == request_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &request_cb_arg);
 	CU_ASSERT(ut_calls_param_get_int(0, 1) == 0);

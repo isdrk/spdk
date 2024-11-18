@@ -786,11 +786,12 @@ enum spdk_fsdev_seek_whence {
 
 struct spdk_fsdev_io;
 
-/*
+typedef void (spdk_fsdev_cpl_cb)(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io);
+
+/**
  * Read directory per-entry callback
  *
  * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
  * \param name Name of the entry
  * \param fobject File object. NULL for "." and "..".
  * \param attr File attributes.
@@ -803,7 +804,7 @@ struct spdk_fsdev_io;
  *       referenced unless this callback sets the \p forget to true. Otherwise, it's up to
  *       the user to call \p spdk_fsdev_forget when the \p fobject is no longer needed.
  */
-typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
+typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg,
 		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
 		off_t offset, bool *forget);
 
@@ -1181,7 +1182,7 @@ struct spdk_fsdev_io {
 		uint64_t unique;
 
 		/** User callback */
-		void *usr_cb_fn;
+		spdk_fsdev_cpl_cb *usr_cb_fn;
 
 		/** The context for the user callback */
 		void *usr_cb_arg;
@@ -1223,19 +1224,6 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
 }
 
 /**
- * Mount operation completion callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param opts Result options.
- * \param root_fobject Root file object
- */
-typedef void (spdk_fsdev_mount_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				       const struct spdk_fsdev_mount_opts *opts,
-				       struct spdk_fsdev_file_object *root_fobject);
-
-/**
  * Mount the filesystem.
  *
  * \param desc Filesystem device descriptor.
@@ -1255,15 +1243,7 @@ typedef void (spdk_fsdev_mount_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_mount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, const struct spdk_fsdev_mount_opts *opts,
-		     spdk_fsdev_mount_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Umount operation completion callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- */
-typedef void (spdk_fsdev_umount_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch);
+		     spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Unmount the filesystem.
@@ -1281,17 +1261,7 @@ typedef void (spdk_fsdev_umount_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  * NOTE: on unmount the lookup count for all fobjects implicitly drops to zero.
  */
 int spdk_fsdev_umount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-		      uint64_t unique, spdk_fsdev_umount_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Syncfs operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- */
-typedef void (spdk_fsdev_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-					int status);
+		      uint64_t unique, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Sync entire filesystem referred by the file handle.
@@ -1309,20 +1279,7 @@ typedef void (spdk_fsdev_syncfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  */
 int spdk_fsdev_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		      uint64_t unique, struct spdk_fsdev_file_object *fobject,
-		      spdk_fsdev_syncfs_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Lookup file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- */
-typedef void (spdk_fsdev_lookup_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-					struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+		      spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Look up a directory entry by name and get its attributes
@@ -1343,20 +1300,7 @@ typedef void (spdk_fsdev_lookup_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  */
 int spdk_fsdev_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
-		      spdk_fsdev_lookup_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Access operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param mask Access mask to check.
- * \param uid Uid that was used for checking access.
- * \param gid Gid that was used for checking access.
- */
-typedef void (spdk_fsdev_access_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-					int status, uint32_t mask, uid_t uid, uid_t gid);
+		      spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Check the file access flags for passed mask.
@@ -1378,17 +1322,8 @@ typedef void (spdk_fsdev_access_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  */
 int spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		      uint64_t unique, struct spdk_fsdev_file_object *fobject,
-		      uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_access_cpl_cb cb_fn,
+		      uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_cpl_cb cb_fn,
 		      void *cb_arg);
-
-/**
- * Look up file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Remove file object from internal cache
@@ -1408,19 +1343,7 @@ typedef void (spdk_fsdev_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  */
 int spdk_fsdev_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
-		      spdk_fsdev_forget_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Reposition read/write file offset callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param offset Resulting offset.
- * \param whence Used whence.
- */
-typedef void (spdk_fsdev_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				       int status, off_t offset, enum spdk_fsdev_seek_whence whence);
+		      spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Reposition read/write file offset operation.
@@ -1449,7 +1372,7 @@ typedef void (spdk_fsdev_lseek_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 int spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle, off_t offset,
-		     enum spdk_fsdev_seek_whence whence, spdk_fsdev_lseek_cpl_cb cb_fn,
+		     enum spdk_fsdev_seek_whence whence, spdk_fsdev_cpl_cb cb_fn,
 		     void *cb_arg);
 
 /* Poll operation type. */
@@ -1489,22 +1412,6 @@ enum spdk_fsdev_poll_event_type {
 };
 
 /**
- * The poll operation callback. Delivers mask of the event type available.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param revents Operation types available mask. See spdk_fsdev_poll_event_type.
- *
- * \returns the following:
- * -EAGAIN - no events available.
- * 0       - requested events available.
- * < 0     - any other errors.
- */
-typedef void (spdk_fsdev_poll_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				      int status, uint32_t revents);
-
-/**
  * Check for some event on a file.
  *
  * \param desc Filesystem device descriptor.
@@ -1524,19 +1431,7 @@ typedef void (spdk_fsdev_poll_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
 int spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		    uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		    struct spdk_fsdev_file_handle *fhandle, uint32_t events,
-		    bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Read symbolic link operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param linkname symbolic link contents
- */
-typedef void (spdk_fsdev_readlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		const char *linkname);
+		    bool wait, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read symbolic link
@@ -1555,45 +1450,7 @@ typedef void (spdk_fsdev_readlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  */
 int spdk_fsdev_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			uint64_t unique, struct spdk_fsdev_file_object *fobject,
-			spdk_fsdev_readlink_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Create a symbolic link operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- */
-typedef void (spdk_fsdev_symlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
-
-/**
- * Ioctl operation completion callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation status:
- * - 0 on success. In unrestricted ioctl() case (see fuse_ioctl() in the Linux kernel)
- *   the final stage of the retry protocol when 0 is returned in status must only
- *   populate the final data buffers. The in_iovcnt and out_iovcnt must be zero and
- *   no iocvecs must be populated. This sanity check is enforced on the higher levels
- *   and will result into -EIO error if violated.
- * - -EAGAIN on retry request when ioctl misses some buffers to set/get the
- *   data (see how the FUSE_IOCTL_RETRY is used).
- * - error code otherwise.
- * \param result Exact result code returned from ioctl implementation.
- * \param in_iov Array of iovec describing the data to bring in the next retry.
- * \param in_iovcnt Size of in_iov array.
- * \param out_iov Array of iovec describing the output data to send in the next retry.
- * \param out_iovcnt Size of out_iov array.
- */
-typedef void (spdk_fsdev_ioctl_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				       int status, int32_t result,
-				       struct iovec *in_iov, uint32_t in_iovcnt,
-				       struct iovec *out_iov, uint32_t out_iovcnt);
+			spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Ioctl operation.
@@ -1621,18 +1478,7 @@ int spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     struct spdk_fsdev_file_handle *fhandle, uint32_t request,
 		     uint64_t arg, struct iovec *in_iov, uint32_t in_iovcnt,
 		     struct iovec *out_iov, uint32_t out_iovcnt,
-		     spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Getlk operation completion callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- * \param lock Conflicting lock params.
- */
-typedef void (spdk_fsdev_getlk_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				       int status, const struct spdk_fsdev_file_lock *lock);
+		     spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * This function checks if the lock with a particular params can be placed.
@@ -1667,17 +1513,7 @@ int spdk_fsdev_getlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle,
 		     const struct spdk_fsdev_file_lock *lock_to_check,
-		     uint64_t owner, spdk_fsdev_getlk_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Setlk operation completion callback.
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_op_ API
- * \param ch I/O channel.
- * \param status Operation status, 0 on success or error code otherwise.
- */
-typedef void (spdk_fsdev_setlk_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-				       int status);
+		     uint64_t owner, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Setlk operation. Acquire, modify or release a file lock.
@@ -1705,7 +1541,7 @@ int spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 		     struct spdk_fsdev_file_handle *fhandle,
 		     const struct spdk_fsdev_file_lock *lock_to_acquire,
-		     uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg);
+		     uint64_t owner, bool wait, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a symbolic link
@@ -1730,20 +1566,7 @@ int spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 int spdk_fsdev_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		       struct spdk_fsdev_file_object *parent_fobject, const char *target,
 		       const char *linkpath, uid_t euid, gid_t egid,
-		       spdk_fsdev_symlink_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Create file node operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- */
-typedef void (spdk_fsdev_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+		       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create file node
@@ -1769,20 +1592,7 @@ typedef void (spdk_fsdev_mknod_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Create a directory operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- */
-typedef void (spdk_fsdev_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a directory
@@ -1807,16 +1617,9 @@ typedef void (spdk_fsdev_mkdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg);
+		     uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
-/**
- * Remove a file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_unlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+
 
 /**
  * Remove a file
@@ -1837,16 +1640,7 @@ typedef void (spdk_fsdev_unlink_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  */
 int spdk_fsdev_unlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
-		      spdk_fsdev_unlink_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Remove a directory operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_rmdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		      spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Remove a directory
@@ -1867,16 +1661,7 @@ typedef void (spdk_fsdev_rmdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *parent_fobject, const char *name,
-		     spdk_fsdev_rmdir_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Rename a file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		     spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Rename2 API flags.
@@ -1917,20 +1702,7 @@ typedef void (spdk_fsdev_rename_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
 int spdk_fsdev_rename(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *parent_fobject, const char *name,
 		      struct spdk_fsdev_file_object *new_parent_fobject, const char *new_name,
-		      uint32_t flags, spdk_fsdev_rename_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Create a hard link operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- */
-typedef void (spdk_fsdev_link_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr);
+		      uint32_t flags, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Create a hard link
@@ -1952,19 +1724,7 @@ typedef void (spdk_fsdev_link_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, 
  */
 int spdk_fsdev_link(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_object *new_parent_fobject,
-		    const char *name, spdk_fsdev_link_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Get file system statistic operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param statfs filesystem statistics
- */
-typedef void (spdk_fsdev_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-					const struct spdk_fsdev_file_statfs *statfs);
+		    const char *name, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Get file system statistics
@@ -1982,7 +1742,7 @@ typedef void (spdk_fsdev_statfs_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
 int spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		      struct spdk_fsdev_file_object *fobject, spdk_fsdev_statfs_cpl_cb cb_fn, void *cb_arg);
+		      struct spdk_fsdev_file_object *fobject, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /*
  * Flags used in setxattr operation.
@@ -1995,15 +1755,6 @@ int spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 #define SPDK_FSDEV_XATTR_CREATE (1 << 0)
 #define SPDK_FSDEV_XATTR_REPLACE (1 << 1)
 #define SPDK_FSDEV_SETXATTR_ACL_KILL_SGID (1 << 2)
-
-/**
- * Set an extended attribute operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
 
 /**
  * Set an extended attribute
@@ -2027,18 +1778,7 @@ typedef void (spdk_fsdev_setxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  */
 int spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, const char *value,
-			size_t size, uint64_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg);
-/**
- * Get an extended attribute operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param value_size Size of an data copied to the value buffer.
- */
-typedef void (spdk_fsdev_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		size_t value_size);
+			size_t size, uint64_t flags, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Get an extended attribute
@@ -2061,20 +1801,7 @@ typedef void (spdk_fsdev_getxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *
  */
 int spdk_fsdev_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name, void *buffer,
-			size_t size, spdk_fsdev_getxattr_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * List extended attribute names operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param size Size of an extended attribute list.
- * \param size_only true if buffer was NULL or size was 0 upon the \ref spdk_fsdev_listxattr call
- */
-typedef void (spdk_fsdev_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		size_t size, bool size_only);
+			size_t size, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * List extended attribute names
@@ -2095,17 +1822,7 @@ typedef void (spdk_fsdev_listxattr_cpl_cb)(void *cb_arg, struct spdk_io_channel 
  */
 int spdk_fsdev_listxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			 uint64_t unique, struct spdk_fsdev_file_object *fobject, char *buffer, size_t size,
-			 spdk_fsdev_listxattr_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Remove an extended attribute operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_removexattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status);
+			 spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Remove an extended attribute
@@ -2126,19 +1843,7 @@ typedef void (spdk_fsdev_removexattr_cpl_cb)(void *cb_arg, struct spdk_io_channe
  */
 int spdk_fsdev_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			   uint64_t unique, struct spdk_fsdev_file_object *fobject, const char *name,
-			   spdk_fsdev_removexattr_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Open a file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fhandle Non-NULL file handle
- */
-typedef void (spdk_fsdev_fopen_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				       struct spdk_fsdev_file_handle *fhandle);
+			   spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Open a file
@@ -2157,24 +1862,8 @@ typedef void (spdk_fsdev_fopen_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
 int spdk_fsdev_fopen(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		     struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_fopen_cpl_cb cb_fn,
+		     struct spdk_fsdev_file_object *fobject, uint32_t flags, spdk_fsdev_cpl_cb cb_fn,
 		     void *cb_arg);
-
-
-/**
- * Create and open a file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fobject File object.
- * \param attr File attributes.
- * \param fhandle Non-NULL file handle.
- */
-typedef void (spdk_fsdev_create_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-					struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-					struct spdk_fsdev_file_handle *fhandle);
 
 /**
  * Create and open a file
@@ -2201,16 +1890,7 @@ typedef void (spdk_fsdev_create_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
 int spdk_fsdev_create(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, uint32_t flags,
 		      mode_t umask, uid_t euid, gid_t egid,
-		      spdk_fsdev_create_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Release an open file operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_release_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		      spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Release an open file
@@ -2230,19 +1910,7 @@ typedef void (spdk_fsdev_release_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  */
 int spdk_fsdev_release(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		       spdk_fsdev_release_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Get file attributes operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param attr file attributes.
- */
-typedef void (spdk_fsdev_getattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		const struct spdk_fsdev_file_attr *attr);
+		       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Get file attributes
@@ -2262,19 +1930,7 @@ typedef void (spdk_fsdev_getattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  */
 int spdk_fsdev_getattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		       uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		       spdk_fsdev_getattr_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Set file attributes operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status Operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param attr file attributes.
- */
-typedef void (spdk_fsdev_setattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		const struct spdk_fsdev_file_attr *attr);
+		       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Set file attributes
@@ -2297,18 +1953,7 @@ typedef void (spdk_fsdev_setattr_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
 int spdk_fsdev_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		       struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 		       const struct spdk_fsdev_file_attr *attr, uint32_t to_set,
-		       spdk_fsdev_setattr_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Read data operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- * \param data_size Number of bytes read.
- */
-typedef void (spdk_fsdev_read_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				      uint32_t data_size);
+		       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read data
@@ -2338,18 +1983,7 @@ int spdk_fsdev_read(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 		    struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 		    size_t size, uint64_t offs, uint32_t flags,
 		    struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
-		    spdk_fsdev_read_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Write data operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- * \param data_size Number of bytes written.
- */
-typedef void (spdk_fsdev_write_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-				       uint32_t data_size);
+		    spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Write data
@@ -2379,16 +2013,7 @@ int spdk_fsdev_write(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, size_t size,
 		     uint64_t offs, uint64_t flags,
 		     const struct iovec *iov, uint32_t iovcnt, struct spdk_fsdev_io_opts *opts,
-		     spdk_fsdev_write_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Synchronize file contents operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_fsync_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		     spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Synchronize file contents
@@ -2409,16 +2034,7 @@ typedef void (spdk_fsdev_fsync_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_fsync(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, bool datasync,
-		     spdk_fsdev_fsync_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Flush operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_flush_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		     spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Flush
@@ -2438,20 +2054,8 @@ typedef void (spdk_fsdev_flush_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		     spdk_fsdev_flush_cpl_cb cb_fn,
+		     spdk_fsdev_cpl_cb cb_fn,
 		     void *cb_arg);
-
-/**
- * Open a directory operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- *  Following parameters should be ignored if status != 0.
- * \param fhandle Non-NULL file handle
- */
-typedef void (spdk_fsdev_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
-		struct spdk_fsdev_file_handle *fhandle);
 
 /**
  * Open a directory
@@ -2471,16 +2075,7 @@ typedef void (spdk_fsdev_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
  */
 int spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		       uint64_t unique, struct spdk_fsdev_file_object *fobject, uint32_t flags,
-		       spdk_fsdev_opendir_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Read directory operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_readdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+		       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Read directory
@@ -2503,17 +2098,7 @@ typedef void (spdk_fsdev_readdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
 int spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		       uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 		       uint64_t offset,
-		       spdk_fsdev_readdir_entry_cb entry_cb_fn, spdk_fsdev_readdir_cpl_cb cpl_cb_fn, void *cb_arg);
-
-/**
- * Open a directory operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_releasedir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status);
+		       spdk_fsdev_readdir_entry_cb entry_cb_fn, spdk_fsdev_cpl_cb cpl_cb_fn, void *cb_arg);
 
 /**
  * Open a directory
@@ -2533,16 +2118,7 @@ typedef void (spdk_fsdev_releasedir_cpl_cb)(void *cb_arg, struct spdk_io_channel
  */
 int spdk_fsdev_releasedir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			  uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-			  spdk_fsdev_releasedir_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Synchronize directory contents operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_fsyncdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+			  spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Synchronize directory contents
@@ -2564,16 +2140,7 @@ typedef void (spdk_fsdev_fsyncdir_cpl_cb)(void *cb_arg, struct spdk_io_channel *
 int spdk_fsdev_fsyncdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 			bool datasync,
-			spdk_fsdev_fsyncdir_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Acquire, modify or release a BSD file lock operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+			spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Acquire, modify or release a BSD file lock
@@ -2594,7 +2161,7 @@ typedef void (spdk_fsdev_flock_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  */
 int spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		     struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
-		     enum spdk_fsdev_file_lock_op operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg);
+		     enum spdk_fsdev_file_lock_op operation, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 #define SPDK_FSDEV_FALLOC_FL_KEEP_SIZE     0x01 /* default is extend size */
 #define SPDK_FSDEV_FALLOC_FL_PUNCH_HOLE    0x02 /* de-allocates range */
@@ -2672,15 +2239,6 @@ int spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 #define SPDK_FSDEV_FALLOC_FL_UNSHARE_RANGE         0x40
 
 /**
- * Allocate requested space operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_fallocate_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
-
-/**
  * Allocate requested space.
  *
  * \param desc Filesystem device descriptor.
@@ -2702,18 +2260,7 @@ typedef void (spdk_fsdev_fallocate_cpl_cb)(void *cb_arg, struct spdk_io_channel 
 int spdk_fsdev_fallocate(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 			 uint64_t unique, struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
 			 int mode, off_t offset, off_t length,
-			 spdk_fsdev_fallocate_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Copy a range of data from one file to another operation completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- * \param data_size Number of bytes written.
- */
-typedef void (spdk_fsdev_copy_file_range_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		int status, uint32_t data_size);
+			 spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Copy a range of data from one file to another.
@@ -2742,17 +2289,7 @@ int spdk_fsdev_copy_file_range(struct spdk_fsdev_desc *desc, struct spdk_io_chan
 			       struct spdk_fsdev_file_object *fobject_in, struct spdk_fsdev_file_handle *fhandle_in, off_t off_in,
 			       struct spdk_fsdev_file_object *fobject_out, struct spdk_fsdev_file_handle *fhandle_out,
 			       off_t off_out, size_t len, uint32_t flags,
-			       spdk_fsdev_copy_file_range_cpl_cb cb_fn, void *cb_arg);
-
-
-/**
- * I/O operation abortion completion callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param status operation result. 0 if the operation succeeded, an error code otherwise.
- */
-typedef void (spdk_fsdev_abort_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status);
+			       spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 /**
  * Abort an I/O
@@ -2769,7 +2306,7 @@ typedef void (spdk_fsdev_abort_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch,
  *  -ENOBUFS - operation cannot be initiated due to a lack of the internal IO objects
  */
 int spdk_fsdev_abort(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-		     uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg);
+		     uint64_t unique_to_abort, spdk_fsdev_cpl_cb cb_fn, void *cb_arg);
 
 #ifdef __cplusplus
 }

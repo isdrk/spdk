@@ -897,7 +897,7 @@ ut_fsdev_test_for_each_channel_err(void)
 }
 
 static void
-ut_fsdev_reset_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_reset_flush_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	ut_call_record_begin(ut_fsdev_reset_flush_cpl_cb);
 	ut_call_record_param_ptr(cb_arg);
@@ -1203,8 +1203,7 @@ ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, size_t num
 }
 
 static void
-ut_fsdev_mount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      const struct spdk_fsdev_mount_opts *opts, struct spdk_fsdev_file_object *root_fobject)
+ut_fsdev_mount_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 
 {
 	int *clb_status = cb_arg;
@@ -1212,11 +1211,10 @@ ut_fsdev_mount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 	bool ut_writeback_cache;
 	*clb_status = status;
 	if (!status) {
-		CU_ASSERT(root_fobject == UT_FOBJECT);
-		CU_ASSERT(opts != NULL);
-		CU_ASSERT(opts->opts_size == ut_mount_opts.opts_size);
-		CU_ASSERT(opts->max_xfer_size == ut_mount_opts.max_xfer_size / 2);
-		has_writeback_cache = !!(opts->flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+		CU_ASSERT(fsdev_io->u_out.mount.root_fobject == UT_FOBJECT);
+		CU_ASSERT(fsdev_io->u_out.mount.opts.opts_size == ut_mount_opts.opts_size);
+		CU_ASSERT(fsdev_io->u_out.mount.opts.max_xfer_size == ut_mount_opts.max_xfer_size / 2);
+		has_writeback_cache = !!(fsdev_io->u_out.mount.opts.flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
 		ut_writeback_cache = !!(ut_mount_opts.flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
 		CU_ASSERT(has_writeback_cache == !ut_writeback_cache);
 	}
@@ -1256,7 +1254,7 @@ ut_fsdev_test_mount_err(void)
 }
 
 static void
-ut_fsdev_umount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch)
+ut_fsdev_umount_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = 0; /* the callback doesn't get status, so we just zero it here */
@@ -1283,14 +1281,14 @@ ut_fsdev_test_umount(void)
 }
 
 static void
-ut_fsdev_lookup_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_lookup_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
 	if (!status) {
-		CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
-		CU_ASSERT(&ut_fsdev_fobject == fobject);
+		CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.lookup.attr,
+				sizeof(fsdev_io->u_out.lookup.attr)));
+		CU_ASSERT(&ut_fsdev_fobject == fsdev_io->u_out.lookup.fobject);
 	}
 }
 
@@ -1326,7 +1324,7 @@ ut_fsdev_test_lookup_err(void)
 }
 
 static void
-ut_fsdev_forget_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_forget_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1355,8 +1353,7 @@ ut_fsdev_test_forget(void)
 }
 
 static void
-ut_fsdev_getattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_getattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1385,11 +1382,11 @@ ut_fsdev_test_getattr(void)
 }
 
 static void
-ut_fsdev_setattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_setattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.setattr.attr,
+			sizeof(fsdev_io->u_out.setattr.attr)));
 	*clb_status = status;
 }
 
@@ -1420,11 +1417,10 @@ ut_fsdev_test_setattr(void)
 }
 
 static void
-ut_fsdev_readlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 const char *linkname)
+ut_fsdev_readlink_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(!strcmp(linkname, UT_FNAME));
+	CU_ASSERT(!strcmp(fsdev_io->u_out.readlink.linkname, UT_FNAME));
 	*clb_status = status;
 }
 
@@ -1450,12 +1446,12 @@ ut_fsdev_test_readlink(void)
 }
 
 static void
-ut_fsdev_symlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_symlink_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fobject == UT_FOBJECT + 1);
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(fsdev_io->u_out.symlink.fobject == UT_FOBJECT + 1);
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.symlink.attr,
+			sizeof(fsdev_io->u_out.symlink.attr)));
 	*clb_status = status;
 }
 
@@ -1488,12 +1484,12 @@ ut_fsdev_test_symlink(void)
 }
 
 static void
-ut_fsdev_mknod_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_mknod_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fobject == UT_FOBJECT + 1);
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(fsdev_io->u_out.mknod.fobject == UT_FOBJECT + 1);
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.mknod.attr,
+			sizeof(fsdev_io->u_out.mknod.attr)));
 	*clb_status = status;
 }
 
@@ -1527,12 +1523,12 @@ ut_fsdev_test_mknod(void)
 }
 
 static void
-ut_fsdev_mkdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_mkdir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fobject == UT_FOBJECT + 1);
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(fsdev_io->u_out.mkdir.fobject == UT_FOBJECT + 1);
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.mkdir.attr,
+			sizeof(fsdev_io->u_out.mkdir.attr)));
 	*clb_status = status;
 }
 
@@ -1565,7 +1561,7 @@ ut_fsdev_test_mkdir(void)
 }
 
 static void
-ut_fsdev_unlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_unlink_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1595,7 +1591,7 @@ ut_fsdev_test_unlink(void)
 }
 
 static void
-ut_fsdev_rmdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_rmdir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1625,7 +1621,7 @@ ut_fsdev_test_rmdir(void)
 }
 
 static void
-ut_fsdev_rename_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_rename_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1659,12 +1655,12 @@ ut_fsdev_test_rename(void)
 }
 
 static void
-ut_fsdev_link_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+ut_fsdev_link_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fobject == UT_FOBJECT + 1);
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(fsdev_io->u_out.link.fobject == UT_FOBJECT + 1);
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.link.attr,
+			sizeof(fsdev_io->u_out.link.attr)));
 	*clb_status = status;
 }
 
@@ -1693,11 +1689,10 @@ ut_fsdev_test_link(void)
 }
 
 static void
-ut_fsdev_fopen_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_fopen_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fhandle == UT_FHANDLE);
+	CU_ASSERT(fsdev_io->u_out.open.fhandle == UT_FHANDLE);
 	*clb_status = status;
 }
 
@@ -1724,11 +1719,10 @@ ut_fsdev_test_fopen(void)
 }
 
 static void
-ut_fsdev_read_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		     uint32_t data_size)
+ut_fsdev_read_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(data_size == UT_DATA_SIZE);
+	CU_ASSERT(fsdev_io->u_out.read.data_size == UT_DATA_SIZE);
 	*clb_status = status;
 }
 
@@ -1764,11 +1758,10 @@ ut_fsdev_test_read(void)
 }
 
 static void
-ut_fsdev_write_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      uint32_t data_size)
+ut_fsdev_write_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(data_size == UT_DATA_SIZE);
+	CU_ASSERT(fsdev_io->u_out.write.data_size == UT_DATA_SIZE);
 	*clb_status = status;
 }
 
@@ -1804,11 +1797,11 @@ ut_fsdev_test_write(void)
 }
 
 static void
-ut_fsdev_statfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		       const struct spdk_fsdev_file_statfs *statfs)
+ut_fsdev_statfs_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(ut_hash(&ut_statfs, sizeof(ut_statfs)) == ut_hash(statfs, sizeof(*statfs)));
+	CU_ASSERT(ut_hash(&ut_statfs, sizeof(ut_statfs)) == ut_hash(&fsdev_io->u_out.statfs.statfs,
+			sizeof(fsdev_io->u_out.statfs.statfs)));
 	*clb_status = status;
 }
 
@@ -1835,7 +1828,7 @@ ut_fsdev_test_statfs(void)
 }
 
 static void
-ut_fsdev_release_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_release_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1864,7 +1857,7 @@ ut_fsdev_test_release(void)
 }
 
 static void
-ut_fsdev_fsync_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fsync_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1894,11 +1887,10 @@ ut_fsdev_test_fsync(void)
 }
 
 static void
-ut_fsdev_getxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			 size_t value_size)
+ut_fsdev_getxattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(value_size == sizeof(UT_AVALUE));
+	CU_ASSERT(fsdev_io->u_out.getxattr.value_size == sizeof(UT_AVALUE));
 	CU_ASSERT(!strcmp(ut_buff, UT_AVALUE));
 	*clb_status = status;
 }
@@ -1930,7 +1922,7 @@ ut_fsdev_test_getxattr(void)
 }
 
 static void
-ut_fsdev_setxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_setxattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -1964,24 +1956,25 @@ ut_fsdev_test_setxattr(void)
 }
 
 static void
-ut_fsdev_listxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, size_t size,
-			  bool size_only)
+ut_fsdev_listxattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	if (ut_listxattr_size_only) {
-		CU_ASSERT(size_only);
-		CU_ASSERT(size == (sizeof(ut_buff) / sizeof(UT_ANAME)) * sizeof(UT_ANAME));
+		CU_ASSERT(fsdev_io->u_out.listxattr.size_only);
+		CU_ASSERT(fsdev_io->u_out.listxattr.data_size == (sizeof(ut_buff) / sizeof(UT_ANAME)) * sizeof(
+				  UT_ANAME));
 	} else {
 		char *p = ut_buff;
 
-		CU_ASSERT(!size_only);
-		CU_ASSERT(size != 0);
+		CU_ASSERT(!fsdev_io->u_out.listxattr.size_only);
+		CU_ASSERT(fsdev_io->u_out.listxattr.data_size != 0);
 
-		for (; p + sizeof(UT_ANAME) <= ut_buff + size; p += sizeof(UT_ANAME)) {
+		for (; p + sizeof(UT_ANAME) <= ut_buff + fsdev_io->u_out.listxattr.data_size;
+		     p += sizeof(UT_ANAME)) {
 			CU_ASSERT(!strcmp(p, UT_ANAME));
 		}
 
-		CU_ASSERT(size + sizeof(UT_ANAME) > sizeof(ut_buff));
+		CU_ASSERT(fsdev_io->u_out.listxattr.data_size + sizeof(UT_ANAME) > sizeof(ut_buff));
 	}
 	*clb_status = status;
 }
@@ -2025,7 +2018,7 @@ ut_fsdev_test_listxattr_get_size(void)
 }
 
 static void
-ut_fsdev_removexattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_removexattr_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2055,7 +2048,7 @@ ut_fsdev_test_removexattr(void)
 }
 
 static void
-ut_fsdev_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_flush_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2084,11 +2077,10 @@ ut_fsdev_test_flush(void)
 }
 
 static void
-ut_fsdev_opendir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_opendir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fhandle == UT_FHANDLE);
+	CU_ASSERT(fsdev_io->u_out.opendir.fhandle == UT_FHANDLE);
 	*clb_status = status;
 }
 
@@ -2115,7 +2107,7 @@ ut_fsdev_test_opendir(void)
 }
 
 static int
-ut_fsdev_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
+ut_fsdev_readdir_entry_cb(void *cb_arg, const char *name,
 			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
 			  off_t offset, bool *forget)
 {
@@ -2131,7 +2123,8 @@ ut_fsdev_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *
 }
 
 static void
-ut_fsdev_readdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_readdir_cpl_cb(void *cb_arg, int status,
+			struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2168,7 +2161,7 @@ ut_fsdev_test_readdir(void)
 }
 
 static void
-ut_fsdev_releasedir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_releasedir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2197,7 +2190,7 @@ ut_fsdev_test_releasedir(void)
 }
 
 static void
-ut_fsdev_fsyncdir_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fsyncdir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2227,7 +2220,7 @@ ut_fsdev_test_fsyncdir(void)
 }
 
 static void
-ut_fsdev_syncfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_syncfs_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2255,8 +2248,7 @@ ut_fsdev_test_syncfs(void)
 }
 
 static void
-ut_fsdev_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		       uint32_t mask, uid_t uid, uid_t gid)
+ut_fsdev_access_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2288,8 +2280,7 @@ ut_fsdev_test_access(void)
 }
 
 static void
-ut_fsdev_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      off_t offset, enum spdk_fsdev_seek_whence whence)
+ut_fsdev_lseek_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2322,8 +2313,7 @@ ut_fsdev_test_lseek(void)
 }
 
 static void
-ut_fsdev_poll_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		     uint32_t reevents)
+ut_fsdev_poll_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2354,9 +2344,7 @@ ut_fsdev_test_poll(void)
 }
 
 static void
-ut_fsdev_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      int32_t result, struct iovec *in_iov, uint32_t in_iovcnt,
-		      struct iovec *out_iov, uint32_t out_iovcnt)
+ut_fsdev_ioctl_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2396,7 +2384,7 @@ ut_fsdev_test_ioctl(void)
 }
 
 static void
-ut_fsdev_flock_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_flock_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2426,14 +2414,13 @@ ut_fsdev_test_flock(void)
 }
 
 static void
-ut_fsdev_create_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		       struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-		       struct spdk_fsdev_file_handle *fhandle)
+ut_fsdev_create_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(fobject == UT_FOBJECT + 1);
-	CU_ASSERT(fhandle == UT_FHANDLE);
-	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
+	CU_ASSERT(fsdev_io->u_out.create.fobject == UT_FOBJECT + 1);
+	CU_ASSERT(fsdev_io->u_out.create.fhandle == UT_FHANDLE);
+	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(&fsdev_io->u_out.create.attr,
+			sizeof(fsdev_io->u_out.create.attr)));
 	*clb_status = status;
 }
 
@@ -2467,7 +2454,7 @@ ut_fsdev_test_create(void)
 }
 
 static void
-ut_fsdev_abort_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_abort_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2495,7 +2482,7 @@ ut_fsdev_test_abort(void)
 }
 
 static void
-ut_fsdev_fallocate_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_fallocate_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2527,11 +2514,10 @@ ut_fsdev_test_fallocate(void)
 }
 
 static void
-ut_fsdev_copy_file_range_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-				uint32_t data_size)
+ut_fsdev_copy_file_range_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
-	CU_ASSERT(data_size == UT_DATA_SIZE);
+	CU_ASSERT(fsdev_io->u_out.copy_file_range.data_size == UT_DATA_SIZE);
 	*clb_status = status;
 }
 
@@ -2565,8 +2551,7 @@ ut_fsdev_test_copy_file_range(void)
 }
 
 static void
-ut_fsdev_getlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-		      const struct spdk_fsdev_file_lock *lock)
+ut_fsdev_getlk_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
@@ -2598,7 +2583,7 @@ ut_fsdev_test_getlk(void)
 }
 
 static void
-ut_fsdev_setlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+ut_fsdev_setlk_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	int *clb_status = cb_arg;
 	*clb_status = status;
