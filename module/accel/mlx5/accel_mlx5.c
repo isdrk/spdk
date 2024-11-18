@@ -4139,10 +4139,70 @@ accel_mlx5_find_mkey_by_id(struct accel_mlx5_dev *dev, uint32_t mkey_id)
 	return mkey;
 }
 
+static struct accel_mlx5_task *
+accel_mlx5_find_task_by_mkey(struct accel_mlx5_dev *dev, struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	struct accel_mlx5_qp *qp;
+	struct accel_mlx5_task *task;
+	unsigned i;
+
+	RB_FOREACH(qp, accel_mlx5_qpairs_map, &dev->qpairs_map) {
+		STAILQ_FOREACH(task, &qp->in_hw, link) {
+			for (i = 0; i < task->num_ops; i++) {
+				if (task->mkeys[i] == mkey) {
+					return task;
+				}
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static void
+accel_mlx5_process_sigerr_cpl(struct accel_mlx5_dev *dev, uint32_t mkey_id,
+			      union spdk_mlx5_cq_error *err)
+{
+	struct spdk_mlx5_mkey_pool_obj *mkey = accel_mlx5_find_mkey_by_id(dev, mkey_id);
+	struct accel_mlx5_task *task;
+
+	assert(mkey);
+	mkey->sig.sigerr_count++;
+	mkey->sig.sigerr = true;
+
+	task = accel_mlx5_find_task_by_mkey(dev, mkey);
+	if (task != NULL) {
+		struct spdk_mlx5_sig_err *sigerr = &err->sigerr;
+		struct spdk_dif_error *accel_err = task->base.dif.err;
+
+		accel_err->err_offset = sigerr->offset;
+
+		if (sigerr->syndrome & SPDK_MLX5_SIGERR_CQE_SYNDROME_REFTAG) {
+			accel_err->err_type = SPDK_DIF_REFTAG_ERROR;
+			accel_err->expected = sigerr->expected & 0xffffffff;
+			accel_err->actual = sigerr->actual & 0xffffffff;
+		} else if (sigerr->syndrome & SPDK_MLX5_SIGERR_CQE_SYNDROME_APPTAG) {
+			accel_err->err_type = SPDK_DIF_APPTAG_ERROR;
+			accel_err->expected = (sigerr->expected >> 32) & 0xffff;
+			accel_err->actual = (sigerr->actual >> 32) & 0xffff;
+		} else if (sigerr->syndrome & SPDK_MLX5_SIGERR_CQE_SYNDROME_GUARD) {
+			accel_err->err_type = SPDK_DIF_GUARD_ERROR;
+			if (sigerr->sig_type == SPDK_MLX5_SIGERR_CQE_SIG_TYPE_BLOCK) {
+				accel_err->expected = sigerr->expected >> 48;
+				accel_err->actual = sigerr->actual >> 48;
+			} else {
+				accel_err->expected = sigerr->expected >> 32;
+				accel_err->actual = sigerr->actual >> 32;
+			}
+		}
+	}
+}
+
 static inline int64_t
 accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 {
 	struct spdk_mlx5_cq_completion wc[ACCEL_MLX5_MAX_WC];
+	union spdk_mlx5_cq_error err[ACCEL_MLX5_MAX_WC];
 	struct accel_mlx5_task *task;
 	struct accel_mlx5_qp *qp;
 	int reaped, i, rc;
@@ -4168,11 +4228,7 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 			continue;
 		}
 		if (spdk_unlikely(wc[i].status == SPDK_MLX5_CQE_SYNDROME_SIGERR)) {
-			struct spdk_mlx5_mkey_pool_obj *mkey = accel_mlx5_find_mkey_by_id(dev, wc[i].mkey);
-
-			assert(mkey);
-			mkey->sig.sigerr_count++;
-			mkey->sig.sigerr = true;
+			accel_mlx5_process_sigerr_cpl(dev, wc[i].mkey, &err[i]);
 			continue;
 		}
 		task = (struct accel_mlx5_task *)wc[i].wr_id;
