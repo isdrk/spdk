@@ -2173,7 +2173,7 @@ skip_lookup:
 		fsdev_io->u_out.readdir.name = name;
 		fsdev_io->u_out.readdir.offset = nextoff;
 
-		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
+		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.usr_cb_arg, &forget);
 		if ((forget || res) && entry_fobject) {
 			file_object_unref(entry_fobject, 1);
 		}

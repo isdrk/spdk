@@ -359,7 +359,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 			fsdev_io->u_out.readdir.attr = ut_fsdev_attr;
 			fsdev_io->u_out.readdir.name = UT_FNAME;
 			fsdev_io->u_out.readdir.offset = ut_readdir_offset + i;
-			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
+			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.usr_cb_arg, &forget);
 			i++;
 		} while (!res);
 

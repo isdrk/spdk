@@ -11,8 +11,7 @@
 
 static struct spdk_fsdev_io *
 fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		      void *usr_cb_fn, void *usr_cb_arg, spdk_fsdev_io_completion_cb cb_fn, void *cb_arg,
-		      enum spdk_fsdev_io_type type)
+		      void *usr_cb_fn, void *usr_cb_arg, enum spdk_fsdev_io_type type)
 {
 	struct spdk_fsdev_io *fsdev_io;
 	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
@@ -32,57 +31,12 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->internal.unique = unique;
 	fsdev_io->internal.usr_cb_fn = usr_cb_fn;
 	fsdev_io->internal.usr_cb_arg = usr_cb_arg;
-	fsdev_io->internal.cb_arg = cb_arg;
-	fsdev_io->internal.cb_fn = cb_fn;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
 	fsdev_io->internal.submit_tsc = spdk_get_ticks();
 	fsdev_io->internal.cleanup_cb_fn = NULL;
 
 	return fsdev_io;
-}
-
-static inline void
-fsdev_io_free(struct spdk_fsdev_io *fsdev_io)
-{
-	enum spdk_fsdev_io_type type = fsdev_io->internal.type;
-	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
-	uint64_t tsc_diff;
-
-	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
-
-	if (tsc_diff < channel->stat->io[type].min_ticks) {
-		channel->stat->io[type].min_ticks = tsc_diff;
-	}
-
-	if (tsc_diff > channel->stat->io[type].max_ticks) {
-		channel->stat->io[type].max_ticks = tsc_diff;
-	}
-
-	channel->stat->io[type].total_ticks += tsc_diff;
-
-	if (fsdev_io->internal.status) {
-		channel->stat->num_io_errors++;
-	}
-
-	spdk_fsdev_free_io(fsdev_io);
-}
-
-static void
-_spdk_fsdev_common_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
-{
-	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
-
-	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io->internal.status,
-				     fsdev_io);
-
-	if (fsdev_io->internal.type == SPDK_FSDEV_IO_READ) {
-		channel->stat->bytes_read += fsdev_io->u_out.read.data_size;
-	} else if (fsdev_io->internal.type == SPDK_FSDEV_IO_WRITE) {
-		channel->stat->bytes_written += fsdev_io->u_out.write.data_size;
-	}
-
-	fsdev_io_free(fsdev_io);
 }
 
 int
@@ -92,8 +46,7 @@ spdk_fsdev_mount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_MOUNT);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_MOUNT);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -110,8 +63,7 @@ spdk_fsdev_umount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_UMOUNT);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_UMOUNT);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -130,8 +82,7 @@ spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_LSEEK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_LSEEK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -153,8 +104,7 @@ spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_POLL);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_POLL);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -176,8 +126,7 @@ spdk_fsdev_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_LOOKUP);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_LOOKUP);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -196,8 +145,7 @@ spdk_fsdev_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_SYNCFS);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_SYNCFS);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -216,8 +164,7 @@ spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_ACCESS);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_ACCESS);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -241,8 +188,7 @@ spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_IOCTL);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_IOCTL);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -275,8 +221,7 @@ spdk_fsdev_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FORGET);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FORGET);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -295,8 +240,7 @@ spdk_fsdev_getattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_GETATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_GETATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -316,8 +260,7 @@ spdk_fsdev_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_SETATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_SETATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -337,8 +280,7 @@ spdk_fsdev_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_READLINK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_READLINK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -357,8 +299,7 @@ spdk_fsdev_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_SYMLINK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_SYMLINK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -382,9 +323,7 @@ spdk_fsdev_getlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg,
-					 _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_GETLK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_GETLK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -407,9 +346,7 @@ spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg,
-					 _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_SETLK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_SETLK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -431,8 +368,7 @@ spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_MKNOD);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_MKNOD);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -456,8 +392,7 @@ spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_MKDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_MKDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -480,8 +415,7 @@ spdk_fsdev_unlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_UNLINK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_UNLINK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -500,8 +434,7 @@ spdk_fsdev_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_RMDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_RMDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -521,8 +454,7 @@ spdk_fsdev_rename(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_RENAME);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_RENAME);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -544,8 +476,7 @@ spdk_fsdev_link(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_LINK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_LINK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -565,8 +496,7 @@ spdk_fsdev_fopen(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_OPEN);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_OPEN);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -587,8 +517,7 @@ spdk_fsdev_read(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_READ);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_READ);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -615,8 +544,7 @@ spdk_fsdev_write(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_WRITE);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_WRITE);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -640,8 +568,7 @@ spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_STATFS);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_STATFS);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -659,8 +586,7 @@ spdk_fsdev_release(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_RELEASE);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_RELEASE);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -679,8 +605,7 @@ spdk_fsdev_fsync(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FSYNC);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FSYNC);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -700,8 +625,7 @@ spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_SETXATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_SETXATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -723,8 +647,7 @@ spdk_fsdev_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_GETXATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_GETXATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -745,8 +668,7 @@ spdk_fsdev_listxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_LISTXATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_LISTXATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -766,8 +688,7 @@ spdk_fsdev_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_REMOVEXATTR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_REMOVEXATTR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -786,8 +707,7 @@ spdk_fsdev_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FLUSH);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FLUSH);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -806,8 +726,7 @@ spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_OPENDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_OPENDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -835,8 +754,7 @@ spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cpl_cb_fn, cb_arg,
-					 _spdk_fsdev_common_cb, ch, SPDK_FSDEV_IO_READDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cpl_cb_fn, cb_arg, SPDK_FSDEV_IO_READDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -858,8 +776,7 @@ spdk_fsdev_releasedir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_RELEASEDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_RELEASEDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -878,8 +795,7 @@ spdk_fsdev_fsyncdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FSYNCDIR);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FSYNCDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -899,8 +815,7 @@ spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FLOCK);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FLOCK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -920,8 +835,7 @@ spdk_fsdev_create(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_CREATE);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_CREATE);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -944,8 +858,7 @@ spdk_fsdev_abort(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, 0, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_ABORT);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, 0, cb_fn, cb_arg, SPDK_FSDEV_IO_ABORT);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -964,8 +877,7 @@ spdk_fsdev_fallocate(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
-					 SPDK_FSDEV_IO_FALLOCATE);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_FALLOCATE);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -990,9 +902,7 @@ spdk_fsdev_copy_file_range(struct spdk_fsdev_desc *desc, struct spdk_io_channel 
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb,
-					 ch,
-					 SPDK_FSDEV_IO_COPY_FILE_RANGE);
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, SPDK_FSDEV_IO_COPY_FILE_RANGE);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}

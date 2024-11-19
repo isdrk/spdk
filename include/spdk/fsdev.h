@@ -1161,12 +1161,6 @@ struct spdk_fsdev_io {
 		/** The fsdev descriptor that was used when submitting this I/O. */
 		struct spdk_fsdev_desc *desc;
 
-		/** User function that will be called when this completes */
-		spdk_fsdev_io_completion_cb cb_fn;
-
-		/** Context that will be passed to the completion callback */
-		void *cb_arg;
-
 		/**
 		 * Set to true while the fsdev module submit_request function is in progress.
 		 *

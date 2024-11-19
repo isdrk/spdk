@@ -1337,7 +1337,9 @@ static inline void
 fsdev_io_complete(void *ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
+	enum spdk_fsdev_io_type type = fsdev_io->internal.type;
 	struct spdk_fsdev_channel *fsdev_ch = fsdev_io->internal.ch;
+	uint64_t tsc_diff;
 
 	if (spdk_unlikely(fsdev_io->internal.in_submit_request)) {
 		/*
@@ -1351,9 +1353,35 @@ fsdev_io_complete(void *ctx)
 
 	TAILQ_REMOVE(&fsdev_ch->io_submitted, fsdev_io, internal.ch_link);
 
-	assert(fsdev_io->internal.cb_fn != NULL);
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
-	fsdev_io->internal.cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+
+	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
+				     fsdev_io->internal.status,
+				     fsdev_io);
+
+	if (type == SPDK_FSDEV_IO_READ) {
+		fsdev_ch->stat->bytes_read += fsdev_io->u_out.read.data_size;
+	} else if (type == SPDK_FSDEV_IO_WRITE) {
+		fsdev_ch->stat->bytes_written += fsdev_io->u_out.write.data_size;
+	}
+
+	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
+
+	if (tsc_diff < fsdev_ch->stat->io[type].min_ticks) {
+		fsdev_ch->stat->io[type].min_ticks = tsc_diff;
+	}
+
+	if (tsc_diff > fsdev_ch->stat->io[type].max_ticks) {
+		fsdev_ch->stat->io[type].max_ticks = tsc_diff;
+	}
+
+	fsdev_ch->stat->io[type].total_ticks += tsc_diff;
+
+	if (fsdev_io->internal.status) {
+		fsdev_ch->stat->num_io_errors++;
+	}
+
+	spdk_fsdev_free_io(fsdev_io);
 }
 
 
