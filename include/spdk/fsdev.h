@@ -776,6 +776,443 @@ struct spdk_fsdev_file_lock {
  */
 #define SPDK_FSDEV_FILE_LOCK_END_OF_FILE LONG_MAX
 
+enum spdk_fsdev_seek_whence {
+	SPDK_FSDEV_SEEK_SET = (1 << 0),
+	SPDK_FSDEV_SEEK_CUR = (1 << 1),
+	SPDK_FSDEV_SEEK_END = (1 << 2),
+	SPDK_FSDEV_SEEK_HOLE = (1 << 3),
+	SPDK_FSDEV_SEEK_DATA = (1 << 4)
+};
+
+struct spdk_fsdev_io;
+
+/*
+ * Read directory per-entry callback
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
+ * \param ch I/O channel.
+ * \param name Name of the entry
+ * \param fobject File object. NULL for "." and "..".
+ * \param attr File attributes.
+ * \param offset Offset of the next entry
+ * \param forget Whether to forget the \p fobject. Default: false
+ *
+ * \return 0 to continue the enumeration, an error code otherwise.
+ *
+ * NOTE: the \p spdk_fsdev_readdir effectively executes lookup and the \p fobject remains
+ *       referenced unless this callback sets the \p forget to true. Otherwise, it's up to
+ *       the user to call \p spdk_fsdev_forget when the \p fobject is no longer needed.
+ */
+typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
+		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+		off_t offset, bool *forget);
+
+/**
+ * Filesystem device IO completion callback.
+ *
+ * \param fsdev_io Filesystem device I/O that has completed.
+ * \param cb_arg Callback argument specified when fsdev_io was submitted.
+ */
+typedef void (*spdk_fsdev_io_completion_cb)(struct spdk_fsdev_io *fsdev_io, void *cb_arg);
+
+struct spdk_fsdev_io {
+	/** The filesystem device that this I/O belongs to. */
+	struct spdk_fsdev *fsdev;
+
+	/** Enumerated value representing the I/O type. */
+	uint8_t type;
+
+	/** A single iovec element for use by this fsdev_io. */
+	struct iovec iov;
+
+	union {
+		struct {
+			struct spdk_fsdev_mount_opts opts;
+		} mount;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+		} lookup;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			uint64_t nlookup;
+		} forget;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+		} getattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_attr attr;
+			uint32_t to_set;
+		} setattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+		} readlink;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *target;
+			char *linkpath;
+			uid_t euid;
+			gid_t egid;
+		} symlink;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+			mode_t mode;
+			uint32_t umask;
+			dev_t rdev;
+			uid_t euid;
+			gid_t egid;
+		} mknod;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+			mode_t mode;
+			uint32_t umask;
+			uid_t euid;
+			gid_t egid;
+		} mkdir;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+		} unlink;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+		} rmdir;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+			struct spdk_fsdev_file_object *new_parent_fobject;
+			char *new_name;
+			uint32_t flags;
+		} rename;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_object *new_parent_fobject;
+			char *name;
+		} link;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			uint32_t flags;
+		} open;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			size_t size;
+			uint64_t offs;
+			uint32_t flags;
+			struct iovec *iov;
+			uint32_t iovcnt;
+			struct spdk_fsdev_io_opts *opts;
+		} read;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			size_t size;
+			uint64_t offs;
+			uint64_t flags;
+			const struct iovec *iov;
+			uint32_t iovcnt;
+			struct spdk_fsdev_io_opts *opts;
+		} write;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+		} statfs;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+		} release;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			bool datasync;
+		} fsync;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			char *name;
+			char *value;
+			size_t size;
+			uint64_t flags;
+		} setxattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			char *name;
+			void *buffer;
+			size_t size;
+		} getxattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			char *buffer;
+			size_t size;
+		} listxattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			char *name;
+		} removexattr;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+		} flush;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			uint32_t flags;
+		} opendir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint64_t offset;
+			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget);
+			spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn;
+		} readdir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+		} releasedir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			bool datasync;
+		} fsyncdir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			enum spdk_fsdev_file_lock_op operation;
+		} flock;
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			char *name;
+			mode_t mode;
+			uint32_t flags;
+			mode_t umask;
+			uid_t euid;
+			gid_t egid;
+		} create;
+		struct {
+			uint64_t unique_to_abort;
+		} abort;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			int mode;
+			off_t offset;
+			off_t length;
+		} fallocate;
+		struct {
+			struct spdk_fsdev_file_object *fobject_in;
+			struct spdk_fsdev_file_handle *fhandle_in;
+			off_t off_in;
+			struct spdk_fsdev_file_object *fobject_out;
+			struct spdk_fsdev_file_handle *fhandle_out;
+			off_t off_out;
+			size_t len;
+			uint32_t flags;
+		} copy_file_range;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+		} syncfs;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t events;
+			bool wait;
+		} poll;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t request;
+			uint64_t arg;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
+		} ioctl;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+		} getlk;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+			bool wait;
+		} setlk;
+	} u_in;
+
+	union {
+		struct {
+			struct spdk_fsdev_mount_opts opts;
+			struct spdk_fsdev_file_object *root_fobject;
+		} mount;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+		} lookup;
+		struct {
+			struct spdk_fsdev_file_attr attr;
+		} getattr;
+		struct {
+			struct spdk_fsdev_file_attr attr;
+		} setattr;
+		struct {
+			char *linkname; /* will be freed by the fsdev layer */
+		} readlink;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+		} symlink;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+		} mknod;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+		} mkdir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+		} link;
+		struct {
+			struct spdk_fsdev_file_handle *fhandle;
+		} open;
+		struct {
+			uint32_t data_size;
+		} read;
+		struct {
+			uint32_t data_size;
+		} write;
+		struct {
+			struct spdk_fsdev_file_statfs statfs;
+		} statfs;
+		struct {
+			size_t value_size;
+		} getxattr;
+		struct {
+			size_t data_size;
+			bool size_only;
+		} listxattr;
+		struct {
+			struct spdk_fsdev_file_handle *fhandle;
+		} opendir;
+		struct {
+			const char *name;
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_attr attr;
+			off_t offset;
+		} readdir;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_attr attr;
+		} create;
+		struct {
+			size_t data_size;
+		} copy_file_range;
+		struct {
+			struct spdk_fsdev_file_attr attr;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
+		struct {
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
+		struct {
+			uint32_t revents;
+		} poll;
+		struct {
+			int32_t result;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
+		} ioctl;
+		struct {
+			struct spdk_fsdev_file_lock lock;
+		} getlk;
+	} u_out;
+
+	/**
+	 *  Fields that are used internally by the fsdev subsystem. Fsdev modules
+	 *  must not read or write to these fields.
+	 */
+	struct __fsdev_io_internal_fields {
+		/** The fsdev I/O channel that this was handled on. */
+		struct spdk_fsdev_channel *ch;
+
+		/** The fsdev descriptor that was used when submitting this I/O. */
+		struct spdk_fsdev_desc *desc;
+
+		/** User function that will be called when this completes */
+		spdk_fsdev_io_completion_cb cb_fn;
+
+		/** Context that will be passed to the completion callback */
+		void *cb_arg;
+
+		/**
+		 * Set to true while the fsdev module submit_request function is in progress.
+		 *
+		 * This is used to decide whether spdk_fsdev_io_complete() can complete the I/O directly
+		 * or if completion must be deferred via an event.
+		 */
+		bool in_submit_request;
+
+		/** IO operation */
+		enum spdk_fsdev_io_type type;
+
+		/** IO unique ID */
+		uint64_t unique;
+
+		/** User callback */
+		void *usr_cb_fn;
+
+		/** The context for the user callback */
+		void *usr_cb_arg;
+
+		/** Status for the IO */
+		int status;
+
+		/** Member used for linking child I/Os together. */
+		TAILQ_ENTRY(spdk_fsdev_io) link;
+
+		/** Entry to the list per_thread_cache of struct spdk_fsdev_mgmt_channel. */
+		STAILQ_ENTRY(spdk_fsdev_io) buf_link;
+
+		/** Entry to the list io_submitted of struct spdk_fsdev_channel */
+		TAILQ_ENTRY(spdk_fsdev_io) ch_link;
+
+		/* Timestamp */
+		uint64_t submit_tsc;
+	} internal;
+
+	/**
+	 * Per I/O context for use by the fsdev module.
+	 */
+	uint8_t driver_ctx[0];
+
+	/* No members may be added after driver_ctx! */
+};
+
 /**
  * Mount operation completion callback.
  *
@@ -963,14 +1400,6 @@ typedef void (spdk_fsdev_forget_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch
 int spdk_fsdev_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		      struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
 		      spdk_fsdev_forget_cpl_cb cb_fn, void *cb_arg);
-
-enum spdk_fsdev_seek_whence {
-	SPDK_FSDEV_SEEK_SET = (1 << 0),
-	SPDK_FSDEV_SEEK_CUR = (1 << 1),
-	SPDK_FSDEV_SEEK_END = (1 << 2),
-	SPDK_FSDEV_SEEK_HOLE = (1 << 3),
-	SPDK_FSDEV_SEEK_DATA = (1 << 4)
-};
 
 /**
  * Reposition read/write file offset callback.
@@ -2034,27 +2463,6 @@ typedef void (spdk_fsdev_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *c
 int spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		       uint64_t unique, struct spdk_fsdev_file_object *fobject, uint32_t flags,
 		       spdk_fsdev_opendir_cpl_cb cb_fn, void *cb_arg);
-
-/**
- * Read directory per-entry callback
- *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
- * \param ch I/O channel.
- * \param name Name of the entry
- * \param fobject File object. NULL for "." and "..".
- * \param attr File attributes.
- * \param offset Offset of the next entry
- * \param forget Whether to forget the \p fobject. Default: false
- *
- * \return 0 to continue the enumeration, an error code otherwise.
- *
- * NOTE: the \p spdk_fsdev_readdir effectively executes lookup and the \p fobject remains
- *       referenced unless this callback sets the \p forget to true. Otherwise, it's up to
- *       the user to call \p spdk_fsdev_forget when the \p fobject is no longer needed.
- */
-typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_io_channel *ch,
-		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-		off_t offset, bool *forget);
 
 /**
  * Read directory operation completion callback
