@@ -517,6 +517,11 @@ spdk_fsdev_free_io(struct spdk_fsdev_io *fsdev_io)
 
 	ch = fsdev_io->internal.ch->shared_resource->mgmt_ch;
 
+	if (fsdev_io->internal.cleanup_cb_fn) {
+		spdk_fsdev_io_cleanup_cb cleanup_cb_fn = fsdev_io->internal.cleanup_cb_fn;
+		cleanup_cb_fn(fsdev_io->internal.cleanup_cb_arg);
+	}
+
 	if (ch->per_thread_cache_count < ch->fsdev_io_cache_size) {
 		ch->per_thread_cache_count++;
 		STAILQ_INSERT_HEAD(&ch->per_thread_cache, fsdev_io, internal.buf_link);
@@ -1378,6 +1383,14 @@ struct spdk_io_channel *
 spdk_fsdev_io_get_io_channel(struct spdk_fsdev_io *fsdev_io)
 {
 	return fsdev_io->internal.ch->channel;
+}
+
+void
+spdk_fsdev_io_set_cleanup_callback(struct spdk_fsdev_io *fsdev_io, spdk_fsdev_io_cleanup_cb cb_fn,
+				   void *cb_arg)
+{
+	fsdev_io->internal.cleanup_cb_fn = cb_fn;
+	fsdev_io->internal.cleanup_cb_arg = cb_arg;
 }
 
 static int

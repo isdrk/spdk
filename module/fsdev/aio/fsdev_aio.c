@@ -1542,20 +1542,10 @@ fsdev_aio_op_poll(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static struct aio_ioctl_unrest aio_unrest;
 static struct aio_ioctl_rest aio_rest;
 
-static struct iovec *
-ioctl_iovec_copy(const struct iovec *iov, uint32_t iovcnt)
+static void
+fsdev_aio_ioctl_io_free(void *cb_arg)
 {
-	size_t size = sizeof(*iov) * iovcnt;
-	struct iovec *result;
-
-	assert(iov && iovcnt);
-
-	result = calloc(1, size);
-	if (!result) {
-		return NULL;
-	}
-	memcpy(result, iov, size);
-	return result;
+	free(cb_arg);
 }
 
 static int
@@ -1563,22 +1553,37 @@ fsdev_aio_ioctl_retry(struct spdk_fsdev_io *fsdev_io,
 		      const struct iovec *in_iov, uint32_t in_iovcnt,
 		      const struct iovec *out_iov, uint32_t out_iovcnt)
 {
-	if (in_iovcnt && in_iov) {
-		fsdev_io->u_out.ioctl.in_iov = ioctl_iovec_copy(in_iov, in_iovcnt);
-		if (!fsdev_io->u_out.ioctl.in_iov) {
-			return -ENOMEM;
-		}
+	struct iovec *iov;
+	uint32_t iovcnt = in_iovcnt + out_iovcnt;
+	size_t size = iovcnt * sizeof(struct iovec);
+
+	fsdev_io->u_out.ioctl.in_iov = NULL;
+	fsdev_io->u_out.ioctl.in_iovcnt = 0;
+	fsdev_io->u_out.ioctl.out_iov = NULL;
+	fsdev_io->u_out.ioctl.out_iovcnt = 0;
+
+	if (!iovcnt)  {
+		return 0;
 	}
-	fsdev_io->u_out.ioctl.in_iovcnt = in_iovcnt;
+
+	iov = calloc(1, size);
+	if (!iov) {
+		return -ENOMEM;
+	}
+
+	if (in_iovcnt && in_iov) {
+		fsdev_io->u_out.ioctl.in_iov = iov;
+		fsdev_io->u_out.ioctl.in_iovcnt = in_iovcnt;
+		memcpy(fsdev_io->u_out.ioctl.in_iov, in_iov, in_iovcnt  * sizeof(struct iovec));
+	}
 
 	if (out_iovcnt && out_iov) {
-		fsdev_io->u_out.ioctl.out_iov = ioctl_iovec_copy(out_iov, out_iovcnt);
-		if (!fsdev_io->u_out.ioctl.out_iov) {
-			free(fsdev_io->u_out.ioctl.in_iov);
-			return -ENOMEM;
-		}
+		fsdev_io->u_out.ioctl.out_iov = iov + in_iovcnt;
+		fsdev_io->u_out.ioctl.out_iovcnt = out_iovcnt;
+		memcpy(fsdev_io->u_out.ioctl.out_iov, in_iov + in_iovcnt, out_iovcnt  * sizeof(struct iovec));
 	}
-	fsdev_io->u_out.ioctl.out_iovcnt = out_iovcnt;
+
+	spdk_fsdev_io_set_cleanup_callback(fsdev_io, fsdev_aio_ioctl_io_free, iov);
 
 	return -EAGAIN;
 }
@@ -2809,6 +2814,12 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	return res;
 }
 
+static void
+fsdev_aio_op_readlink_free(void *cb_arg)
+{
+	free(cb_arg);
+}
+
 static int
 fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2846,6 +2857,7 @@ fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 
 	buf[res] = 0;
 	fsdev_io->u_out.readlink.linkname = buf;
+	spdk_fsdev_io_set_cleanup_callback(fsdev_io, fsdev_aio_op_readlink_free, buf);
 	buf = NULL;
 	res = 0;
 

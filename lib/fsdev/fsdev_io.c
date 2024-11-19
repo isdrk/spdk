@@ -37,6 +37,7 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
 	fsdev_io->internal.submit_tsc = spdk_get_ticks();
+	fsdev_io->internal.cleanup_cb_fn = NULL;
 
 	return fsdev_io;
 }
@@ -230,20 +231,6 @@ spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	return 0;
 }
 
-static void
-_spdk_fsdev_ioctl_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
-{
-	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io->internal.status, fsdev_io);
-
-	/* Can be allocated in the module implementation. */
-
-	/* TODO: These are not allocated by this layer. They should be released
-	 * by the module. */
-	free(fsdev_io->u_out.ioctl.in_iov);
-	free(fsdev_io->u_out.ioctl.out_iov);
-	fsdev_io_free(fsdev_io);
-}
-
 int
 spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
@@ -254,7 +241,7 @@ spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_ioctl_cb, ch,
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
 					 SPDK_FSDEV_IO_IOCTL);
 	if (!fsdev_io) {
 		return -ENOBUFS;
@@ -344,24 +331,13 @@ spdk_fsdev_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	return 0;
 }
 
-static void
-_spdk_fsdev_readlink_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
-{
-	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io->internal.status, fsdev_io);
-
-	/* TODO: This is not allocated by this layer. This should be released
-	 * by the module. */
-	free(fsdev_io->u_out.readlink.linkname);
-	fsdev_io_free(fsdev_io);
-}
-
 int
 spdk_fsdev_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		    struct spdk_fsdev_file_object *fobject, spdk_fsdev_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
-	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_readlink_cb, ch,
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_common_cb, ch,
 					 SPDK_FSDEV_IO_READLINK);
 	if (!fsdev_io) {
 		return -ENOBUFS;
