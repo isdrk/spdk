@@ -829,7 +829,7 @@ struct spdk_fsdev_io {
 		} mount;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 		} lookup;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -850,14 +850,14 @@ struct spdk_fsdev_io {
 		} readlink;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *target;
-			char *linkpath;
+			const char *target;
+			const char *linkpath;
 			uid_t euid;
 			gid_t egid;
 		} symlink;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 			mode_t mode;
 			uint32_t umask;
 			dev_t rdev;
@@ -866,7 +866,7 @@ struct spdk_fsdev_io {
 		} mknod;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 			mode_t mode;
 			uint32_t umask;
 			uid_t euid;
@@ -874,23 +874,23 @@ struct spdk_fsdev_io {
 		} mkdir;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 		} unlink;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 		} rmdir;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 			struct spdk_fsdev_file_object *new_parent_fobject;
-			char *new_name;
+			const char *new_name;
 			uint32_t flags;
 		} rename;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_object *new_parent_fobject;
-			char *name;
+			const char *name;
 		} link;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -930,14 +930,14 @@ struct spdk_fsdev_io {
 		} fsync;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
-			char *name;
-			char *value;
+			const char *name;
+			const char *value;
 			size_t size;
 			uint64_t flags;
 		} setxattr;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
-			char *name;
+			const char *name;
 			void *buffer;
 			size_t size;
 		} getxattr;
@@ -948,7 +948,7 @@ struct spdk_fsdev_io {
 		} listxattr;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
-			char *name;
+			const char *name;
 		} removexattr;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -981,7 +981,7 @@ struct spdk_fsdev_io {
 		} flock;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
-			char *name;
+			const char *name;
 			mode_t mode;
 			uint32_t flags;
 			mode_t umask;

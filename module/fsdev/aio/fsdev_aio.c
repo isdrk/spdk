@@ -1240,7 +1240,7 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int err;
 	struct aio_fsdev_file_object *parent_fobject;
 	struct aio_fsdev_file_object *fobject = NULL;
-	char *name = fsdev_io->u_in.lookup.name;
+	const char *name = fsdev_io->u_in.lookup.name;
 
 	/* Don't use is_safe_path_component(), allow "." and ".." for NFS export
 	 * support.
@@ -2975,7 +2975,7 @@ fsdev_aio_op_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	char *name = fsdev_io->u_in.mknod.name;
+	const char *name = fsdev_io->u_in.mknod.name;
 	mode_t mode = fsdev_io->u_in.mknod.mode;
 	uint32_t umask = fsdev_io->u_in.mknod.umask;
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
@@ -3006,7 +3006,7 @@ fsdev_aio_op_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	char *name = fsdev_io->u_in.mkdir.name;
+	const char *name = fsdev_io->u_in.mkdir.name;
 	mode_t mode = fsdev_io->u_in.mkdir.mode;
 	uint32_t umask = fsdev_io->u_in.mkdir.umask;
 	uid_t euid = fsdev_io->u_in.mkdir.euid;
@@ -3034,8 +3034,8 @@ fsdev_aio_op_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	char *target = fsdev_io->u_in.symlink.target;
-	char *linkpath = fsdev_io->u_in.symlink.linkpath;
+	const char *target = fsdev_io->u_in.symlink.target;
+	const char *linkpath = fsdev_io->u_in.symlink.linkpath;
 	uid_t euid = fsdev_io->u_in.symlink.euid;
 	gid_t egid = fsdev_io->u_in.symlink.egid;
 	struct aio_fsdev_file_object *fobject = NULL;
@@ -3096,7 +3096,7 @@ fsdev_aio_op_unlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	char *name = fsdev_io->u_in.unlink.name;
+	const char *name = fsdev_io->u_in.unlink.name;
 	int res;
 
 	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.unlink.parent_fobject);
@@ -3115,7 +3115,7 @@ fsdev_aio_op_rmdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	char *name = fsdev_io->u_in.rmdir.name;
+	const char *name = fsdev_io->u_in.rmdir.name;
 	int res;
 
 	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rmdir.parent_fobject);
@@ -3158,9 +3158,9 @@ fsdev_aio_op_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	/* old_fobject must be initialized to avoid a scan-build false positive */
 	struct aio_fsdev_file_object *old_fobject = NULL;
 	struct aio_fsdev_file_object *parent_fobject;
-	char *name = fsdev_io->u_in.rename.name;
+	const char *name = fsdev_io->u_in.rename.name;
 	struct aio_fsdev_file_object *new_parent_fobject;
-	char *new_name = fsdev_io->u_in.rename.new_name;
+	const char *new_name = fsdev_io->u_in.rename.new_name;
 	uint32_t flags = fsdev_io->u_in.rename.flags;
 
 	if (!is_safe_path_component(name)) {
@@ -3257,7 +3257,7 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int res;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_object *new_parent_fobject;
-	char *name = fsdev_io->u_in.link.name;
+	const char *name = fsdev_io->u_in.link.name;
 	struct aio_fsdev_file_object *link_fobject = NULL;
 
 	if (!is_safe_path_component(name)) {
@@ -3409,8 +3409,8 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
 	struct aio_fsdev_file_object *fobject;
-	char *name = fsdev_io->u_in.setxattr.name;
-	char *value = fsdev_io->u_in.setxattr.value;
+	const char *name = fsdev_io->u_in.setxattr.name;
+	const char *value = fsdev_io->u_in.setxattr.value;
 	uint32_t size = fsdev_io->u_in.setxattr.size;
 	uint64_t flags = fsdev_io->u_in.setxattr.flags;
 	char *procname = NULL;
@@ -3491,7 +3491,7 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	int res;
 	char *procname = NULL;
 	struct aio_fsdev_file_object *fobject;
-	char *name = fsdev_io->u_in.getxattr.name;
+	const char *name = fsdev_io->u_in.getxattr.name;
 	void *buffer = fsdev_io->u_in.getxattr.buffer;
 	size_t size = fsdev_io->u_in.getxattr.size;
 	ssize_t value_size;
@@ -3615,7 +3615,7 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	int res;
 	char *procname = NULL;
 	struct aio_fsdev_file_object *fobject;
-	char *name = fsdev_io->u_in.removexattr.name;
+	const char *name = fsdev_io->u_in.removexattr.name;
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
