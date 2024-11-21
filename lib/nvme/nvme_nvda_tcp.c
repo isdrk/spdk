@@ -5425,7 +5425,8 @@ static const struct spdk_nvme_transport_ops tcp_ops = {
 
 SPDK_NVME_TRANSPORT_REGISTER(tcp, &tcp_ops);
 
-SPDK_TRACE_REGISTER_FN(nvme_nvda_tcp, "nvme_nvda_tcp", TRACE_GROUP_NVME_NVDA_TCP)
+static void
+nvme_nvda_tcp(void)
 {
 	struct spdk_trace_tpoint_opts opts[] = {
 		{
@@ -5453,3 +5454,4 @@ SPDK_TRACE_REGISTER_FN(nvme_nvda_tcp, "nvme_nvda_tcp", TRACE_GROUP_NVME_NVDA_TCP
 	spdk_trace_register_owner(OWNER_NVME_NVDA_TCP_QP, 'q');
 	spdk_trace_register_description_ext(opts, SPDK_COUNTOF(opts));
 }
+SPDK_TRACE_REGISTER_FN(nvme_nvda_tcp, "nvme_nvda_tcp", TRACE_GROUP_NVME_NVDA_TCP)
