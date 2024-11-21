@@ -5075,7 +5075,8 @@ accel_mlx5_task_assign_qp_by_domain_pd(struct accel_mlx5_task *task,
 static inline int
 accel_mlx5_task_merge_copy_crypto(struct accel_mlx5_task *crypto, struct accel_mlx5_task *copy,
 				  struct accel_mlx5_io_channel *ch,
-				  struct spdk_memory_domain *domain_override, void *domain_ctx_override)
+				  struct spdk_memory_domain *domain_override, void *domain_ctx_override,
+				  enum spdk_mlx5_encryption_order enc_order)
 {
 	struct spdk_memory_domain_rdma_ctx *domain_ctx;
 	struct spdk_accel_task *crypto_base = &crypto->base;
@@ -5110,7 +5111,7 @@ accel_mlx5_task_merge_copy_crypto(struct accel_mlx5_task *crypto, struct accel_m
 	} else {
 		crypto->mlx5_opcode = ACCEL_MLX5_OPC_CRYPTO_MKEY;
 	}
-	crypto->enc_order = SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE;
+	crypto->enc_order = enc_order;
 	crypto->needs_data_transfer = 1;
 	crypto->inplace = 1;
 	spdk_accel_task_complete(copy_base, 0);
@@ -5154,7 +5155,8 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		    next_base->dst_domain && spdk_memory_domain_get_dma_device_type(next_base->dst_domain) ==
 		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
 			return accel_mlx5_task_merge_copy_crypto(first, SPDK_CONTAINEROF(next_base, struct accel_mlx5_task,
-					base), accel_ch, next_base->dst_domain, next_base->dst_domain_ctx);
+					base), accel_ch,
+					next_base->dst_domain, next_base->dst_domain_ctx, SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE);
 		}
 
 		if (g_accel_mlx5.merge && accel_mlx5_task_merge_encrypt_and_crc(first, accel_ch)) {
@@ -5176,14 +5178,15 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DECRYPT &&
 		    first_base->dst_domain &&  spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
 		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			return accel_mlx5_task_merge_copy_crypto(
-				       SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base), first, accel_ch,
-				       first_base->dst_domain, first_base->dst_domain_ctx);
+			return accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
+					first, accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
+					SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE);
 		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_ENCRYPT &&
 			   first_base->src_domain &&  spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
 			   SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
 			rc = accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
-							       first, accel_ch, first_base->src_domain, first_base->src_domain_ctx);
+							       first, accel_ch, first_base->src_domain, first_base->src_domain_ctx,
+							       SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY);
 			if (spdk_unlikely(rc)) {
 				return rc;
 			}
@@ -5199,7 +5202,8 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		    next_base->src_domain && spdk_memory_domain_get_dma_device_type(next_base->src_domain) ==
 		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
 			return accel_mlx5_task_merge_copy_crypto(first, SPDK_CONTAINEROF(next_base, struct accel_mlx5_task,
-					base), accel_ch, next_base->src_domain, next_base->src_domain_ctx);
+					base), accel_ch, next_base->src_domain, next_base->src_domain_ctx,
+					SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY);
 		}
 	}
 
