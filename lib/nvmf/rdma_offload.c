@@ -7975,6 +7975,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	spdk_nvme_ctrlr_get_default_io_qpair_opts(nvme_ctrlr, &opts, sizeof(opts));
 	opts.create_only = true;
+	/* DOCA STA requires aligned IO queue size */
+	opts.io_queue_size = spdk_align32pow2(opts.io_queue_size);
 	queue->nvme_qpair = spdk_nvme_ctrlr_alloc_io_qpair(nvme_ctrlr, &opts, sizeof(opts));
 	if (!queue->nvme_qpair) {
 		SPDK_ERRLOG("Failed to allocate nvme IO qpair\n");
@@ -7990,11 +7992,11 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 	}
 
 	nvme_pqpair = nvme_pcie_qpair(queue->nvme_qpair);
-	SPDK_NOTICELOG("PCIe qpair: sqdb %p, cqdb %p, sq %p, cq %p, sq_vaddr %p, cq_vaddr %p"
+	SPDK_NOTICELOG("PCIe qpair: sqdb %p, cqdb %p, sq %p, cq %p, num_entries %u"
 		       ", sq_bus_addr %p, cq_bus_addr %p\n",
 		       nvme_pqpair->sq_tdbl, nvme_pqpair->cq_hdbl,
 		       nvme_pqpair->cmd, nvme_pqpair->cpl,
-		       nvme_pqpair->sq_vaddr, nvme_pqpair->cq_vaddr,
+		       nvme_pqpair->num_entries,
 		       (void *)nvme_pqpair->cmd_bus_addr,
 		       (void *)nvme_pqpair->cpl_bus_addr);
 
