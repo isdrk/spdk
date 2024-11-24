@@ -247,7 +247,7 @@ virtio_fs_alloc_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_virt
 	}
 
 	fs_req->io_ctx = calloc(1, spdk_fuse_dispatcher_get_io_ctx_size());
-	if (fs_req->io_ctx) {
+	if (!fs_req->io_ctx) {
 		free(fs_req);
 		return NULL;
 	}
