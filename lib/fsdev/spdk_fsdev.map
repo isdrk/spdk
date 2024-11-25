@@ -85,6 +85,8 @@
 	spdk_fsdev_io_get_io_channel;
 	spdk_fsdev_module_list_add;
 	spdk_fsdev_module_list_find;
+	spdk_fsdev_notify_inval_data;
+	spdk_fsdev_notify_inval_entry;
 
 	# Everything else
 	local: *;

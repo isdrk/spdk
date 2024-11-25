@@ -1075,6 +1075,55 @@ spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
 	return res;
 }
 
+
+static int
+fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,
+	     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
+{
+	int res = -ENODEV;
+
+	if (fsdev->internal.notify_cb) {
+		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
+					  reply_cb, reply_ctx);
+		res = 0;
+	}
+
+	return res;
+}
+
+int
+spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
+			     struct spdk_fsdev_file_object *fobject,
+			     uint64_t offset, size_t size,
+			     spdk_fsdev_notify_reply_cb_t reply_cb,
+			     void *reply_ctx)
+{
+	struct spdk_fsdev_notify_data notify_data = {
+		.type = SPDK_FSDEV_NOTIFY_INVAL_DATA,
+		.inval_data.fobject = fobject,
+		.inval_data.offset = offset,
+		.inval_data.size = size
+	};
+
+	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
+int
+spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
+			      struct spdk_fsdev_file_object *parent_fobject,
+			      const char *name,
+			      spdk_fsdev_notify_reply_cb_t reply_cb,
+			      void *reply_ctx)
+{
+	struct spdk_fsdev_notify_data notify_data = {
+		.type = SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
+		.inval_entry.parent_fobject = parent_fobject,
+		.inval_entry.name = name
+	};
+
+	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
 bool
 spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev)
 {
