@@ -269,7 +269,7 @@ mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsign
 	assert(obj_idx < pool->num_mkeys);
 	assert(pool->mkeys[obj_idx] != NULL);
 	mkey->mkey = pool->mkeys[obj_idx]->mkey;
-	mkey->pool_flag = pool->flags & 0xf;
+	mkey->pool = pool;
 	mkey->sig.sigerr_count = 1;
 	mkey->sig.sigerr = false;
 
@@ -508,6 +508,7 @@ spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool, struct spdk_mlx5_mkey_
 {
 	assert(pool);
 	assert(mkey);
+	assert(mkey->pool == pool);
 
 	spdk_mempool_put(pool->mpool, mkey);
 }

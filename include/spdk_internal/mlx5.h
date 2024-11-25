@@ -117,9 +117,7 @@ struct spdk_mlx5_mkey_pool_param {
 
 struct spdk_mlx5_mkey_pool_obj {
 	uint32_t mkey;
-	/* TODO: pool_flags will be removed */
-	/* Determines which pool the mkey belongs to. See \ref spdk_mlx5_mkey_pool_flags */
-	uint8_t pool_flag;
+	struct spdk_mlx5_mkey_pool *pool;
 	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
 	struct {
 		uint32_t sigerr_count;
