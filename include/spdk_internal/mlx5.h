@@ -706,6 +706,23 @@ void spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 				  struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count);
 
 /**
+ * Get an mkey from the pool.
+ *
+ * \param pool mkey pool
+ * \return Pointer to an mkey on success, NULL if the pool is empty
+ */
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_pool *pool);
+
+/**
+ * Return the mkey to the pool
+ *
+ * \param pool mkey pool
+ * \param mkey mkey to return to the pool
+ */
+void spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool,
+			     struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
  * Find mkey object by mkey ID
  *
  * \param ch mkey pool channel

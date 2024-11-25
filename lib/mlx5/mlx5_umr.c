@@ -494,6 +494,24 @@ spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 	spdk_mempool_put_bulk(pool->mpool, (void **)mkeys, mkeys_count);
 }
 
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_pool *pool)
+{
+	struct spdk_mlx5_mkey_pool_obj *result;
+
+	result = spdk_mempool_get(pool->mpool);
+
+	return result;
+}
+
+void
+spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool, struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	assert(pool);
+	assert(mkey);
+
+	spdk_mempool_put(pool->mpool, mkey);
+}
+
 struct spdk_mlx5_mkey_pool_obj *
 spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey)
 {
