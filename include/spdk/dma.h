@@ -122,6 +122,7 @@ struct spdk_memory_domain_translation_result {
 		struct {
 			uint32_t lkey;
 			uint32_t rkey;
+			void *memory_key;
 		} rdma;
 	};
 };
