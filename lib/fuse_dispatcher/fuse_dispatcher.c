@@ -278,9 +278,9 @@ fuse_dispatcher_name(struct spdk_fuse_dispatcher *disp)
 }
 
 static inline uint64_t
-file_ino(struct fuse_io *fuse_io, const struct spdk_fsdev_file_object *fobject)
+file_ino(struct spdk_fuse_dispatcher *disp, const struct spdk_fsdev_file_object *fobject)
 {
-	return (fuse_io->disp->root_fobject == fobject) ? FUSE_ROOT_ID : (uint64_t)(uintptr_t)fobject;
+	return (disp->root_fobject == fobject) ? FUSE_ROOT_ID : (uint64_t)(uintptr_t)fobject;
 }
 
 static struct spdk_fsdev_file_object *
@@ -523,7 +523,7 @@ static void
 fill_entry(struct fuse_io *fuse_io, struct fuse_entry_out *arg,
 	   struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
 {
-	arg->nodeid = fsdev_io_h2d_u64(fuse_io, file_ino(fuse_io, fobject));
+	arg->nodeid = fsdev_io_h2d_u64(fuse_io, file_ino(fuse_io->disp, fobject));
 	arg->generation = 0;
 	arg->entry_valid = fsdev_io_h2d_u64(fuse_io, calc_timeout_sec(attr->valid_ms));
 	arg->entry_valid_nsec = fsdev_io_h2d_u32(fuse_io, calc_timeout_nsec(attr->valid_ms));
@@ -989,7 +989,7 @@ fuse_dispatcher_add_direntry(struct fuse_io *fuse_io, char *buf, size_t bufsize,
 	}
 
 	dirent = (struct fuse_dirent *) buf;
-	dirent->ino = file_ino(fuse_io, fobject);
+	dirent->ino = file_ino(fuse_io->disp, fobject);
 	dirent->off = fsdev_io_h2d_u64(fuse_io, off);
 	dirent->namelen = fsdev_io_h2d_u32(fuse_io, namelen);
 	dirent->type = fsdev_io_h2d_u32(fuse_io, (attr->mode & 0170000) >> 12);
