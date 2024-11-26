@@ -490,6 +490,9 @@ spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 			     struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count)
 {
 	assert(pool->mpool);
+	assert(mkeys);
+	assert(mkeys_count);
+	assert(mkeys[0]->ref_count == 0);
 
 	spdk_mempool_put_bulk(pool->mpool, (void **)mkeys, mkeys_count);
 }
@@ -499,6 +502,10 @@ struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_po
 	struct spdk_mlx5_mkey_pool_obj *result;
 
 	result = spdk_mempool_get(pool->mpool);
+	if (spdk_likely(result)) {
+		assert(result->ref_count < UINT32_MAX && "too many references");
+		result->ref_count++;
+	}
 
 	return result;
 }
@@ -509,8 +516,27 @@ spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool, struct spdk_mlx5_mkey_
 	assert(pool);
 	assert(mkey);
 	assert(mkey->pool == pool);
+	assert(mkey->ref_count > 0);
 
-	spdk_mempool_put(pool->mpool, mkey);
+	if (--mkey->ref_count == 0) {
+		spdk_mempool_put(pool->mpool, mkey);
+	}
+}
+
+void
+spdk_mlx5_mkey_pool_obj_get_ref(struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	assert(mkey);
+	assert(mkey->pool);
+	assert(mkey->ref_count > 0);
+
+	mkey->ref_count++;
+}
+
+void
+spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	spdk_mlx5_mkey_pool_put(mkey->pool, mkey);
 }
 
 struct spdk_mlx5_mkey_pool_obj *

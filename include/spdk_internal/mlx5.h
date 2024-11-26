@@ -117,6 +117,7 @@ struct spdk_mlx5_mkey_pool_param {
 
 struct spdk_mlx5_mkey_pool_obj {
 	uint32_t mkey;
+	uint32_t ref_count;
 	struct spdk_mlx5_mkey_pool *pool;
 	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
 	struct {
@@ -719,6 +720,26 @@ struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_po
  */
 void spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool,
 			     struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Increment reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_get_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Decrement the reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ * If the reference count is 0, the mkey object is returned to the pool. This function is an alternative to
+ * \ref spdk_mlx5_mkey_pool_put
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
 
 /**
  * Find mkey object by mkey ID
