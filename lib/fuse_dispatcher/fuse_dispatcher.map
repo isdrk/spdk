@@ -7,6 +7,7 @@
 	spdk_fuse_dispatcher_get_io_ctx_size;
 	spdk_fuse_dispatcher_submit_request;
 	spdk_fuse_dispatcher_delete;
+	spdk_fuse_dispatcher_encode_notify;
 
 	# Everything else
 	local: *;

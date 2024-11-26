@@ -334,6 +334,12 @@ fsdev_io_h2d_u32(struct spdk_fuse_dispatcher *disp, uint32_t v)
 }
 
 static inline int32_t
+fsdev_io_d2h_i32(struct spdk_fuse_dispatcher *disp, int32_t v)
+{
+	return v;
+}
+
+static inline int32_t
 fsdev_io_h2d_i32(struct spdk_fuse_dispatcher *disp, int32_t v)
 {
 	return v;
@@ -3914,6 +3920,114 @@ spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
 		spdk_rmem_pool_destroy(disp->rmem_pool);
 	}
 	free(disp);
+}
+
+static int
+fuse_dispatcher_encode_notify_inval_inode(struct spdk_fuse_dispatcher *disp,
+		struct fuse_out_header *out_hdr,
+		size_t buf_size,
+		const struct spdk_fsdev_notify_data *notify_data)
+{
+	struct fuse_notify_inval_inode_out *inval_inode;
+
+	out_hdr->error = fsdev_io_d2h_i32(disp, FUSE_NOTIFY_INVAL_INODE);
+	out_hdr->len = fsdev_io_d2h_u32(disp,
+					sizeof(struct fuse_out_header) + sizeof(struct fuse_notify_inval_inode_out));
+
+	if (out_hdr->len > buf_size) {
+		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+			    buf_size, out_hdr->len);
+		return -ENOMEM;
+	}
+
+	inval_inode = (struct fuse_notify_inval_inode_out *)(out_hdr + 1);
+	inval_inode->ino = fsdev_io_d2h_u64(disp, file_ino(disp, notify_data->inval_data.fobject));
+	inval_inode->off = fsdev_io_d2h_u64(disp, notify_data->inval_data.offset);
+	inval_inode->len = fsdev_io_d2h_u64(disp, notify_data->inval_data.size);
+	return 0;
+}
+
+static int
+fuse_dispatcher_encode_notify_inval_entry(struct spdk_fuse_dispatcher *disp,
+		struct fuse_out_header *out_hdr,
+		size_t buf_size,
+		const struct spdk_fsdev_notify_data *notify_data)
+{
+	struct fuse_notify_inval_entry_out *inval_entry;
+	char *name;
+	size_t namelen;
+
+	namelen = strlen(notify_data->inval_entry.name);
+	out_hdr->error = fsdev_io_d2h_i32(disp, FUSE_NOTIFY_INVAL_ENTRY);
+	out_hdr->len = fsdev_io_d2h_u32(disp,
+					sizeof(struct fuse_out_header) + sizeof(struct fuse_notify_inval_entry_out) + namelen);
+
+	if (out_hdr->len > buf_size) {
+		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+			    buf_size, out_hdr->len);
+		return -ENOMEM;
+	}
+
+	inval_entry = (struct fuse_notify_inval_entry_out *)(out_hdr + 1);
+	inval_entry->parent =
+		fsdev_io_d2h_u64(disp, file_ino(disp, notify_data->inval_entry.parent_fobject));
+	inval_entry->namelen = fsdev_io_d2h_u32(disp, namelen);
+	name = (char *)(out_hdr + 1) + sizeof(*inval_entry);
+	memcpy(name, notify_data->inval_entry.name, namelen);
+	return 0;
+}
+
+int
+spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
+				   struct iovec *iov, int iovcnt,
+				   const struct spdk_fsdev_notify_data *notify_data,
+				   uint64_t unique_id,
+				   bool *has_reply)
+{
+	struct fuse_out_header *out_hdr;
+	size_t buf_size;
+	bool tmp_has_reply = false;
+	int i;
+	int rc = 0;
+
+	for (i = 0, buf_size = 0; i < iovcnt; buf_size += iov[i].iov_len, ++i);
+	assert(buf_size >= sizeof(struct fuse_out_header));
+	out_hdr = malloc(buf_size);
+	if (!out_hdr) {
+		SPDK_ERRLOG("Failed to allocate bounce buffer for fuse notification, buf_size %lu\n", buf_size);
+		return -ENOMEM;
+	}
+
+	if (notify_data) {
+		out_hdr->unique = fsdev_io_d2h_u64(disp, unique_id);
+		switch (notify_data->type) {
+		case SPDK_FSDEV_NOTIFY_INVAL_DATA:
+			rc = fuse_dispatcher_encode_notify_inval_inode(disp, out_hdr, buf_size, notify_data);
+			tmp_has_reply = true;
+			break;
+		case SPDK_FSDEV_NOTIFY_INVAL_ENTRY:
+			rc = fuse_dispatcher_encode_notify_inval_entry(disp, out_hdr, buf_size, notify_data);
+			tmp_has_reply = true;
+			break;
+		default:
+			SPDK_ERRLOG("Unsupported notify type %d\n", notify_data->type);
+			rc = -EINVAL;
+			break;
+		}
+	} else {
+		/* error and unique set to zero indicate device reset to driver */
+		out_hdr->len = fsdev_io_d2h_u32(disp, sizeof(*out_hdr));
+		out_hdr->error = 0;
+		out_hdr->unique = 0;
+	}
+
+	if (rc == 0) {
+		*has_reply = tmp_has_reply;
+		spdk_copy_buf_to_iovs(iov, iovcnt, out_hdr, out_hdr->len);
+	}
+
+	free(out_hdr);
+	return rc;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fuse_dispatcher)

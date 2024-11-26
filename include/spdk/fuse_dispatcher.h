@@ -98,6 +98,24 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
  */
 void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
 
+/**
+ * Encode FUSE notification
+ *
+ * \param disp FUSE fsdev dispatcher object.
+ * \param iov Output IO vectors array.
+ * \param iovcnt Size of the output IO vectors array.
+ * \param notify_data Notification data received from fsdev.
+ * Pass NULL to encode "empty" notification that is used to indicate device reset.
+ * \param unique_id Unique ID of the notification.
+ *
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
+				       struct iovec *iov, int iovcnt,
+				       const struct spdk_fsdev_notify_data *notify_data,
+				       uint64_t unique_id,
+				       bool *has_reply);
+
 #ifdef __cplusplus
 }
 #endif

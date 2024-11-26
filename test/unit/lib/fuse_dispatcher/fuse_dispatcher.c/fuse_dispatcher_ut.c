@@ -268,6 +268,15 @@ struct fuse_out {
 	struct fuse_out_header hdr;
 	union {
 		struct fuse_init_out init;
+		struct fuse_notify_poll_wakeup_out poll;
+		struct fuse_notify_inval_inode_out inval_inode;
+		struct {
+			struct fuse_notify_inval_entry_out fuse;
+			char name[UT_CALL_REC_MAX_STR_SIZE];
+		} inval_entry;
+		struct fuse_notify_delete_out delete;
+		struct fuse_notify_store_out store;
+		struct fuse_notify_retrieve_out retrieve;
 	};
 };
 
@@ -289,7 +298,6 @@ ut_fuse_disp_test_init_destroy(void)
 	void *cb_arg;
 	int rc;
 
-	ut_calls_reset();
 	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
 	CU_ASSERT(disp != NULL);
 
@@ -375,6 +383,64 @@ ut_fuse_disp_test_init_destroy(void)
 	spdk_fuse_dispatcher_delete(disp);
 }
 
+static void
+ut_fuse_disp_test_encode_notify(void)
+{
+	struct spdk_fuse_dispatcher *disp;
+	struct spdk_fsdev_notify_data fsdev_notify_data;
+	struct fuse_out fuse_notify_data;
+	struct iovec iov = { .iov_base = &fuse_notify_data, .iov_len = sizeof(fuse_notify_data) };
+	bool has_reply;
+	int rc;
+
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
+	CU_ASSERT(disp != NULL);
+
+	/* INVAL INODE notification */
+	memset(&fsdev_notify_data, 0, sizeof(fsdev_notify_data));
+	fsdev_notify_data.type = SPDK_FSDEV_NOTIFY_INVAL_DATA;
+	fsdev_notify_data.inval_data.fobject = UT_FOBJECT;
+	fsdev_notify_data.inval_data.offset = 100500;
+	fsdev_notify_data.inval_data.size = 4096;
+	rc = spdk_fuse_dispatcher_encode_notify(disp, &iov, 1, &fsdev_notify_data, 1, &has_reply);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fuse_notify_data.hdr.len == sizeof(fuse_notify_data.hdr) + sizeof(
+			  fuse_notify_data.inval_inode));
+	CU_ASSERT(fuse_notify_data.hdr.error == FUSE_NOTIFY_INVAL_INODE);
+	CU_ASSERT(fuse_notify_data.hdr.unique == 1);
+	CU_ASSERT(fuse_notify_data.inval_inode.ino == (uint64_t)(uintptr_t)UT_FOBJECT);
+	CU_ASSERT(fuse_notify_data.inval_inode.off == 100500);
+	CU_ASSERT(fuse_notify_data.inval_inode.len == 4096);
+	CU_ASSERT(has_reply == true);
+
+	/* INVAL ENTRY notification */
+	memset(&fsdev_notify_data, 0, sizeof(fsdev_notify_data));
+	fsdev_notify_data.type = SPDK_FSDEV_NOTIFY_INVAL_ENTRY;
+	fsdev_notify_data.inval_entry.parent_fobject = UT_FOBJECT;
+	fsdev_notify_data.inval_entry.name = UT_FNAME;
+	rc = spdk_fuse_dispatcher_encode_notify(disp, &iov, 1, &fsdev_notify_data, 2, &has_reply);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fuse_notify_data.hdr.len == sizeof(fuse_notify_data.hdr) + sizeof(
+			  fuse_notify_data.inval_entry.fuse) +
+		  strlen(UT_FNAME));
+	CU_ASSERT(fuse_notify_data.hdr.error == FUSE_NOTIFY_INVAL_ENTRY);
+	CU_ASSERT(fuse_notify_data.hdr.unique == 2);
+	CU_ASSERT(fuse_notify_data.inval_entry.fuse.parent == (uint64_t)(uintptr_t)UT_FOBJECT);
+	CU_ASSERT(fuse_notify_data.inval_entry.fuse.namelen == strlen(UT_FNAME));
+	CU_ASSERT(memcmp(fuse_notify_data.inval_entry.name, UT_FNAME, strlen(UT_FNAME)) == 0);
+	CU_ASSERT(has_reply == true);
+
+	/* "Empty" notification */
+	rc = spdk_fuse_dispatcher_encode_notify(disp, &iov, 1, NULL, 3, &has_reply);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fuse_notify_data.hdr.len == sizeof(fuse_notify_data.hdr));
+	CU_ASSERT(fuse_notify_data.hdr.error == 0);
+	CU_ASSERT(fuse_notify_data.hdr.unique == 0);
+	CU_ASSERT(has_reply == false);
+
+	spdk_fuse_dispatcher_delete(disp);
+}
+
 static int
 fuse_disp_ut(int argc, char **argv)
 {
@@ -385,6 +451,7 @@ fuse_disp_ut(int argc, char **argv)
 
 	CU_ADD_TEST(suite, ut_fuse_disp_test_create_delete);
 	CU_ADD_TEST(suite, ut_fuse_disp_test_init_destroy);
+	CU_ADD_TEST(suite, ut_fuse_disp_test_encode_notify);
 
 	allocate_cores(1);
 	allocate_threads(1);
