@@ -855,6 +855,7 @@ accel_mlx5_memory_domain_transfer(struct accel_mlx5_task *task)
 	translation.size = sizeof(translation);
 	translation.rdma.rkey = task->mkeys[0]->mkey;
 	translation.rdma.lkey = task->mkeys[0]->mkey;
+	translation.rdma.memory_key = task->mkeys[0];
 
 	SPDK_DEBUGLOG(accel_mlx5, "start transfer, task %p, dst_domain_ctx %p, mkey %u\n", task,
 		      task->base.dst_domain_ctx, task->mkeys[0]->mkey);
