@@ -669,4 +669,16 @@ spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_object_end(w);
 }
 
+void
+spdk_rdma_provider_memory_key_get_ref(void *mkey)
+{
+	spdk_mlx5_mkey_pool_obj_get_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
+}
+
+void
+spdk_rdma_provider_memory_key_put_ref(void *mkey)
+{
+	spdk_mlx5_mkey_pool_obj_put_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
+}
+
 SPDK_LOG_REGISTER_COMPONENT(rdma_mlx5_dv)

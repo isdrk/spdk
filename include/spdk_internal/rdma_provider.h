@@ -271,6 +271,22 @@ int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_en
 bool spdk_rdma_provider_accel_sequence_supported(void);
 
 /**
+ * Get a reference of the memory key
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_get_ref(void *mkey);
+
+/**
+ * Put a reference of the memory key
+ *
+ * The memory key is released once the count reaches 0.
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_put_ref(void *mkey);
+
+/**
  * Set the options for the rdma_provide library.
  *
  * \param opts options to set

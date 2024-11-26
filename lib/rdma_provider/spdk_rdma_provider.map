@@ -23,6 +23,8 @@
 	spdk_rdma_provider_set_opts;
 	spdk_rdma_provider_get_opts;
 	spdk_rdma_provider_subsystem_config_json;
+	spdk_rdma_provider_memory_key_get_ref;
+	spdk_rdma_provider_memory_key_put_ref;
 
 	local: *;
 };

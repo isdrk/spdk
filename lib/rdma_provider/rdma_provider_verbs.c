@@ -404,3 +404,15 @@ spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
 
 }
+
+void
+spdk_rdma_provider_memory_key_get_ref(void *mkey)
+{
+
+}
+
+void
+spdk_rdma_provider_memory_key_put_ref(void *mkey)
+{
+
+}
