@@ -376,9 +376,11 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 	SPDK_DEBUGLOG(accel_mlx5, "Fail task %p, opc %d, rc %d\n", task, task->base.op_code, rc);
 
 	if (task->num_ops) {
-		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO || task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY ||
-		    task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP) {
+		if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, task->mkeys, task->num_ops);
+		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY ||
+			   task->mlx5_opcode == ACCEL_MLX5_OPC_CRYPTO_MKEY_EXT_QP) {
+			spdk_mlx5_mkey_pool_put(dev->crypto_mkeys, task->mkeys[0]);
 		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C) {
 			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
 			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
@@ -387,7 +389,7 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, task->mkeys, task->num_ops);
 			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
 		} else if (task->mlx5_opcode == ACCEL_MLX5_OPC_MKEY) {
-			spdk_mlx5_mkey_pool_put_bulk(dev->mkeys, task->mkeys, task->num_ops);
+			spdk_mlx5_mkey_pool_put(dev->mkeys, task->mkeys[0]);
 		}
 	}
 	next = spdk_accel_sequence_next_task(&task->base);
@@ -766,7 +768,7 @@ accel_mlx5_crypto_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 	assert(mlx5_task->num_processed_blocks == mlx5_task->num_blocks);
 	assert(mlx5_task->base.seq);
 
-	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
+	spdk_mlx5_mkey_pool_put(dev->crypto_mkeys, mlx5_task->mkeys[0]);
 	spdk_accel_task_complete(&mlx5_task->base, 0);
 }
 
@@ -2957,8 +2959,8 @@ accel_mlx5_crypto_mkey_task_init_common(struct accel_mlx5_task *mlx5_task,
 	mlx5_task->num_reqs = 1;
 	mlx5_task->blocks_per_req = num_blocks;
 
-	rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
-	if (spdk_unlikely(rc)) {
+	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
+	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
 		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
 		return -ENOMEM;
 	}
@@ -3087,12 +3089,11 @@ static inline int
 accel_mlx5_crypto_mkey_ext_qp_task_continue(struct accel_mlx5_task *mlx5_task)
 {
 	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
-	int rc;
 
 	/* We can only be here if mkey pool was empty */
 	assert(mlx5_task->num_ops == 0);
-	rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, mlx5_task->mkeys, 1);
-	if (spdk_unlikely(rc)) {
+	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
+	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
 		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
 		return -ENOMEM;
 	}
@@ -3138,12 +3139,11 @@ accel_mlx5_crypto_mkey_task_continue(struct accel_mlx5_task *task)
 {
 	struct accel_mlx5_qp *qp = task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
-	int rc;
 	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
 
 	if (task->num_ops == 0) {
-		rc = spdk_mlx5_mkey_pool_get_bulk(dev->crypto_mkeys, task->mkeys, 1);
-		if (spdk_unlikely(rc)) {
+		task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
+		if (spdk_unlikely(task->mkeys[0] == NULL)) {
 			accel_mlx5_dev_nomem_task_mkey(qp->dev, task);
 			return -ENOMEM;
 		}
