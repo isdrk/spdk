@@ -36,17 +36,32 @@ enum spdk_fuse_arch {
 typedef void (*spdk_fuse_dispatcher_submit_cpl_cb)(void *cb_arg, int error);
 
 /**
+ * FUSE fsdev dispatcher notify reply callback.
+ *
+ * \param cb_arg Callback argument specified upon submit operation.
+ * \param notify_reply_data Decoded notification data for fsdev.
+ * \param unique_id Unique ID value.
+ */
+typedef void (*spdk_fuse_dispatcher_notify_reply_cb)(void *cb_arg,
+		const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+		uint64_t unique_id);
+
+/**
  * Create a FUSE fsdev dispatcher
  *
  * \param desc fsdev descriptor to work with
  * \param recovery_mode true if the dispatcher's state should be recovered, false otherwise.
+ * \param notify_reply_cb Callback to invoke on FUSE_NOTIFY_REPLY requests
+ * \param notify_reply_cb_arg Argument that will be passed to notify_reply_cb
  *
  * NOTE: \p recovery_mode is ignored if rmem pool functionality is disabled
  *
  * \return FUSE fsdev dispatcher object on success, NULL otherwise.
  */
 struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
-		bool recovery_mode);
+		bool recovery_mode,
+		spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
+		void *notify_reply_cb_arg);
 
 /**
  * Set a FUSE request source's HW architecture.

@@ -269,6 +269,21 @@ struct spdk_fuse_dispatcher {
 	 * Recovery memory entry (data).
 	 */
 	struct spdk_rmem_entry *rmem_data;
+
+	/**
+	 * Callback to handle FUSE_NOTIFY_REPLY requests.
+	 */
+	spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb;
+
+	/**
+	 * Context for notify_reply_cb.
+	 */
+	void *notify_reply_cb_arg;
+};
+
+struct fuse_notify_reply_in {
+	int32_t error; /* 0 on success, negated errno for error */
+	uint32_t padding;
 };
 
 static inline const char *
@@ -472,6 +487,7 @@ _fuse_op_requires_reply(uint32_t opcode)
 	switch (opcode) {
 	case FUSE_FORGET:
 	case FUSE_BATCH_FORGET:
+	case FUSE_NOTIFY_REPLY:
 		return false;
 	default:
 		return true;
@@ -3621,6 +3637,31 @@ do_syncfs(struct fuse_io *fuse_io)
 	}
 }
 
+static void
+do_notify_reply(struct fuse_io *fuse_io)
+{
+	struct fuse_notify_reply_in *arg;
+	struct spdk_fsdev_notify_reply_data notify_reply_data;
+
+	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
+	if (!arg) {
+		SPDK_ERRLOG("Cannot get virtiofs_reply_in: unique %" PRIu64", len %u\n",
+			    fuse_io->hdr.unique, fuse_io->hdr.len);
+		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL);
+		return;
+	}
+
+	SPDK_INFOLOG(fuse_dispatcher, "FUSE_NOTIFY_REPLY: unique %" PRIu64 ", len %u, error %d\n",
+		     fuse_io->hdr.unique, fuse_io->hdr.len, arg->error);
+	if (fuse_io->disp->notify_reply_cb) {
+		notify_reply_data.status = fsdev_io_h2d_i32(fuse_io->disp, arg->error);
+		fuse_io->disp->notify_reply_cb(fuse_io->disp->notify_reply_cb_arg, &notify_reply_data,
+					       fuse_io->hdr.unique);
+	}
+
+	fuse_dispatcher_io_complete_none(fuse_io, 0);
+}
+
 static const struct {
 	void (*func)(struct fuse_io *fuse_io);
 	const char *name;
@@ -3664,7 +3705,7 @@ static const struct {
 	[FUSE_POLL]	   = { do_poll,        "POLL"	     },
 	[FUSE_FALLOCATE]   = { do_fallocate,   "FALLOCATE"   },
 	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
-	[FUSE_NOTIFY_REPLY] = { NULL,    "NOTIFY_REPLY" },
+	[FUSE_NOTIFY_REPLY] = { do_notify_reply, "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
 	[FUSE_READDIRPLUS] = { do_readdirplus,	"READDIRPLUS"},
 	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
@@ -3835,7 +3876,9 @@ fuse_dispatcher_init_rmem(struct spdk_fuse_dispatcher *disp, bool recovery_mode)
 }
 
 struct spdk_fuse_dispatcher *
-spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode)
+spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
+			    spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
+			    void *notify_reply_cb_arg)
 {
 	struct spdk_fuse_dispatcher *disp;
 
@@ -3847,6 +3890,8 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode)
 
 	disp->fuse_arch = SPDK_FUSE_ARCH_NATIVE;
 	disp->desc = desc;
+	disp->notify_reply_cb = notify_reply_cb;
+	disp->notify_reply_cb_arg = notify_reply_cb_arg;
 
 	if (!fuse_dispatcher_init_rmem(disp, recovery_mode)) {
 		SPDK_ERRLOG("could not create or restore rmem pool for %s\n", fuse_dispatcher_name(disp));

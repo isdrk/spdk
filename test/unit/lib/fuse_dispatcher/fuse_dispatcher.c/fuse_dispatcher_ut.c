@@ -247,20 +247,38 @@ request_cb(void *cb_arg, int error)
 }
 
 static void
+notify_reply_cb(void *cb_arg,
+		const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+		uint64_t unique_id)
+{
+	ut_call_record_begin(notify_reply_cb);
+	ut_call_record_param_ptr(cb_arg);
+	ut_call_record_param_hash(notify_reply_data, sizeof(*notify_reply_data));
+	ut_call_record_param_int(unique_id);
+	ut_call_record_end();
+}
+
+static void
 ut_fuse_disp_test_create_delete(void)
 {
 	struct spdk_fuse_dispatcher *disp;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	spdk_fuse_dispatcher_delete(disp);
 }
 
+struct fuse_notify_reply_in {
+	int32_t error; /* 0 on success, negated errno for error */
+	uint32_t padding;
+};
+
 struct fuse_in {
 	struct fuse_in_header hdr;
 	union {
 		struct fuse_init_in init;
+		struct fuse_notify_reply_in notify_reply;
 	};
 };
 
@@ -298,7 +316,7 @@ ut_fuse_disp_test_init_destroy(void)
 	void *cb_arg;
 	int rc;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	/* FUSE_INIT 7.34 */
@@ -393,7 +411,7 @@ ut_fuse_disp_test_encode_notify(void)
 	bool has_reply;
 	int rc;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	/* INVAL INODE notification */
@@ -441,6 +459,64 @@ ut_fuse_disp_test_encode_notify(void)
 	spdk_fuse_dispatcher_delete(disp);
 }
 
+static void
+ut_fuse_disp_test_notify_reply(void)
+{
+	struct spdk_fuse_dispatcher *disp;
+	const size_t io_ctx_size = spdk_fuse_dispatcher_get_io_ctx_size();
+	uint8_t io_ctx[io_ctx_size];
+	struct spdk_io_channel *io_channel = (struct spdk_io_channel *)0x12345678;
+	int request_cb_arg;
+	int notify_cb_arg;
+	struct spdk_fsdev_notify_reply_data fsdev_notify_reply_data;
+	struct iovec in_iov;
+	struct fuse_in notify_reply;
+	int rc;
+
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, &notify_cb_arg);
+	CU_ASSERT(disp != NULL);
+
+	/* Successful reply */
+	ut_calls_reset();
+	memset(&notify_reply, 0, sizeof(notify_reply));
+	notify_reply.hdr.len = sizeof(notify_reply);
+	notify_reply.hdr.opcode = FUSE_NOTIFY_REPLY;
+	notify_reply.hdr.unique = 1;
+	in_iov.iov_base = &notify_reply;
+	in_iov.iov_len = notify_reply.hdr.len;
+	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, NULL, 0, io_ctx,
+			request_cb, &request_cb_arg);
+	CU_ASSERT(rc == 0);
+	fsdev_notify_reply_data.status = 0;
+	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &notify_cb_arg);
+	CU_ASSERT(ut_calls_param_get_hash(0, 1) ==
+		  ut_hash(&fsdev_notify_reply_data, sizeof(fsdev_notify_reply_data)));
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == 1);
+	CU_ASSERT(ut_calls_get_func(1) == request_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &request_cb_arg);
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == 0);
+
+	/* Reply with error */
+	ut_calls_reset();
+	notify_reply.hdr.unique = 2;
+	notify_reply.notify_reply.error = -EINVAL;
+	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, NULL, 0, io_ctx,
+			request_cb, &request_cb_arg);
+	CU_ASSERT(rc == 0);
+	fsdev_notify_reply_data.status = -EINVAL;
+	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &notify_cb_arg);
+	CU_ASSERT(ut_calls_param_get_hash(0, 1) ==
+		  ut_hash(&fsdev_notify_reply_data, sizeof(fsdev_notify_reply_data)));
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == 2);
+	CU_ASSERT(ut_calls_get_func(1) == request_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &request_cb_arg);
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == 0);
+
+	spdk_fuse_dispatcher_delete(disp);
+}
+
 static int
 fuse_disp_ut(int argc, char **argv)
 {
@@ -452,6 +528,7 @@ fuse_disp_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fuse_disp_test_create_delete);
 	CU_ADD_TEST(suite, ut_fuse_disp_test_init_destroy);
 	CU_ADD_TEST(suite, ut_fuse_disp_test_encode_notify);
+	CU_ADD_TEST(suite, ut_fuse_disp_test_notify_reply);
 
 	allocate_cores(1);
 	allocate_threads(1);
