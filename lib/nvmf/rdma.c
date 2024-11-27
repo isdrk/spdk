@@ -260,6 +260,7 @@ struct spdk_nvmf_rdma_request {
 	struct ibv_send_wr			*remaining_tranfer_in_wrs;
 	struct ibv_send_wr			*transfer_wr;
 	struct spdk_nvmf_rdma_request_data	data;
+	void					*data_transfer_mkey;
 	spdk_memory_domain_data_cpl_cb		transfer_cpl_cb;
 	void					*transfer_cpl_cb_arg;
 };
@@ -2021,6 +2022,10 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 						   &rqpair->poller->group->group,
 						   &rtransport->transport);
 	}
+	if (rdma_req->data_transfer_mkey) {
+		spdk_rdma_provider_memory_key_put_ref(rdma_req->data_transfer_mkey);
+		rdma_req->data_transfer_mkey = NULL;
+	}
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	rdma_req->req.length = 0;
 	rdma_req->req.iovcnt = 0;
@@ -2202,17 +2207,29 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_read_queue, rdma_req, state_link);
 		rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING;
 	} else {
-		struct ibv_send_wr *last = nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey,
-					   IBV_SEND_SIGNALED);
-
 		/* Read IO: The callback is called when data from the bdev is in local buffers. UMR
-		 * is registered on these buffers. We need to write data buffers to the host, but
-		 * without sending a response. The response will be sent when bdev finishes IO request -
-		 * when RDMA_WRITE completes and we call the cpl_cb */
-		last->next = NULL;
-		SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, translation->rdma.lkey);
-		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
-		rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
+		 * is registered on these buffers. */
+		if (translation->size >= offsetof(struct spdk_memory_domain_translation_result,
+						  rdma.memory_key) + sizeof(translation->rdma.memory_key) &&
+		    translation->rdma.memory_key != NULL) {
+			nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey, 0);
+			/* Mkey object is available. We can increment the reference counter and handle IO as usual */
+			rdma_req->data_transfer_mkey = translation->rdma.memory_key;
+			spdk_rdma_provider_memory_key_get_ref(rdma_req->data_transfer_mkey);
+			nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
+
+			return 0;
+		} else {
+			struct ibv_send_wr *last = nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey,
+						   IBV_SEND_SIGNALED);
+			/* We need to write data buffers to the host, but
+			 * without sending a response. The response will be sent when bdev finishes IO request -
+			 * when RDMA_WRITE completes and we call the cpl_cb */
+			last->next = NULL;
+			SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, translation->rdma.lkey);
+			STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
+			rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
+		}
 	}
 	nvmf_rdma_request_process(rtransport, rdma_req);
 
