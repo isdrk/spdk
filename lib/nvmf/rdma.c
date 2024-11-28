@@ -56,6 +56,9 @@ enum spdk_nvmf_rdma_request_state {
 	/* The request is queued until a data buffer is available. */
 	RDMA_REQUEST_STATE_NEED_BUFFER,
 
+	/* The request is queued until accel task is available. */
+	RDMA_REQUEST_STATE_NEED_ACCEL_TASK,
+
 	/* The request is waiting on RDMA queue depth availability
 	 * to transfer data from the host to the controller.
 	 */
@@ -447,6 +450,8 @@ struct spdk_nvmf_rdma_poll_group {
 	struct spdk_nvmf_transport_poll_group		group;
 	struct spdk_nvmf_rdma_poll_group_stat		stat;
 	struct spdk_io_channel				*accel_ch;
+	/* Requests that are waiting for accel task */
+	STAILQ_HEAD(, spdk_nvmf_rdma_request)		pending_accel_queue;
 	TAILQ_HEAD(, spdk_nvmf_rdma_poller)		pollers;
 	TAILQ_ENTRY(spdk_nvmf_rdma_poll_group)		link;
 };
@@ -2267,6 +2272,53 @@ nvmf_rdma_request_need_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 	return ns->accel_sequence;
 }
 
+static inline void
+nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
+				   struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct spdk_nvmf_rdma_poll_group *rgroup;
+	int rc;
+
+	rgroup = rqpair->poller->group;
+	SPDK_DEBUGLOG(rdma, "req %p, offset %"PRIu64" opc %d append copy, buf %p len %zu, count %u\n",
+		      rdma_req,
+		      from_le64(&rdma_req->req.cmd->nvme_cmd.cdw10),
+		      rdma_req->req.cmd->nvme_cmd.opc, rdma_req->req.iov[0].iov_base, rdma_req->req.iov[0].iov_len,
+		      rdma_req->req.iovcnt);
+
+	/* Append a copy task and wait for the accel module to call transfer_cb
+	 * In the callback we expect to get a UMR and:
+	 * Read IO: unprocessed data from bdev is in the iovs, start transfer to the host using UMR,
+	 * data will be processed by HW during RDMA_WRITE operation
+	 * Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
+	 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
+	 * the media */
+	rc = spdk_accel_append_copy(&rdma_req->req.accel_sequence, rgroup->accel_ch,
+				    rdma_req->req.iov, rdma_req->req.iovcnt,
+				    rqpair->rdma_qp->domain, rdma_req,
+				    rdma_req->req.iov, rdma_req->req.iovcnt,
+				    rqpair->rdma_qp->domain, rdma_req,
+				    NULL, NULL);
+	if (spdk_unlikely(rc)) {
+		struct spdk_nvme_cpl *rsp;
+
+		if (rc == -ENOMEM) {
+			STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
+			rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
+			return;
+		}
+
+		rsp = &rdma_req->req.rsp->nvme_cpl;
+		rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+		rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_send_queue, rdma_req, state_link);
+		rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
+		SPDK_DEBUGLOG(rdma, "req %p, accel task failed, rc %d\n", rdma_req, rc);
+		return;
+	}
+	rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+}
+
 bool
 nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			  struct spdk_nvmf_rdma_request *rdma_req)
@@ -2295,6 +2347,9 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 		switch (rdma_req->state) {
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
 			STAILQ_REMOVE(&rgroup->group.pending_buf_queue, &rdma_req->req, spdk_nvmf_request, buf_link);
+			break;
+		case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+			STAILQ_REMOVE(&rgroup->pending_accel_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 			STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
@@ -2411,25 +2466,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
 			if (nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req)) {
-				/* Append a copy task and wait for the accel module to call transfer_cb
-				 * In the callback we expect to get a UMR and:
-				 * Read IO: unprocessed data from bdev is in the iovs, start transfer to the host using UMR,
-				 * data will be processed by HW during RDMA_WRITE operation
-				 * Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
-				 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
-				 * the media */
-				SPDK_DEBUGLOG(rdma, "req %p, offset %"PRIu64" opc %d append copy, buf %p len %zu, count %u\n",
-					      rdma_req,
-					      from_le64(&rdma_req->req.cmd->nvme_cmd.cdw10),
-					      rdma_req->req.cmd->nvme_cmd.opc, rdma_req->req.iov[0].iov_base, rdma_req->req.iov[0].iov_len,
-					      rdma_req->req.iovcnt);
-				rc = spdk_accel_append_copy(&rdma_req->req.accel_sequence, rgroup->accel_ch,
-							    rdma_req->req.iov, rdma_req->req.iovcnt,
-							    rqpair->rdma_qp->domain, rdma_req,
-							    rdma_req->req.iov, rdma_req->req.iovcnt,
-							    rqpair->rdma_qp->domain, rdma_req,
-							    NULL, NULL);
-				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+				nvmf_rdma_request_append_copy_task(rqpair, rdma_req);
 				break;
 			}
 
@@ -2444,6 +2481,17 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+			break;
+		case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_NEED_ACCEL_TASK, 0, 0,
+					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
+
+			if (rdma_req != STAILQ_FIRST(&rgroup->pending_accel_queue)) {
+				/* This request needs to wait in line to obtain a buffer */
+				break;
+			}
+			STAILQ_REMOVE_HEAD(&rgroup->pending_accel_queue, state_link);
+			nvmf_rdma_request_append_copy_task(rqpair, rdma_req);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING, 0, 0,
@@ -3655,6 +3703,13 @@ nvmf_rdma_qpair_process_pending(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 	}
 
+	/* Then we handle request waiting on accel tasks. */
+	STAILQ_FOREACH_SAFE(rdma_req, &rqpair->poller->group->pending_accel_queue, state_link, req_tmp) {
+		if (nvmf_rdma_request_process(rtransport, rdma_req) == false && drain == false) {
+			break;
+		}
+	}
+
 	resources = rqpair->resources;
 	while (!STAILQ_EMPTY(&resources->free_queue) && !STAILQ_EMPTY(&resources->incoming_queue)) {
 		rdma_req = STAILQ_FIRST(&resources->free_queue);
@@ -4391,6 +4446,7 @@ nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport,
 	}
 
 	TAILQ_INIT(&rgroup->pollers);
+	STAILQ_INIT(&rgroup->pending_accel_queue);
 
 	TAILQ_FOREACH(device, &rtransport->devices, link) {
 		rc = nvmf_rdma_poller_create(rtransport, rgroup, device, &poller);
@@ -5363,6 +5419,13 @@ _nvmf_rdma_qpair_abort_request(void *ctx)
 	case RDMA_REQUEST_STATE_NEED_BUFFER:
 		STAILQ_REMOVE(&rqpair->poller->group->group.pending_buf_queue,
 			      &rdma_req_to_abort->req, spdk_nvmf_request, buf_link);
+
+		nvmf_rdma_request_set_abort_status(req, rdma_req_to_abort, rqpair);
+		break;
+
+	case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+		STAILQ_REMOVE(&rqpair->poller->group->pending_accel_queue,
+			      rdma_req_to_abort, spdk_nvmf_rdma_request, state_link);
 
 		nvmf_rdma_request_set_abort_status(req, rdma_req_to_abort, rqpair);
 		break;
