@@ -270,6 +270,8 @@ fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_
 static inline struct spdk_fsdev_file_object *
 fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
+	assert(fobject);
+
 	return (struct spdk_fsdev_file_object *)(uintptr_t)(fobject->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
 
@@ -392,8 +394,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 		spdk_spin_unlock(&vfsdev->lock);
 
 		if (!refcount) {
-			file_object_destroy(fobject);
 			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
+			file_object_destroy(fobject);
 		}
 		return 0;
 	}
@@ -2369,7 +2371,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static int
 clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
-	struct spdk_fsdev_file_attr st;
+	struct spdk_fsdev_file_attr st = {};
 	mode_t new_mode;
 	int fd, error;
 
@@ -2642,7 +2644,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
 		return res;
 	}
-
+	assert(*pfobject != NULL);
 	/*
 	 * Fixup the mode, functions creating files above ignore some bits important
 	 * for POSIX compliance.
@@ -2675,7 +2677,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
 	uid_t euid = fsdev_io->u_in.mknod.euid;
 	gid_t egid = fsdev_io->u_in.mknod.egid;
-	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_object *fobject = NULL;
 	int rc;
 
 	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mknod.parent_fobject);
@@ -2687,6 +2689,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
 			      umask, &fobject, &fsdev_io->u_out.mknod.attr);
 	if (!rc) {
+		assert(fobject);
 		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
 
@@ -2887,7 +2890,6 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	res = 0;
 	if (flags) {
 #ifndef SYS_renameat2
 		SPDK_ERRLOG("flags are not supported\n");
@@ -2952,7 +2954,7 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_object *new_parent_fobject;
 	char *name = fsdev_io->u_in.link.name;
-	struct aio_fsdev_file_object *link_fobject;
+	struct aio_fsdev_file_object *link_fobject = NULL;
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s is not a safe component\n", name);
@@ -2987,6 +2989,7 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(link_fobject);
 	fsdev_io->u_out.link.fobject = fsdev_aio_get_spdk_fobject(vfsdev, link_fobject);
 
 	res = 0;
@@ -3147,7 +3150,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	/* Clear SGID when system.posix_acl_access is set. */
 	if ((flags & SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
-		struct spdk_fsdev_file_attr st;
+		struct spdk_fsdev_file_attr st = {};
 		mode_t new_mode;
 
 		res = file_object_fill_attr(fobject, &st);
@@ -3570,15 +3573,11 @@ lo_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	ssize_t res;
 	int saverr = 0;
-	struct aio_fsdev_file_object *fobject_in =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_in);
-	struct aio_fsdev_file_handle *fhandle_in =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_in);
+	struct aio_fsdev_file_object *fobject_in;
+	struct aio_fsdev_file_handle *fhandle_in;
 	off_t off_in = fsdev_io->u_in.copy_file_range.off_in;
-	struct aio_fsdev_file_object *fobject_out =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_out);
-	struct aio_fsdev_file_handle *fhandle_out =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_out);
+	struct aio_fsdev_file_object *fobject_out;
+	struct aio_fsdev_file_handle *fhandle_out;
 	off_t off_out = fsdev_io->u_in.copy_file_range.off_out;
 	size_t len = fsdev_io->u_in.copy_file_range.len;
 	uint32_t flags = fsdev_io->u_in.copy_file_range.flags;
