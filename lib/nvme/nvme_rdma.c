@@ -1620,7 +1620,7 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 {
 	struct nvme_request *req = rdma_req->req;
 	struct spdk_nvmf_cmd *cmd = &rqpair->cmds[rdma_req->id];
-	struct spdk_rdma_provider_memory_translation_ctx ctx;
+	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
 	uint32_t remaining_size;
 	uint32_t sge_length;
 	int rc, max_num_sgl, num_sgl_desc;
@@ -1733,7 +1733,7 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 				   struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct spdk_rdma_provider_memory_translation_ctx ctx;
+	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
 	uint32_t length;
 	int rc;
 
