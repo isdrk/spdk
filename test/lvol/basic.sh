@@ -239,6 +239,8 @@ function test_construct_lvol_fio_clear_method_unmap() {
 	run_fio_test "$nbd_name" 0 $((256 * 1024 ** 2)) write 0xdd
 	nbd_stop_disks "$DEFAULT_RPC_ADDR" "$nbd_name"
 
+	sleep 5
+
 	lvstore_uuid=$(rpc_cmd bdev_lvol_create_lvstore --clear-method none "$malloc_dev" "$lvstore_name")
 	get_lvs_jq bdev_lvol_get_lvstores -u "$lvstore_uuid"
 
