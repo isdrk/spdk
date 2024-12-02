@@ -85,8 +85,14 @@ def _json_dump(config, fd, indent):
         indent = 2
     elif indent < 0:
         indent = None
-    json.dump(config, fd, indent=indent)
-    fd.write('\n')
+
+    if fd == sys.stdout or isinstance(fd, io):
+        json.dump(config, fd, indent=indent)
+        fd.write('\n')
+    else:
+        with open(fd, "w") as file:
+            json.dump(config, file, indent=indent)
+            file.write('\n')
 
 
 def _json_load(j):
