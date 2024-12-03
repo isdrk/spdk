@@ -819,9 +819,6 @@ struct spdk_fsdev_io {
 	/** The filesystem device that this I/O belongs to. */
 	struct spdk_fsdev *fsdev;
 
-	/** Enumerated value representing the I/O type. */
-	uint8_t type;
-
 	/** A single iovec element for use by this fsdev_io. */
 	struct iovec iov;
 
@@ -1212,6 +1209,18 @@ struct spdk_fsdev_io {
 
 	/* No members may be added after driver_ctx! */
 };
+
+/**
+ * Get I/O type
+ *
+ * \param fsdev_io I/O to complete.
+ *
+ * \return operation code associated with the I/O
+ */
+static inline enum spdk_fsdev_io_type
+spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
+	return fsdev_io->internal.type;
+}
 
 /**
  * Mount operation completion callback.

@@ -301,19 +301,6 @@ void spdk_fsdev_module_init_done(struct spdk_fsdev_module *module);
  */
 void spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status);
 
-
-/**
- * Get I/O type
- *
- * \param fsdev_io I/O to complete.
- *
- * \return operation code associated with the I/O
- */
-static inline enum spdk_fsdev_io_type
-spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
-	return fsdev_io->internal.type;
-}
-
 /**
  * Get I/O unique id
  *
