@@ -93,9 +93,36 @@ function external_run_hello_fsdev_shared_iso() {
 	sudo rm -rf /tmp/fsdev
 }
 
+function external_run_hello_fsdev_rpc() {
+	local PYTHONPATH=$PYTHONPATH:$test_root/fsdev_passthru
+	local rpc_py="$_sudo --preserve-env=PYTHONPATH $SPDK_DIR/scripts/rpc.py --plugin fsdev_passthru"
+
+	sudo rm -rf /tmp/fsdev
+	sudo mkdir /tmp/fsdev
+	$_sudo LD_PRELOAD=libfsdev_passthru_external.so $SPDK_DIR/build/bin/spdk_tgt &
+	sleep 3
+	spdk_pid=$(pidof spdk_tgt)
+	trap 'sudo kill -9 $spdk_pid; exit 1' SIGINT SIGTERM EXIT
+
+	$rpc_py fsdev_aio_create Aio0 /tmp/fsdev
+	$rpc_py fsdev_passthru_ext_create -b Aio0 -p Pt0
+	$rpc_py fsdev_get_fsdevs -f Pt0
+	$rpc_py fsdev_passthru_ext_delete Pt0
+	if $rpc_py fsdev_get_fsdevs -f Pt0; then
+		echo "Pt0 fsdev should not exist"
+		false
+	fi
+	$rpc_py fsdev_passthru_ext_create -b Aio0 -p Pt0
+	$rpc_py fsdev_get_fsdevs -f Pt0
+	$rpc_py spdk_kill_instance 15
+	trap - SIGINT SIGTERM EXIT
+	sudo rm -rf /tmp/fsdev
+}
+
 # Make passthru fsdev shared.
 run_test "external_make_fsdev_passthru" make -C $test_root fsdev_passthru_shared
 run_test "external_run_hello_fsdev_shared_iso" external_run_hello_fsdev_shared_iso
+run_test "external_run_hello_fsdev_rpc" external_run_hello_fsdev_rpc
 
 make -C $test_root clean
 
