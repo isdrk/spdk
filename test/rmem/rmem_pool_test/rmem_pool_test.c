@@ -385,6 +385,7 @@ test_main(void *arg1)
 		break;
 	case PMEM_TEST_ACTION_WRITE_NO_CLEANUP:
 		rc = test_write(false);
+		assert(rc == 0);
 		SPDK_NOTICELOG("Imitating app crash...\n");
 		abort(); /* simulate app crash */
 	case PMEM_TEST_ACTION_RESTORE:
