@@ -60,7 +60,8 @@ if __name__ == "__main__":
                                 pipes and can be used as a faster way to send RPC commands. If enabled, rpc.py \
                                 must be executed without any other parameters.")
     parser.set_defaults(is_server=False)
-    parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+    parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                        help='Module name of plugin with additional RPC commands. May be specified multiple times.')
     subparsers = parser.add_subparsers(help='RPC methods', dest='called_rpc_name', metavar='')
 
     def framework_start_init(args):
@@ -3943,19 +3944,27 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def load_plugin(args):
         # Create temporary parser, pull out the plugin parameter, load the module, and then run the real argument parser
         plugin_parser = argparse.ArgumentParser(add_help=False)
-        plugin_parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+        plugin_parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                                   help='Module name of plugin with additional RPC commands. May be specified multiple times.')
 
-        rpc_module = plugin_parser.parse_known_args()[0].rpc_plugin
+        rpc_modules = []
+        tmp_rpc_modules = plugin_parser.parse_known_args()[0].rpc_plugin
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend(tmp_rpc_modules)
+
         if args is not None:
-            rpc_module = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            tmp_rpc_modules = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            if tmp_rpc_modules is not None:
+                rpc_modules.extend(tmp_rpc_modules)
 
-        if rpc_module in plugins:
-            return
+        tmp_rpc_modules = os.environ.get('SPDK_RPC_PLUGIN')
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend([s for s in tmp_rpc_modules.split(':') if s])
 
-        if rpc_module is None:
-            rpc_module = os.environ.get('SPDK_RPC_PLUGIN')
+        for rpc_module in rpc_modules:
+            if rpc_module in plugins:
+                return
 
-        if rpc_module is not None:
             try:
                 rpc_plugin = importlib.import_module(rpc_module)
                 try:
