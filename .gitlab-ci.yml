@@ -96,11 +96,16 @@ build-shared-release-job:
       when: manual
       allow_failure: true
     - when: on_success
+  hooks:
+    pre_get_sources_script:
+    - sudo rm -rf python/spdk/rpc/__pycache__
 
 .test-job-k8s-template:
   extends: .test-job-vm-template
   tags: [k8s, mtr-rdma, x86_64]
   image: "$FEDORA_IMAGE"
+  hooks:
+    pre_get_sources_script: []
 
 test-nvmf-k8s-job:
   extends: .test-job-k8s-template
