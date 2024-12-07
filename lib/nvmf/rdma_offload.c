@@ -708,7 +708,7 @@ struct spdk_nvmf_rdma_bdev_null_queue {
 };
 
 struct spdk_nvmf_rdma_bdev {
-	struct spdk_bdev		*bdev;
+	char				*name;
 	struct spdk_nvmf_rdma_sta	*sta;
 	int				refs;
 	doca_sta_be_handle_t		handle;
@@ -8225,6 +8225,11 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 			return -EINVAL;
 		}
 	}
+
+	if (rbdev->name) {
+		free(rbdev->name);
+		rbdev->name = NULL;
+	}
 	free(rbdev);
 
 	return 0;
@@ -8232,6 +8237,7 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 
 static struct spdk_nvmf_rdma_bdev *
 nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
+		      char *rbdev_name,
 		      struct spdk_nvme_ctrlr *nvme_ctrlr,
 		      struct spdk_bdev *bdev)
 {
@@ -8246,10 +8252,15 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		SPDK_ERRLOG("Cannot allocate memory for backend device context\n");
 		return NULL;
 	}
-	rbdev->bdev = bdev;
 	rbdev->sta = &rtransport->sta;
 	rbdev->num_queues = num_bdev_queues;
 	rbdev->null_ns_id = 1;
+	rbdev->name = strdup(rbdev_name);
+	if (!rbdev->name) {
+		SPDK_ERRLOG("Failed to allocate memory for device name\n");
+		nvmf_rdma_bdev_destroy(rbdev);
+		return NULL;
+	}
 
 	drc = doca_sta_be_create(rtransport->sta.sta, &rbdev->handle);
 	if (DOCA_IS_ERROR(drc)) {
@@ -8257,7 +8268,8 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		nvmf_rdma_bdev_destroy(rbdev);
 		return NULL;
 	}
-	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, handle %lu\n", rbdev, rbdev->handle);
+	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, name %s, handle %lu, num_queues %d\n",
+		      rbdev, rbdev->name, rbdev->handle, rbdev->num_queues);
 
 	if (nvme_ctrlr) {
 		rbdev->type = SPDK_NVMF_RDMA_BDEV_TYPE_NVME;
@@ -8302,14 +8314,45 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 	return rbdev;
 }
 
+static char *
+get_be_dev_name(struct spdk_bdev *bdev)
+{
+	const char *module_name = spdk_bdev_get_module_name(bdev);
+	const char *bdev_name;
+	const char *tmp;
+	char *be_name;
+
+	assert(bdev);
+
+	module_name = spdk_bdev_get_module_name(bdev);
+	bdev_name = spdk_bdev_get_name(bdev);
+
+	if (strcmp(module_name, "nvme") == 0) {
+		/* The NVMe namespace name has the following format: <ctrlr_name>n<namespace_id> */
+		tmp = strrchr(bdev_name, 'n');
+		if (!tmp) {
+			SPDK_ERRLOG("Wrong NVMe namespace name format\n");
+			return NULL;
+		}
+		be_name = strndup(bdev_name, tmp - bdev_name);
+	} else if (strcmp(module_name, "null") == 0) {
+		be_name = strdup(bdev_name);
+	} else {
+		SPDK_ERRLOG("bdev module %s is unsupported\n", module_name);
+		return NULL;
+	}
+
+	return be_name;
+}
+
 static struct spdk_nvmf_rdma_bdev *
 nvmf_rdma_find_bdev(struct spdk_nvmf_rdma_transport *rtransport,
-		    struct spdk_bdev *bdev)
+		    const char *name)
 {
 	struct spdk_nvmf_rdma_bdev *rbdev;
 
 	TAILQ_FOREACH(rbdev, &rtransport->bdevs, link) {
-		if (bdev == rbdev->bdev) {
+		if (strcmp(name, rbdev->name) == 0) {
 			break;
 		}
 	}
@@ -8323,21 +8366,30 @@ nvmf_rdma_add_bdev(struct spdk_nvmf_rdma_transport *rtransport,
 		   struct spdk_bdev *bdev)
 {
 	struct spdk_nvmf_rdma_bdev *rbdev;
+	char *be_name;
 
-	rbdev = nvmf_rdma_find_bdev(rtransport, bdev);
+	be_name = get_be_dev_name(bdev);
+	if (!be_name) {
+		SPDK_ERRLOG("Failed to get backend device name for bdev %s\n", spdk_bdev_get_name(bdev));
+		return NULL;
+	}
+
+	rbdev = nvmf_rdma_find_bdev(rtransport, be_name);
 	if (rbdev) {
 		rbdev->refs++;
+		free(be_name);
 		return rbdev;
 	}
 
-	rbdev = nvmf_rdma_bdev_create(rtransport, nvme_ctrlr, bdev);
+	rbdev = nvmf_rdma_bdev_create(rtransport, be_name, nvme_ctrlr, bdev);
 	if (!rbdev) {
-		SPDK_ERRLOG("Failed to create bdev\n");
+		SPDK_ERRLOG("Failed to create backend dev\n");
 	} else {
 		rbdev->refs = 1;
 		TAILQ_INSERT_TAIL(&rtransport->bdevs, rbdev, link);
 	}
 
+	free(be_name);
 	return rbdev;
 }
 
