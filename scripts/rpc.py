@@ -2847,6 +2847,15 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    type=int, default=-1, required=False)
     p.set_defaults(func=tgt_ofld_connect_qp_count)
 
+    def tgt_ofld_get_backend_ctrl_stat(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_get_backend_ctrl_stat(args.client,
+                                                               name=args.name))
+
+    p = subparsers.add_parser('tgt_ofld_get_backend_ctrl_stat',
+                              help='Display statistics of all the offload backend controllers or specified conroller.')
+    p.add_argument('-b', '--name', help='Name of the offload backend controller. Example: Nvme0', required=False)
+    p.set_defaults(func=tgt_ofld_get_backend_ctrl_stat)
+
     # subsystem
     def framework_get_subsystems(args):
         print_dict(rpc.subsystem.framework_get_subsystems(args.client))

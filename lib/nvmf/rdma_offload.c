@@ -8682,12 +8682,21 @@ tgt_ofld_hdlr_data_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_c
 }
 
 static void
+tgt_ofld_ctr_info_dump(struct spdk_json_write_ctx *w, const struct doca_sta_eu_ctr_info *ctr_info)
+{
+	unsigned int i;
+
+	for (i = 0; i < ctr_info->num; i++) {
+		spdk_json_write_named_uint64(w, ctr_info->entries[i].name, *ctr_info->entries[i].val);
+	}
+}
+
+static void
 tgt_ofld_hdlr_counter_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
 {
 	const struct doca_sta_eu_ctr_info *ctr_info;
 	const char *name, *state = "RUNNING";
 	uint16_t eu_id, port;
-	uint8_t i;
 
 	spdk_json_write_object_begin(w);
 
@@ -8702,9 +8711,7 @@ tgt_ofld_hdlr_counter_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_writ
 	spdk_json_write_named_string(w, "state", state);
 
 	if (ctr_info) {
-		for (i = 0; i < ctr_info->num; ++i) {
-			spdk_json_write_named_uint64(w, ctr_info->entries[i].name, *ctr_info->entries[i].val);
-		}
+		tgt_ofld_ctr_info_dump(w, ctr_info);
 	}
 
 	spdk_json_write_object_end(w);
@@ -8756,12 +8763,11 @@ tgt_ofld_rpc_get_handles(struct doca_sta *sta, doca_sta_eu_handle_t *eu_handle_a
 	return err == DOCA_SUCCESS ? true : false;
 }
 
-static struct spdk_nvmf_rdma_sta *
-tgt_ofld_get_sta(void)
+static struct spdk_nvmf_rdma_transport *
+tgt_ofld_get_rtransport(void)
 {
 	struct spdk_nvmf_tgt *tgt;
 	struct spdk_nvmf_transport *transport;
-	struct spdk_nvmf_rdma_transport *rtransport;
 
 	tgt = spdk_nvmf_get_tgt(NULL);
 	if (!tgt) {
@@ -8774,7 +8780,19 @@ tgt_ofld_get_sta(void)
 		SPDK_ERRLOG("Unable to find a transport object.\n");
 		return NULL;
 	}
-	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
+
+	return SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
+}
+
+static struct spdk_nvmf_rdma_sta *
+tgt_ofld_get_sta(void)
+{
+	struct spdk_nvmf_rdma_transport *rtransport;
+
+	rtransport = tgt_ofld_get_rtransport();
+	if (!rtransport) {
+		return NULL;
+	}
 
 	return &rtransport->sta;
 }
@@ -9217,3 +9235,117 @@ fail:
 					 "Internal error, see log file");
 }
 SPDK_RPC_REGISTER("tgt_ofld_connect_qp_count", rpc_tgt_ofld_connect_qp_count, SPDK_RPC_RUNTIME)
+
+struct rpc_tgt_ofld_get_backend_ctrl_stat {
+	char *name;
+};
+
+static void
+free_rpc_tgt_ofld_get_backend_ctrl_stat(struct rpc_tgt_ofld_get_backend_ctrl_stat *s)
+{
+	if (s->name) {
+		free(s->name);
+	}
+}
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_get_backend_ctrl_stat_decoders[] = {
+	{"name", offsetof(struct rpc_tgt_ofld_get_backend_ctrl_stat, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_tgt_ofld_be_ctrlr_stats_dump(struct spdk_json_write_ctx *w,
+				 struct spdk_nvmf_rdma_bdev *rbdev)
+{
+	int i;
+	doca_error_t drc;
+	doca_sta_be_q_handle_t q_handle;
+	const struct doca_sta_eu_ctr_info *ctr_info;
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "name", rbdev->name);
+	spdk_json_write_named_array_begin(w, "queues");
+
+	for (i = 0; i < rbdev->num_queues; i++) {
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string_fmt(w, "name", "queue%d", i);
+
+		if (rbdev->type == SPDK_NVMF_RDMA_BDEV_TYPE_NVME) {
+			q_handle = rbdev->nvme_queue[i].handle;
+		} else {
+			q_handle = rbdev->null_queue[i].handle;
+		}
+
+		drc = doca_sta_get_be_queue_stats(rbdev->handle, q_handle, &ctr_info);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to get queue %d stats: %s\n", i, doca_error_get_descr(drc));
+		} else {
+			tgt_ofld_ctr_info_dump(w, ctr_info);
+		}
+		spdk_json_write_object_end(w);
+	}
+	spdk_json_write_array_end(w);
+	spdk_json_write_object_end(w);
+}
+
+static void
+rpc_tgt_ofld_get_backend_ctrl_stat(struct spdk_jsonrpc_request *request,
+				   const struct spdk_json_val *params)
+{
+	struct spdk_json_write_ctx *w;
+	struct rpc_tgt_ofld_get_backend_ctrl_stat req = {};
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_bdev *rbdev = NULL;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params,
+					    rpc_tgt_ofld_get_backend_ctrl_stat_decoders,
+					    SPDK_COUNTOF(rpc_tgt_ofld_get_backend_ctrl_stat_decoders),
+					    &req)) {
+			SPDK_ERRLOG("spdk_json_decode_object failed\n");
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 "spdk_json_decode_object failed");
+			goto cleanup;
+		}
+	}
+
+	rtransport = tgt_ofld_get_rtransport();
+	if (!rtransport) {
+		SPDK_ERRLOG("RDMA_OFFLOAD transport is not found\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "RDMA_OFFLOAD transport is not found");
+		goto cleanup;
+	}
+
+	if (req.name) {
+		TAILQ_FOREACH(rbdev, &rtransport->bdevs, link) {
+			if (strcmp(rbdev->name, req.name) == 0) {
+				break;
+			}
+		}
+		if (!rbdev) {
+			SPDK_ERRLOG("Backend controller %s is not found\n", req.name);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "Backend controller is not found");
+			goto cleanup;
+		}
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	if (rbdev) {
+		rpc_tgt_ofld_be_ctrlr_stats_dump(w, rbdev);
+	} else {
+		TAILQ_FOREACH(rbdev, &rtransport->bdevs, link) {
+			rpc_tgt_ofld_be_ctrlr_stats_dump(w, rbdev);
+		}
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+cleanup:
+	free_rpc_tgt_ofld_get_backend_ctrl_stat(&req);
+}
+SPDK_RPC_REGISTER("tgt_ofld_get_backend_ctrl_stat", rpc_tgt_ofld_get_backend_ctrl_stat,
+		  SPDK_RPC_RUNTIME)

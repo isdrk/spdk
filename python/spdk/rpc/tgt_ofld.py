@@ -85,3 +85,17 @@ def tgt_ofld_connect_qp_count(client, group):
     params = {'group': group}
 
     return client.call('tgt_ofld_connect_qp_count', params)
+
+def tgt_ofld_get_backend_ctrl_stat(client, name):
+    """Get statistics for offload backend controllers.
+
+    Args:
+        name: controller name to query (optional; if omitted, query all controllers)
+
+    Returns:
+        Statistics for requested controllers.
+    """
+    params = {}
+    if name:
+        params['name'] = name
+    return client.call('tgt_ofld_get_backend_ctrl_stat', params)
