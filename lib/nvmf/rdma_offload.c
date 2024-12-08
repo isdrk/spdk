@@ -9349,3 +9349,107 @@ cleanup:
 }
 SPDK_RPC_REGISTER("tgt_ofld_get_backend_ctrl_stat", rpc_tgt_ofld_get_backend_ctrl_stat,
 		  SPDK_RPC_RUNTIME)
+
+struct rpc_tgt_ofld_get_bdev_stat {
+	char *name;
+};
+
+static void
+free_tgt_ofld_get_bdev_stat(struct rpc_tgt_ofld_get_bdev_stat *s)
+{
+	if (s->name) {
+		free(s->name);
+	}
+}
+
+static const struct spdk_json_object_decoder tgt_ofld_get_bdev_stat_decoders[] = {
+	{"name", offsetof(struct rpc_tgt_ofld_get_bdev_stat, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_tgt_ofld_get_bdev_stats_dump(struct spdk_json_write_ctx *w,
+				 struct spdk_nvmf_rdma_subsystem *rsubsystem,
+				 struct spdk_nvmf_rdma_ns *rns)
+{
+	const struct doca_sta_eu_ctr_info *ctr_info;
+	doca_error_t drc;
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "name", spdk_bdev_get_name(rns->ns->bdev));
+
+	drc = doca_sta_get_ns_stats(rsubsystem->handle, rns->handle, &ctr_info);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get bdev %s stats: %s\n", spdk_bdev_get_name(rns->ns->bdev),
+			    doca_error_get_descr(drc));
+	} else {
+		tgt_ofld_ctr_info_dump(w, ctr_info);
+	}
+
+	spdk_json_write_object_end(w);
+}
+
+static void
+rpc_tgt_ofld_get_bdev_stat(struct spdk_jsonrpc_request *request,
+			   const struct spdk_json_val *params)
+{
+	struct spdk_json_write_ctx *w;
+	struct rpc_tgt_ofld_get_bdev_stat req = {};
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	struct spdk_nvmf_rdma_ns *rns = NULL;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params,
+					    tgt_ofld_get_bdev_stat_decoders,
+					    SPDK_COUNTOF(tgt_ofld_get_bdev_stat_decoders),
+					    &req)) {
+			SPDK_ERRLOG("spdk_json_decode_object failed\n");
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 "spdk_json_decode_object failed");
+			goto cleanup;
+		}
+	}
+
+	rtransport = tgt_ofld_get_rtransport();
+	if (!rtransport) {
+		SPDK_ERRLOG("RDMA_OFFLOAD transport is not found\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "RDMA_OFFLOAD transport is not found");
+		goto cleanup;
+	}
+
+	if (req.name) {
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			TAILQ_FOREACH(rns, &rsubsystem->namespaces, link) {
+				if (strcmp(spdk_bdev_get_name(rns->ns->bdev), req.name) == 0) {
+					goto bdev_is_found;
+				}
+			}
+		}
+		SPDK_ERRLOG("bdev %s is not found\n", req.name);
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "bdev is not found");
+		goto cleanup;
+	}
+bdev_is_found:
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	if (rns) {
+		assert(rsubsystem);
+		rpc_tgt_ofld_get_bdev_stats_dump(w, rsubsystem, rns);
+	} else {
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			TAILQ_FOREACH(rns, &rsubsystem->namespaces, link) {
+				rpc_tgt_ofld_get_bdev_stats_dump(w, rsubsystem, rns);
+			}
+		}
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+cleanup:
+	free_tgt_ofld_get_bdev_stat(&req);
+}
+SPDK_RPC_REGISTER("tgt_ofld_get_bdev_stat", rpc_tgt_ofld_get_bdev_stat, SPDK_RPC_RUNTIME)

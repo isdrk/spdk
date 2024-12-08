@@ -99,3 +99,17 @@ def tgt_ofld_get_backend_ctrl_stat(client, name):
     if name:
         params['name'] = name
     return client.call('tgt_ofld_get_backend_ctrl_stat', params)
+
+def tgt_ofld_get_bdev_stat(client, name):
+    """Get statistics for offload bdevs.
+
+    Args:
+        name: bdev name to query (optional; if omitted, query all bdevs)
+
+    Returns:
+        Statistics for requested bdevs.
+    """
+    params = {}
+    if name:
+        params['name'] = name
+    return client.call('tgt_ofld_get_bdev_stat', params)
