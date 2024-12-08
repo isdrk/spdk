@@ -670,7 +670,6 @@ struct spdk_nvmf_rdma_port {
 	const struct spdk_nvme_transport_id	*trid;
 	struct rdma_cm_id			*id;
 	struct spdk_nvmf_rdma_device		*device;
-	struct spdk_nvmf_rdma_subsystem_dev	*subsystem_device;
 	TAILQ_ENTRY(spdk_nvmf_rdma_port)	link;
 };
 
@@ -739,19 +738,11 @@ struct spdk_nvmf_rdma_ns {
 	TAILQ_ENTRY(spdk_nvmf_rdma_ns)		link;
 };
 
-struct spdk_nvmf_rdma_subsystem_dev {
-	int						refs;
-	struct spdk_nvmf_rdma_subsystem			*rsubsystem;
-	struct doca_dev					*doca_dev;
-	TAILQ_ENTRY(spdk_nvmf_rdma_subsystem_dev)	link;
-};
-
 struct spdk_nvmf_rdma_subsystem {
 	const struct spdk_nvmf_subsystem		*subsystem;
 	struct spdk_nvmf_rdma_transport			*rtransport;
 	doca_sta_subs_handle_t				handle;
 	TAILQ_HEAD(, spdk_nvmf_rdma_ns)			namespaces;
-	TAILQ_HEAD(, spdk_nvmf_rdma_subsystem_dev)	devices;
 	TAILQ_ENTRY(spdk_nvmf_rdma_subsystem)		link;
 };
 
@@ -899,8 +890,6 @@ static void _poller_submit_recvs(struct spdk_nvmf_rdma_transport *rtransport,
 				 struct spdk_nvmf_rdma_poller *rpoller);
 
 static void _nvmf_rdma_remove_destroyed_device(void *c);
-
-static void nvmf_rdma_subsystem_dev_put(struct spdk_nvmf_rdma_subsystem_dev *sdev);
 
 static int nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev);
 
@@ -4544,7 +4533,6 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	TAILQ_FOREACH_SAFE(port, &rtransport->ports, link, port_tmp) {
 		TAILQ_REMOVE(&rtransport->ports, port, link);
 		rdma_destroy_id(port->id);
-		nvmf_rdma_subsystem_dev_put(port->subsystem_device);
 		free(port);
 	}
 
@@ -4766,10 +4754,6 @@ nvmf_rdma_stop_listen_ex(struct spdk_nvmf_transport *transport,
 				      port->trid->traddr, port->trid->trsvcid, need_retry);
 			TAILQ_REMOVE(&rtransport->ports, port, link);
 			rdma_destroy_id(port->id);
-			if (port->subsystem_device) {
-				nvmf_rdma_subsystem_dev_put(port->subsystem_device);
-				port->subsystem_device = NULL;
-			}
 			port->id = NULL;
 			port->device = NULL;
 			if (need_retry) {
@@ -7647,10 +7631,6 @@ nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem)
 		SPDK_WARNLOG("Namespace list is not empty\n");
 	}
 
-	if (!TAILQ_EMPTY(&rsubsystem->devices)) {
-		SPDK_WARNLOG("Device list is not empty\n");
-	}
-
 	if (rsubsystem->handle) {
 		drc = doca_sta_subsystem_destroy(rsubsystem->handle);
 		if (DOCA_IS_ERROR(drc)) {
@@ -7668,6 +7648,7 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 			   const struct spdk_nvmf_subsystem *subsystem)
 {
 	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	struct spdk_nvmf_rdma_device *rdevice;
 	doca_error_t drc;
 
 	rsubsystem = calloc(1, sizeof(*rsubsystem));
@@ -7677,7 +7658,6 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 	TAILQ_INIT(&rsubsystem->namespaces);
-	TAILQ_INIT(&rsubsystem->devices);
 	rsubsystem->subsystem = subsystem;
 	rsubsystem->rtransport = rtransport;
 
@@ -7689,6 +7669,17 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 		nvmf_rdma_subsystem_destroy(rsubsystem);
 		return NULL;
 	}
+
+	TAILQ_FOREACH(rdevice, &rtransport->devices, link) {
+		drc = doca_sta_subsystem_add_dev(rsubsystem->handle, rdevice->doca_dev);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to add %s to subsystem %s\n",
+				    ibv_get_device_name(rdevice->context->device),
+				    spdk_nvmf_subsystem_get_nqn(subsystem));
+			nvmf_rdma_subsystem_destroy(rsubsystem);
+			return NULL;
+		}
+	}
 	SPDK_NOTICELOG("Create DOCA STA subsystem 0x%lx for nqn %s\n",
 		       rsubsystem->handle, spdk_nvmf_subsystem_get_nqn(subsystem));
 	TAILQ_INSERT_TAIL(&rtransport->subsystems, rsubsystem, link);
@@ -7699,99 +7690,7 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 static inline bool
 nvmf_rdma_subsystem_is_busy(struct spdk_nvmf_rdma_subsystem *rsubsystem)
 {
-	return !TAILQ_EMPTY(&rsubsystem->namespaces) || !TAILQ_EMPTY(&rsubsystem->devices);
-}
-
-static void
-nvmf_rdma_subsystem_dev_destroy(struct spdk_nvmf_rdma_subsystem_dev *sdev)
-{
-	struct spdk_nvmf_rdma_subsystem *rsubsystem = sdev->rsubsystem;
-
-	assert(sdev->refs == 0);
-	TAILQ_REMOVE(&rsubsystem->devices, sdev, link);
-	free(sdev);
-}
-
-static void
-nvmf_rdma_subsystem_dev_put(struct spdk_nvmf_rdma_subsystem_dev *sdev)
-{
-	sdev->refs--;
-	if (sdev->refs == 0) {
-		nvmf_rdma_subsystem_dev_destroy(sdev);
-	}
-}
-
-static void
-nvmf_rdma_subsystem_dev_get(struct spdk_nvmf_rdma_subsystem_dev *sdev)
-{
-	sdev->refs++;
-}
-
-static struct spdk_nvmf_rdma_subsystem_dev *
-nvmf_rdma_subsystem_dev_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
-			       struct spdk_nvmf_rdma_device *device)
-{
-	struct spdk_nvmf_rdma_subsystem_dev *sdev;
-	doca_error_t drc;
-
-	sdev = calloc(1, sizeof(*sdev));
-	if (!sdev) {
-		SPDK_ERRLOG("Cannot allocate memory\n");
-		return NULL;
-	}
-
-	drc = doca_sta_subsystem_add_dev(rsubsystem->handle, device->doca_dev);
-	/*
-	 * We cannot prevent DOCA_ERROR_ALREADY_EXIST for the case when the same device is removed and added again
-	 * because the doca sta lib does not provide an API to remove doca_dev from subsystem. Ignore the error
-	 * for now.
-	 */
-	if (DOCA_IS_ERROR(drc) && drc != DOCA_ERROR_ALREADY_EXIST) {
-		SPDK_ERRLOG("Failed to add doca_dev to DOCA STA subsystem 0x%lx\n", rsubsystem->handle);
-		free(sdev);
-		return NULL;
-	}
-	sdev->doca_dev = device->doca_dev;
-	sdev->rsubsystem = rsubsystem;
-	nvmf_rdma_subsystem_dev_get(sdev);
-	TAILQ_INSERT_TAIL(&rsubsystem->devices, sdev, link);
-
-	return sdev;
-}
-
-static struct spdk_nvmf_rdma_subsystem_dev *
-nvmf_rdma_subsystem_dev_find(struct spdk_nvmf_rdma_subsystem *rsubsystem,
-			     struct spdk_nvmf_rdma_device *device)
-{
-	struct spdk_nvmf_rdma_subsystem_dev *sdev;
-
-	TAILQ_FOREACH(sdev, &rsubsystem->devices, link) {
-		if (sdev->doca_dev == device->doca_dev) {
-			break;
-		}
-	}
-
-	return sdev;
-}
-
-static int
-nvmf_rdma_subsystem_add_port(struct spdk_nvmf_rdma_subsystem *rsubsystem,
-			     struct spdk_nvmf_rdma_port *port)
-{
-	struct spdk_nvmf_rdma_subsystem_dev *sdev;
-
-	sdev = nvmf_rdma_subsystem_dev_find(rsubsystem, port->device);
-	if (sdev) {
-		nvmf_rdma_subsystem_dev_get(sdev);
-	} else {
-		sdev = nvmf_rdma_subsystem_dev_create(rsubsystem, port->device);
-		if (!sdev) {
-			return -1;
-		}
-	}
-	port->subsystem_device = sdev;
-
-	return 0;
+	return !TAILQ_EMPTY(&rsubsystem->namespaces);
 }
 
 static int
@@ -7802,7 +7701,6 @@ nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_rdma_port *port;
 	struct spdk_nvmf_rdma_subsystem *rsubsystem;
-	int rc;
 
 	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
 
@@ -7823,15 +7721,6 @@ nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
 	}
 	if (!rsubsystem) {
 		SPDK_ERRLOG("Cannot get subsystem\n");
-		return -EINVAL;
-	}
-
-	rc = nvmf_rdma_subsystem_add_port(rsubsystem, port);
-	if (rc) {
-		SPDK_ERRLOG("Cannot add device to subsystem\n");
-		if (!nvmf_rdma_subsystem_is_busy(rsubsystem)) {
-			nvmf_rdma_subsystem_destroy(rsubsystem);
-		}
 		return -EINVAL;
 	}
 
