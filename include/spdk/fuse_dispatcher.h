@@ -131,6 +131,15 @@ int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 				       uint64_t unique_id,
 				       bool *has_reply);
 
+/**
+ * Get minimum buffer size required to fit FUSE notification.
+ *
+ * \param disp FUSE fsdev dispatcher object.
+ *
+ * \return notify buffer size in bytes. Zero means that notifications are not supported.
+ */
+uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp);
+
 #ifdef __cplusplus
 }
 #endif

@@ -29,6 +29,7 @@ DEFINE_STUB(spdk_fsdev_get_opts, int, (struct spdk_fsdev_opts *opts, size_t opts
 DEFINE_STUB(spdk_fsdev_reset, int, (struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb,
 				    void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_reset_supported, bool, (struct spdk_fsdev *fsdev), true);
+DEFINE_STUB(spdk_fsdev_get_notify_max_data_size, uint32_t, (const struct spdk_fsdev *fsdev), 0);
 DEFINE_STUB(spdk_fsdev_syncfs, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 				     uint64_t unique, struct spdk_fsdev_file_object *fobject,
 				     spdk_fsdev_syncfs_cpl_cb cb_fn, void *cb_arg), 0);

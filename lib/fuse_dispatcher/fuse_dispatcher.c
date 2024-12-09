@@ -4075,4 +4075,18 @@ spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 	return rc;
 }
 
+uint32_t
+spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp)
+{
+	const uint32_t max_header_size = sizeof(struct fuse_out_header) +
+					 sizeof(struct fuse_notify_retrieve_out);
+	uint32_t buf_size = spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(disp->desc));
+
+	if (buf_size) {
+		buf_size += max_header_size;
+	}
+
+	return buf_size;
+}
+
 SPDK_LOG_REGISTER_COMPONENT(fuse_dispatcher)
