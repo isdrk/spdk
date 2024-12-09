@@ -5963,6 +5963,10 @@ nvmf_sta_io_rdma_write_error(struct doca_sta_producer_task_send *task,
 	struct nvmf_non_offload_request *non_offload_req = task_user_data.ptr;
 
 	SPDK_ERRLOG("RDMA_WRITE/SEND task error, req %p\n", non_offload_req);
+	assert(non_offload_req->task == task);
+	doca_task_free(doca_sta_producer_send_task_as_task(non_offload_req->task));
+	non_offload_req->task = NULL;
+
 	nvmf_rdma_offload_qpair_disconnect(nvmf_offload_qpair_get(non_offload_req->common.req.qpair));
 }
 
@@ -5988,6 +5992,10 @@ nvmf_sta_io_rdma_read_error(struct doca_sta_producer_task_send *task,
 	struct nvmf_non_offload_request *non_offload_req = task_user_data.ptr;
 
 	SPDK_ERRLOG("RDMA_READ task error, req %p\n", non_offload_req);
+	assert(non_offload_req->task == task);
+	doca_task_free(doca_sta_producer_send_task_as_task(non_offload_req->task));
+	non_offload_req->task = NULL;
+
 	nvmf_rdma_offload_qpair_disconnect(nvmf_offload_qpair_get(non_offload_req->common.req.qpair));
 }
 
