@@ -3106,12 +3106,16 @@ static int
 nvmf_sta_fabric_connect(struct nvmf_non_offload_request *non_offload_req)
 {
 	struct spdk_nvmf_request *req = &non_offload_req->common.req;
+	struct spdk_nvmf_fabric_connect_cmd *cmd = &req->cmd->connect_cmd;
 	struct spdk_nvmf_fabric_connect_data *data = req->iov[0].iov_base;
 	struct spdk_nvmf_offload_qpair *oqpair = nvmf_offload_qpair_get(req->qpair);
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_subsystem *subsystem;
 	struct spdk_nvmf_rdma_subsystem *rsubsystem;
 	doca_error_t drc;
+
+	assert(cmd->opcode == SPDK_NVME_OPC_FABRIC);
+	assert(cmd->fctype == SPDK_NVMF_FABRIC_COMMAND_CONNECT);
 
 	if (req->length < sizeof(struct spdk_nvmf_fabric_connect_data)) {
 		SPDK_ERRLOG("Connect command data length 0x%x too small\n", req->length);
@@ -3151,6 +3155,12 @@ nvmf_sta_fabric_connect(struct nvmf_non_offload_request *non_offload_req)
 			SPDK_ERRLOG("Failed to add qpair to subsystem: %s\n", doca_error_get_descr(drc));
 			return -1;
 		}
+	}
+
+	drc = doca_sta_io_qp_connect_set_sq_size(oqpair->opoller->sta_io, oqpair->handle, cmd->sqsize);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set sq_size for qpair: %s\n", doca_error_get_descr(drc));
+		return -1;
 	}
 
 	return 0;
