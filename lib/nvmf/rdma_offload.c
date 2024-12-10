@@ -1824,11 +1824,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	SPDK_DEBUGLOG(rdma_offload,
 		      "Local NIC Max Send/Recv Queue Depth: %d Max Read/Write Queue Depth: %d\n",
 		      port->device->attr.max_qp_wr, port->device->attr.max_qp_rd_atom);
-	if (private_data->qid == 0) {
-		max_queue_depth = spdk_min(max_queue_depth, port->device->attr.max_qp_wr);
-	} else {
-		max_queue_depth = spdk_min(max_queue_depth, rtransport->sta.caps.max_io_queue_size);
-	}
+	max_queue_depth = spdk_min(max_queue_depth, port->device->attr.max_qp_wr);
 	max_read_depth = spdk_min(max_read_depth, port->device->attr.max_qp_init_rd_atom);
 
 	/* Next check the remote NIC's hardware limitations */
@@ -3953,8 +3949,6 @@ nvmf_rdma_sta_get_caps(struct doca_sta *sta, struct nvmf_rdma_sta_caps *caps)
 static int
 nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 {
-	struct spdk_nvmf_rdma_device *device;
-	union doca_data udata;
 	doca_error_t rc;
 
 	TAILQ_INIT(&rtransport->sta.bdevs);
@@ -3980,6 +3974,20 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 	}
 	SPDK_NOTICELOG("Create DOCA STA Context for device %s\n",
 		       rtransport->rdma_opts.doca_device);
+
+	if (nvmf_rdma_sta_get_caps(rtransport->sta.sta, &rtransport->sta.caps)) {
+		return -1;
+	}
+
+	return 0;
+}
+
+static int
+nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
+{
+	struct spdk_nvmf_rdma_device *device;
+	union doca_data udata;
+	doca_error_t rc;
 
 	TAILQ_FOREACH(device, &rtransport->devices, link) {
 		/* Add device to the existing DOCA STA Context */
@@ -4058,10 +4066,6 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 			SPDK_NOTICELOG("Wrong DOCA STA state %s\n", nvmf_rdma_sta_state_to_str(rtransport->sta.state));
 			return -EINVAL;
 		}
-	}
-
-	if (nvmf_rdma_sta_get_caps(rtransport->sta.sta, &rtransport->sta.caps)) {
-		return -1;
 	}
 
 	return 0;
@@ -4188,7 +4192,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	uint32_t			min_shared_buffers;
 	uint32_t			min_in_capsule_data_size;
 	int				max_device_sge = SPDK_NVMF_MAX_SGL_ENTRIES;
-	uint16_t			data_wr_pool_size = opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES;
+	uint16_t			data_wr_pool_size;
 
 	rtransport = calloc(1, sizeof(*rtransport));
 	if (!rtransport) {
@@ -4259,6 +4263,16 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		}
 		rtransport->rdma_opts.num_rdma_devices = 1;
 	}
+
+	rc = nvmf_rdma_sta_create(rtransport);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("Unable to create DOCA STA\n");
+		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+		return NULL;
+	}
+	opts->max_queue_depth = spdk_min(opts->max_queue_depth, rtransport->sta.caps.max_io_queue_size);
+	data_wr_pool_size = opts->max_queue_depth * SPDK_NVMF_MAX_SGL_ENTRIES;
+	opts->max_io_size = spdk_min(opts->max_io_size, rtransport->sta.caps.max_io_size);
 
 	SPDK_INFOLOG(rdma_offload, "*** RDMA Transport Init ***\n"
 		     "  Transport opts:  max_ioq_depth=%d, max_io_size=%d,\n"
@@ -4397,13 +4411,12 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	}
 	rdma_free_devices(contexts);
 
-	rc = nvmf_rdma_sta_create(rtransport);
+	rc = nvmf_rdma_sta_start(rtransport);
 	if (DOCA_IS_ERROR(rc)) {
-		SPDK_ERRLOG("Unable to create DOCA STA\n");
+		SPDK_ERRLOG("Unable to start DOCA STA\n");
 		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
 		return NULL;
 	}
-
 	if (opts->io_unit_size * max_device_sge < opts->max_io_size) {
 		/* divide and round up. */
 		opts->io_unit_size = (opts->max_io_size + max_device_sge - 1) / max_device_sge;
@@ -4552,8 +4565,6 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 		nvmf_rdma_subsystem_destroy(rsubsystem);
 	}
 
-	nvmf_rdma_sta_destroy(rtransport);
-
 	TAILQ_FOREACH_SAFE(device, &rtransport->devices, link, device_tmp) {
 		destroy_ib_device(rtransport, device);
 	}
@@ -4570,6 +4581,7 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	spdk_mempool_free(rtransport->data_wr_pool);
 
 	spdk_poller_unregister(&rtransport->accept_poller);
+	nvmf_rdma_sta_destroy(rtransport);
 	if (rtransport->rdma_opts.doca_log_level) {
 		free(rtransport->rdma_opts.doca_log_level);
 	}
