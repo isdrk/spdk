@@ -3148,7 +3148,8 @@ nvmf_sta_fabric_connect(struct nvmf_non_offload_request *non_offload_req)
 		oqpair->rsubsystem = rsubsystem;
 		drc = doca_sta_io_qp_add_subsystem(oqpair->opoller->sta_io, rsubsystem->handle, oqpair->handle);
 		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to add qpair to ubsystem: %s\n", doca_error_get_descr(drc));
+			SPDK_ERRLOG("Failed to add qpair to subsystem: %s\n", doca_error_get_descr(drc));
+			return -1;
 		}
 	}
 
