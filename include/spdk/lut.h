@@ -93,9 +93,9 @@ int spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_a
  * \param lut LUT object.
  * \param key Element's key.
  *
- * \return true on success, false otherwise (an invalid element etc.).
+ * \return 0 on success, a negative error code otherwise (an invalid element etc.).
  */
-bool spdk_lut_remove(struct spdk_lut *lut, uint64_t key);
+int spdk_lut_remove(struct spdk_lut *lut, uint64_t key);
 
 /**
  * Destroy LUT

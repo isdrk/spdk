@@ -5,8 +5,8 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/log.h"
-#include "spdk/thread.h"
-#include "lut.h"
+#include "spdk/assert.h"
+#include "spdk/lut.h"
 
 /* SPDK_LUT_MAX_KEY_BITS must be < 64 to share the same uint64_t with the 'valid' field */
 SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
@@ -42,13 +42,13 @@ struct spdk_lut {
 };
 
 static inline size_t
-spdk_lut_node_size(struct spdk_lut *lut)
+lut_node_size(struct spdk_lut *lut)
 {
 	return sizeof(struct spdk_lut_node);
 }
 
 static inline struct spdk_lut_node *
-spdk_lut_get_node(struct spdk_lut *lut, uint64_t key)
+lut_get_node(struct spdk_lut *lut, uint64_t key)
 {
 	return &lut->nodes[key];
 }
@@ -67,7 +67,7 @@ lut_extend_unsafe(struct spdk_lut *lut, uint64_t delta)
 		return false;
 	}
 
-	new_nodes = realloc(lut->nodes, num_nodes * spdk_lut_node_size(lut));
+	new_nodes = realloc(lut->nodes, num_nodes * lut_node_size(lut));
 	if (!new_nodes) {
 		SPDK_ERRLOG("Cannot alloc array of %" PRIu64 "nodes\n", num_nodes);
 		return false;
@@ -79,7 +79,8 @@ lut_extend_unsafe(struct spdk_lut *lut, uint64_t delta)
 	lut->num_nodes = num_nodes;
 
 	for (; i < num_nodes; i++) {
-		node = spdk_lut_get_node(lut, i);
+		node = lut_get_node(lut, i);
+		node->valid = 0;
 		node->key = i;
 		STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
 	}
@@ -88,19 +89,18 @@ lut_extend_unsafe(struct spdk_lut *lut, uint64_t delta)
 }
 
 static struct spdk_lut_node *
-spdk_lut_insert_unsafe(struct spdk_lut *lut, void *value)
+lut_insert_unsafe(struct spdk_lut *lut, void *value)
 {
-	struct spdk_lut_node *node = NULL;
+	struct spdk_lut_node *node;
 
-	if (STAILQ_EMPTY(&lut->free_nodes)) {
-		lut_extend_unsafe(lut, lut->growth_step);
+	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend_unsafe(lut, lut->growth_step)) {
+		return NULL;
 	}
-	if (!STAILQ_EMPTY(&lut->free_nodes)) {
-		node = STAILQ_FIRST(&lut->free_nodes);
-		STAILQ_REMOVE_HEAD(&lut->free_nodes, u.link);
-		node->valid = 1;
-		node->u.ptr = value;
-	}
+
+	node = STAILQ_FIRST(&lut->free_nodes);
+	STAILQ_REMOVE_HEAD(&lut->free_nodes, u.link);
+	node->valid = 1;
+	node->u.ptr = value;
 
 	return node;
 }
@@ -141,7 +141,7 @@ spdk_lut_insert(struct spdk_lut *lut, void *value)
 	struct spdk_lut_node *node;
 	uint64_t key = SPDK_LUT_INVALID_KEY;
 
-	node = spdk_lut_insert_unsafe(lut, value);
+	node = lut_insert_unsafe(lut, value);
 	if (node) {
 		key = node->key;
 	}
@@ -156,7 +156,7 @@ spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 	void *value = SPDK_LUT_INVALID_VALUE;
 
 	if (key < lut->num_nodes) {
-		node = spdk_lut_get_node(lut, key);
+		node = lut_get_node(lut, key);
 		if (node->valid) {
 			value = node->u.ptr;
 		}
@@ -173,7 +173,7 @@ spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 	int rc = 0;
 
 	for (key = 0; key < lut->num_nodes ; key++) {
-		node = spdk_lut_get_node(lut, key);
+		node = lut_get_node(lut, key);
 
 		if (!node->valid) {
 			continue;
@@ -188,18 +188,18 @@ spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 	return rc;
 }
 
-bool
+int
 spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 {
 	struct spdk_lut_node *node;
-	bool rc = false;
+	bool rc = -ENOENT;
 
 	if (key < lut->num_nodes) {
-		node = spdk_lut_get_node(lut, key);
+		node = lut_get_node(lut, key);
 		if (node->valid) {
 			node->valid = 0;
 			STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
-			rc = true;
+			rc = 0;
 		}
 	}
 

@@ -208,5 +208,13 @@
 	spdk_md5final;
 	spdk_md5update;
 
+	# public functions in lut.h
+	spdk_lut_create;
+	spdk_lut_insert;
+	spdk_lut_get;
+	spdk_lut_foreach;
+	spdk_lut_remove;
+	spdk_lut_free;
+
 	local: *;
 };

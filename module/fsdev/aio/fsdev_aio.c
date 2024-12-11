@@ -9,9 +9,9 @@
 #include "spdk/util.h"
 #include "spdk/thread.h"
 #include "spdk/likely.h"
+#include "spdk/lut.h"
 #include "aio_mgr.h"
 #include "fsdev_aio.h"
-#include "lut.h"
 
 #define FILE_PTR_LUT_INIT_SIZE 1000
 #define FILE_PTR_LUT_BITS 63
