@@ -211,12 +211,13 @@ test-virtio-fs-app:
   script:
     - |
       if [ x"$VIRTIO_FS_CI_WEBREPO_URL" != x"" ]; then
-        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$CI_COMMIT_REF_NAME.json || true
-        if [ -f ci-$CI_COMMIT_REF_NAME.json ]; then
-          VIRTIO_FS_TARGET_REF=$(cat ci-$CI_COMMIT_REF_NAME.json | jq .spdk.app_ref)
-          echo ci-$CI_COMMIT_REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        REF_NAME=$(echo "$CI_COMMIT_REF_NAME" | tr '/' '_')
+        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$REF_NAME.json || true
+        if [ -f ci-$REF_NAME.json ]; then
+          VIRTIO_FS_TARGET_REF=$(cat ci-$REF_NAME.json | jq .spdk.app_ref)
+          echo ci-$REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
         else
-          echo ci-$CI_COMMIT_REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+          echo ci-$REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
         fi
       fi
     - >
