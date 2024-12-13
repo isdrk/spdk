@@ -8553,56 +8553,277 @@ const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload = {
 SPDK_NVMF_TRANSPORT_REGISTER(rdma_offload, &spdk_nvmf_transport_rdma_offload);
 SPDK_LOG_REGISTER_COMPONENT(rdma_offload)
 
-/* 256 can be replaced with doca_sta_cap_get_max_num_eus_available(...) */
-#define MAX_EUS_NUM 256
+static int
+rpc_tgt_ofld_get_rtransport(struct spdk_nvmf_rdma_transport **out)
+{
+	struct spdk_nvmf_tgt *tgt;
+	struct spdk_nvmf_transport *transport;
+	struct spdk_nvmf_rdma_transport *rtransport;
 
-struct tgt_ofld_comp_eu_num_attr {
-	int group;
+	tgt = spdk_nvmf_get_tgt(NULL);
+	if (!tgt) {
+		SPDK_ERRLOG("Unable to find a target object\n");
+		return -ENODEV;
+	}
+
+	transport = spdk_nvmf_tgt_get_transport(tgt, "RDMA_OFFLOAD");
+	if (!transport) {
+		SPDK_ERRLOG("RDMA_OFFLOAD transport is not found\n");
+		return -ENODEV;
+	}
+
+	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
+	if (rtransport->sta.state != DOCA_CTX_STATE_RUNNING) {
+		SPDK_ERRLOG("Invalid sta state - not running\n");
+		return -EPERM;
+	}
+
+	*out = rtransport;
+	return 0;
+}
+
+static int
+rpc_tgt_ofld_get_sta(struct spdk_nvmf_rdma_sta **sta)
+{
+	struct spdk_nvmf_rdma_transport *rtransport;
+	int rc;
+
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		return rc;
+	}
+
+	*sta = &rtransport->sta;
+	return 0;
+}
+
+static doca_error_t
+rpc_tgt_ofld_get_eu_handles(struct spdk_nvmf_rdma_sta *sta, doca_sta_eu_handle_t **handles,
+			    uint32_t *num_handles)
+{
+	doca_sta_eu_handle_t *arr;
+	uint32_t arr_size;
+	doca_error_t drc;
+
+	arr_size = sta->caps.max_eus;
+	arr = calloc(arr_size, sizeof(*arr));
+	if (!arr) {
+		return DOCA_ERROR_NO_MEMORY;
+	}
+
+	drc = doca_sta_get_eu_handle(sta->sta, arr, &arr_size);
+	if (DOCA_IS_ERROR(drc)) {
+		free(arr);
+		return drc;
+	}
+
+	*handles = arr;
+	*num_handles = arr_size;
+	return 0;
+}
+
+static int
+rpc_tgt_ofld_eu_cmp_type(doca_sta_eu_handle_t eu_handle, enum dpa_sta_eu_type type)
+{
+	doca_error_t drc;
+	enum dpa_sta_eu_type eu_type;
+
+	assert(type < DOCA_STA_EU_MAX);
+	drc = doca_sta_get_eu_type(eu_handle, &eu_type);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get handle type: %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	return (type == eu_type) ? 0 : -1;
+}
+
+static doca_error_t
+rpc_tgt_ofld_eu_find_by_type_id(doca_sta_eu_handle_t *handles, uint32_t num_handles,
+				enum dpa_sta_eu_type type, uint16_t id, doca_sta_eu_handle_t **handle)
+{
+	uint32_t i;
+	enum dpa_sta_eu_type eu_type;
+	uint16_t eu_id;
+	doca_error_t drc;
+
+	for (i = 0; i < num_handles; i++) {
+		drc = doca_sta_get_eu_type(handles[i], &eu_type);
+		if (DOCA_IS_ERROR(drc)) {
+			return drc;
+		}
+		if (eu_type != type) {
+			continue;
+		}
+
+		drc = doca_sta_get_eu_id(handles[i], &eu_id);
+		if (DOCA_IS_ERROR(drc)) {
+			return drc;
+		}
+		if (eu_id == id) {
+			*handle = &handles[i];
+			return DOCA_SUCCESS;
+		}
+	}
+
+	return DOCA_ERROR_NOT_FOUND;
+}
+
+static doca_error_t
+rpc_tgt_ofld_eu_find_by_name(doca_sta_eu_handle_t *handles, uint32_t num_handles,
+			     const char *name, doca_sta_eu_handle_t **handle)
+{
+	uint32_t i;
+	const char *eu_name;
+	doca_error_t drc;
+
+
+	for (i = 0; i < num_handles; i++) {
+		drc = doca_sta_get_eu_name(handles[i], &eu_name);
+		if (DOCA_IS_ERROR(drc)) {
+			return drc;
+		}
+		if (strcmp(eu_name, name) == 0) {
+			*handle = &handles[i];
+			return DOCA_SUCCESS;
+		}
+	}
+
+	return DOCA_ERROR_NOT_FOUND;
+}
+
+struct rpc_tgt_ofld_eu_data {
+	const char *name;
+	uint16_t eu_id;
+	uint16_t port;
 };
 
-static const struct spdk_json_object_decoder tgt_ofld_comp_eu_num_decoder[] = {
-	{"group", offsetof(struct tgt_ofld_comp_eu_num_attr, group), spdk_json_decode_int32, true},
-};
+static doca_error_t
+rpc_tgt_ofld_eu_get_data(doca_sta_eu_handle_t eu_handle, struct rpc_tgt_ofld_eu_data *data)
+{
+	doca_error_t drc;
 
-struct tgt_ofld_hdlr_list_attr {
-	char *type;
-};
+	drc = doca_sta_get_eu_name(eu_handle, &data->name);
+	if (DOCA_IS_ERROR(drc)) {
+		return drc;
+	}
 
-static const struct spdk_json_object_decoder tgt_ofld_rpc_hdlr_list_decoder[] = {
-	{"type", offsetof(struct tgt_ofld_hdlr_list_attr, type), spdk_json_decode_string, true},
-};
+	drc = doca_sta_get_eu_id(eu_handle, &data->eu_id);
+	if (DOCA_IS_ERROR(drc)) {
+		return drc;
+	}
 
-struct tgt_ofld_hdlr_counter_attr {
-	char *type;
-	char *name;
-};
+	drc = doca_sta_get_eu_port(eu_handle, &data->port);
+	if (DOCA_IS_ERROR(drc)) {
+		return drc;
+	}
 
-static const struct spdk_json_object_decoder tgt_ofld_rpc_hdlr_counter_decoder[] = {
-	{"type", offsetof(struct tgt_ofld_hdlr_counter_attr, type), spdk_json_decode_string, true},
-	{"name", offsetof(struct tgt_ofld_hdlr_counter_attr, name), spdk_json_decode_string, true},
-};
+	return DOCA_SUCCESS;
+}
 
 static void
-tgt_ofld_hdlr_data_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_hdlr_data_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
 {
-	const char *name;
-	uint16_t eu_id, port;
+	struct rpc_tgt_ofld_eu_data data;
+	doca_error_t drc;
+
+	drc = rpc_tgt_ofld_eu_get_data(eu_handle, &data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get EU handle data: %s\n", doca_error_get_descr(drc));
+		return;
+	}
 
 	spdk_json_write_object_begin(w);
 
-	(void)doca_sta_get_eu_name(eu_handle, &name);
-	(void)doca_sta_get_eu_id(eu_handle, &eu_id);
-	(void)doca_sta_get_eu_port(eu_handle, &port);
-
-	spdk_json_write_named_string(w, "hdlr_name", name);
-	spdk_json_write_named_uint32(w, "eu_id", eu_id);
-	spdk_json_write_named_uint32(w, "port", port);
+	spdk_json_write_named_string(w, "hdlr_name", data.name);
+	spdk_json_write_named_uint16(w, "eu_id", data.eu_id);
+	spdk_json_write_named_uint16(w, "port", data.port);
 
 	spdk_json_write_object_end(w);
 }
 
+static int
+rpc_tgt_ofld_decode_eu_type(const struct spdk_json_val *val, void *out)
+{
+	enum dpa_sta_eu_type *type = out;
+
+	if (spdk_json_strequal(val, "comp") == true) {
+		*type = DOCA_STA_EU_COMP;
+	} else if (spdk_json_strequal(val, "tx") == true) {
+		*type = DOCA_STA_EU_TX;
+	} else if (spdk_json_strequal(val, "beq") == true) {
+		*type = DOCA_STA_EU_BEQ;
+	} else {
+		SPDK_NOTICELOG("Invalid parameter value: type\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+struct rpc_tgt_ofld_hdlr_list_attr {
+	enum dpa_sta_eu_type type;
+};
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_rpc_hdlr_list_decoder[] = {
+	{"type", offsetof(struct rpc_tgt_ofld_hdlr_list_attr, type), rpc_tgt_ofld_decode_eu_type, true},
+};
+
 static void
-tgt_ofld_ctr_info_dump(struct spdk_json_write_ctx *w, const struct doca_sta_eu_ctr_info *ctr_info)
+rpc_tgt_ofld_event_handler_list(struct spdk_jsonrpc_request *request,
+				const struct spdk_json_val *params)
+{
+	struct rpc_tgt_ofld_hdlr_list_attr attr = {
+		.type = DOCA_STA_EU_MAX
+	};
+	struct spdk_nvmf_rdma_sta *sta;
+	struct spdk_json_write_ctx *w;
+	doca_sta_eu_handle_t *eu_handles;
+	uint32_t i, num_eu_handles;
+	int rc;
+	doca_error_t drc;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_rpc_hdlr_list_decoder,
+					    SPDK_COUNTOF(rpc_tgt_ofld_rpc_hdlr_list_decoder), &attr)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			return;
+		}
+	}
+
+	rc = rpc_tgt_ofld_get_sta(&sta);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		return;
+	}
+
+	drc = rpc_tgt_ofld_get_eu_handles(sta, &eu_handles, &num_eu_handles);
+	if (DOCA_IS_ERROR(drc)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 doca_error_get_descr(drc));
+		return;
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	for (i = 0; i < num_eu_handles; ++i) {
+		if (attr.type == DOCA_STA_EU_MAX ||
+		    !rpc_tgt_ofld_eu_cmp_type(eu_handles[i], attr.type)) {
+			rpc_tgt_ofld_hdlr_data_dump(eu_handles[i], w);
+		}
+	}
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+	free(eu_handles);
+}
+SPDK_RPC_REGISTER("tgt_ofld_event_handler_list", rpc_tgt_ofld_event_handler_list, SPDK_RPC_RUNTIME)
+
+static void
+rpc_tgt_ofld_ctr_info_dump(struct spdk_json_write_ctx *w,
+			   const struct doca_sta_eu_ctr_info *ctr_info)
 {
 	unsigned int i;
 
@@ -8612,246 +8833,121 @@ tgt_ofld_ctr_info_dump(struct spdk_json_write_ctx *w, const struct doca_sta_eu_c
 }
 
 static void
-tgt_ofld_hdlr_counter_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_eu_dump_counters(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
 {
 	const struct doca_sta_eu_ctr_info *ctr_info;
-	const char *name, *state = "RUNNING";
-	uint16_t eu_id, port;
+	struct rpc_tgt_ofld_eu_data eu_data;
+	doca_error_t drc;
+
+	drc = rpc_tgt_ofld_eu_get_data(eu_handle, &eu_data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get EU data: %s\n", doca_error_get_descr(drc));
+		return;
+	}
 
 	spdk_json_write_object_begin(w);
 
-	(void)doca_sta_get_eu_stats(eu_handle, &ctr_info);
-	(void)doca_sta_get_eu_id(eu_handle, &eu_id);
-	(void)doca_sta_get_eu_name(eu_handle, &name);
-	(void)doca_sta_get_eu_port(eu_handle, &port);
+	spdk_json_write_named_string(w, "hdlr_name", eu_data.name);
+	spdk_json_write_named_uint16(w, "eu_id", eu_data.eu_id);
+	spdk_json_write_named_uint16(w, "port", eu_data.port);
+	spdk_json_write_named_string(w, "state", "RUNNING");
 
-	spdk_json_write_named_string(w, "hdlr_name", name);
-	spdk_json_write_named_uint32(w, "eu_id", eu_id);
-	spdk_json_write_named_uint32(w, "port", port);
-	spdk_json_write_named_string(w, "state", state);
-
-	if (ctr_info) {
-		tgt_ofld_ctr_info_dump(w, ctr_info);
+	drc = doca_sta_get_eu_stats(eu_handle, &ctr_info);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get EU stats: %s\n", doca_error_get_descr(drc));
+	} else {
+		rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
 	}
 
 	spdk_json_write_object_end(w);
 }
 
-static bool
-tgt_ofld_rpc_common_check(struct spdk_nvmf_rdma_sta *sta, struct spdk_jsonrpc_request *request)
-{
-	const char *err_msg = "Invalid sta state - not running";
+struct rpc_tgt_ofld_hdlr_counter_attr {
+	enum dpa_sta_eu_type type;
+	char *name;
+};
 
-	/* Check if sta is running */
-	if (sta->state != DOCA_CTX_STATE_RUNNING) {
-		SPDK_ERRLOG("%s\n", err_msg);
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, err_msg);
-		return false;
-	}
-
-	return true;
-}
-
-static inline enum dpa_sta_eu_type
-tgt_ofld_rpc_hdlr_type_str_to_type(const char *type) {
-	enum dpa_sta_eu_type htype = DOCA_STA_EU_TYPE_UNKNOWN;
-
-	if (!strcmp(type, "comp"))
-	{
-		htype = DOCA_STA_EU_COMP;
-	} else if (!strcmp(type, "tx"))
-	{
-		htype = DOCA_STA_EU_TX;
-	} else if (!strcmp(type, "beq"))
-	{
-		htype = DOCA_STA_EU_BEQ;
-	} else if (!strcmp(type, "all"))
-	{
-		htype = DOCA_STA_EU_MAX;
-	}
-
-	return htype;
-}
-
-static bool
-tgt_ofld_rpc_get_handles(struct doca_sta *sta, doca_sta_eu_handle_t *eu_handle_arr,
-			 uint32_t *arr_size)
-{
-	doca_error_t err;
-
-	err = doca_sta_get_eu_handle(sta, eu_handle_arr, arr_size);
-	return err == DOCA_SUCCESS ? true : false;
-}
-
-static struct spdk_nvmf_rdma_transport *
-tgt_ofld_get_rtransport(void)
-{
-	struct spdk_nvmf_tgt *tgt;
-	struct spdk_nvmf_transport *transport;
-
-	tgt = spdk_nvmf_get_tgt(NULL);
-	if (!tgt) {
-		SPDK_ERRLOG("Unable to find a target object.\n");
-		return NULL;
-	}
-
-	transport = spdk_nvmf_tgt_get_transport(tgt, "RDMA_OFFLOAD");
-	if (!transport) {
-		SPDK_ERRLOG("Unable to find a transport object.\n");
-		return NULL;
-	}
-
-	return SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
-}
-
-static struct spdk_nvmf_rdma_sta *
-tgt_ofld_get_sta(void)
-{
-	struct spdk_nvmf_rdma_transport *rtransport;
-
-	rtransport = tgt_ofld_get_rtransport();
-	if (!rtransport) {
-		return NULL;
-	}
-
-	return &rtransport->sta;
-}
-
-static void
-rpc_tgt_ofld_event_handler_list(struct spdk_jsonrpc_request *request,
-				const struct spdk_json_val *params)
-{
-	struct spdk_json_write_ctx *w;
-	struct tgt_ofld_hdlr_counter_attr attr = {};
-	struct spdk_nvmf_rdma_sta *sta;
-	enum dpa_sta_eu_type attr_type, htype;
-	doca_sta_eu_handle_t eu_handle_arr[MAX_EUS_NUM];
-	uint32_t i, arr_size = MAX_EUS_NUM;
-
-	if (spdk_json_decode_object(params,
-				    tgt_ofld_rpc_hdlr_list_decoder,
-				    SPDK_COUNTOF(tgt_ofld_rpc_hdlr_list_decoder),
-				    &attr)) {
-		SPDK_ERRLOG("Function list: Invalid parameters");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid parameters");
-		goto cleanup;
-	}
-
-	sta = tgt_ofld_get_sta();
-	if (!sta) {
-		SPDK_ERRLOG("Function list: DOCA STA is not found");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "DOCA STA is not found");
-		goto cleanup;
-	}
-
-	if (!tgt_ofld_rpc_common_check(sta, request)) {
-		goto cleanup;
-	}
-
-	attr_type = tgt_ofld_rpc_hdlr_type_str_to_type(attr.type);
-	if (attr_type == DOCA_STA_EU_TYPE_UNKNOWN) {
-		SPDK_ERRLOG("Function list: Invalid handler type (%s, %d)", attr.type, attr_type);
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "Invalid handler type");
-		goto cleanup;
-	}
-
-	w = spdk_jsonrpc_begin_result(request);
-	spdk_json_write_array_begin(w);
-
-	if (tgt_ofld_rpc_get_handles(sta->sta, eu_handle_arr, &arr_size)) {
-		for (i = 0; i < arr_size; ++i) {
-			(void)doca_sta_get_eu_type(eu_handle_arr[i], &htype);
-			if (attr_type == DOCA_STA_EU_MAX || htype == attr_type) {
-				tgt_ofld_hdlr_data_dump(eu_handle_arr[i], w);
-			}
-		}
-	}
-
-	spdk_json_write_array_end(w);
-	spdk_jsonrpc_end_result(request, w);
-
-cleanup:
-	free(attr.type);
-}
-SPDK_RPC_REGISTER("tgt_ofld_event_handler_list", rpc_tgt_ofld_event_handler_list, SPDK_RPC_RUNTIME)
+static const struct spdk_json_object_decoder rpc_tgt_ofld_rpc_hdlr_counter_decoder[] = {
+	{"type", offsetof(struct rpc_tgt_ofld_hdlr_counter_attr, type), rpc_tgt_ofld_decode_eu_type, true},
+	{"name", offsetof(struct rpc_tgt_ofld_hdlr_counter_attr, name), spdk_json_decode_string, true},
+};
 
 static void
 rpc_tgt_ofld_event_handler_counter(struct spdk_jsonrpc_request *request,
 				   const struct spdk_json_val *params)
 {
-	struct spdk_json_write_ctx *w;
-	struct tgt_ofld_hdlr_counter_attr attr = {};
+	struct rpc_tgt_ofld_hdlr_counter_attr attr = {
+		.type = DOCA_STA_EU_MAX
+	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_sta_eu_handle_t eu_handle_arr[MAX_EUS_NUM];
-	enum dpa_sta_eu_type attr_type = DOCA_STA_EU_TYPE_UNKNOWN, htype;
-	uint32_t i, arr_size = MAX_EUS_NUM;
+	struct spdk_json_write_ctx *w;
+	doca_sta_eu_handle_t *eu_handles = NULL;
+	doca_sta_eu_handle_t *eu_handle;
+	uint32_t i, num_eu_handles;
+	int rc;
+	doca_error_t drc;
 
-	if (spdk_json_decode_object(params,
-				    tgt_ofld_rpc_hdlr_counter_decoder,
-				    SPDK_COUNTOF(tgt_ofld_rpc_hdlr_counter_decoder),
-				    &attr)) {
-		SPDK_ERRLOG("Get counters: Invalid parameters");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid parameters");
-		goto cleanup;
-	}
-
-	sta = tgt_ofld_get_sta();
-	if (!sta) {
-		SPDK_ERRLOG("Get counters: DOCA STA is not found");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "DOCA STA is not found");
-		goto cleanup;
-	}
-
-	if (!tgt_ofld_rpc_common_check(sta, request)) {
-		goto cleanup;
-	}
-
-	if (attr.type) {
-		attr_type = tgt_ofld_rpc_hdlr_type_str_to_type(attr.type);
-		if (attr_type == DOCA_STA_EU_TYPE_UNKNOWN) {
-			SPDK_ERRLOG("Get counters: Invalid handler type (%s, %d)", attr.type, attr_type);
-			spdk_jsonrpc_send_error_response(request,
-							 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "Invalid handler type");
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_rpc_hdlr_counter_decoder,
+					    SPDK_COUNTOF(rpc_tgt_ofld_rpc_hdlr_counter_decoder), &attr)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
 			goto cleanup;
 		}
 	}
-
-	if (!tgt_ofld_rpc_get_handles(sta->sta, eu_handle_arr, &arr_size)) {
-		SPDK_ERRLOG("Get counters: Failed to get handles (%s, %d)", attr.type, attr_type);
-		spdk_jsonrpc_send_error_response(request,
-						 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "Get counters - failed get handles");
+	if (attr.type != DOCA_STA_EU_MAX && attr.name != NULL) {
+		SPDK_ERRLOG("Only one of type and name can be configured\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 spdk_strerror(EINVAL));
 		goto cleanup;
 	}
 
+	rc = rpc_tgt_ofld_get_sta(&sta);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	drc = rpc_tgt_ofld_get_eu_handles(sta, &eu_handles, &num_eu_handles);
+	if (DOCA_IS_ERROR(drc)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 doca_error_get_descr(drc));
+		goto cleanup;
+	}
+
+	eu_handle = NULL;
+	if (attr.name) {
+		drc = rpc_tgt_ofld_eu_find_by_name(eu_handles, num_eu_handles, attr.name, &eu_handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("EU %s is not found\n", attr.name);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
+			goto cleanup;
+		}
+	}
 	w = spdk_jsonrpc_begin_result(request);
 	spdk_json_write_array_begin(w);
 
-	const char *name;
-	for (i = 0; i < arr_size; ++i) {
-		if (attr.name) {
-			(void)doca_sta_get_eu_name(eu_handle_arr[i], &name);
-			if (!strcmp(name, attr.name)) {
-				tgt_ofld_hdlr_counter_dump(eu_handle_arr[i], w);
+	if (eu_handle) {
+		rpc_tgt_ofld_eu_dump_counters(*eu_handle, w);
+	} else {
+		for (i = 0; i < num_eu_handles; ++i) {
+			if (attr.type != DOCA_STA_EU_MAX &&
+			    rpc_tgt_ofld_eu_cmp_type(eu_handles[i], attr.type)) {
+				continue;
 			}
-		} else {
-			(void)doca_sta_get_eu_type(eu_handle_arr[i], &htype);
-			if (attr_type == DOCA_STA_EU_MAX || htype == attr_type) {
-				tgt_ofld_hdlr_counter_dump(eu_handle_arr[i], w);
-			}
+			rpc_tgt_ofld_eu_dump_counters(eu_handles[i], w);
 		}
 	}
-
 	spdk_json_write_array_end(w);
 	spdk_jsonrpc_end_result(request, w);
-
 cleanup:
-	free(attr.type);
-	free(attr.name);
+	if (eu_handles) {
+		free(eu_handles);
+	}
+	if (attr.name) {
+		free(attr.name);
+	}
 }
 SPDK_RPC_REGISTER("tgt_ofld_event_handler_counter", rpc_tgt_ofld_event_handler_counter,
 		  SPDK_RPC_RUNTIME)
@@ -8860,198 +8956,272 @@ static void
 rpc_tgt_ofld_event_handler_counter_reset(struct spdk_jsonrpc_request *request,
 		const struct spdk_json_val *params)
 {
-	struct tgt_ofld_hdlr_counter_attr attr = {};
+	struct rpc_tgt_ofld_hdlr_counter_attr attr = {
+		.type = DOCA_STA_EU_MAX
+	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_sta_eu_handle_t eu_handle_arr[MAX_EUS_NUM];
-	enum dpa_sta_eu_type attr_type = DOCA_STA_EU_TYPE_UNKNOWN;
-	uint32_t i, arr_size = MAX_EUS_NUM;
-	doca_error_t err = DOCA_SUCCESS;
-	bool found = false;
+	doca_sta_eu_handle_t *eu_handles = NULL;
+	doca_sta_eu_handle_t *eu_handle;
+	uint32_t num_eu_handles;
+	int rc;
+	doca_error_t drc;
 
-	if (spdk_json_decode_object(params,
-				    tgt_ofld_rpc_hdlr_counter_decoder,
-				    SPDK_COUNTOF(tgt_ofld_rpc_hdlr_counter_decoder),
-				    &attr)) {
-		SPDK_ERRLOG("Reset counters: Invalid parameters");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS, "Invalid parameters");
-		goto cleanup;
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_rpc_hdlr_counter_decoder,
+					    SPDK_COUNTOF(rpc_tgt_ofld_rpc_hdlr_counter_decoder), &attr)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			goto cleanup;
+		}
 	}
-
-	sta = tgt_ofld_get_sta();
-	if (!sta) {
-		SPDK_ERRLOG("Reset counters: DOCA STA is not found");
+	if (attr.type == DOCA_STA_EU_MAX && attr.name == NULL) {
+		SPDK_ERRLOG("Either type or name must be configured\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "DOCA STA is not found");
+						 spdk_strerror(EINVAL));
+		goto cleanup;
+	}
+	if (attr.type != DOCA_STA_EU_MAX && attr.name != NULL) {
+		SPDK_ERRLOG("Only one of type and name can be configured\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 spdk_strerror(EINVAL));
 		goto cleanup;
 	}
 
-	if (!tgt_ofld_rpc_common_check(sta, request)) {
+	rc = rpc_tgt_ofld_get_sta(&sta);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
 		goto cleanup;
 	}
 
-	if (attr.type) {
-		attr_type = tgt_ofld_rpc_hdlr_type_str_to_type(attr.type);
-		if (attr_type == DOCA_STA_EU_TYPE_UNKNOWN) {
-			SPDK_ERRLOG("Reset counters: Invalid handler type (%s, %d)", attr.type, attr_type);
-			spdk_jsonrpc_send_error_response(request,
-							 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "Invalid handler type");
+	if (attr.type != DOCA_STA_EU_MAX) {
+		drc = doca_sta_eu_reset_stats_type(sta->sta, attr.type);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to reset counters by EU type (%d): %s\n",
+				    attr.type, doca_error_get_descr(drc));
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
 			goto cleanup;
 		}
-
-		err = doca_sta_eu_reset_stats_type(sta->sta, attr_type);
 	} else {
-		if (!tgt_ofld_rpc_get_handles(sta->sta, eu_handle_arr, &arr_size)) {
-			SPDK_ERRLOG("Reset counters: Failed to get handles (%s, %d)", attr.type, attr_type);
-			spdk_jsonrpc_send_error_response(request,
-							 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "Failed get handles");
+		drc = rpc_tgt_ofld_get_eu_handles(sta, &eu_handles, &num_eu_handles);
+		if (DOCA_IS_ERROR(drc)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
 			goto cleanup;
 		}
 
-		const char *name;
-		for (i = 0; i < arr_size; ++i) {
-			(void)doca_sta_get_eu_name(eu_handle_arr[i], &name);
-			if (!strcmp(name, attr.name)) {
-				err = doca_sta_eu_reset_stats_handle(eu_handle_arr[i]);
-				found = true;
-				break;
-			}
-		}
-
-		if (!found) {
-			SPDK_ERRLOG("Reset counters: Failed to find handler by specified name (%s)", attr.name);
-			spdk_jsonrpc_send_error_response(request,
-							 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "Failed to reset counters by given name");
+		drc = rpc_tgt_ofld_eu_find_by_name(eu_handles, num_eu_handles, attr.name, &eu_handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("EU %s is not found\n", attr.name);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
 			goto cleanup;
 		}
-	}
-
-	if (err != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Reset counters: Failed to reset counters (%s, %d)", attr.type, attr_type);
-		spdk_jsonrpc_send_error_response(request,
-						 SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "Failed to reset counters");
-		goto cleanup;
+		drc = doca_sta_eu_reset_stats_handle(*eu_handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to reset counters for EU %s: %s\n", attr.name,
+				    doca_error_get_descr(drc));
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
+			goto cleanup;
+		}
 	}
 
 	spdk_jsonrpc_send_bool_response(request, true);
-
 cleanup:
-	free(attr.type);
-	free(attr.name);
+	if (eu_handles) {
+		free(eu_handles);
+	}
+	if (attr.name) {
+		free(attr.name);
+	}
 }
 SPDK_RPC_REGISTER("tgt_ofld_event_handler_counter_reset", rpc_tgt_ofld_event_handler_counter_reset,
 		  SPDK_RPC_RUNTIME)
 
-#define MAX_CONNECTED_QP_PER_COMP_EU (4096)
-
 static void
-tgt_ofld_rpc_qp_dump(doca_sta_qp_handle_t qp_h, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_qp_dump(doca_sta_qp_handle_t qp_handle, struct spdk_json_write_ctx *w)
 {
-	uint32_t u32;
-	uint16_t u16;
+	uint32_t qpn;
+	uint16_t port_id;
+	uint16_t conn_id;
+	doca_error_t drc;
+
+	drc = doca_sta_io_qp_get_id(qp_handle, &qpn);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get QPN: %s\n", doca_error_get_descr(drc));
+		return;
+	}
+
+	drc = doca_sta_io_qp_get_port_id(qp_handle, &port_id);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get QP port: %s\n", doca_error_get_descr(drc));
+		return;
+	}
+
+	drc = doca_sta_io_qp_get_index_in_group(qp_handle, &conn_id);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get QP conn_id: %s\n", doca_error_get_descr(drc));
+		return;
+	}
 
 	spdk_json_write_object_begin(w);
 
-	(void)doca_sta_io_qp_get_id(qp_h, &u32);
-	spdk_json_write_named_string_fmt(w, "QPN #", "0x%x", u32);
-
-	(void)doca_sta_io_qp_get_port_id(qp_h, &u16);
-	spdk_json_write_named_uint16(w, "port", u16);
-
-	(void)doca_sta_io_qp_get_index_in_group(qp_h, &u16);
-	spdk_json_write_named_uint16(w, "conn_id", u16);
+	spdk_json_write_named_string_fmt(w, "QPN", "0x%x", qpn);
+	spdk_json_write_named_uint16(w, "port", port_id);
+	spdk_json_write_named_uint16(w, "conn_id", conn_id);
 
 	spdk_json_write_object_end(w);
 }
+
+static void
+rpc_tgt_ofld_eu_dump_qp_stats(doca_sta_eu_handle_t eu_handle, doca_sta_qp_handle_t *qp_handles,
+			      uint16_t *num_qp_handles, struct spdk_json_write_ctx *w)
+{
+	char grp_name[64];
+	uint16_t eu_id;
+	uint16_t i;
+	doca_error_t drc;
+
+	drc = doca_sta_get_eu_id(eu_handle, &eu_id);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get EU id\n");
+		*num_qp_handles = 0;
+		return;
+	}
+
+	drc = doca_sta_get_eu_connect_qp_stats(eu_handle, qp_handles, num_qp_handles);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get QP stats for EU #%u: %s\n", eu_id, doca_error_get_descr(drc));
+		*num_qp_handles = 0;
+		return;
+	}
+	if (*num_qp_handles == 0) {
+		return;
+	}
+
+	spdk_json_write_object_begin(w);
+
+	snprintf(grp_name, sizeof(grp_name), "EU #%u", eu_id);
+	spdk_json_write_named_array_begin(w, grp_name);
+
+	for (i = 0; i < *num_qp_handles; i++) {
+		rpc_tgt_ofld_qp_dump(qp_handles[i], w);
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_json_write_named_uint32(w, "Total", *num_qp_handles);
+	spdk_json_write_object_end(w);
+}
+
+#define RPC_TGT_OFLD_EU_NUM_MAX		UINT16_MAX
+#define RPC_TGT_OFLD_EU_NUM_UNDEFINED	(RPC_TGT_OFLD_EU_NUM_MAX + 1)
+
+static int
+rpc_tgt_ofld_decode_eu_num(const struct spdk_json_val *val, void *out)
+{
+	int rc;
+	uint32_t eu_num;
+	uint32_t *u = out;
+
+	rc = spdk_json_number_to_uint32(val, &eu_num);
+	if (rc) {
+		return -EINVAL;
+	}
+	if (eu_num > RPC_TGT_OFLD_EU_NUM_MAX) {
+		SPDK_NOTICELOG("Invalid parameter value: too big (%u > %u)\n",
+			       eu_num, RPC_TGT_OFLD_EU_NUM_MAX);
+		return -EINVAL;
+	}
+	*u = eu_num;
+
+	return 0;
+}
+
+struct rpc_tgt_ofld_comp_eu_num_attr {
+	uint32_t group;
+};
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_comp_eu_num_decoder[] = {
+	{"group", offsetof(struct rpc_tgt_ofld_comp_eu_num_attr, group), rpc_tgt_ofld_decode_eu_num, true},
+};
 
 static void
 rpc_tgt_ofld_connect_qp_list(struct spdk_jsonrpc_request *request,
 			     const struct spdk_json_val *params)
 {
-	struct spdk_json_write_ctx *w;
-	struct tgt_ofld_comp_eu_num_attr attr = {};
+	struct rpc_tgt_ofld_comp_eu_num_attr attr = {
+		.group = RPC_TGT_OFLD_EU_NUM_UNDEFINED
+	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_error_t err;
-	doca_sta_be_q_handle_t connect_qp_arr[MAX_CONNECTED_QP_PER_COMP_EU];
-	doca_sta_eu_handle_t eu_handle_arr[MAX_EUS_NUM];
-	enum dpa_sta_eu_type htype;
-	uint32_t i, j, arr_size = MAX_EUS_NUM, total_qps = 0, max_connected_qps;
-	uint16_t eu_id, connect_qp_arr_size;
-	char grp_name[64];
-	const char *eu_name;
+	doca_sta_eu_handle_t *eu_handles;
+	doca_sta_eu_handle_t *eu_handle;
+	doca_sta_be_q_handle_t *qp_handles;
+	struct spdk_json_write_ctx *w;
+	uint32_t i, num_eu_handles;
+	uint16_t num_qp_handles, connected_qps;
+	uint32_t total_qps = 0;
+	int rc;
+	doca_error_t drc;
 
-	if (spdk_json_decode_object(params,
-				    tgt_ofld_comp_eu_num_decoder,
-				    SPDK_COUNTOF(tgt_ofld_comp_eu_num_decoder),
-				    &attr)) {
-		SPDK_ERRLOG("Connect QP list: Invalid parameters");
-		goto fail;
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_comp_eu_num_decoder,
+					    SPDK_COUNTOF(rpc_tgt_ofld_comp_eu_num_decoder), &attr)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			return;
+		}
 	}
 
-	sta = tgt_ofld_get_sta();
-	if (!sta) {
-		SPDK_ERRLOG("Connect QP list: DOCA STA is not found");
-		goto fail;
+	rc = rpc_tgt_ofld_get_sta(&sta);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		return;
 	}
 
-	if (!tgt_ofld_rpc_common_check(sta, request)) {
-		goto fail;
+	drc = rpc_tgt_ofld_get_eu_handles(sta, &eu_handles, &num_eu_handles);
+	if (DOCA_IS_ERROR(drc)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 doca_error_get_descr(drc));
+		return;
 	}
 
-	if (!tgt_ofld_rpc_get_handles(sta->sta, eu_handle_arr, &arr_size)) {
-		SPDK_ERRLOG("Connect QP list: Failed to get handles");
-		goto fail;
+	num_qp_handles = spdk_min(sta->caps.max_connected_qps, UINT16_MAX);
+	qp_handles = calloc(num_qp_handles, sizeof(*qp_handles));
+	if (!qp_handles) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 spdk_strerror(ENOMEM));
+		goto cleanup;
 	}
 
-	(void)doca_sta_cap_get_max_num_connected_qp_per_eu(sta->sta, &max_connected_qps);
-	if (max_connected_qps > MAX_CONNECTED_QP_PER_COMP_EU) {
-		SPDK_ERRLOG("Connect QP list: increase MAX_CONNECTED_QP_PER_COMP_EU (%d)",
-			    MAX_CONNECTED_QP_PER_COMP_EU);
-		goto fail;
+	eu_handle = NULL;
+	if (attr.group != RPC_TGT_OFLD_EU_NUM_UNDEFINED) {
+		drc = rpc_tgt_ofld_eu_find_by_type_id(eu_handles, num_eu_handles, DOCA_STA_EU_COMP,
+						      attr.group, &eu_handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Group %u is not found\n", attr.group);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
+			goto cleanup;
+		}
 	}
 
 	w = spdk_jsonrpc_begin_result(request);
 	spdk_json_write_array_begin(w);
 
-	for (i = 0; i < arr_size; ++i) {
-		(void)doca_sta_get_eu_type(eu_handle_arr[i], &htype);
-		if (htype != DOCA_STA_EU_COMP) {
-			continue;
-		}
-
-		doca_sta_get_eu_id(eu_handle_arr[i], &eu_id);
-		if (!(attr.group == -1 || attr.group == eu_id)) {
-			continue;
-		}
-
-		connect_qp_arr_size = MAX_CONNECTED_QP_PER_COMP_EU;
-		err = doca_sta_get_eu_connect_qp_stats(eu_handle_arr[i], connect_qp_arr, &connect_qp_arr_size);
-		if (err != DOCA_SUCCESS) {
-			(void)doca_sta_get_eu_name(eu_handle_arr[i], &eu_name);
-			SPDK_ERRLOG("Connect QP list: failed to get_eu_connect_qp_stats for %s ", eu_name);
-		} else {
-			if (connect_qp_arr_size) {
-				spdk_json_write_object_begin(w);
-
-				snprintf(grp_name, sizeof(grp_name) - 1, "EU #%d", eu_id);
-				spdk_json_write_named_array_begin(w, grp_name);
-
-				/* dump offload QP */
-				for (j = 0; j < connect_qp_arr_size; ++j) {
-					tgt_ofld_rpc_qp_dump(connect_qp_arr[j], w);
-				}
-
-				spdk_json_write_array_end(w);
-
-				spdk_json_write_named_uint32(w, "Total", connect_qp_arr_size);
-
-				spdk_json_write_object_end(w);
+	if (eu_handle) {
+		connected_qps = num_qp_handles;
+		rpc_tgt_ofld_eu_dump_qp_stats(*eu_handle, qp_handles, &connected_qps, w);
+		total_qps += connected_qps;
+	} else {
+		for (i = 0; i < num_eu_handles; ++i) {
+			if (rpc_tgt_ofld_eu_cmp_type(eu_handles[i], DOCA_STA_EU_COMP)) {
+				continue;
 			}
 
-			total_qps += connect_qp_arr_size;
+			connected_qps = num_qp_handles;
+			rpc_tgt_ofld_eu_dump_qp_stats(eu_handles[i], qp_handles, &connected_qps, w);
+			total_qps += connected_qps;
 		}
 	}
 
@@ -9061,84 +9231,112 @@ rpc_tgt_ofld_connect_qp_list(struct spdk_jsonrpc_request *request,
 
 	spdk_json_write_array_end(w);
 	spdk_jsonrpc_end_result(request, w);
-	return;
-
-fail:
-	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
-					 "Internal error, see log file");
+cleanup:
+	if (qp_handles) {
+		free(qp_handles);
+	}
+	if (eu_handles) {
+		free(eu_handles);
+	}
 }
 SPDK_RPC_REGISTER("tgt_ofld_connect_qp_list", rpc_tgt_ofld_connect_qp_list, SPDK_RPC_RUNTIME)
+
+static void
+rpc_tgt_ofld_eu_dump_qp_count(doca_sta_eu_handle_t eu_handle, uint16_t *num_qps,
+			      struct spdk_json_write_ctx *w)
+{
+	struct rpc_tgt_ofld_eu_data eu_data;
+	doca_error_t drc;
+
+	*num_qps = 0;
+	drc = rpc_tgt_ofld_eu_get_data(eu_handle, &eu_data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed get EU data: %s\n", doca_error_get_descr(drc));
+		return;
+	}
+
+	drc = doca_sta_get_eu_connect_qp_stats(eu_handle, NULL, num_qps);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to qp stats for EU #%u\n", eu_data.eu_id);
+		return;
+	}
+
+	if (*num_qps) {
+		spdk_json_write_object_begin(w);
+
+		spdk_json_write_named_uint32(w, "EU #", eu_data.eu_id);
+		spdk_json_write_named_uint32(w, "Port", eu_data.port);
+		spdk_json_write_named_uint32(w, "Total", *num_qps);
+
+		spdk_json_write_object_end(w);
+	}
+}
 
 static void
 rpc_tgt_ofld_connect_qp_count(struct spdk_jsonrpc_request *request,
 			      const struct spdk_json_val *params)
 {
-	struct spdk_json_write_ctx *w;
-	struct tgt_ofld_comp_eu_num_attr attr = {};
+	struct rpc_tgt_ofld_comp_eu_num_attr attr = {
+		.group = RPC_TGT_OFLD_EU_NUM_UNDEFINED
+	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_error_t err;
-	doca_sta_eu_handle_t eu_handle_arr[MAX_EUS_NUM];
-	enum dpa_sta_eu_type htype;
-	uint32_t i, arr_size = MAX_EUS_NUM, total_qps = 0;
-	uint16_t eu_id, port_id, connect_qp_arr_size;
-	const char *eu_name;
+	struct spdk_json_write_ctx *w;
+	doca_sta_eu_handle_t *eu_handles = NULL;
+	doca_sta_eu_handle_t *eu_handle;
+	uint32_t i, num_eu_handles, total_qps;
+	uint16_t num_qps;
+	int rc;
+	doca_error_t drc;
 
-	if (spdk_json_decode_object(params,
-				    tgt_ofld_comp_eu_num_decoder,
-				    SPDK_COUNTOF(tgt_ofld_comp_eu_num_decoder),
-				    &attr)) {
-		SPDK_ERRLOG("Connect QP list: Invalid parameters");
-		goto fail;
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_comp_eu_num_decoder,
+					    SPDK_COUNTOF(rpc_tgt_ofld_comp_eu_num_decoder), &attr)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			return;
+		}
 	}
 
-	sta = tgt_ofld_get_sta();
-	if (!sta) {
-		SPDK_ERRLOG("Connect QP list: DOCA STA is not found");
-		goto fail;
+	rc = rpc_tgt_ofld_get_sta(&sta);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		return;
 	}
 
-	if (!tgt_ofld_rpc_common_check(sta, request)) {
-		goto fail;
+	drc = rpc_tgt_ofld_get_eu_handles(sta, &eu_handles, &num_eu_handles);
+	if (DOCA_IS_ERROR(drc)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 doca_error_get_descr(drc));
+		return;
 	}
 
-	if (!tgt_ofld_rpc_get_handles(sta->sta, eu_handle_arr, &arr_size)) {
-		SPDK_ERRLOG("Connect QP list: Failed to get handles");
-		goto fail;
+	eu_handle = NULL;
+	if (attr.group != RPC_TGT_OFLD_EU_NUM_UNDEFINED) {
+		drc = rpc_tgt_ofld_eu_find_by_type_id(eu_handles, num_eu_handles, DOCA_STA_EU_COMP,
+						      attr.group, &eu_handle);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Group %u is not found\n", attr.group);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+							 doca_error_get_descr(drc));
+			goto cleanup;
+		}
 	}
 
 	w = spdk_jsonrpc_begin_result(request);
 	spdk_json_write_array_begin(w);
 
-	for (i = 0; i < arr_size; ++i) {
-		(void)doca_sta_get_eu_type(eu_handle_arr[i], &htype);
-		if (htype != DOCA_STA_EU_COMP) {
-			continue;
-		}
-
-		doca_sta_get_eu_id(eu_handle_arr[i], &eu_id);
-		if (!(attr.group == -1 || attr.group == eu_id)) {
-			continue;
-		}
-
-		doca_sta_get_eu_port(eu_handle_arr[i], &port_id);
-		connect_qp_arr_size = 0;
-		err = doca_sta_get_eu_connect_qp_stats(eu_handle_arr[i], NULL, &connect_qp_arr_size);
-		if (err != DOCA_SUCCESS) {
-			(void)doca_sta_get_eu_name(eu_handle_arr[i], &eu_name);
-			SPDK_ERRLOG("Connect QP list: failed to get_eu_connect_qp_stats for %s ", eu_name);
-		} else {
-			if (connect_qp_arr_size) {
-				spdk_json_write_object_begin(w);
-
-				spdk_json_write_named_uint32(w, "EU #", eu_id);
-				spdk_json_write_named_uint32(w, "Port", port_id);
-
-				spdk_json_write_named_uint32(w, "Total", connect_qp_arr_size);
-
-				spdk_json_write_object_end(w);
+	if (eu_handle) {
+		rpc_tgt_ofld_eu_dump_qp_count(*eu_handle, &num_qps, w);
+		total_qps = num_qps;
+	} else {
+		total_qps = 0;
+		for (i = 0; i < num_eu_handles; ++i) {
+			if (rpc_tgt_ofld_eu_cmp_type(eu_handles[i], DOCA_STA_EU_COMP)) {
+				continue;
 			}
 
-			total_qps += connect_qp_arr_size;
+			rpc_tgt_ofld_eu_dump_qp_count(eu_handles[i], &num_qps, w);
+			total_qps += num_qps;
 		}
 	}
 
@@ -9148,11 +9346,8 @@ rpc_tgt_ofld_connect_qp_count(struct spdk_jsonrpc_request *request,
 
 	spdk_json_write_array_end(w);
 	spdk_jsonrpc_end_result(request, w);
-	return;
-
-fail:
-	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
-					 "Internal error, see log file");
+cleanup:
+	free(eu_handles);
 }
 SPDK_RPC_REGISTER("tgt_ofld_connect_qp_count", rpc_tgt_ofld_connect_qp_count, SPDK_RPC_RUNTIME)
 
@@ -9199,7 +9394,7 @@ rpc_tgt_ofld_be_ctrlr_stats_dump(struct spdk_json_write_ctx *w,
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to get queue %d stats: %s\n", i, doca_error_get_descr(drc));
 		} else {
-			tgt_ofld_ctr_info_dump(w, ctr_info);
+			rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
 		}
 		spdk_json_write_object_end(w);
 	}
@@ -9211,28 +9406,24 @@ static void
 rpc_tgt_ofld_get_backend_ctrl_stat(struct spdk_jsonrpc_request *request,
 				   const struct spdk_json_val *params)
 {
-	struct spdk_json_write_ctx *w;
 	struct rpc_tgt_ofld_get_backend_ctrl_stat req = {};
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_rdma_bdev *rbdev = NULL;
+	struct spdk_json_write_ctx *w;
+	int rc;
 
 	if (params != NULL) {
-		if (spdk_json_decode_object(params,
-					    rpc_tgt_ofld_get_backend_ctrl_stat_decoders,
-					    SPDK_COUNTOF(rpc_tgt_ofld_get_backend_ctrl_stat_decoders),
-					    &req)) {
-			SPDK_ERRLOG("spdk_json_decode_object failed\n");
-			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_get_backend_ctrl_stat_decoders,
+					    SPDK_COUNTOF(rpc_tgt_ofld_get_backend_ctrl_stat_decoders), &req)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 							 "spdk_json_decode_object failed");
 			goto cleanup;
 		}
 	}
 
-	rtransport = tgt_ofld_get_rtransport();
-	if (!rtransport) {
-		SPDK_ERRLOG("RDMA_OFFLOAD transport is not found\n");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "RDMA_OFFLOAD transport is not found");
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
 		goto cleanup;
 	}
 
@@ -9243,9 +9434,9 @@ rpc_tgt_ofld_get_backend_ctrl_stat(struct spdk_jsonrpc_request *request,
 			}
 		}
 		if (!rbdev) {
-			SPDK_ERRLOG("Backend controller %s is not found\n", req.name);
+			SPDK_ERRLOG("Backend controller is not found (%s)\n", req.name);
 			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "Backend controller is not found");
+							 spdk_strerror(ENODEV));
 			goto cleanup;
 		}
 	}
@@ -9263,7 +9454,6 @@ rpc_tgt_ofld_get_backend_ctrl_stat(struct spdk_jsonrpc_request *request,
 
 	spdk_json_write_array_end(w);
 	spdk_jsonrpc_end_result(request, w);
-
 cleanup:
 	free_rpc_tgt_ofld_get_backend_ctrl_stat(&req);
 }
@@ -9282,7 +9472,7 @@ free_tgt_ofld_get_bdev_stat(struct rpc_tgt_ofld_get_bdev_stat *s)
 	}
 }
 
-static const struct spdk_json_object_decoder tgt_ofld_get_bdev_stat_decoders[] = {
+static const struct spdk_json_object_decoder rpc_tgt_ofld_get_bdev_stat_decoders[] = {
 	{"name", offsetof(struct rpc_tgt_ofld_get_bdev_stat, name), spdk_json_decode_string, true},
 };
 
@@ -9302,7 +9492,7 @@ rpc_tgt_ofld_get_bdev_stats_dump(struct spdk_json_write_ctx *w,
 		SPDK_ERRLOG("Failed to get bdev %s stats: %s\n", spdk_bdev_get_name(rns->ns->bdev),
 			    doca_error_get_descr(drc));
 	} else {
-		tgt_ofld_ctr_info_dump(w, ctr_info);
+		rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
 	}
 
 	spdk_json_write_object_end(w);
@@ -9312,29 +9502,25 @@ static void
 rpc_tgt_ofld_get_bdev_stat(struct spdk_jsonrpc_request *request,
 			   const struct spdk_json_val *params)
 {
-	struct spdk_json_write_ctx *w;
 	struct rpc_tgt_ofld_get_bdev_stat req = {};
 	struct spdk_nvmf_rdma_transport *rtransport;
 	struct spdk_nvmf_rdma_subsystem *rsubsystem;
 	struct spdk_nvmf_rdma_ns *rns = NULL;
+	struct spdk_json_write_ctx *w;
+	int rc;
 
 	if (params != NULL) {
-		if (spdk_json_decode_object(params,
-					    tgt_ofld_get_bdev_stat_decoders,
-					    SPDK_COUNTOF(tgt_ofld_get_bdev_stat_decoders),
-					    &req)) {
-			SPDK_ERRLOG("spdk_json_decode_object failed\n");
-			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_get_bdev_stat_decoders,
+					    SPDK_COUNTOF(rpc_tgt_ofld_get_bdev_stat_decoders), &req)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 							 "spdk_json_decode_object failed");
 			goto cleanup;
 		}
 	}
 
-	rtransport = tgt_ofld_get_rtransport();
-	if (!rtransport) {
-		SPDK_ERRLOG("RDMA_OFFLOAD transport is not found\n");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "RDMA_OFFLOAD transport is not found");
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
 		goto cleanup;
 	}
 
@@ -9346,9 +9532,9 @@ rpc_tgt_ofld_get_bdev_stat(struct spdk_jsonrpc_request *request,
 				}
 			}
 		}
-		SPDK_ERRLOG("bdev %s is not found\n", req.name);
+		SPDK_ERRLOG("bdev is not found (%s)\n", req.name);
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "bdev is not found");
+						 spdk_strerror(ENODEV));
 		goto cleanup;
 	}
 bdev_is_found:
@@ -9368,7 +9554,6 @@ bdev_is_found:
 
 	spdk_json_write_array_end(w);
 	spdk_jsonrpc_end_result(request, w);
-
 cleanup:
 	free_tgt_ofld_get_bdev_stat(&req);
 }

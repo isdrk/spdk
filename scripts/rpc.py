@@ -2792,32 +2792,22 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                                             type=args.type))
 
     p = subparsers.add_parser('tgt_ofld_event_handler_list', help='List of OFFLOAD event handlers')
-    p.add_argument('--type', help='Event handler type', type=str, required=True,
-                   choices=['comp', 'tx', 'sqb', 'cqb', 'beq', 'all'])
+    p.add_argument('--type', help='Event handler type', type=str, required=False,
+                   choices=['comp', 'tx', 'beq'])
     p.set_defaults(func=tgt_ofld_event_handler_list)
 
     def tgt_ofld_event_handler_counter(args):
-        if args.type is None and args.name is None:
-            raise Exception('Either type or name must be configured')
-        if args.type is not None and args.name is not None:
-            raise Exception('Only one of type and name can be configured')
-
         print_dict(rpc.tgt_ofld.tgt_ofld_event_handler_counter(args.client,
                                                                type=args.type,
                                                                name=args.name))
 
     p = subparsers.add_parser('tgt_ofld_event_handler_counter', help='Get counters of event handlers')
     p.add_argument('--type', help='Event handler type', type=str, required=False,
-                   choices=['comp', 'tx', 'sqb', 'cqb', 'beq', 'all'])
+                   choices=['comp', 'tx', 'beq'])
     p.add_argument('--name', help='Event handler name', type=str, required=False)
     p.set_defaults(func=tgt_ofld_event_handler_counter)
 
     def tgt_ofld_event_handler_counter_reset(args):
-        if args.type is None and args.name is None:
-            raise Exception('Either type or name must be configured')
-        if args.type is not None and args.name is not None:
-            raise Exception('Only one of type and name can be configured')
-
         rpc.tgt_ofld.tgt_ofld_event_handler_counter_reset(args.client,
                                                           type=args.type,
                                                           name=args.name)
@@ -2825,7 +2815,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p = subparsers.add_parser('tgt_ofld_event_handler_counter_reset',
                               help='Reset the counters of the specified event handler(s)')
     p.add_argument('--type', help='Event handler type', type=str, required=False,
-                   choices=['comp', 'tx', 'sqb', 'cqb', 'beq', 'all'])
+                   choices=['comp', 'tx', 'beq'])
     p.add_argument('--name', help='Event handler name', type=str, required=False)
     p.set_defaults(func=tgt_ofld_event_handler_counter_reset)
 
@@ -2834,8 +2824,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                                          group=args.group))
 
     p = subparsers.add_parser('tgt_ofld_connect_qp_list', help='List of the connected QPs')
-    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups (-1).',
-                   type=int, default=-1, required=False)
+    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups.',
+                   type=int, required=False)
     p.set_defaults(func=tgt_ofld_connect_qp_list)
 
     def tgt_ofld_connect_qp_count(args):
@@ -2843,8 +2833,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                                           group=args.group))
 
     p = subparsers.add_parser('tgt_ofld_connect_qp_count', help='Total number of the connected QPs')
-    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups (-1).',
-                   type=int, default=-1, required=False)
+    p.add_argument('--group', help='Completion group EU index [0..max]. Default is all groups.',
+                   type=int, required=False)
     p.set_defaults(func=tgt_ofld_connect_qp_count)
 
     def tgt_ofld_get_backend_ctrl_stat(args):

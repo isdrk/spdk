@@ -4,18 +4,18 @@
 from .cmd_parser import *
 
 
-def tgt_ofld_event_handler_list(client, type):
+def tgt_ofld_event_handler_list(client, type=None):
     """List of OFFLOAD event handlers.
 
     Args:
-        type: Event handler type (comp, tx, sqb, cqb, beq, all)
+        type: Event handler type (comp, tx, beq)
 
     Returns:
         An array of event handlers.
     """
-    params = {'type': type}
-
-    params['type'] = type
+    params = {}
+    if type:
+        params['type'] = type
     return client.call('tgt_ofld_event_handler_list', params)
 
 
@@ -23,19 +23,17 @@ def tgt_ofld_event_handler_counter(client, type=None, name=None):
     """Get counters of event handlers.
 
     Args:
-        type: Event handler type (comp, tx, sqb, cqb, beq, all)
+        type: Event handler type (comp, tx, beq)
         name: Event handler name
 
     Returns:
         Counters of event handlers.
     """
     params = {}
-
     if type:
         params['type'] = type
     if name:
         params['name'] = name
-
     return client.call('tgt_ofld_event_handler_counter', params)
 
 
@@ -43,37 +41,36 @@ def tgt_ofld_event_handler_counter_reset(client, type=None, name=None):
     """Reset the counters of the specified event handler(s)
 
     Args:
-        type: Event handler type (comp, tx, sqb, cqb, beq, all)
+        type: Event handler type (comp, tx, beq)
         name: Event handler name
 
     Returns:
         True or false
     """
     params = {}
-
     if type:
         params['type'] = type
     if name:
         params['name'] = name
-
     return client.call('tgt_ofld_event_handler_counter_reset', params)
 
 
-def tgt_ofld_connect_qp_list(client, group):
+def tgt_ofld_connect_qp_list(client, group=None):
     """List of the connected QPs
 
     Args:
-        group: Completion group EU index [0..max]. Default is all groups (-1)
+        group: Completion group EU index [0..max]. Default is all groups.
 
     Returns:
         An array of connected QPs.
     """
-    params = {'group': group}
-
+    params = {}
+    if group is not None:
+        params['group'] = group
     return client.call('tgt_ofld_connect_qp_list', params)
 
 
-def tgt_ofld_connect_qp_count(client, group):
+def tgt_ofld_connect_qp_count(client, group=None):
     """Total number of the connected QPs
 
     Args:
@@ -82,11 +79,12 @@ def tgt_ofld_connect_qp_count(client, group):
     Returns:
         Number of connected QPs.
     """
-    params = {'group': group}
-
+    params = {}
+    if group is not None:
+        params['group'] = group
     return client.call('tgt_ofld_connect_qp_count', params)
 
-def tgt_ofld_get_backend_ctrl_stat(client, name):
+def tgt_ofld_get_backend_ctrl_stat(client, name=None):
     """Get statistics for offload backend controllers.
 
     Args:
@@ -100,7 +98,7 @@ def tgt_ofld_get_backend_ctrl_stat(client, name):
         params['name'] = name
     return client.call('tgt_ofld_get_backend_ctrl_stat', params)
 
-def tgt_ofld_get_bdev_stat(client, name):
+def tgt_ofld_get_bdev_stat(client, name=None):
     """Get statistics for offload bdevs.
 
     Args:
