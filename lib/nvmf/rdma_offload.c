@@ -10,7 +10,7 @@
 #include <doca_ctx.h>
 #include <doca_comch_producer.h>
 #include <doca_sta.h>
-#include <doca_sta_caps.h>
+#include <doca_sta_event.h>
 #include <doca_sta_be.h>
 #include <doca_sta_subsystem.h>
 #include <doca_sta_mem.h>
@@ -575,7 +575,7 @@ enum spdk_nvmf_offload_qpair_state {
 struct spdk_nvmf_offload_qpair {
 	struct spdk_nvmf_common_qpair		common;
 	struct spdk_nvmf_rdma_device		*device;
-	doca_sta_qp_handle_t			handle;
+	struct doca_sta_qp_handle		*handle;
 	struct spdk_nvmf_rdma_subsystem		*rsubsystem;
 	struct spdk_nvmf_offload_poller		*opoller;
 	struct rdma_cm_id			*cm_id;
@@ -686,7 +686,7 @@ struct spdk_nvmf_rdma_bdev_queue_destroy_ctx {
 struct spdk_nvmf_rdma_bdev_nvme_queue {
 	struct spdk_nvme_qpair				*nvme_qpair;
 	struct spdk_dmabuf				*db_dmabuf;
-	doca_sta_be_q_handle_t				handle;
+	struct doca_sta_be_q_handle			*handle;
 	struct doca_mmap				*sq_mmap;
 	struct doca_mmap				*cq_mmap;
 	struct doca_mmap				*db_mmap;
@@ -698,7 +698,7 @@ struct spdk_nvmf_rdma_bdev_null_queue {
 	void						*cq;
 	uint64_t					*sqdb;
 	uint64_t					*cqdb;
-	doca_sta_be_q_handle_t				handle;
+	struct doca_sta_be_q_handle			*handle;
 	struct doca_mmap				*sq_mmap;
 	struct doca_mmap				*cq_mmap;
 	struct doca_mmap				*db_mmap;
@@ -710,7 +710,7 @@ struct spdk_nvmf_rdma_bdev {
 	char				*name;
 	struct spdk_nvmf_rdma_sta	*sta;
 	int				refs;
-	doca_sta_be_handle_t		handle;
+	struct doca_sta_be_handle	*handle;
 	enum spdk_nvmf_rdma_bdev_type	type;
 	uint32_t			null_ns_id; /* is not relevant for SPDK_NVMF_RDMA_NS_BE_TYPE_NVME */
 	int num_queues;
@@ -728,7 +728,7 @@ struct spdk_nvmf_rdma_ns {
 	struct spdk_nvmf_ns			*ns;
 	struct spdk_nvmf_rdma_subsystem		*rsubsystem;
 	struct spdk_nvmf_rdma_bdev		*rbdev;
-	doca_sta_ns_handle_t			handle;
+	struct doca_sta_ns_handle		*handle;
 	uint32_t				fe_ns_id;
 	uint32_t				be_ns_id;
 	struct doca_sta_producer_task_send	*delete_task;
@@ -741,7 +741,7 @@ struct spdk_nvmf_rdma_ns {
 struct spdk_nvmf_rdma_subsystem {
 	const struct spdk_nvmf_subsystem		*subsystem;
 	struct spdk_nvmf_rdma_transport			*rtransport;
-	doca_sta_subs_handle_t				handle;
+	struct doca_sta_subs_handle			*handle;
 	TAILQ_HEAD(, spdk_nvmf_rdma_ns)			namespaces;
 	TAILQ_ENTRY(spdk_nvmf_rdma_subsystem)		link;
 };
@@ -3819,6 +3819,13 @@ sta_offload_task_destroy_bqueue_complete_err(struct doca_sta_producer_task_send 
 	destroy_ctx->destroy_completed = true;
 }
 
+static void
+nvmf_sta_event_back_end_timeout_cb(const struct doca_sta_event_back_end_timeout *event,
+				   union doca_data user_data)
+{
+	SPDK_ERRLOG("nvmf_sta_event_back_end_timeout_cb\n");
+}
+
 static void *
 nvmf_sta_zmalloc(size_t size, size_t align, uint64_t *phys_addr)
 {
@@ -3864,91 +3871,91 @@ nvmf_rdma_sta_get_caps(struct doca_sta *sta, struct nvmf_rdma_sta_caps *caps)
 {
 	doca_error_t drc;
 
-	drc = doca_sta_cap_get_max_devs(&caps->max_devs);
+	drc = doca_sta_get_max_devs(&caps->max_devs);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_devs(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_num_eus_available(sta, &caps->max_eus);
+	drc = doca_sta_get_max_num_eus_available(sta, &caps->max_eus);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_num_eus_available(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_num_connected_qp_per_eu(sta, &caps->max_connected_qps);
+	drc = doca_sta_get_max_num_connected_qp_per_eu(sta, &caps->max_connected_qps);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_num_connected_qp_per_eu(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_subsys(&caps->max_subsys);
+	drc = doca_sta_get_max_subsys(&caps->max_subsys);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_subsys(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_io_threads(&caps->max_io_threads);
+	drc = doca_sta_get_max_io_threads(&caps->max_io_threads);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_io_threads(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_io_size(&caps->max_io_size);
+	drc = doca_sta_get_max_io_size(&caps->max_io_size);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_io_size(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_io_num_per_dev(sta, &caps->max_ios);
+	drc = doca_sta_get_max_io_num_per_dev(sta, &caps->max_ios);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_io_num_per_dev(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_io_queue_size(sta, &caps->max_io_queue_size);
+	drc = doca_sta_get_max_io_queue_size(sta, &caps->max_io_queue_size);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_io_queue_size(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_min_ioccsz(&caps->min_ioccsz);
+	drc = doca_sta_get_min_ioccsz(&caps->min_ioccsz);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_min_ioccsz(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_ioccsz(&caps->max_ioccsz);
+	drc = doca_sta_get_max_ioccsz(&caps->max_ioccsz);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_ioccsz(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_min_iorcsz(&caps->min_iorcsz);
+	drc = doca_sta_get_min_iorcsz(&caps->min_iorcsz);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_min_iorcsz(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_iorcsz(&caps->max_iorcsz);
+	drc = doca_sta_get_max_iorcsz(&caps->max_iorcsz);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_iorcsz(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_icdoff(&caps->max_icdoff);
+	drc = doca_sta_get_max_icdoff(&caps->max_icdoff);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_icdoff(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_be(&caps->max_be);
+	drc = doca_sta_get_max_be(&caps->max_be);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_be(): %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
-	drc = doca_sta_cap_get_max_qs_per_be(&caps->max_qs_per_be);
+	drc = doca_sta_get_max_qs_per_be(&caps->max_qs_per_be);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("doca_sta_cap_get_max_qs_per_be(): %s\n", doca_error_get_descr(drc));
 		return -1;
@@ -3969,14 +3976,8 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 		return -ENODEV;
 	}
 
-	rc = doca_pe_create(&rtransport->sta.pe);
-	if (DOCA_IS_ERROR(rc)) {
-		SPDK_ERRLOG("doca_pe_create(): %s\n", doca_error_get_descr(rc));
-		return -EINVAL;
-	}
-
 	/* Create a new DOCA STA Context */
-	rc = doca_sta_create(rtransport->sta.dev, rtransport->sta.pe, &rtransport->sta.sta);
+	rc = doca_sta_create(rtransport->sta.dev, &rtransport->sta.sta);
 	if (DOCA_IS_ERROR(rc)) {
 		SPDK_ERRLOG("Unable to create DOCA STA Context for device %s: %s\n",
 			    rtransport->rdma_opts.doca_device,
@@ -4000,6 +4001,24 @@ nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
 	union doca_data udata;
 	doca_error_t rc;
 
+	rtransport->sta.ctx = doca_sta_as_ctx(rtransport->sta.sta);
+	if (!rtransport->sta.ctx) {
+		SPDK_ERRLOG("Unable to get context for DOCA STA\n");
+		return -EINVAL;
+	}
+
+	rc = doca_pe_create(&rtransport->sta.pe);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("doca_pe_create(): %s\n", doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+
+	rc = doca_pe_connect_ctx(rtransport->sta.pe, rtransport->sta.ctx);
+	if (DOCA_IS_ERROR(rc)) {
+		SPDK_ERRLOG("doca_pe_connect_ctx(): %s\n", doca_error_get_descr(rc));
+		return -EINVAL;
+	}
+
 	TAILQ_FOREACH(device, &rtransport->devices, link) {
 		/* Add device to the existing DOCA STA Context */
 		rc = doca_sta_add_dev(rtransport->sta.sta, device->doca_dev);
@@ -4013,11 +4032,6 @@ nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
 			       ibv_get_device_name(device->context->device));
 	}
 
-	rtransport->sta.ctx = doca_sta_as_doca_ctx(rtransport->sta.sta);
-	if (!rtransport->sta.ctx) {
-		SPDK_ERRLOG("Unable to get context for DOCA STA\n");
-		return -EINVAL;
-	}
 	rtransport->sta.state = DOCA_CTX_STATE_IDLE;
 	udata.ptr = rtransport;
 
@@ -4059,6 +4073,13 @@ nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
 	rc = doca_sta_set_max_sta_io(rtransport->sta.sta, spdk_env_get_core_count());
 	if (rc != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to set max_sta_io: %s", doca_error_get_name(rc));
+		return -EINVAL;
+	}
+
+	rc = doca_sta_event_back_end_timeout_register_cb(rtransport->sta.sta,
+			nvmf_sta_event_back_end_timeout_cb, udata);
+	if (rc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to register event_back_end_timeout_cb: %s", doca_error_get_name(rc));
 		return -EINVAL;
 	}
 
@@ -4521,15 +4542,15 @@ nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
 		}
 	}
 
-	if (rtransport->sta.pe) {
-		rc = doca_pe_destroy(rtransport->sta.pe);
+	if (rtransport->sta.dev) {
+		rc = doca_dev_close(rtransport->sta.dev);
 		if (DOCA_IS_ERROR(rc)) {
 			SPDK_ERRLOG("doca_pe_destroy: %s\n", doca_error_get_descr(rc));
 		}
 	}
 
-	if (rtransport->sta.dev) {
-		rc = doca_dev_close(rtransport->sta.dev);
+	if (rtransport->sta.pe) {
+		rc = doca_pe_destroy(rtransport->sta.pe);
 		if (DOCA_IS_ERROR(rc)) {
 			SPDK_ERRLOG("doca_pe_destroy: %s\n", doca_error_get_descr(rc));
 		}
@@ -5875,7 +5896,7 @@ nvmf_sta_io_state_changed_cb(const union doca_data user_data,
 
 static struct spdk_nvmf_offload_qpair *
 get_offload_qpair_from_qp_handle(struct spdk_nvmf_offload_poller *opoller,
-				 doca_sta_qp_handle_t qp_handle)
+				 struct doca_sta_qp_handle *qp_handle)
 {
 	struct spdk_nvmf_offload_qpair find;
 
@@ -5894,7 +5915,16 @@ nvmf_rdma_offload_qpair_disconnect(struct spdk_nvmf_offload_qpair *oqpair)
 }
 
 static void
-nvmf_sta_io_non_offload_handler(doca_sta_qp_handle_t qp_handle,
+nvmf_sta_io_event_transport_err_cb(const struct doca_sta_event_transport_err *event,
+				   union doca_data user_data)
+{
+	struct spdk_nvmf_offload_poller *opoller = user_data.ptr;
+
+	SPDK_ERRLOG("nvmf_sta_io_event_transport_err_cb: opoller %p\n", opoller);
+}
+
+static void
+nvmf_sta_io_non_offload_handler(struct doca_sta_qp_handle *qp_handle,
 				union doca_data user_data,
 				const uint8_t *nvme_cmd,
 				uint8_t *payload,
@@ -5911,7 +5941,7 @@ nvmf_sta_io_non_offload_handler(doca_sta_qp_handle_t qp_handle,
 
 	oqpair = get_offload_qpair_from_qp_handle(opoller, qp_handle);
 	if (!oqpair) {
-		SPDK_ERRLOG("qpair is not found for qp_handle 0x%lx\n", qp_handle);
+		SPDK_ERRLOG("qpair is not found for qp_handle %p\n", qp_handle);
 		// TODO: Any idea how to handle this error?
 		assert(0);
 		return;
@@ -6008,7 +6038,7 @@ nvmf_offload_poller_destroy(struct spdk_nvmf_offload_poller *opoller)
 		nvmf_sta_non_offload_resources_destroy(opoller->resources);
 		opoller->resources = NULL;
 	}
-	if (opoller->io_ctx != NULL && opoller->state == DOCA_CTX_STATE_RUNNING) {
+	if (opoller->state == DOCA_CTX_STATE_RUNNING) {
 		drc = doca_ctx_stop(opoller->io_ctx);
 		if (DOCA_IS_ERROR(drc)) {
 			if (drc != DOCA_ERROR_IN_PROGRESS) {
@@ -6065,12 +6095,7 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	RB_INIT(&opoller->qpairs);
 	opoller->state = DOCA_CTX_STATE_IDLE;
 
-	drc = doca_sta_cap_get_max_io_num_per_dev(rtransport->sta.sta, &opoller->max_queue_depth);
-	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("Failed to get max_io_num per io thread: %s\n", doca_error_get_descr(drc));
-		nvmf_offload_poller_destroy(opoller);
-		return -EINVAL;
-	}
+	opoller->max_queue_depth = rtransport->sta.caps.max_ios;
 	SPDK_DEBUGLOG(rdma_offload, "max_io_num per io thread: %u\n", opoller->max_queue_depth);
 	/* FIXME: max_queue_depth must be multiplied by the number of threads. The workaround below
 	 * is applied because there is no API to get that number. So far, assume that the number
@@ -6078,18 +6103,34 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	 */
 	opoller->max_queue_depth *= 32;
 
+	drc = doca_sta_io_create(rtransport->sta.sta, &opoller->sta_io);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to create doca_sta_io: %s\n", doca_error_get_descr(drc));
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
+	opoller->io_ctx = doca_sta_io_as_ctx(opoller->sta_io);
+	if (!opoller->io_ctx) {
+		SPDK_ERRLOG("Unable to get doca_ctx\n");
+		nvmf_offload_poller_destroy(opoller);
+		return -EINVAL;
+	}
+
 	drc = doca_pe_create(&opoller->pe);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to create doca_pe: %s\n", doca_error_get_descr(drc));
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
-	drc = doca_sta_io_create(rtransport->sta.sta, opoller->pe, &opoller->sta_io);
+
+	drc = doca_pe_connect_ctx(opoller->pe, opoller->io_ctx);
 	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("Failed to create doca_sta_io: %s\n", doca_error_get_descr(drc));
+		SPDK_ERRLOG("Failed to connect doca_pe: %s\n", doca_error_get_descr(drc));
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
+
 	drc = doca_sta_io_task_disconnect_set_conf(opoller->sta_io, nvmf_sta_io_disconnect_comp_hadler,
 			nvmf_sta_io_disconnect_error_hadler);
 	if (DOCA_IS_ERROR(drc)) {
@@ -6099,6 +6140,13 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 	udata.ptr = opoller;
+	drc = doca_sta_io_event_transport_err_register_cb(opoller->sta_io,
+			nvmf_sta_io_event_transport_err_cb, udata);
+	if (drc != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to register event_transport_err_cb: %s", doca_error_get_name(drc));
+		return -EINVAL;
+	}
+
 	drc = doca_sta_io_non_offload_register_cb(opoller->sta_io, nvmf_sta_io_non_offload_handler, udata);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to set non-offload handler doca_sta_io: %s\n", doca_error_get_descr(drc));
@@ -6121,13 +6169,6 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to set rdma_read completio handler doca_sta_io: %s\n",
 			    doca_error_get_descr(drc));
-		nvmf_offload_poller_destroy(opoller);
-		return -EINVAL;
-	}
-
-	opoller->io_ctx = doca_sta_io_as_doca_ctx(opoller->sta_io);
-	if (!opoller->io_ctx) {
-		SPDK_ERRLOG("Unable to get doca_ctx\n");
 		nvmf_offload_poller_destroy(opoller);
 		return -EINVAL;
 	}
@@ -6750,7 +6791,7 @@ nvmf_sta_io_disconnect_comp_hadler(struct doca_sta_producer_task_send *task,
 	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	oqpair->destroy_task = NULL;
 
-	SPDK_DEBUGLOG(rdma_offload, "Disconect task completed for IO QP 0x%lx\n", oqpair->handle);
+	SPDK_DEBUGLOG(rdma_offload, "Disconect task completed for IO QP %p\n", oqpair->handle);
 	oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_DISCONNECTED;
 	nvmf_rdma_offload_qpair_destroy(oqpair);
 }
@@ -6768,7 +6809,7 @@ nvmf_sta_io_disconnect_error_hadler(struct doca_sta_producer_task_send *task,
 	doca_task_free(doca_sta_producer_send_task_as_task(task));
 	oqpair->destroy_task = NULL;
 
-	SPDK_ERRLOG("Disconect task failed for IO QP 0x%lx\n", oqpair->handle);
+	SPDK_ERRLOG("Disconect task failed for IO QP %p\n", oqpair->handle);
 	oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_DISCONNECT_FAILED;
 	nvmf_rdma_offload_qpair_destroy(oqpair);
 }
@@ -6799,13 +6840,13 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 					oqpair->handle,
 					&oqpair->destroy_task);
 			if (DOCA_IS_ERROR(drc)) {
-				SPDK_ERRLOG("Failed to alloc disconnect task for offload QP 0x%lx: %s\n",
+				SPDK_ERRLOG("Failed to alloc disconnect task for offload QP %p: %s\n",
 					    oqpair->handle, doca_error_get_descr(drc));
 				break;
 			}
 			drc = submit_doca_task(doca_sta_producer_send_task_as_task(oqpair->destroy_task));
 			if (DOCA_IS_ERROR(drc)) {
-				SPDK_ERRLOG("Failed to submit disconnect task for IO QP 0x%lx: %s\n",
+				SPDK_ERRLOG("Failed to submit disconnect task for IO QP %p: %s\n",
 					    oqpair->handle, doca_error_get_descr(drc));
 				doca_task_free(doca_sta_producer_send_task_as_task(oqpair->destroy_task));
 				oqpair->destroy_task = NULL;
@@ -6864,7 +6905,7 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 			free(oqpair);
 			return;
 		default:
-			SPDK_ERRLOG("Unknown offload qpair state %d, handle 0x%lx\n", oqpair->state, oqpair->handle);
+			SPDK_ERRLOG("Unknown offload qpair state %d, handle %p\n", oqpair->state, oqpair->handle);
 			assert(0);
 		}
 	} while (prev_state != oqpair->state);
@@ -7665,7 +7706,7 @@ nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem)
 	if (rsubsystem->handle) {
 		drc = doca_sta_subsystem_destroy(rsubsystem->handle);
 		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy DOCA STA subsystem 0x%lx\n", rsubsystem->handle);
+			SPDK_ERRLOG("Failed to destroy DOCA STA subsystem %p\n", rsubsystem->handle);
 			return -EINVAL;
 		}
 	}
@@ -7711,7 +7752,7 @@ nvmf_rdma_subsystem_create(struct spdk_nvmf_rdma_transport *rtransport,
 			return NULL;
 		}
 	}
-	SPDK_NOTICELOG("Create DOCA STA subsystem 0x%lx for nqn %s\n",
+	SPDK_NOTICELOG("Create DOCA STA subsystem %p for nqn %s\n",
 		       rsubsystem->handle, spdk_nvmf_subsystem_get_nqn(subsystem));
 	TAILQ_INSERT_TAIL(&rtransport->subsystems, rsubsystem, link);
 
@@ -7760,7 +7801,7 @@ nvmf_rdma_listen_associate(struct spdk_nvmf_transport *transport,
 
 static int
 nvmf_sta_bdev_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
-			    doca_sta_be_q_handle_t handle,
+			    struct doca_sta_be_q_handle *handle,
 			    struct spdk_nvmf_rdma_bdev_queue_destroy_ctx *destroy_ctx)
 {
 	struct doca_sta_producer_task_send *destroy_task;
@@ -7815,7 +7856,7 @@ nvmf_rdma_bdev_nvme_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 			SPDK_ERRLOG("Failed to destroy nvme backend queue\n");
 			return -1;
 		}
-		SPDK_NOTICELOG("Destroy DOCA STA nvme backend queue 0x%lx\n", queue->handle);
+		SPDK_NOTICELOG("Destroy DOCA STA nvme backend queue %p\n", queue->handle);
 		queue->handle = 0;
 	}
 
@@ -7987,7 +8028,7 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	SPDK_NOTICELOG("Add DOCA STA nvme backend queue 0x%lx to backend 0x%lx\n", queue->handle,
+	SPDK_NOTICELOG("Add DOCA STA nvme backend queue %p to backend %p\n", queue->handle,
 		       rbdev->handle);
 	return 0;
 }
@@ -8005,7 +8046,7 @@ nvmf_rdma_bdev_null_queue_destroy(struct spdk_nvmf_rdma_sta *sta,
 			SPDK_ERRLOG("Failed to destroy null backend queue\n");
 			return -1;
 		}
-		SPDK_NOTICELOG("Destroy DOCA STA null backend queue 0x%lx\n", queue->handle);
+		SPDK_NOTICELOG("Destroy DOCA STA null backend queue %p\n", queue->handle);
 		queue->handle = 0;
 	}
 	if (queue->sq_mmap) {
@@ -8110,7 +8151,7 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 		return -1;
 	}
 
-	SPDK_NOTICELOG("Add DOCA STA null queue 0x%lx to backend 0x%lx\n", queue->handle, bdev->handle);
+	SPDK_NOTICELOG("Add DOCA STA null queue %p to backend %p\n", queue->handle, bdev->handle);
 	return 0;
 }
 
@@ -8149,7 +8190,7 @@ nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 	if (rbdev->handle) {
 		drc = doca_sta_be_destroy(rbdev->handle);
 		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to destroy doca_sta_be %lu: %s\n", rbdev->handle,
+			SPDK_ERRLOG("Failed to destroy doca_sta_be %p: %s\n", rbdev->handle,
 				    doca_error_get_descr(drc));
 			return -EINVAL;
 		}
@@ -8197,7 +8238,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		nvmf_rdma_bdev_destroy(rbdev);
 		return NULL;
 	}
-	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, name %s, handle %lu, num_queues %d\n",
+	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, name %s, handle %p, num_queues %d\n",
 		      rbdev, rbdev->name, rbdev->handle, rbdev->num_queues);
 
 	if (nvme_ctrlr) {
@@ -8607,32 +8648,32 @@ rpc_tgt_ofld_get_sta(struct spdk_nvmf_rdma_sta **sta)
 }
 
 static doca_error_t
-rpc_tgt_ofld_get_eu_handles(struct spdk_nvmf_rdma_sta *sta, doca_sta_eu_handle_t **handles,
+rpc_tgt_ofld_get_eu_handles(struct spdk_nvmf_rdma_sta *sta, struct doca_sta_eu_handle ***handles,
 			    uint32_t *num_handles)
 {
-	doca_sta_eu_handle_t *arr;
-	uint32_t arr_size;
+	struct doca_sta_eu_handle **eu_handles;
+	uint32_t num_eu_handles;
 	doca_error_t drc;
 
-	arr_size = sta->caps.max_eus;
-	arr = calloc(arr_size, sizeof(*arr));
-	if (!arr) {
+	num_eu_handles = sta->caps.max_eus;
+	eu_handles = calloc(num_eu_handles, sizeof(*eu_handles));
+	if (!eu_handles) {
 		return DOCA_ERROR_NO_MEMORY;
 	}
 
-	drc = doca_sta_get_eu_handle(sta->sta, arr, &arr_size);
+	drc = doca_sta_get_eu_handle(sta->sta, eu_handles, &num_eu_handles);
 	if (DOCA_IS_ERROR(drc)) {
-		free(arr);
+		free(eu_handles);
 		return drc;
 	}
 
-	*handles = arr;
-	*num_handles = arr_size;
+	*handles = eu_handles;
+	*num_handles = num_eu_handles;
 	return 0;
 }
 
 static int
-rpc_tgt_ofld_eu_cmp_type(doca_sta_eu_handle_t eu_handle, enum dpa_sta_eu_type type)
+rpc_tgt_ofld_eu_cmp_type(struct doca_sta_eu_handle *eu_handle, enum dpa_sta_eu_type type)
 {
 	doca_error_t drc;
 	enum dpa_sta_eu_type eu_type;
@@ -8648,8 +8689,8 @@ rpc_tgt_ofld_eu_cmp_type(doca_sta_eu_handle_t eu_handle, enum dpa_sta_eu_type ty
 }
 
 static doca_error_t
-rpc_tgt_ofld_eu_find_by_type_id(doca_sta_eu_handle_t *handles, uint32_t num_handles,
-				enum dpa_sta_eu_type type, uint16_t id, doca_sta_eu_handle_t **handle)
+rpc_tgt_ofld_eu_find_by_type_id(struct doca_sta_eu_handle **handles, uint32_t num_handles,
+				enum dpa_sta_eu_type type, uint16_t id, struct doca_sta_eu_handle **handle)
 {
 	uint32_t i;
 	enum dpa_sta_eu_type eu_type;
@@ -8670,7 +8711,7 @@ rpc_tgt_ofld_eu_find_by_type_id(doca_sta_eu_handle_t *handles, uint32_t num_hand
 			return drc;
 		}
 		if (eu_id == id) {
-			*handle = &handles[i];
+			*handle = handles[i];
 			return DOCA_SUCCESS;
 		}
 	}
@@ -8679,8 +8720,8 @@ rpc_tgt_ofld_eu_find_by_type_id(doca_sta_eu_handle_t *handles, uint32_t num_hand
 }
 
 static doca_error_t
-rpc_tgt_ofld_eu_find_by_name(doca_sta_eu_handle_t *handles, uint32_t num_handles,
-			     const char *name, doca_sta_eu_handle_t **handle)
+rpc_tgt_ofld_eu_find_by_name(struct doca_sta_eu_handle **handles, uint32_t num_handles,
+			     const char *name, struct doca_sta_eu_handle **handle)
 {
 	uint32_t i;
 	const char *eu_name;
@@ -8693,7 +8734,7 @@ rpc_tgt_ofld_eu_find_by_name(doca_sta_eu_handle_t *handles, uint32_t num_handles
 			return drc;
 		}
 		if (strcmp(eu_name, name) == 0) {
-			*handle = &handles[i];
+			*handle = handles[i];
 			return DOCA_SUCCESS;
 		}
 	}
@@ -8708,7 +8749,7 @@ struct rpc_tgt_ofld_eu_data {
 };
 
 static doca_error_t
-rpc_tgt_ofld_eu_get_data(doca_sta_eu_handle_t eu_handle, struct rpc_tgt_ofld_eu_data *data)
+rpc_tgt_ofld_eu_get_data(struct doca_sta_eu_handle *eu_handle, struct rpc_tgt_ofld_eu_data *data)
 {
 	doca_error_t drc;
 
@@ -8731,7 +8772,7 @@ rpc_tgt_ofld_eu_get_data(doca_sta_eu_handle_t eu_handle, struct rpc_tgt_ofld_eu_
 }
 
 static void
-rpc_tgt_ofld_hdlr_data_dump(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_hdlr_data_dump(struct doca_sta_eu_handle *eu_handle, struct spdk_json_write_ctx *w)
 {
 	struct rpc_tgt_ofld_eu_data data;
 	doca_error_t drc;
@@ -8787,7 +8828,7 @@ rpc_tgt_ofld_event_handler_list(struct spdk_jsonrpc_request *request,
 	};
 	struct spdk_nvmf_rdma_sta *sta;
 	struct spdk_json_write_ctx *w;
-	doca_sta_eu_handle_t *eu_handles;
+	struct doca_sta_eu_handle **eu_handles;
 	uint32_t i, num_eu_handles;
 	int rc;
 	doca_error_t drc;
@@ -8831,21 +8872,23 @@ rpc_tgt_ofld_event_handler_list(struct spdk_jsonrpc_request *request,
 SPDK_RPC_REGISTER("tgt_ofld_event_handler_list", rpc_tgt_ofld_event_handler_list, SPDK_RPC_RUNTIME)
 
 static void
-rpc_tgt_ofld_ctr_info_dump(struct spdk_json_write_ctx *w,
-			   const struct doca_sta_eu_ctr_info *ctr_info)
+rpc_tgt_ofld_ctr_entries_dump(struct spdk_json_write_ctx *w,
+			      const struct doca_sta_eu_ctr_entry *entries,
+			      uint16_t num_entries)
 {
 	unsigned int i;
 
-	for (i = 0; i < ctr_info->num; i++) {
-		spdk_json_write_named_uint64(w, ctr_info->entries[i].name, *ctr_info->entries[i].val);
+	for (i = 0; i < num_entries; i++) {
+		spdk_json_write_named_uint64(w, entries[i].name, *entries[i].val);
 	}
 }
 
 static void
-rpc_tgt_ofld_eu_dump_counters(doca_sta_eu_handle_t eu_handle, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_eu_dump_counters(struct doca_sta_eu_handle *eu_handle, struct spdk_json_write_ctx *w)
 {
-	const struct doca_sta_eu_ctr_info *ctr_info;
 	struct rpc_tgt_ofld_eu_data eu_data;
+	const struct doca_sta_eu_ctr_entry *ctr_entries;
+	uint16_t num_entries;
 	doca_error_t drc;
 
 	drc = rpc_tgt_ofld_eu_get_data(eu_handle, &eu_data);
@@ -8861,11 +8904,11 @@ rpc_tgt_ofld_eu_dump_counters(doca_sta_eu_handle_t eu_handle, struct spdk_json_w
 	spdk_json_write_named_uint16(w, "port", eu_data.port);
 	spdk_json_write_named_string(w, "state", "RUNNING");
 
-	drc = doca_sta_get_eu_stats(eu_handle, &ctr_info);
+	drc = doca_sta_get_eu_stats(eu_handle, &ctr_entries, &num_entries);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to get EU stats: %s\n", doca_error_get_descr(drc));
 	} else {
-		rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
+		rpc_tgt_ofld_ctr_entries_dump(w, ctr_entries, num_entries);
 	}
 
 	spdk_json_write_object_end(w);
@@ -8890,8 +8933,8 @@ rpc_tgt_ofld_event_handler_counter(struct spdk_jsonrpc_request *request,
 	};
 	struct spdk_nvmf_rdma_sta *sta;
 	struct spdk_json_write_ctx *w;
-	doca_sta_eu_handle_t *eu_handles = NULL;
-	doca_sta_eu_handle_t *eu_handle;
+	struct doca_sta_eu_handle **eu_handles = NULL;
+	struct doca_sta_eu_handle *eu_handle;
 	uint32_t i, num_eu_handles;
 	int rc;
 	doca_error_t drc;
@@ -8938,7 +8981,7 @@ rpc_tgt_ofld_event_handler_counter(struct spdk_jsonrpc_request *request,
 	spdk_json_write_array_begin(w);
 
 	if (eu_handle) {
-		rpc_tgt_ofld_eu_dump_counters(*eu_handle, w);
+		rpc_tgt_ofld_eu_dump_counters(eu_handle, w);
 	} else {
 		for (i = 0; i < num_eu_handles; ++i) {
 			if (attr.type != DOCA_STA_EU_MAX &&
@@ -8969,8 +9012,8 @@ rpc_tgt_ofld_event_handler_counter_reset(struct spdk_jsonrpc_request *request,
 		.type = DOCA_STA_EU_MAX
 	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_sta_eu_handle_t *eu_handles = NULL;
-	doca_sta_eu_handle_t *eu_handle;
+	struct doca_sta_eu_handle **eu_handles = NULL;
+	struct doca_sta_eu_handle *eu_handle;
 	uint32_t num_eu_handles;
 	int rc;
 	doca_error_t drc;
@@ -9026,7 +9069,7 @@ rpc_tgt_ofld_event_handler_counter_reset(struct spdk_jsonrpc_request *request,
 							 doca_error_get_descr(drc));
 			goto cleanup;
 		}
-		drc = doca_sta_eu_reset_stats_handle(*eu_handle);
+		drc = doca_sta_eu_reset_stats_handle(eu_handle);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to reset counters for EU %s: %s\n", attr.name,
 				    doca_error_get_descr(drc));
@@ -9049,7 +9092,7 @@ SPDK_RPC_REGISTER("tgt_ofld_event_handler_counter_reset", rpc_tgt_ofld_event_han
 		  SPDK_RPC_RUNTIME)
 
 static void
-rpc_tgt_ofld_qp_dump(doca_sta_qp_handle_t qp_handle, struct spdk_json_write_ctx *w)
+rpc_tgt_ofld_qp_dump(struct doca_sta_qp_handle *qp_handle, struct spdk_json_write_ctx *w)
 {
 	uint32_t qpn;
 	uint16_t port_id;
@@ -9084,7 +9127,8 @@ rpc_tgt_ofld_qp_dump(doca_sta_qp_handle_t qp_handle, struct spdk_json_write_ctx 
 }
 
 static void
-rpc_tgt_ofld_eu_dump_qp_stats(doca_sta_eu_handle_t eu_handle, doca_sta_qp_handle_t *qp_handles,
+rpc_tgt_ofld_eu_dump_qp_stats(struct doca_sta_eu_handle *eu_handle,
+			      struct doca_sta_qp_handle **qp_handles,
 			      uint16_t *num_qp_handles, struct spdk_json_write_ctx *w)
 {
 	char grp_name[64];
@@ -9163,9 +9207,9 @@ rpc_tgt_ofld_connect_qp_list(struct spdk_jsonrpc_request *request,
 		.group = RPC_TGT_OFLD_EU_NUM_UNDEFINED
 	};
 	struct spdk_nvmf_rdma_sta *sta;
-	doca_sta_eu_handle_t *eu_handles;
-	doca_sta_eu_handle_t *eu_handle;
-	doca_sta_be_q_handle_t *qp_handles;
+	struct doca_sta_eu_handle **eu_handles;
+	struct doca_sta_eu_handle *eu_handle;
+	struct doca_sta_qp_handle **qp_handles;
 	struct spdk_json_write_ctx *w;
 	uint32_t i, num_eu_handles;
 	uint16_t num_qp_handles, connected_qps;
@@ -9220,7 +9264,7 @@ rpc_tgt_ofld_connect_qp_list(struct spdk_jsonrpc_request *request,
 
 	if (eu_handle) {
 		connected_qps = num_qp_handles;
-		rpc_tgt_ofld_eu_dump_qp_stats(*eu_handle, qp_handles, &connected_qps, w);
+		rpc_tgt_ofld_eu_dump_qp_stats(eu_handle, qp_handles, &connected_qps, w);
 		total_qps += connected_qps;
 	} else {
 		for (i = 0; i < num_eu_handles; ++i) {
@@ -9251,7 +9295,7 @@ cleanup:
 SPDK_RPC_REGISTER("tgt_ofld_connect_qp_list", rpc_tgt_ofld_connect_qp_list, SPDK_RPC_RUNTIME)
 
 static void
-rpc_tgt_ofld_eu_dump_qp_count(doca_sta_eu_handle_t eu_handle, uint16_t *num_qps,
+rpc_tgt_ofld_eu_dump_qp_count(struct doca_sta_eu_handle *eu_handle, uint16_t *num_qps,
 			      struct spdk_json_write_ctx *w)
 {
 	struct rpc_tgt_ofld_eu_data eu_data;
@@ -9290,8 +9334,8 @@ rpc_tgt_ofld_connect_qp_count(struct spdk_jsonrpc_request *request,
 	};
 	struct spdk_nvmf_rdma_sta *sta;
 	struct spdk_json_write_ctx *w;
-	doca_sta_eu_handle_t *eu_handles = NULL;
-	doca_sta_eu_handle_t *eu_handle;
+	struct doca_sta_eu_handle **eu_handles = NULL;
+	struct doca_sta_eu_handle *eu_handle;
 	uint32_t i, num_eu_handles, total_qps;
 	uint16_t num_qps;
 	int rc;
@@ -9335,7 +9379,7 @@ rpc_tgt_ofld_connect_qp_count(struct spdk_jsonrpc_request *request,
 	spdk_json_write_array_begin(w);
 
 	if (eu_handle) {
-		rpc_tgt_ofld_eu_dump_qp_count(*eu_handle, &num_qps, w);
+		rpc_tgt_ofld_eu_dump_qp_count(eu_handle, &num_qps, w);
 		total_qps = num_qps;
 	} else {
 		total_qps = 0;
@@ -9382,8 +9426,9 @@ rpc_tgt_ofld_be_ctrlr_stats_dump(struct spdk_json_write_ctx *w,
 {
 	int i;
 	doca_error_t drc;
-	doca_sta_be_q_handle_t q_handle;
-	const struct doca_sta_eu_ctr_info *ctr_info;
+	struct doca_sta_be_q_handle *q_handle;
+	const struct doca_sta_eu_ctr_entry *ctr_entries;
+	uint16_t num_entries;
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "name", rbdev->name);
@@ -9399,11 +9444,11 @@ rpc_tgt_ofld_be_ctrlr_stats_dump(struct spdk_json_write_ctx *w,
 			q_handle = rbdev->null_queue[i].handle;
 		}
 
-		drc = doca_sta_get_be_queue_stats(rbdev->handle, q_handle, &ctr_info);
+		drc = doca_sta_get_be_queue_stats(rbdev->handle, q_handle, &ctr_entries, &num_entries);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to get queue %d stats: %s\n", i, doca_error_get_descr(drc));
 		} else {
-			rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
+			rpc_tgt_ofld_ctr_entries_dump(w, ctr_entries, num_entries);
 		}
 		spdk_json_write_object_end(w);
 	}
@@ -9490,18 +9535,19 @@ rpc_tgt_ofld_get_bdev_stats_dump(struct spdk_json_write_ctx *w,
 				 struct spdk_nvmf_rdma_subsystem *rsubsystem,
 				 struct spdk_nvmf_rdma_ns *rns)
 {
-	const struct doca_sta_eu_ctr_info *ctr_info;
+	const struct doca_sta_eu_ctr_entry *ctr_entries;
+	uint16_t num_entries;
 	doca_error_t drc;
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "name", spdk_bdev_get_name(rns->ns->bdev));
 
-	drc = doca_sta_get_ns_stats(rsubsystem->handle, rns->handle, &ctr_info);
+	drc = doca_sta_get_ns_stats(rsubsystem->handle, rns->handle, &ctr_entries, &num_entries);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to get bdev %s stats: %s\n", spdk_bdev_get_name(rns->ns->bdev),
 			    doca_error_get_descr(drc));
 	} else {
-		rpc_tgt_ofld_ctr_info_dump(w, ctr_info);
+		rpc_tgt_ofld_ctr_entries_dump(w, ctr_entries, num_entries);
 	}
 
 	spdk_json_write_object_end(w);
