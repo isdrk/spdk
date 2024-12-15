@@ -7880,6 +7880,8 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 {
 	const struct spdk_nvme_transport_id *trid;
 	struct spdk_nvme_io_qpair_opts opts;
+	union spdk_nvme_cap_register nvme_ctrlr_cap;
+	uint32_t max_io_queue_size;
 	struct nvme_pcie_qpair *nvme_pqpair;
 	void *db_mmap_addr;
 	size_t db_mmap_len = 64;
@@ -7895,8 +7897,15 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	spdk_nvme_ctrlr_get_default_io_qpair_opts(nvme_ctrlr, &opts, sizeof(opts));
 	opts.create_only = true;
+	nvme_ctrlr_cap = spdk_nvme_ctrlr_get_regs_cap(nvme_ctrlr);
+	/* mqes is a 0's based value, but max_io_queue_size isn't */
+	max_io_queue_size = nvme_ctrlr_cap.bits.mqes + 1;
 	/* DOCA STA requires aligned IO queue size */
-	opts.io_queue_size = spdk_align32pow2(opts.io_queue_size);
+	opts.io_queue_size = spdk_align32pow2(max_io_queue_size);
+	if (opts.io_queue_size > max_io_queue_size) {
+		opts.io_queue_size /= 2;
+	}
+
 	queue->nvme_qpair = spdk_nvme_ctrlr_alloc_io_qpair(nvme_ctrlr, &opts, sizeof(opts));
 	if (!queue->nvme_qpair) {
 		SPDK_ERRLOG("Failed to allocate nvme IO qpair\n");
