@@ -236,6 +236,7 @@ struct spdk_nvmf_rdma_request {
 
 	bool					fused_failed;
 	bool					data_transferred;
+	bool					use_accel_seq;
 
 	struct spdk_nvmf_rdma_wr		data_wr;
 	struct spdk_nvmf_rdma_wr		rsp_wr;
@@ -2038,6 +2039,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->req.dif_enabled = false;
 	rdma_req->fused_failed = false;
 	rdma_req->data_transferred = false;
+	rdma_req->use_accel_seq = false;
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
 		/* This req was part of a valid fused pair, but failed before it got to
@@ -2447,6 +2449,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				/* This request needs to wait in line to obtain a buffer */
 				break;
 			}
+			rdma_req->use_accel_seq = nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req);
 
 			/* Try to get a data buffer */
 			rc = nvmf_rdma_request_parse_sgl(rtransport, device, rdma_req);
@@ -2465,7 +2468,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
-			if (nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req)) {
+			if (rdma_req->use_accel_seq) {
 				nvmf_rdma_request_append_copy_task(rqpair, rdma_req);
 				break;
 			}
