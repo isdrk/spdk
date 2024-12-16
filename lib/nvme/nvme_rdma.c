@@ -1897,6 +1897,9 @@ nvme_rdma_apply_accel_sequence(struct nvme_rdma_qpair *rqpair, struct nvme_reque
 			src_domain = rdma_req->req->payload.opts->memory_domain;
 			src_domain_ctx = rdma_req->req->payload.opts->memory_domain_ctx;
 		}
+	} else if (accel_seq) {
+		src_domain = rqpair->rdma_qp->domain;
+		src_domain_ctx = rdma_req;
 	} else {
 		src_domain = NULL;
 		src_domain_ctx = NULL;
