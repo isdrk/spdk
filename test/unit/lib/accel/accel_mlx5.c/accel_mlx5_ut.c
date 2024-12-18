@@ -78,6 +78,9 @@ DEFINE_STUB(spdk_mlx5_qp_set_psv, int, (struct spdk_mlx5_qp *dv_qp, uint32_t psv
 DEFINE_STUB(spdk_mlx5_umr_configure_trans_sig, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
 		uint64_t wr_id, uint32_t flags), 0);
+DEFINE_STUB(spdk_mlx5_umr_configure_block_sig, int, (struct spdk_mlx5_qp *qp,
+		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_block_sig_attr *sig_attr,
+		uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_create_psv, struct spdk_mlx5_psv *, (struct ibv_pd *pd), NULL);
 DEFINE_STUB(spdk_mlx5_destroy_psv, int, (struct spdk_mlx5_psv *psv), 0);
 DEFINE_STUB(spdk_mlx5_mkey_pool_init, int, (struct spdk_mlx5_mkey_pool_param *params,
