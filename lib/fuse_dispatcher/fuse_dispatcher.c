@@ -156,7 +156,6 @@ struct fuse_io {
 		struct {
 			struct spdk_thread *thread;
 			struct fuse_init_in *in;
-			bool legacy_in;
 			struct spdk_fsdev_mount_opts opts;
 			size_t out_len;
 			int error;
@@ -2227,8 +2226,8 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	assert(disp->desc);
 
 	memset(&outarg, 0, sizeof(outarg));
-	outarg.major = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_VERSION);
-	outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_MINOR_VERSION);
+	outarg.major = fsdev_io_h2d_u32(fuse_io->disp, disp->proto_major);
+	outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, disp->proto_minor);
 
 	if (disp->proto_minor < 5) {
 		outargsize = FUSE_COMPAT_INIT_OUT_SIZE;
@@ -2384,30 +2383,18 @@ do_init(struct fuse_io *fuse_io)
 		      disp->proto_major,
 		      disp->proto_minor);
 
-	/* Now try to read the whole struct */
-	if (disp->proto_major == 7 && disp->proto_minor >= 6) {
-		void *arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*fuse_io->u.init.in) - compat_size);
-		if (!arg_extra) {
-			SPDK_ERRLOG("INIT: protocol version: %" PRIu32 ".%" PRIu32 " but legacy data found\n",
-				    disp->proto_major, disp->proto_minor);
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
-		}
-		fuse_io->u.init.legacy_in = false;
-	} else {
-		fuse_io->u.init.legacy_in = true;
-	}
-
-	if (disp->proto_major < 7) {
+	if (disp->proto_major < FUSE_KERNEL_VERSION) {
 		SPDK_ERRLOG("INIT: unsupported major protocol version: %" PRIu32 "\n",
 			    disp->proto_major);
-		fuse_dispatcher_io_complete_err(fuse_io, -EAGAIN);
+		fuse_dispatcher_io_complete_err(fuse_io, -EPROTO);
 		return;
 	}
 
-	if (disp->proto_major > 7) {
-		/* Wait for a second INIT request with a 7.X version */
-
+	/* NOTE: it seems that libfuse has made assumption that FUSE_KERNEL_VERSION will never be changed again,
+	 * and proto_minor will determine all versioning forever (see do_init() in libfuse/lib/fuse_lowlevel.c).
+	 * As libfuse is considered the de facto standard, we just follow the same logic here.
+	 */
+	if (disp->proto_major > FUSE_KERNEL_VERSION) {
 		struct fuse_init_out outarg;
 		size_t outargsize = sizeof(outarg);
 
@@ -2419,7 +2406,22 @@ do_init(struct fuse_io *fuse_io)
 		return;
 	}
 
-	if (!fuse_io->u.init.legacy_in) {
+	if (disp->proto_minor > FUSE_KERNEL_MINOR_VERSION) {
+		SPDK_DEBUGLOG(fuse_dispatcher, "INIT: proto_minor adjusted: %" PRIu32 " -> %" PRIu32 "\n",
+			      disp->proto_minor, FUSE_KERNEL_MINOR_VERSION);
+		disp->proto_minor = FUSE_KERNEL_MINOR_VERSION;
+	}
+
+	if (disp->proto_minor >= 6) {
+		/* Read the rest of struct fuse_init_in */
+		void *arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*fuse_io->u.init.in) - compat_size);
+		if (!arg_extra) {
+			SPDK_ERRLOG("INIT: protocol version: %" PRIu32 ".%" PRIu32 " but legacy data found\n",
+				    disp->proto_major, disp->proto_minor);
+			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+			return;
+		}
+
 		requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
 		max_readahead = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->max_readahead);
 		SPDK_INFOLOG(fuse_dispatcher, "requested: flags=0x%" PRIx32 " max_readahead=%" PRIu32 "\n",
