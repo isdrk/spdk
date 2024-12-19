@@ -1726,6 +1726,10 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport,
 					   length);
+	rdma_req->iovpos = 0;
+	if (rdma_req->use_accel_seq) {
+		goto out;
+	}
 	if (spdk_unlikely(rc != 0)) {
 		return rc;
 	}
@@ -1742,8 +1746,6 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 			SPDK_INFOLOG(rdma, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
 		}
 	}
-
-	rdma_req->iovpos = 0;
 
 	if (spdk_unlikely(req->dif_enabled)) {
 		num_wrs = nvmf_rdma_calc_num_wrs(length, rtransport->transport.opts.io_unit_size,
@@ -1770,6 +1772,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 	}
 
+out:
 	/* set the number of outstanding data WRs for this request. */
 	rdma_req->num_outstanding_data_wr = num_wrs;
 
@@ -1833,6 +1836,11 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, total_length);
+	if (rdma_req->use_accel_seq) {
+		rdma_req->iovpos = 0;
+		req->length = total_length;
+		goto out;
+	}
 	if (spdk_unlikely(rc != 0)) {
 		nvmf_rdma_request_free_data(rdma_req, rtransport);
 		return rc;
@@ -1893,9 +1901,10 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	}
 #endif
 
+out:
 	rdma_req->num_outstanding_data_wr = num_sgl_descriptors;
 
-	return 0;
+	return rc;
 
 err_exit:
 	spdk_nvmf_request_free_buffers(req, &rgroup->group, &rtransport->transport);
@@ -1961,6 +1970,7 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 		uint64_t offset = sgl->address;
 		uint32_t max_len = rtransport->transport.opts.in_capsule_data_size;
 
+		assert(!rdma_req->use_accel_seq);
 		SPDK_DEBUGLOG(nvmf, "In-capsule data: offset 0x%" PRIx64 ", length 0x%x\n",
 			      offset, sgl->unkeyed.length);
 
@@ -2160,6 +2170,8 @@ nvmf_rdma_update_sges_with_accel_key(struct spdk_nvmf_rdma_request *rdma_req, ui
 			wr->sg_list[0].lkey = lkey;
 			wr->sg_list[0].addr = offset;
 			wr->sg_list[0].length = desc_len;
+			wr->wr.rdma.remote_addr = desc->address;
+			wr->wr.rdma.rkey = desc->keyed.key;
 			wr->send_flags |= send_flags;
 			offset += desc_len;
 
