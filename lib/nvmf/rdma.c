@@ -132,6 +132,9 @@ nvmf_trace(void)
 	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER", TRACE_RDMA_REQUEST_STATE_NEED_BUFFER,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
+	spdk_trace_register_description("RDMA_REQ_NEED_ACCEL", TRACE_RDMA_REQUEST_STATE_NEED_ACCEL_TASK,
+					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
 					TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
@@ -445,6 +448,7 @@ struct spdk_nvmf_rdma_poller {
 
 struct spdk_nvmf_rdma_poll_group_stat {
 	uint64_t				pending_data_buffer;
+	uint64_t				pending_accel_task;
 };
 
 struct spdk_nvmf_rdma_poll_group {
@@ -2183,6 +2187,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
+	assert(rdma_req->use_accel_seq);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
 	if (spdk_unlikely(!src_domain ||
 			  spdk_memory_domain_get_dma_device_type(src_domain) != SPDK_DMA_DEVICE_TYPE_RDMA)) {
@@ -2274,7 +2279,7 @@ nvmf_rdma_request_need_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 	return ns->accel_sequence;
 }
 
-static inline void
+static inline int
 nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
 				   struct spdk_nvmf_rdma_request *rdma_req)
 {
@@ -2295,6 +2300,7 @@ nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
 	 * Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
 	 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
 	 * the media */
+	assert(rdma_req->req.accel_sequence == NULL);
 	rc = spdk_accel_append_copy(&rdma_req->req.accel_sequence, rgroup->accel_ch,
 				    rdma_req->req.iov, rdma_req->req.iovcnt,
 				    rqpair->rdma_qp->domain, rdma_req,
@@ -2305,9 +2311,8 @@ nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
 		struct spdk_nvme_cpl *rsp;
 
 		if (rc == -ENOMEM) {
-			STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
-			rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
-			return;
+			rgroup->stat.pending_accel_task++;
+			return rc;
 		}
 
 		rsp = &rdma_req->req.rsp->nvme_cpl;
@@ -2316,9 +2321,11 @@ nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
 		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_send_queue, rdma_req, state_link);
 		rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
 		SPDK_DEBUGLOG(rdma, "req %p, accel task failed, rc %d\n", rdma_req, rc);
-		return;
+		return rc;
 	}
 	rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+
+	return 0;
 }
 
 bool
@@ -2469,7 +2476,8 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
 			if (rdma_req->use_accel_seq) {
-				nvmf_rdma_request_append_copy_task(rqpair, rdma_req);
+				STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
+				rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
 				break;
 			}
 
@@ -2493,8 +2501,10 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				/* This request needs to wait in line to obtain a buffer */
 				break;
 			}
+			if (spdk_unlikely(nvmf_rdma_request_append_copy_task(rqpair, rdma_req))) {
+				break;
+			}
 			STAILQ_REMOVE_HEAD(&rgroup->pending_accel_queue, state_link);
-			nvmf_rdma_request_append_copy_task(rqpair, rdma_req);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING, 0, 0,
@@ -5525,6 +5535,7 @@ nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 	rgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_rdma_poll_group, group);
 
 	spdk_json_write_named_uint64(w, "pending_data_buffer", rgroup->stat.pending_data_buffer);
+	spdk_json_write_named_uint64(w, "pending_accel_task", rgroup->stat.pending_accel_task);
 
 	spdk_json_write_named_array_begin(w, "devices");
 
