@@ -145,6 +145,7 @@ test-crypto-k8s-job:
     - tar xf .test.tar
     - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh ${CI_DUT_RDMA}
     - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA}
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA} --transport=rdma
 
 coverity-job:
   extends: .do_build
