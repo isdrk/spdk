@@ -5679,6 +5679,62 @@ accel_mlx5_task_merge_copy_dif_verify_copy(struct spdk_accel_task *dif_base,
 }
 
 static inline int
+accel_mlx5_task_merge_copy_write_copy(struct accel_mlx5_task *write_copy,
+				      struct accel_mlx5_task *copy, struct accel_mlx5_io_channel *ch,
+				      struct spdk_memory_domain *domain_override, void *domain_ctx_override)
+{
+	struct spdk_accel_task *write_copy_base = &write_copy->base;
+	struct spdk_accel_task *copy_base = &copy->base;
+	int rc;
+
+	rc = accel_mlx5_task_assign_qp_by_domain_pd(write_copy, ch, domain_override);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+
+	/* Update write copy task memory domain, complete copy task */
+	SPDK_DEBUGLOG(accel_mlx5, "Merge copy task (%p) and write copy task\n", copy_base);
+
+	write_copy_base->dst_domain = domain_override;
+	write_copy_base->dst_domain_ctx = domain_ctx_override;
+	accel_mlx5_task_reset(write_copy);
+	write_copy->mlx5_opcode = ACCEL_MLX5_OPC_MKEY;
+	write_copy->needs_data_transfer = 1;
+	write_copy->inplace = 1;
+	spdk_accel_task_complete(copy_base, 0);
+
+	return 0;
+}
+
+static inline int
+accel_mlx5_task_merge_copy_read_copy(struct accel_mlx5_task *read_copy,
+				     struct accel_mlx5_task *copy, struct accel_mlx5_io_channel *ch,
+				     struct spdk_memory_domain *domain_override, void *domain_ctx_override)
+{
+	struct spdk_accel_task *read_copy_base = &read_copy->base;
+	struct spdk_accel_task *copy_base = &copy->base;
+	int rc;
+
+	rc = accel_mlx5_task_assign_qp_by_domain_pd(read_copy, ch, domain_override);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+
+	/* Update read copy task memory domain, complete copy task */
+	SPDK_DEBUGLOG(accel_mlx5, "Merge copy task (%p) and read copy task\n", copy_base);
+
+	read_copy_base->dst_domain = domain_override;
+	read_copy_base->dst_domain_ctx = domain_ctx_override;
+	accel_mlx5_task_reset(read_copy);
+	read_copy->mlx5_opcode = ACCEL_MLX5_OPC_MKEY;
+	read_copy->needs_data_transfer = 1;
+	read_copy->inplace = 1;
+	spdk_accel_task_complete(copy_base, 0);
+
+	return 0;
+}
+
+static inline int
 accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 				   struct accel_mlx5_io_channel *accel_ch)
 {
@@ -5780,6 +5836,33 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 			return accel_mlx5_task_merge_copy_dif_verify_copy(next_base, first_base,
 					accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
 					false);
+		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_COPY &&
+			   TAILQ_NEXT(next_base, seq_link) == NULL) {
+			if (first_base->src_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
+			    SPDK_DMA_DEVICE_TYPE_RDMA) {
+				rc = accel_mlx5_task_merge_copy_write_copy(
+					     SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
+					     first, accel_ch, first_base->src_domain, first_base->src_domain_ctx);
+				if (spdk_unlikely(rc)) {
+					return rc;
+				}
+				next_base->s.iovs = next_base->d.iovs;
+				next_base->s.iovcnt = next_base->d.iovcnt;
+				return 0;
+			} else if (next_base->src_domain &&
+				   spdk_memory_domain_get_dma_device_type(next_base->src_domain) ==
+				   SPDK_DMA_DEVICE_TYPE_RDMA) {
+				rc = accel_mlx5_task_merge_copy_read_copy(first,
+						SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
+						accel_ch, next_base->src_domain, next_base->src_domain_ctx);
+				if (spdk_unlikely(rc)) {
+					return rc;
+				}
+				first_base->d.iovs = first_base->s.iovs;
+				first_base->d.iovcnt = first_base->s.iovcnt;
+				return 0;
+			}
 		}
 		break;
 	case SPDK_ACCEL_OPC_DECRYPT:
