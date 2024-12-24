@@ -120,6 +120,13 @@ static const char *fsdev_io_type_names[] = {
 };
 SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_io_type_names) == __SPDK_FSDEV_IO_LAST, "Incorrect size");
 
+static const char *fsdev_notify_type_names[] = {
+	"inval_data",
+	"inval_entry"
+};
+SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NUM_TYPES,
+		   "Incorrect size");
+
 struct spdk_fsdev_mgmt_channel {
 	/*
 	 * Each thread keeps a cache of fsdev_io - this allows
@@ -631,6 +638,9 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 	to_stat->bytes_written += from_stat->bytes_written;
 	to_stat->num_out_of_io += from_stat->num_out_of_io;
 	to_stat->num_errors += from_stat->num_errors;
+	for (i = 0; i < SPDK_COUNTOF(from_stat->num_notifies); i++) {
+		to_stat->num_notifies[i] += from_stat->num_notifies[i];
+	}
 }
 
 static void
@@ -1091,6 +1101,9 @@ fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *noti
 		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
 					  reply_cb, reply_ctx);
 		res = 0;
+		spdk_spin_lock(&fsdev->internal.spinlock);
+		fsdev->internal.hist_stat->num_notifies[notify_data->type]++;
+		spdk_spin_unlock(&fsdev->internal.spinlock);
 	}
 
 	return res;
@@ -1778,6 +1791,13 @@ const char *
 spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type)
 {
 	return (type < SPDK_COUNTOF(fsdev_io_type_names)) ? fsdev_io_type_names[type] : NULL;
+}
+
+const char *
+fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type)
+{
+	assert(type < SPDK_FSDEV_NOTIFY_NUM_TYPES);
+	return (type < SPDK_COUNTOF(fsdev_notify_type_names)) ? fsdev_notify_type_names[type] : NULL;
 }
 
 int

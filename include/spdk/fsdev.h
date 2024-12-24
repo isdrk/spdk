@@ -193,6 +193,13 @@ enum spdk_fsdev_io_type {
 	__SPDK_FSDEV_IO_LAST
 };
 
+/** Notification type */
+enum spdk_fsdev_notify_type {
+	SPDK_FSDEV_NOTIFY_INVAL_DATA,
+	SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
+	SPDK_FSDEV_NOTIFY_NUM_TYPES
+};
+
 /**
  * fsdev IO statistics
  */
@@ -207,6 +214,8 @@ struct spdk_fsdev_io_stat {
 	uint64_t num_out_of_io;
 	/** Number of IOs completed with an error */
 	uint64_t num_errors;
+	/** Number of emitted notifications by type */
+	uint64_t num_notifies[SPDK_FSDEV_NOTIFY_NUM_TYPES];
 };
 
 /**
@@ -471,12 +480,6 @@ typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, boo
  * negated errno on failure, in which case the callback will not be called.
  */
 int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
-
-/** Notification type */
-enum spdk_fsdev_notify_type {
-	SPDK_FSDEV_NOTIFY_INVAL_DATA,
-	SPDK_FSDEV_NOTIFY_INVAL_ENTRY
-};
 
 struct spdk_fsdev_notify_data {
 	/** Notification type */

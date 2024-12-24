@@ -1037,6 +1037,12 @@ ut_fsdev_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply
 }
 
 static void
+ut_fsdev_device_stat_cb(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat, void *cb_arg,
+			int rc)
+{
+}
+
+static void
 ut_fsdev_test_notifications(void)
 {
 	struct ut_fsdev *utfsdev;
@@ -1048,6 +1054,7 @@ ut_fsdev_test_notifications(void)
 	int parent_file_object;
 	const char *filename = "test_file.txt";
 	struct spdk_fsdev_notify_data notify_data;
+	struct spdk_fsdev_io_stat stat;
 	int rc;
 
 	utfsdev = ut_fsdev_create("utfsdev0");
@@ -1117,6 +1124,12 @@ ut_fsdev_test_notifications(void)
 			sizeof(notify_data.inval_entry)));
 	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+
+	memset(&stat, 0, sizeof(stat));
+	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
+	poll_threads();
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_DATA] == 1);
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_ENTRY] == 1);
 
 	/* Disable notifications */
 	ut_calls_reset();

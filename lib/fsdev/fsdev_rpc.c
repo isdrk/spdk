@@ -9,6 +9,8 @@
 #include "spdk/string.h"
 #include "spdk/fsdev.h"
 #include "spdk/thread.h"
+#include "spdk/fsdev_module.h"
+#include "fsdev_internal.h"
 
 static void
 rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
@@ -257,6 +259,13 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 	spdk_json_write_named_uint64(w, "bytes_written", stat->bytes_written);
 	spdk_json_write_named_uint64(w, "num_out_of_io", stat->num_out_of_io);
 	spdk_json_write_named_uint64(w, "num_errors", stat->num_errors);
+	spdk_json_write_named_object_begin(w, "num_notifies");
+	for (i = 0; i < SPDK_COUNTOF(stat->num_notifies); i++) {
+		const char *name = fsdev_notify_type_get_name(i);
+		assert(name);
+		spdk_json_write_named_uint64(w, name, stat->num_notifies[i]);
+	}
+	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 }
 
