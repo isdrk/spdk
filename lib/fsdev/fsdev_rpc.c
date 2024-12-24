@@ -311,6 +311,8 @@ rpc_fsdev_get_ch_iostat_done(struct spdk_fsdev *fsdev, void *_ctx, int status)
 	struct rpc_fsdev_get_iostat_node *node = _ctx;
 	struct rpc_fsdev_get_iostat_ctx *ctx = node->ctx;
 
+	spdk_fsdev_close(node->fsdev_desc);
+
 	spdk_json_write_array_end(ctx->w);
 	spdk_json_write_object_end(ctx->w);
 
