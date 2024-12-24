@@ -219,12 +219,6 @@ static const struct spdk_json_object_decoder rpc_fsdev_get_iostat_decoders[] = {
 };
 
 static void
-fsdev_stab_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev, void *event_ctx)
-{
-	SPDK_NOTICELOG("Unsupported fsdev event: type %d\n", type);
-}
-
-static void
 fsdev_free_get_iostat_ctx(struct rpc_fsdev_get_iostat_ctx *ctx)
 {
 	free(ctx->name);
@@ -339,7 +333,7 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
-	rc = spdk_fsdev_open(node->fsdev_name, fsdev_stab_event_cb, NULL, &node->fsdev_desc);
+	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);
@@ -506,7 +500,7 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
-	rc = spdk_fsdev_open(node->fsdev_name, fsdev_stab_event_cb, NULL, &node->fsdev_desc);
+	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);
