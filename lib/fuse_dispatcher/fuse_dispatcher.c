@@ -2507,7 +2507,7 @@ do_readdir_entry_clb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
 					 name, fobject, attr, offset);
 
 	if (direntry_bytes > bytes_remained) {
-		return EAGAIN;
+		return -EAGAIN;
 	}
 
 	fuse_io->u.readdir.writep += direntry_bytes;
