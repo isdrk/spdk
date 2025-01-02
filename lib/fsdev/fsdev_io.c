@@ -71,7 +71,7 @@ fsdev_io_free(struct spdk_fsdev_io *fsdev_io)
 	}
 
 	if (fsdev_io->internal.status) {
-		channel->stat->num_errors++;
+		channel->stat->num_io_errors++;
 	}
 
 	spdk_fsdev_free_io(fsdev_io);

@@ -220,7 +220,7 @@ struct spdk_fsdev_io_stat {
 	/** Number of IOs which couldn't be handled due to lack of the IO objects */
 	uint64_t num_out_of_io;
 	/** Number of IOs completed with an error */
-	uint64_t num_errors;
+	uint64_t num_io_errors;
 	/** Number of emitted notifications by type */
 	uint64_t num_notifies[SPDK_FSDEV_NOTIFY_NUM_TYPES];
 };

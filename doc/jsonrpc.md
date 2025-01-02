@@ -13587,7 +13587,7 @@ Example response:
         "bytes_read": 7100444672,
         "bytes_written": 7103463424,
         "num_out_of_io": 0,
-        "num_errors": 33
+        "num_io_errors": 33
       }
     ]
   }

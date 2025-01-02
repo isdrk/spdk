@@ -263,7 +263,7 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 	spdk_json_write_named_uint64(w, "bytes_read", stat->bytes_read);
 	spdk_json_write_named_uint64(w, "bytes_written", stat->bytes_written);
 	spdk_json_write_named_uint64(w, "num_out_of_io", stat->num_out_of_io);
-	spdk_json_write_named_uint64(w, "num_errors", stat->num_errors);
+	spdk_json_write_named_uint64(w, "num_io_errors", stat->num_io_errors);
 	spdk_json_write_named_object_begin(w, "num_notifies");
 	for (i = 0; i < SPDK_COUNTOF(stat->num_notifies); i++) {
 		const char *name = fsdev_notify_type_get_name(i);
