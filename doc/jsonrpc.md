@@ -13351,6 +13351,8 @@ per_channel             | Optional | bool        | Display per channel data.
 
 The response is an array of objects containing I/O statistics of the requested fsdevs.
 
+NOTE: Only the statistics for the I/Os with non-zero `count` are reported.
+
 #### Example
 
 Example request:
@@ -13383,11 +13385,6 @@ Example response:
             "max_latency_ticks": 145384,
             "min_latency_ticks": 145384
           },
-          "umount": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
           "lookup": {
             "count": 18,
             "max_latency_ticks": 13828182,
@@ -13402,51 +13399,6 @@ Example response:
             "count": 43,
             "max_latency_ticks": 13864914,
             "min_latency_ticks": 23098
-          },
-          "setattr": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "readlink": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "symlink": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "mknod": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "mkdir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "unlink": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "rmdir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "rename": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "link": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
           },
           "open": {
             "count": 7,
@@ -13463,125 +13415,10 @@ Example response:
             "max_latency_ticks": 45676558,
             "min_latency_ticks": 456126
           },
-          "statfs": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "release": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "fsync": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "setxattr": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
           "getxattr": {
             "count": 33,
             "max_latency_ticks": 1722712,
             "min_latency_ticks": 24690
-          },
-          "listxattr": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "removexattr": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "flush": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "opendir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "readdir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "releasedir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "fsyncdir": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "flock": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "create": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "abort": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "fallocate": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "copy_file_range": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "syncfs": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "access": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "lseek": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "poll": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "ioctl": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "getlk": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
-          },
-          "setlk": {
-            "count": 0,
-            "max_latency_ticks": 0,
-            "min_latency_ticks": 0
           }
         },
         "bytes_read": 7100444672,
