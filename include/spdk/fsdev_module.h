@@ -603,6 +603,9 @@ struct spdk_fsdev_io {
 
 		/** Entry to the list io_submitted of struct spdk_fsdev_channel */
 		TAILQ_ENTRY(spdk_fsdev_io) ch_link;
+
+		/* Timestamp */
+		uint64_t submit_tsc;
 	} internal;
 
 	/**

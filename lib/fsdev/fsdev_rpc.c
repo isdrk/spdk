@@ -245,14 +245,19 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "name", name);
-	spdk_json_write_named_object_begin(w, "num_ios");
-	for (i = 0; i < SPDK_COUNTOF(stat->num_ios); i++) {
+	spdk_json_write_named_object_begin(w, "io");
+	for (i = 0; i < SPDK_COUNTOF(stat->io); i++) {
 		const char *name = spdk_fsdev_io_type_get_name(i);
 		if (!name) {
 			SPDK_ERRLOG("Cannot get name for IO %zu\n", i);
 			continue;
 		}
-		spdk_json_write_named_uint64(w, name, stat->num_ios[i]);
+		spdk_json_write_named_object_begin(w, name);
+		spdk_json_write_named_uint64(w, "count", stat->io[i].count);
+		spdk_json_write_named_uint64(w, "max_latency_ticks", stat->io[i].max_latency_ticks);
+		spdk_json_write_named_uint64(w, "min_latency_ticks",
+					     (stat->io[i].min_latency_ticks == UINT64_MAX) ? 0 : stat->io[i].min_latency_ticks);
+		spdk_json_write_object_end(w);
 	}
 	spdk_json_write_object_end(w);
 	spdk_json_write_named_uint64(w, "bytes_read", stat->bytes_read);

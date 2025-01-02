@@ -13376,54 +13376,218 @@ Example response:
   "result": {
     "fsdevs": [
       {
-        "name": "aio0",
-        "num_ios": {
-          "mount": 1,
-          "umount": 0,
-          "lookup": 20,
-          "forget": 11,
-          "getattr": 46,
-          "setattr": 0,
-          "readlink": 0,
-          "symlink": 0,
-          "mknod": 0,
-          "mkdir": 0,
-          "unlink": 0,
-          "rmdir": 0,
-          "rename": 0,
-          "link": 0,
-          "open": 9,
-          "read": 526466,
-          "write": 527031,
-          "statfs": 0,
-          "release": 0,
-          "fsync": 0,
-          "setxattr": 0,
-          "getxattr": 0,
-          "listxattr": 0,
-          "removexattr": 0,
-          "flush": 0,
-          "opendir": 0,
-          "readdir": 0,
-          "releasedir": 0,
-          "fsyncdir": 0,
-          "flock": 0,
-          "create": 0,
-          "abort": 0,
-          "fallocate": 0,
-          "copy_file_range": 0,
-          "syncfs": 0,
-          "access": 0,
-          "lseek": 0,
-          "poll": 0,
-          "ioctl": 0,
-          "getlk": 0,
-          "setlk": 0
+        "name": "fsdev0",
+        "io": {
+          "mount": {
+            "count": 1,
+            "max_latency_ticks": 145384,
+            "min_latency_ticks": 145384
+          },
+          "umount": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "lookup": {
+            "count": 18,
+            "max_latency_ticks": 13828182,
+            "min_latency_ticks": 41132
+          },
+          "forget": {
+            "count": 11,
+            "max_latency_ticks": 71684,
+            "min_latency_ticks": 31922
+          },
+          "getattr": {
+            "count": 43,
+            "max_latency_ticks": 13864914,
+            "min_latency_ticks": 23098
+          },
+          "setattr": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "readlink": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "symlink": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "mknod": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "mkdir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "unlink": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "rmdir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "rename": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "link": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "open": {
+            "count": 7,
+            "max_latency_ticks": 2309832,
+            "min_latency_ticks": 54062
+          },
+          "read": {
+            "count": 1733507,
+            "max_latency_ticks": 45798992,
+            "min_latency_ticks": 447254
+          },
+          "write": {
+            "count": 1734244,
+            "max_latency_ticks": 45676558,
+            "min_latency_ticks": 456126
+          },
+          "statfs": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "release": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "fsync": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "setxattr": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "getxattr": {
+            "count": 33,
+            "max_latency_ticks": 1722712,
+            "min_latency_ticks": 24690
+          },
+          "listxattr": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "removexattr": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "flush": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "opendir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "readdir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "releasedir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "fsyncdir": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "flock": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "create": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "abort": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "fallocate": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "copy_file_range": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "syncfs": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "access": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "lseek": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "poll": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "ioctl": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "getlk": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          },
+          "setlk": {
+            "count": 0,
+            "max_latency_ticks": 0,
+            "min_latency_ticks": 0
+          }
         },
-        "bytes_read": 2156335104,
-        "bytes_written": 2158678016,
+        "bytes_read": 7100444672,
+        "bytes_written": 7103463424,
         "num_out_of_io": 0,
-        "num_errors": 0
+        "num_errors": 33
       }
     ]
   }

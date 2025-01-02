@@ -565,6 +565,17 @@ fsdev_desc_free(struct spdk_fsdev_desc *desc)
 	free(desc);
 }
 
+static void
+fsdev_init_io_stat(struct spdk_fsdev_io_stat *stat)
+{
+	size_t i;
+
+	memset(stat, 0, sizeof(*stat));
+
+	for (i = 0; i < SPDK_COUNTOF(stat->io); i++) {
+		stat->io[i].min_latency_ticks = UINT64_MAX;
+	}
+}
 
 static int
 fsdev_channel_create(void *io_device, void *ctx_buf)
@@ -622,6 +633,8 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 	ch->io_outstanding = 0;
 	ch->shared_resource = shared_resource;
 	TAILQ_INIT(&ch->io_submitted);
+	fsdev_init_io_stat(ch->stat);
+
 	return 0;
 }
 
@@ -630,8 +643,16 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 {
 	size_t i;
 
-	for (i = 0; i < SPDK_COUNTOF(from_stat->num_ios); i++) {
-		to_stat->num_ios[i] += from_stat->num_ios[i];
+	for (i = 0; i < SPDK_COUNTOF(from_stat->io); i++) {
+		to_stat->io[i].count += from_stat->io[i].count;
+
+		if (to_stat->io[i].max_latency_ticks < from_stat->io[i].max_latency_ticks) {
+			to_stat->io[i].max_latency_ticks = from_stat->io[i].max_latency_ticks;
+		}
+
+		if (to_stat->io[i].min_latency_ticks > from_stat->io[i].min_latency_ticks) {
+			to_stat->io[i].min_latency_ticks = from_stat->io[i].min_latency_ticks;
+		}
 	}
 
 	to_stat->bytes_read += from_stat->bytes_read;
@@ -1160,7 +1181,7 @@ spdk_fsdev_get_io_stat(struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch,
 {
 	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
 
-	memset(stat, 0, sizeof(*stat));
+	fsdev_init_io_stat(stat);
 
 	fsdev_add_io_stat(stat, ch->stat);
 }
@@ -1210,7 +1231,7 @@ spdk_fsdev_get_device_stat(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *
 		return;
 	}
 
-	memset(stat, 0, sizeof(*stat));
+	fsdev_init_io_stat(stat);
 
 	/* Start with the statistics from previously deleted channels. */
 	spdk_spin_lock(&fsdev->internal.spinlock);
@@ -1237,7 +1258,7 @@ fsdev_reset_channel_stat(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *f
 {
 	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
 
-	memset(ch->stat, 0, sizeof(*ch->stat));
+	fsdev_init_io_stat(ch->stat);
 
 	spdk_fsdev_for_each_channel_continue(i, 0);
 }
@@ -1270,7 +1291,7 @@ spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev, spdk_fsdev_reset_device_s
 
 	/* Start with the statistics from previously deleted channels. */
 	spdk_spin_lock(&fsdev->internal.spinlock);
-	memset(fsdev->internal.hist_stat, 0, sizeof(*fsdev->internal.hist_stat));
+	fsdev_init_io_stat(fsdev->internal.hist_stat);
 	spdk_spin_unlock(&fsdev->internal.spinlock);
 
 	ctx->cb = cb;
@@ -1379,6 +1400,7 @@ fsdev_register(struct spdk_fsdev *fsdev)
 
 	fsdev->internal.status = SPDK_FSDEV_STATUS_READY;
 	TAILQ_INIT(&fsdev->internal.open_descs);
+	fsdev_init_io_stat(fsdev->internal.hist_stat);
 
 	ret = fsdev_name_add(&fsdev->internal.fsdev_name, fsdev, fsdev->name);
 	if (ret != 0) {

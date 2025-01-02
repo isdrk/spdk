@@ -204,8 +204,15 @@ enum spdk_fsdev_notify_type {
  * fsdev IO statistics
  */
 struct spdk_fsdev_io_stat {
-	/** Number of handled IOs by IO type */
-	uint64_t num_ios[__SPDK_FSDEV_IO_LAST];
+	/** Stats by IO type */
+	struct {
+		/* Number of handled IOs */
+		uint64_t count;
+		/* Max latency */
+		uint64_t max_latency_ticks;
+		/* Min latency */
+		uint64_t min_latency_ticks;
+	} io[__SPDK_FSDEV_IO_LAST];
 	/** Number of bytes read */
 	uint64_t bytes_read;
 	/** Number of bytes written */
