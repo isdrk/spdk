@@ -4122,51 +4122,6 @@ fsdev_aio_destruct(void *ctx)
 	return 0;
 }
 
-typedef int (*fsdev_op_handler_func)(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io);
-
-static fsdev_op_handler_func handlers[__SPDK_FSDEV_IO_LAST] = {
-	[SPDK_FSDEV_IO_MOUNT] = lo_mount,
-	[SPDK_FSDEV_IO_UMOUNT] = lo_umount,
-	[SPDK_FSDEV_IO_LOOKUP] = lo_lookup,
-	[SPDK_FSDEV_IO_FORGET] = lo_forget,
-	[SPDK_FSDEV_IO_GETATTR] = lo_getattr,
-	[SPDK_FSDEV_IO_SETATTR] = lo_setattr,
-	[SPDK_FSDEV_IO_READLINK] = lo_readlink,
-	[SPDK_FSDEV_IO_SYMLINK] = lo_symlink,
-	[SPDK_FSDEV_IO_MKNOD] = lo_mknod,
-	[SPDK_FSDEV_IO_MKDIR] = lo_mkdir,
-	[SPDK_FSDEV_IO_UNLINK] = lo_unlink,
-	[SPDK_FSDEV_IO_RMDIR] = lo_rmdir,
-	[SPDK_FSDEV_IO_RENAME] = lo_rename,
-	[SPDK_FSDEV_IO_LINK] = lo_link,
-	[SPDK_FSDEV_IO_OPEN] = lo_open,
-	[SPDK_FSDEV_IO_READ] = lo_read,
-	[SPDK_FSDEV_IO_WRITE] = lo_write,
-	[SPDK_FSDEV_IO_STATFS] =  lo_statfs,
-	[SPDK_FSDEV_IO_RELEASE] = lo_release,
-	[SPDK_FSDEV_IO_FSYNC] = lo_fsync,
-	[SPDK_FSDEV_IO_SETXATTR] =  lo_setxattr,
-	[SPDK_FSDEV_IO_GETXATTR] =  lo_getxattr,
-	[SPDK_FSDEV_IO_LISTXATTR] = lo_listxattr,
-	[SPDK_FSDEV_IO_REMOVEXATTR] =  lo_removexattr,
-	[SPDK_FSDEV_IO_FLUSH] =  lo_flush,
-	[SPDK_FSDEV_IO_OPENDIR] =  lo_opendir,
-	[SPDK_FSDEV_IO_READDIR] =  lo_readdir,
-	[SPDK_FSDEV_IO_RELEASEDIR] = lo_releasedir,
-	[SPDK_FSDEV_IO_FSYNCDIR] = lo_fsyncdir,
-	[SPDK_FSDEV_IO_FLOCK] = lo_flock,
-	[SPDK_FSDEV_IO_CREATE] = lo_create,
-	[SPDK_FSDEV_IO_ABORT] = lo_abort,
-	[SPDK_FSDEV_IO_FALLOCATE] = lo_fallocate,
-	[SPDK_FSDEV_IO_COPY_FILE_RANGE] = lo_copy_file_range,
-	[SPDK_FSDEV_IO_SYNCFS] = lo_syncfs,
-	[SPDK_FSDEV_IO_LSEEK] = lo_lseek,
-	[SPDK_FSDEV_IO_POLL] = lo_poll,
-	[SPDK_FSDEV_IO_GETLK] = lo_getlk,
-	[SPDK_FSDEV_IO_SETLK] = lo_setlk,
-	[SPDK_FSDEV_IO_IOCTL] = lo_ioctl,
-};
-
 static void
 fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -4175,13 +4130,133 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 
 	assert(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
 
-	if (!handlers[type]) {
-		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n",
-			      (int)type);
+	switch (type) {
+	case SPDK_FSDEV_IO_MOUNT:
+		status = lo_mount(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_UMOUNT:
+		status = lo_umount(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_LOOKUP:
+		status = lo_lookup(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FORGET:
+		status = lo_forget(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_GETATTR:
+		status = lo_getattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_SETATTR:
+		status = lo_setattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_READLINK:
+		status = lo_readlink(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_SYMLINK:
+		status = lo_symlink(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_MKNOD:
+		status = lo_mknod(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_MKDIR:
+		status = lo_mkdir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_UNLINK:
+		status = lo_unlink(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_RMDIR:
+		status = lo_rmdir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_RENAME:
+		status = lo_rename(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_LINK:
+		status = lo_link(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_OPEN:
+		status = lo_open(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_READ:
+		status = lo_read(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_WRITE:
+		status = lo_write(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_STATFS:
+		status = lo_statfs(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_RELEASE:
+		status = lo_release(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FSYNC:
+		status = lo_fsync(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_SETXATTR:
+		status = lo_setxattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_GETXATTR:
+		status = lo_getxattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_LISTXATTR:
+		status = lo_listxattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_REMOVEXATTR:
+		status = lo_removexattr(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FLUSH:
+		status = lo_flush(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_OPENDIR:
+		status = lo_opendir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_READDIR:
+		status = lo_readdir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_RELEASEDIR:
+		status = lo_releasedir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FSYNCDIR:
+		status = lo_fsyncdir(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FLOCK:
+		status = lo_flock(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_CREATE:
+		status = lo_create(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_ABORT:
+		status = lo_abort(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_FALLOCATE:
+		status = lo_fallocate(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
+		status = lo_copy_file_range(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_SYNCFS:
+		status = lo_syncfs(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_LSEEK:
+		status = lo_lseek(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_POLL:
+		status = lo_poll(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_GETLK:
+		status = lo_getlk(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_SETLK:
+		status = lo_setlk(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_IOCTL:
+		status = lo_ioctl(ch, fsdev_io);
+		break;
+	default:
+		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
 		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
 		return;
 	}
-	status = handlers[type](ch, fsdev_io);
+
 	if (status != IO_STATUS_ASYNC) {
 		spdk_fsdev_io_complete(fsdev_io, status);
 	}
