@@ -953,6 +953,8 @@ fsdev_aio_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts 
 	AIO_SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
 	AIO_SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
 	AIO_SET_MOUNT_FLAG(true, flags, POSIX_ACL);
+	AIO_SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
+	AIO_SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
 
 	/* Based on the setting above. */
 	AIO_SET_MOUNT_FLAG(writeback_cache_enabled, flags, WRITEBACK_CACHE);

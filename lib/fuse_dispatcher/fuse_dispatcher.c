@@ -2168,7 +2168,9 @@ fuse_dispatcher_mount_rollback_msg(void *ctx)
 	MNT_FLAG(AUTO_INVAL_DATA)      \
 	MNT_FLAG(EXPLICIT_INVAL_DATA)  \
 	MNT_FLAG(WRITEBACK_CACHE)      \
-	MNT_FLAG(POSIX_ACL)
+	MNT_FLAG(POSIX_ACL)            \
+	MNT_FLAG(POSIX_LOCKS)          \
+	MNT_FLAG(FLOCK_LOCKS)
 
 static uint32_t
 fuse_mount_flags_to_fsdev(uint32_t flags)
@@ -2254,9 +2256,7 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV_V2);
 	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
 
-	SET_MOUNT_FLAG(true, supported, POSIX_LOCKS);
 	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
-	SET_MOUNT_FLAG(true, supported, FLOCK_LOCKS);
 	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
 
 	/* Sending back the fsdev negotiated mount opts. */
@@ -2302,8 +2302,8 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 
 	SPDK_INFOLOG(fuse_dispatcher, "INIT: %" PRIu32 ".%" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io->disp, outarg.major), fsdev_io_d2h_u32(fuse_io->disp, outarg.minor));
-	SPDK_INFOLOG(fuse_dispatcher, "mount_flags: 0x%08" PRIx32 "\n",
-		     fsdev_io_h2d_u32(fuse_io->disp, fsdev_mount_flags_to_fuse(supported)));
+	SPDK_INFOLOG(fuse_dispatcher, "flags: 0x%08" PRIx32 "\n",
+		     fsdev_io_d2h_u32(fuse_io->disp, outarg.flags));
 	SPDK_INFOLOG(fuse_dispatcher, "max_readahead: %" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io->disp, outarg.max_readahead));
 	SPDK_INFOLOG(fuse_dispatcher, "max_write: %" PRIu32 "\n",
@@ -2314,8 +2314,8 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 		     fsdev_io_d2h_u16(fuse_io->disp, outarg.max_background));
 	SPDK_INFOLOG(fuse_dispatcher, "congestion_threshold: %" PRIu16 "\n",
 		     fsdev_io_d2h_u16(fuse_io->disp, outarg.congestion_threshold));
-	SPDK_INFOLOG(fuse_dispatcher, "time_gran: %" PRIu32 "\n", fsdev_io_d2h_u32(fuse_io->disp,
-			outarg.time_gran));
+	SPDK_INFOLOG(fuse_dispatcher, "time_gran: %" PRIu32 "\n",
+		     fsdev_io_d2h_u32(fuse_io->disp, outarg.time_gran));
 
 	out_buf = _fsdev_io_out_arg_get_buf(fuse_io, outargsize);
 	if (!out_buf) {
@@ -2436,6 +2436,8 @@ do_init(struct fuse_io *fuse_io)
 	SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
 	SET_MOUNT_FLAG(true, flags, WRITEBACK_CACHE);
 	SET_MOUNT_FLAG(true, flags, POSIX_ACL);
+	SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
+	SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
 
 	memset(&fuse_io->u.init.opts, 0, sizeof(fuse_io->u.init.opts));
 	fuse_io->u.init.opts.opts_size = sizeof(fuse_io->u.init.opts);

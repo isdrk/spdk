@@ -343,7 +343,7 @@ ut_fuse_disp_test_init_destroy(void)
 	opts.max_xfer_size = 0;
 	opts.max_readahead = 16384;
 	opts.flags = SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP | SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA |
-		     SPDK_FSDEV_MOUNT_WRITEBACK_CACHE | SPDK_FSDEV_MOUNT_POSIX_ACL;
+		     SPDK_FSDEV_MOUNT_WRITEBACK_CACHE | SPDK_FSDEV_MOUNT_POSIX_ACL | SPDK_FSDEV_MOUNT_POSIX_LOCKS;
 	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&opts, sizeof(opts)));
 	mount_cb_fn = ut_calls_param_get_ptr(0, 4);
 	cb_arg = ut_calls_param_get_ptr(0, 5);

@@ -110,7 +110,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size")
  * for attribute changes (e.g. size) prior to issuing a read, rather than assuming
  * their latest cached attributes are valid.
  *
- * SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA:: The user will receive cache invalidation requests
+ * SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA: The user will receive cache invalidation requests
  * when necessary. This ensures that data cached by user is correctly invalidated
  * and updated.
  *
@@ -120,12 +120,18 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size")
  *
  * SPDK_FSDEV_MOUNT_POSIX_ACL: The user will assume that the fsdev is performing ACL checks
  * on setxattr_flags.
+ *
+ * SPDK_FSDEV_MOUNT_POSIX_LOCKS: remote locking for POSIX file locks supported.
+ *
+ * SPDK_FSDEV_MOUNT_FLOCK_LOCKS: remote locking for BSD style file locks supported.
  */
 #define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
 #define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
 #define SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA  (1 << 2)
 #define SPDK_FSDEV_MOUNT_WRITEBACK_CACHE      (1 << 3)
 #define SPDK_FSDEV_MOUNT_POSIX_ACL            (1 << 4)
+#define SPDK_FSDEV_MOUNT_POSIX_LOCKS          (1 << 5)
+#define SPDK_FSDEV_MOUNT_FLOCK_LOCKS          (1 << 6)
 
 /**
  * Structure with optional fsdev IO parameters
