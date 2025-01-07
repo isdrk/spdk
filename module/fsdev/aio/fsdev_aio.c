@@ -4194,6 +4194,7 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
+	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -4210,6 +4211,7 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
+	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
 
 	return 0;
 }
