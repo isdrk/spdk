@@ -3529,7 +3529,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
                                          max_xfer_size=args.max_xfer_size, skip_rw=args.skip_rw,
                                          max_readahead=args.max_readahead,
-                                         enable_notifications=args.enable_notifications))
+                                         enable_notifications=args.enable_notifications,
+                                         attr_valid_ms=args.attr_valid_ms))
 
     p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
     p.add_argument('name', help='Filesystem name. Example: aio0.')
@@ -3549,6 +3550,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('--skip-rw', dest='skip_rw', help="Do not process read or write commands. This is used for testing.",
                    action='store_true', default=None)
     p.add_argument('--enable-notifications', help="Enable notifications.", action='store_true', default=None)
+    p.add_argument('-a', '--attr-valid-ms', help='File attributes validity time in miliseconds. Used for entry cache.', type=int)
 
     p.set_defaults(func=fsdev_aio_create)
 

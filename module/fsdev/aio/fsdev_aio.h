@@ -19,6 +19,7 @@ struct spdk_fsdev_aio_opts {
 	bool skip_rw;
 	uint32_t max_readahead;
 	bool enable_notifications;
+	uint32_t attr_valid_ms;
 };
 
 typedef void (*spdk_delete_aio_fsdev_complete)(void *cb_arg, int fsdeverrno);

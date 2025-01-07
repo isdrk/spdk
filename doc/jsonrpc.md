@@ -13489,6 +13489,7 @@ max_xfer_size           | Optional | int         | The maximum size allowed for 
 max_readahead           | Optional | int         | The maximum size allowed for readahead, in bytes
 skip_rw                 | Optional | bool        | Skip processing read and write requests and complete them successfully immediately. This is useful for benchmarking.
 enable_notifications    | Optional | bool        | Enable notifications
+attr_valid_ms           | Optional | int         | File attributes validity time in milliseconds. Used for entry cache
 
 #### Example
 
@@ -13506,7 +13507,8 @@ Example request:
     "max_xfer_size": 65535,
     "max_readahead": 65535,
     "skip_rw": true,
-    "enable_notifications": true
+    "enable_notifications": true,
+    "attr_valid_ms": 30000
   }
 }
 ~~~
