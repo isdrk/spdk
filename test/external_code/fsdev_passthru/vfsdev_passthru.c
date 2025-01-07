@@ -125,8 +125,9 @@ vfsdev_passthru_destruct(void *ctx)
 }
 
 static void
-vfsdev_passthru_check_io_ctx(struct spdk_fsdev_io *fsdev_io)
+vfsdev_passthru_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *child_io)
 {
+	struct spdk_fsdev_io *fsdev_io = cb_arg;
 	struct passthru_fsdev_io *io_ctx = (struct passthru_fsdev_io *)fsdev_io->driver_ctx;
 
 	/* We setup this value in the submission routine, just showing here that it is
@@ -135,237 +136,9 @@ vfsdev_passthru_check_io_ctx(struct spdk_fsdev_io *fsdev_io)
 	if (io_ctx->test != 0x5a) {
 		SPDK_ERRLOG("Error, original IO device_ctx is wrong! 0x%x\n", io_ctx->test);
 	}
-}
 
-static void
-vfsdev_passthru_mount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			     const struct spdk_fsdev_mount_opts *opts,
-			     struct spdk_fsdev_file_object *root_fobject)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.mount.opts = *opts;
-	fsdev_io->u_out.mount.root_fobject = root_fobject;
+	memcpy(&fsdev_io->u_out, &child_io->u_out, sizeof(fsdev_io->u_out));
 	spdk_fsdev_io_complete(fsdev_io, status);
-}
-
-static void
-vfsdev_passthru_umount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	spdk_fsdev_io_complete(cb_arg, 0);
-}
-
-static void
-vfsdev_passthru_status_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-#define CPL_CB_FOBJECT_ATTR(io_type) \
-static void \
-vfsdev_passthru_ ## io_type ## _cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, \
-				       struct spdk_fsdev_file_object *fobject, \
-				       const struct spdk_fsdev_file_attr *attr) \
-{ \
-	struct spdk_fsdev_io *fsdev_io = cb_arg; \
-	vfsdev_passthru_check_io_ctx(fsdev_io); \
-	fsdev_io->u_out.io_type.fobject = fobject; \
-	fsdev_io->u_out.io_type.attr = *attr; \
-	spdk_fsdev_io_complete(fsdev_io, status); \
-}
-
-CPL_CB_FOBJECT_ATTR(lookup)
-CPL_CB_FOBJECT_ATTR(mknod)
-CPL_CB_FOBJECT_ATTR(symlink)
-CPL_CB_FOBJECT_ATTR(mkdir)
-CPL_CB_FOBJECT_ATTR(link)
-
-#define CPL_CB_DATA_SIZE(io_type) \
-static void \
-vfsdev_passthru_ ## io_type ## _cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, uint32_t data_size) \
-{ \
-	struct spdk_fsdev_io *fsdev_io = cb_arg; \
-	vfsdev_passthru_check_io_ctx(fsdev_io); \
-	fsdev_io->u_out.io_type.data_size = data_size; \
-	spdk_fsdev_io_complete(fsdev_io, status); \
-}
-
-CPL_CB_DATA_SIZE(read)
-CPL_CB_DATA_SIZE(write)
-CPL_CB_DATA_SIZE(copy_file_range)
-
-#define CPL_CB_ATTR(io_type) \
-static void \
-vfsdev_passthru_ ## io_type ## _cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, \
-				       const struct spdk_fsdev_file_attr *attr) \
-{ \
-	struct spdk_fsdev_io *fsdev_io = cb_arg; \
-	vfsdev_passthru_check_io_ctx(fsdev_io); \
-	fsdev_io->u_out.io_type.attr = *attr; \
-	spdk_fsdev_io_complete(cb_arg, status); \
-}
-
-CPL_CB_ATTR(getattr)
-CPL_CB_ATTR(setattr)
-
-#define CPL_CB_FHANDLE(io_type) \
-static void \
-vfsdev_passthru_ ## io_type ## _cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status, \
-				       struct spdk_fsdev_file_handle *fhandle) \
-{ \
-	struct spdk_fsdev_io *fsdev_io = cb_arg; \
-	vfsdev_passthru_check_io_ctx(fsdev_io); \
-	fsdev_io->u_out.io_type.fhandle = fhandle; \
-	spdk_fsdev_io_complete(fsdev_io, status); \
-}
-
-CPL_CB_FHANDLE(open)
-CPL_CB_FHANDLE(opendir)
-
-static void
-vfsdev_passthru_readlink_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-				const char *linkname)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.readlink.linkname = strdup(linkname);
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_statfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			      const struct spdk_fsdev_file_statfs *statfs)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.statfs.statfs = *statfs;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_getxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-				size_t value_size)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.getxattr.value_size = value_size;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_listxattr_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-				 size_t size, bool size_only)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.listxattr.data_size = size;
-	fsdev_io->u_out.listxattr.size_only = size_only;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_create_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			      struct spdk_fsdev_file_object *fobject,
-			      const struct spdk_fsdev_file_attr *attr,
-			      struct spdk_fsdev_file_handle *fhandle)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.create.fobject = fobject;
-	fsdev_io->u_out.create.attr = *attr;
-	fsdev_io->u_out.create.fhandle = fhandle;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			      uint32_t mask, uid_t uid, uid_t gid)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.access.mask = mask;
-	fsdev_io->u_out.access.uid = uid;
-	fsdev_io->u_out.access.gid = gid;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			     off_t offset, enum spdk_fsdev_seek_whence whence)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.lseek.offset = offset;
-	fsdev_io->u_out.lseek.whence = whence;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_poll_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			    uint32_t revents)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.poll.revents = revents;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			     int32_t result,
-			     struct iovec *in_iov, uint32_t in_iovcnt,
-			     struct iovec *out_iov, uint32_t out_iovcnt)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.ioctl.result = result;
-	fsdev_io->u_out.ioctl.in_iov = in_iov;
-	fsdev_io->u_out.ioctl.in_iovcnt = in_iovcnt;
-	fsdev_io->u_out.ioctl.out_iov = out_iov;
-	fsdev_io->u_out.ioctl.out_iovcnt = out_iovcnt;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static void
-vfsdev_passthru_getlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
-			     const struct spdk_fsdev_file_lock *lock)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	vfsdev_passthru_check_io_ctx(fsdev_io);
-	fsdev_io->u_out.getlk.lock = *lock;
-	spdk_fsdev_io_complete(cb_arg, status);
-}
-
-static int
-vfsdev_passthru_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
-				 struct spdk_fsdev_file_object *fobject,
-				 const struct spdk_fsdev_file_attr *attr,
-				 off_t offset, bool *forget)
-{
-	struct spdk_fsdev_io *fsdev_io = cb_arg;
-
-	fsdev_io->u_out.readdir.fobject = fobject;
-	fsdev_io->u_out.readdir.name = name;
-	fsdev_io->u_out.readdir.offset = offset;
-	fsdev_io->u_out.readdir.attr = *attr;
-	return fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, forget);
 }
 
 /* Called when someone above submits IO to this pt vfsdev. We're simply passing it on here
@@ -392,23 +165,23 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 	case SPDK_FSDEV_IO_MOUNT:
 		rc = spdk_fsdev_mount(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      &fsdev_io->u_in.mount.opts,
-				      vfsdev_passthru_mount_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_UMOUNT:
 		rc = spdk_fsdev_umount(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       vfsdev_passthru_umount_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_LOOKUP:
 		rc = spdk_fsdev_lookup(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				       fsdev_io->u_in.lookup.parent_fobject,
 				       fsdev_io->u_in.lookup.name,
-				       vfsdev_passthru_lookup_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FORGET:
 		rc = spdk_fsdev_forget(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				       fsdev_io->u_in.forget.fobject,
 				       fsdev_io->u_in.forget.nlookup,
-				       vfsdev_passthru_status_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_MKNOD:
 		rc = spdk_fsdev_mknod(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -419,13 +192,13 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.mknod.umask,
 				      fsdev_io->u_in.mknod.euid,
 				      fsdev_io->u_in.mknod.egid,
-				      vfsdev_passthru_mknod_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_OPEN:
 		rc = spdk_fsdev_fopen(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      fsdev_io->u_in.open.fobject,
 				      fsdev_io->u_in.open.flags,
-				      vfsdev_passthru_open_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_WRITE:
 		rc = spdk_fsdev_write(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -437,7 +210,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.write.iov,
 				      fsdev_io->u_in.write.iovcnt,
 				      fsdev_io->u_in.write.opts,
-				      vfsdev_passthru_write_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_READ:
 		rc = spdk_fsdev_read(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -449,25 +222,25 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				     fsdev_io->u_in.read.iov,
 				     fsdev_io->u_in.read.iovcnt,
 				     fsdev_io->u_in.read.opts,
-				     vfsdev_passthru_read_cpl_cb, fsdev_io);
+				     vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_RELEASE:
 		rc = spdk_fsdev_release(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					fsdev_io->u_in.release.fobject,
 					fsdev_io->u_in.release.fhandle,
-					vfsdev_passthru_status_cpl_cb, fsdev_io);
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_UNLINK:
 		rc = spdk_fsdev_unlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				       fsdev_io->u_in.unlink.parent_fobject,
 				       fsdev_io->u_in.unlink.name,
-				       vfsdev_passthru_status_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_GETATTR:
 		rc = spdk_fsdev_getattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					fsdev_io->u_in.getattr.fobject,
 					fsdev_io->u_in.getattr.fhandle,
-					vfsdev_passthru_getattr_cpl_cb, fsdev_io);
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_SETATTR:
 		rc = spdk_fsdev_setattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -475,12 +248,12 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					fsdev_io->u_in.setattr.fhandle,
 					&fsdev_io->u_in.setattr.attr,
 					fsdev_io->u_in.setattr.to_set,
-					vfsdev_passthru_setattr_cpl_cb, fsdev_io);
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_READLINK:
 		rc = spdk_fsdev_readlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					 fsdev_io->u_in.readlink.fobject,
-					 vfsdev_passthru_readlink_cpl_cb, fsdev_io);
+					 vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_SYMLINK:
 		rc = spdk_fsdev_symlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -489,7 +262,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					fsdev_io->u_in.symlink.linkpath,
 					fsdev_io->u_in.symlink.euid,
 					fsdev_io->u_in.symlink.egid,
-					vfsdev_passthru_symlink_cpl_cb, fsdev_io);
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_MKDIR:
 		rc = spdk_fsdev_mkdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -499,13 +272,13 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.mkdir.umask,
 				      fsdev_io->u_in.mkdir.euid,
 				      fsdev_io->u_in.mkdir.egid,
-				      vfsdev_passthru_mkdir_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_RMDIR:
 		rc = spdk_fsdev_rmdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      fsdev_io->u_in.rmdir.parent_fobject,
 				      fsdev_io->u_in.rmdir.name,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_RENAME:
 		rc = spdk_fsdev_rename(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -514,26 +287,26 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				       fsdev_io->u_in.rename.new_parent_fobject,
 				       fsdev_io->u_in.rename.new_name,
 				       fsdev_io->u_in.rename.flags,
-				       vfsdev_passthru_status_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_LINK:
 		rc = spdk_fsdev_link(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				     fsdev_io->u_in.link.fobject,
 				     fsdev_io->u_in.link.new_parent_fobject,
 				     fsdev_io->u_in.link.name,
-				     vfsdev_passthru_link_cpl_cb, fsdev_io);
+				     vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_STATFS:
 		rc = spdk_fsdev_statfs(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				       fsdev_io->u_in.statfs.fobject,
-				       vfsdev_passthru_statfs_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FSYNC:
 		rc = spdk_fsdev_fsync(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      fsdev_io->u_in.fsync.fobject,
 				      fsdev_io->u_in.fsync.fhandle,
 				      fsdev_io->u_in.fsync.datasync,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_SETXATTR:
 		rc = spdk_fsdev_setxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -542,7 +315,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					 fsdev_io->u_in.setxattr.value,
 					 fsdev_io->u_in.setxattr.size,
 					 fsdev_io->u_in.setxattr.flags,
-					 vfsdev_passthru_status_cpl_cb, fsdev_io);
+					 vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_GETXATTR:
 		rc = spdk_fsdev_getxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -550,60 +323,60 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					 fsdev_io->u_in.getxattr.name,
 					 fsdev_io->u_in.getxattr.buffer,
 					 fsdev_io->u_in.getxattr.size,
-					 vfsdev_passthru_getxattr_cpl_cb, fsdev_io);
+					 vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_LISTXATTR:
 		rc = spdk_fsdev_listxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					  fsdev_io->u_in.listxattr.fobject,
 					  fsdev_io->u_in.listxattr.buffer,
 					  fsdev_io->u_in.listxattr.size,
-					  vfsdev_passthru_listxattr_cpl_cb, fsdev_io);
+					  vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_REMOVEXATTR:
 		rc = spdk_fsdev_removexattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					    fsdev_io->u_in.removexattr.fobject,
 					    fsdev_io->u_in.removexattr.name,
-					    vfsdev_passthru_status_cpl_cb, fsdev_io);
+					    vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FLUSH:
 		rc = spdk_fsdev_flush(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      fsdev_io->u_in.flush.fobject,
 				      fsdev_io->u_in.flush.fhandle,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_OPENDIR:
 		rc = spdk_fsdev_opendir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					fsdev_io->u_in.opendir.fobject,
 					fsdev_io->u_in.opendir.flags,
-					vfsdev_passthru_opendir_cpl_cb, fsdev_io);
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_READDIR:
 		rc = spdk_fsdev_readdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					fsdev_io->u_in.readdir.fobject,
 					fsdev_io->u_in.readdir.fhandle,
 					fsdev_io->u_in.readdir.offset,
-					vfsdev_passthru_readdir_entry_cb,
-					vfsdev_passthru_status_cpl_cb, fsdev_io);
+					fsdev_io->u_in.readdir.usr_entry_cb_fn,
+					vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_RELEASEDIR:
 		rc = spdk_fsdev_releasedir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					   fsdev_io->u_in.releasedir.fobject,
 					   fsdev_io->u_in.releasedir.fhandle,
-					   vfsdev_passthru_status_cpl_cb, fsdev_io);
+					   vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FSYNCDIR:
 		rc = spdk_fsdev_fsyncdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 					 fsdev_io->u_in.fsyncdir.fobject,
 					 fsdev_io->u_in.fsyncdir.fhandle,
 					 fsdev_io->u_in.fsyncdir.datasync,
-					 vfsdev_passthru_status_cpl_cb, fsdev_io);
+					 vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FLOCK:
 		rc = spdk_fsdev_flock(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				      fsdev_io->u_in.flock.fobject,
 				      fsdev_io->u_in.flock.fhandle,
 				      fsdev_io->u_in.flock.operation,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_CREATE:
 		rc = spdk_fsdev_create(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -614,12 +387,12 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				       fsdev_io->u_in.create.umask,
 				       fsdev_io->u_in.create.euid,
 				       fsdev_io->u_in.create.egid,
-				       vfsdev_passthru_create_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_ABORT:
 		rc = spdk_fsdev_abort(pt_node->base_desc, pt_ch->base_ch,
 				      fsdev_io->u_in.abort.unique_to_abort,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FALLOCATE:
 		rc = spdk_fsdev_fallocate(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -628,7 +401,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					  fsdev_io->u_in.fallocate.mode,
 					  fsdev_io->u_in.fallocate.offset,
 					  fsdev_io->u_in.fallocate.length,
-					  vfsdev_passthru_status_cpl_cb, fsdev_io);
+					  vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		rc = spdk_fsdev_copy_file_range(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -640,12 +413,12 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 						fsdev_io->u_in.copy_file_range.off_out,
 						fsdev_io->u_in.copy_file_range.len,
 						fsdev_io->u_in.copy_file_range.flags,
-						vfsdev_passthru_copy_file_range_cpl_cb, fsdev_io);
+						vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_SYNCFS:
 		rc = spdk_fsdev_syncfs(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
 				       fsdev_io->u_in.syncfs.fobject,
-				       vfsdev_passthru_status_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_ACCESS:
 		rc = spdk_fsdev_access(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -653,7 +426,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				       fsdev_io->u_in.access.mask,
 				       fsdev_io->u_in.access.uid,
 				       fsdev_io->u_in.access.gid,
-				       vfsdev_passthru_access_cpl_cb, fsdev_io);
+				       vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_LSEEK:
 		rc = spdk_fsdev_lseek(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -661,7 +434,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.lseek.fhandle,
 				      fsdev_io->u_in.lseek.offset,
 				      fsdev_io->u_in.lseek.whence,
-				      vfsdev_passthru_lseek_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_POLL:
 		rc = spdk_fsdev_poll(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -669,7 +442,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				     fsdev_io->u_in.poll.fhandle,
 				     fsdev_io->u_in.poll.events,
 				     fsdev_io->u_in.poll.wait,
-				     vfsdev_passthru_poll_cpl_cb, fsdev_io);
+				     vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		rc = spdk_fsdev_ioctl(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -681,7 +454,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.ioctl.in_iovcnt,
 				      fsdev_io->u_in.ioctl.out_iov,
 				      fsdev_io->u_in.ioctl.out_iovcnt,
-				      vfsdev_passthru_ioctl_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_GETLK:
 		rc = spdk_fsdev_getlk(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -689,7 +462,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      fsdev_io->u_in.getlk.fhandle,
 				      &fsdev_io->u_in.getlk.lock,
 				      fsdev_io->u_in.getlk.owner,
-				      vfsdev_passthru_getlk_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_SETLK:
 		rc = spdk_fsdev_setlk(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
@@ -698,7 +471,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 				      &fsdev_io->u_in.setlk.lock,
 				      fsdev_io->u_in.setlk.owner,
 				      fsdev_io->u_in.setlk.wait,
-				      vfsdev_passthru_status_cpl_cb, fsdev_io);
+				      vfsdev_passthru_cpl_cb, fsdev_io);
 		break;
 	default:
 		SPDK_ERRLOG("passthru: unknown I/O type %d\n", type);
