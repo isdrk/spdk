@@ -1,10 +1,11 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "mlx5_priv.h"
 #include "mlx5_ifc.h"
 #include "spdk/log.h"
+#include "spdk/env.h"
 #include "spdk/util.h"
 #include "spdk/barrier.h"
 #include "spdk/likely.h"
@@ -126,7 +127,7 @@ mlx5_cqe_err(struct mlx5_cqe64 *cqe)
 		snprintf(info, sizeof(info), "Remote access");
 		break;
 	case MLX5_CQE_SYNDROME_REMOTE_OP_ERR:
-		snprintf(info, sizeof(info), "Remote QP");
+		snprintf(info, sizeof(info), "Remote OP");
 		break;
 	case MLX5_CQE_SYNDROME_TRANSPORT_RETRY_EXC_ERR:
 		snprintf(info, sizeof(info), "Transport retry count exceeded");
@@ -190,9 +191,9 @@ mlx5_dma_xfer_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_co
 		dseg = dseg + 1;
 	}
 
-	mlx5_qp_wqe_submit(qp, ctrl, bb_count, pi);
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
 
-	mlx5_qp_set_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
 	assert(qp->tx_available >= bb_count);
 	qp->tx_available -= bb_count;
 }
@@ -241,9 +242,9 @@ mlx5_dma_xfer_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t
 		}
 	}
 
-	mlx5_qp_wqe_submit(qp, ctrl, bb_count, pi);
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
 
-	mlx5_qp_set_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
 	assert(qp->tx_available >= bb_count);
 	qp->tx_available -= bb_count;
 }
@@ -268,12 +269,14 @@ mlx5_qp_rdma_op(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count
 	}
 	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
 	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+	flags |= qp->extra_flags;
 
 	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
 		mlx5_dma_xfer_full(qp, sge, sge_count, dstaddr, rkey, op, flags, wrid, bb_count);
 	} else {
 		mlx5_dma_xfer_wrap_around(qp, sge, sge_count, dstaddr, rkey, op, flags, wrid, bb_count);
 	}
+	qp->extra_flags = 0;
 
 	return 0;
 }
@@ -292,24 +295,185 @@ spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sg
 	return mlx5_qp_rdma_op(qp, sge, sge_count, dstaddr, rkey, wrid, flags, MLX5_OPCODE_RDMA_READ);
 }
 
-/* polling start */
-
 static inline void
-mlx5_qp_update_comp(struct spdk_mlx5_qp *qp)
+mlx5_dma_send_full(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int op,
+		   uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
 {
-	qp->completions[qp->last_pi].completions = qp->nonsignaled_outstanding;
-	qp->nonsignaled_outstanding = 0;
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_data_seg *dseg;
+	uint8_t fm_ce_se;
+	uint32_t i, pi;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	/* absolute PI value */
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	SPDK_DEBUGLOG(mlx5, "opc %d, num_sge %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, num_sge,
+		      bb_count, hw_qp->sq_pi, fm_ce_se);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
+	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 1 + num_sge, 0, imm);
+
+	dseg = (struct mlx5_wqe_data_seg *)(ctrl + 1);
+	for (i = 0; i < num_sge; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
+		dseg = dseg + 1;
+	}
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	assert(qp->tx_available >= bb_count);
+	qp->tx_available -= bb_count;
 }
 
 static inline void
-mlx5_qp_tx_complete(struct spdk_mlx5_qp *qp)
+mlx5_dma_send_wrap_around(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+			  int op, uint32_t flags, uint32_t imm, uint64_t wr_id, uint32_t bb_count)
 {
-	if (qp->sigmode == SPDK_MLX5_QP_SIG_LAST) {
-		qp->ctrl->fm_ce_se &= ~SPDK_MLX5_WQE_CTRL_CE_MASK;
-		qp->ctrl->fm_ce_se |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
-		mlx5_qp_update_comp(qp);
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_data_seg *dseg;
+	uint8_t fm_ce_se;
+	uint32_t i, to_end, pi;
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	/* absolute PI value */
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	SPDK_DEBUGLOG(mlx5, "opc %d, num_sge %u, bb_count %u, orig pi %u, fm_ce_se %x\n", op, num_sge,
+		      bb_count, pi, fm_ce_se);
+
+	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+	ctrl = (struct mlx5_wqe_ctrl_seg *) mlx5_qp_get_wqe_bb(hw_qp);
+	/* WQE size in octowords (16-byte units). DS accounts for all the segments in the WQE as summarized in WQE construction */
+	mlx5_set_ctrl_seg(ctrl, hw_qp->sq_pi, op, 0, hw_qp->qp_num, fm_ce_se, 1 + num_sge, 0, imm);
+	to_end -= sizeof(struct mlx5_wqe_ctrl_seg); /* 16 bytes */
+
+	dseg = (struct mlx5_wqe_data_seg *)(ctrl + 1);
+	for (i = 0; i < num_sge; i++) {
+		mlx5dv_set_data_seg(dseg, sge[i].length, sge[i].lkey, sge[i].addr);
+		to_end -= sizeof(struct mlx5_wqe_data_seg); /* 16 bytes */
+		if (to_end != 0) {
+			dseg = dseg + 1;
+		} else {
+			/* Start from the beginning of SQ */
+			dseg = (struct mlx5_wqe_data_seg *)(hw_qp->sq_addr);
+			to_end = hw_qp->sq_wqe_cnt * MLX5_SEND_WQE_BB;
+		}
 	}
-	mlx5_ring_tx_db(qp, qp->ctrl);
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, bb_count, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, bb_count);
+	assert(qp->tx_available >= bb_count);
+	qp->tx_available -= bb_count;
+}
+
+static inline int
+mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, int opcode,
+	     uint32_t imm, uint64_t wrid, uint32_t flags)
+{
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
+	uint32_t to_end, pi, bb_count;
+
+	/* One building block is 64 bytes - 4 octowords
+	 * It can hold control segment + 3 data segments.
+	 * If num_sge (data segments) is bigger than 3 then we consume additional bb */
+	bb_count = (num_sge <= 3) ? 1 : 1 + SPDK_CEIL_DIV(num_sge - 3, 4);
+
+	if (spdk_unlikely(bb_count > qp->tx_available)) {
+		return -ENOMEM;
+	}
+	if (spdk_unlikely(num_sge > qp->max_send_sge)) {
+		return -E2BIG;
+	}
+	pi = hw_qp->sq_pi & (hw_qp->sq_wqe_cnt - 1);
+	to_end = (hw_qp->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	if (spdk_likely(to_end >= bb_count * MLX5_SEND_WQE_BB)) {
+		mlx5_dma_send_full(qp, sge, num_sge, opcode, flags, imm, wrid, bb_count);
+	} else {
+		mlx5_dma_send_wrap_around(qp, sge, num_sge, opcode, flags, imm, wrid,
+					  bb_count);
+	}
+
+	return 0;
+}
+
+int
+spdk_mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		  uint64_t wrid, uint32_t flags)
+{
+	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND, 0, wrid, flags);
+}
+
+int
+spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags)
+{
+	return mlx5_qp_send(qp, sge, num_sge, MLX5_OPCODE_SEND_INVAL, htobe32(invalidate_rkey), wrid,
+			    flags);
+}
+
+int
+spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge, uint64_t wrid)
+{
+	struct mlx5_hw_qp *hw_qp = &qp->hw;
+	uint16_t wqe_index;
+	struct mlx5_wqe_data_seg *dseg;
+	uint32_t i;
+
+	SPDK_DEBUGLOG(mlx5, "qp 0x%x, wrid 0x%lx\n", hw_qp->qp_num, wrid);
+	if (spdk_unlikely(qp->rx_available == 0)) {
+		return -ENOMEM;
+	}
+	if (spdk_unlikely(num_sge > qp->max_recv_sge)) {
+		return -E2BIG;
+	}
+
+	wqe_index = hw_qp->rq_pi++ & (hw_qp->rq_wqe_cnt - 1);
+	qp->rq_completions[wqe_index].wr_id = wrid;
+	dseg = (void *)hw_qp->rq_addr + wqe_index * hw_qp->rq_stride;
+
+	for (i = 0; i < num_sge; i++, dseg++, sge++) {
+		dseg->byte_count	= htobe32(sge->length);
+		dseg->lkey		= htobe32(sge->lkey);
+		dseg->addr		= htobe64(sge->addr);
+	}
+
+	/*
+	 * The receive WQE has a fixed size defined in the create QP command. When num_sge is
+	 * lower than qp->max_recv_sge, the last entries of the data segment are not used.
+	 * Set lkey to MLX5_INVALID_LKEY for the first unused entry to let the HW recognize
+	 * the end of the data segment.
+	 */
+	if (i < qp->max_recv_sge) {
+		dseg->byte_count	= 0;
+		dseg->lkey		= htobe32(MLX5_INVALID_LKEY);
+		dseg->addr		= 0;
+	}
+	qp->rx_available--;
+	mlx5_qp_dump_rq_wqe(qp, wqe_index);
+
+	return 0;
+}
+
+void
+spdk_mlx5_qp_complete_recv(struct spdk_mlx5_qp *qp)
+{
+	mlx5_ring_rx_db(qp);
+}
+
+/* polling start */
+
+static inline void
+mlx5_qp_update_sq_comp(struct spdk_mlx5_qp *qp)
+{
+	qp->sq_completions[qp->last_pi].completions = qp->nonsignaled_outstanding;
+	qp->nonsignaled_outstanding = 0;
 }
 
 static inline struct mlx5_cqe64 *
@@ -354,23 +518,68 @@ mlx5_cq_poll_one(struct mlx5_hw_cq *hw_cq, int cqe_size)
 		      be16toh(cqe->wqe_counter),
 		      cqe->op_own & MLX5_INLINE_SCATTER_32,
 		      cqe->op_own & MLX5_INLINE_SCATTER_64);
+
+	mlx5_cq_dump_cqe(hw_cq, cqe);
+
 	return cqe;
 }
 
 static inline uint64_t
-mlx5_qp_get_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
+mlx5_qp_get_sq_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
 {
 	uint16_t comp_idx;
 	uint32_t sq_mask;
 
 	sq_mask = qp->hw.sq_wqe_cnt - 1;
 	comp_idx = be16toh(cqe->wqe_counter) & sq_mask;
-	SPDK_DEBUGLOG(mlx5, "got cpl, wqe_counter %u, comp_idx %u; wrid %"PRIx64", cpls %u\n",
-		      cqe->wqe_counter, comp_idx, qp->completions[comp_idx].wr_id, qp->completions[comp_idx].completions);
+	SPDK_DEBUGLOG(mlx5, "got send cpl, wqe_counter %u, comp_idx %u; wrid %"PRIx64", cpls %u\n",
+		      cqe->wqe_counter, comp_idx, qp->sq_completions[comp_idx].wr_id,
+		      qp->sq_completions[comp_idx].completions);
 	/* If we have several unsignaled WRs, we accumulate them in the completion of the next signaled WR */
-	qp->tx_available += qp->completions[comp_idx].completions;
+	qp->tx_available += qp->sq_completions[comp_idx].completions;
 
-	return qp->completions[comp_idx].wr_id;
+	return qp->sq_completions[comp_idx].wr_id;
+}
+
+static inline uint64_t
+mlx5_qp_get_rq_comp_wr_id(struct spdk_mlx5_qp *qp, struct mlx5_cqe64 *cqe)
+{
+	uint16_t comp_idx;
+	uint32_t rq_mask;
+
+	rq_mask = qp->hw.rq_wqe_cnt - 1;
+	comp_idx = be16toh(cqe->wqe_counter) & rq_mask;
+	SPDK_DEBUGLOG(mlx5, "got recv cpl, wqe_counter %u, comp_idx %u; wrid %"PRIx64"\n",
+		      cqe->wqe_counter, comp_idx, qp->rq_completions[comp_idx].wr_id);
+	qp->rx_available++;
+
+	return qp->rq_completions[comp_idx].wr_id;
+}
+
+static inline uint64_t
+mlx5_srq_get_comp_wr_id(struct spdk_mlx5_srq *srq, struct mlx5_cqe64 *cqe)
+{
+	uint16_t comp_idx;
+
+	/* A mask is not applied because the WQE index is reported for SRQ, not the WQE counter. */
+	comp_idx = be16toh(cqe->wqe_counter);
+	mlx5_srq_free_wqe(&srq->hw, comp_idx);
+	SPDK_DEBUGLOG(mlx5, "got srq cpl, comp_idx %u, wrid %" PRIx64 "\n",
+		      comp_idx, srq->wr_id[comp_idx]);
+
+	return srq->wr_id[comp_idx];
+}
+
+static void
+mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp)
+{
+	comp->status = SPDK_MLX5_CQE_SYNDROME_SIGERR;
+	comp->mkey = be32toh(cqe->mkey);
+
+	SPDK_DEBUGLOG(mlx5,
+		      "got SIGERR CQE, syndrome 0x%x, mkey 0x%x, expected_sig 0x%x, actual_trans_sig 0x%x\n",
+		      be16toh(cqe->syndrome), comp->mkey, be32toh(cqe->expected_trans_sig),
+		      be32toh(cqe->actual_trans_sig));
 }
 
 int
@@ -394,10 +603,13 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 		}
 
 		opcode = mlx5dv_get_cqe_opcode(cqe);
-		comp[n].wr_id = mlx5_qp_get_comp_wr_id(qp, cqe);
 		if (spdk_likely(opcode == MLX5_CQE_REQ)) {
+			comp[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
 			comp[n].status = IBV_WC_SUCCESS;
+		} else if (opcode == MLX5_CQE_SIG_ERR) {
+			mlx5_cqe_sigerr_comp((struct mlx5_sigerr_cqe *)cqe, &comp[n]);
 		} else {
+			comp[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
 			comp[n].status = mlx5_cqe_err(cqe);
 		}
 		n++;
@@ -406,46 +618,295 @@ spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq, struct spdk_mlx5_cq_compl
 	return n;
 }
 
+static inline int
+handle_good_cqe_req(struct mlx5_cqe64 *cqe, struct ibv_wc *wc)
+{
+	assert(cqe);
+	assert(wc);
+	/* Inline data in CQE is not implemented for the send operations */
+	assert(!(cqe->op_own & MLX5_INLINE_SCATTER_32));
+	assert(!(cqe->op_own & MLX5_INLINE_SCATTER_64));
+
+	uint8_t send_opcode = be32toh(cqe->sop_drop_qpn) >> 24;
+
+	switch (send_opcode) {
+	case MLX5_OPCODE_RDMA_WRITE_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+	/* FALLTHROUGH */
+	case MLX5_OPCODE_RDMA_WRITE:
+		wc->opcode = IBV_WC_RDMA_WRITE;
+		break;
+	case MLX5_OPCODE_SEND_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+	/* FALLTHROUGH */
+	case MLX5_OPCODE_SEND:
+	case MLX5_OPCODE_SEND_INVAL:
+		wc->opcode = IBV_WC_SEND;
+		break;
+	case MLX5_OPCODE_RDMA_READ:
+		wc->opcode = IBV_WC_RDMA_READ;
+		wc->byte_len = be32toh(cqe->byte_cnt);
+		break;
+	default:
+		SPDK_ERRLOG("Invalid send_opcode 0x%x\n", send_opcode);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static inline int
+handle_good_cqe_resp(struct mlx5_cqe64 *cqe, struct ibv_wc *wc)
+{
+	assert(cqe);
+	assert(wc);
+
+	uint8_t opcode = cqe->op_own >> 4;
+	uint8_t grh;
+
+	switch (opcode) {
+	case MLX5_CQE_RESP_WR_IMM:
+		wc->opcode = IBV_WC_RECV_RDMA_WITH_IMM;
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+		wc->imm_data = cqe->imm_inval_pkey;
+		break;
+	case MLX5_CQE_RESP_SEND_IMM:
+		wc->wc_flags |= IBV_WC_WITH_IMM;
+		wc->imm_data = cqe->imm_inval_pkey;
+	/* FALLTHROUGH */
+	case MLX5_CQE_RESP_SEND:
+		wc->opcode = IBV_WC_RECV;
+		break;
+	case MLX5_CQE_RESP_SEND_INV:
+		wc->opcode = IBV_WC_RECV;
+		wc->wc_flags |= IBV_WC_WITH_INV;
+		wc->invalidated_rkey = be32toh(cqe->imm_inval_pkey);
+		break;
+	default:
+		SPDK_ERRLOG("Invalid recv opcode 0x%x\n", opcode);
+		return -EINVAL;
+	}
+
+	wc->slid		= be16toh(cqe->slid);
+	wc->sl			= (be32toh(cqe->flags_rqpn) >> 24) & 0xf;
+	wc->src_qp		= be32toh(cqe->flags_rqpn) & 0xffffff;
+	wc->dlid_path_bits	= cqe->ml_path & 0x7f;
+	grh			= (be32toh(cqe->flags_rqpn) >> 28) & 3;
+	wc->wc_flags		|= grh ? IBV_WC_GRH : 0;
+	wc->pkey_index		= be32toh(cqe->imm_inval_pkey) & 0xffff;
+
+	return 0;
+}
+
+static inline void
+handle_err_cqe(struct mlx5_err_cqe *cqe, struct ibv_wc *wc)
+{
+	enum ibv_wc_status status;
+
+	switch (cqe->syndrome) {
+	case MLX5_CQE_SYNDROME_LOCAL_LENGTH_ERR:
+		status = IBV_WC_LOC_LEN_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_QP_OP_ERR:
+		status = IBV_WC_LOC_QP_OP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_PROT_ERR:
+		status = IBV_WC_LOC_PROT_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_WR_FLUSH_ERR:
+		status = IBV_WC_WR_FLUSH_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_MW_BIND_ERR:
+		status = IBV_WC_MW_BIND_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_BAD_RESP_ERR:
+		status = IBV_WC_BAD_RESP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_LOCAL_ACCESS_ERR:
+		status = IBV_WC_LOC_ACCESS_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_INVAL_REQ_ERR:
+		status = IBV_WC_REM_INV_REQ_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_ACCESS_ERR:
+		status = IBV_WC_REM_ACCESS_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_OP_ERR:
+		status = IBV_WC_REM_OP_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_TRANSPORT_RETRY_EXC_ERR:
+		status = IBV_WC_RETRY_EXC_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_RNR_RETRY_EXC_ERR:
+		status = IBV_WC_RNR_RETRY_EXC_ERR;
+		break;
+	case MLX5_CQE_SYNDROME_REMOTE_ABORTED_ERR:
+		status = IBV_WC_REM_ABORT_ERR;
+		break;
+	default:
+		status = IBV_WC_GENERAL_ERR;
+	}
+
+	wc->status	= status;
+	wc->vendor_err	= cqe->vendor_err_synd;
+}
+
+static int
+mlx5_copy_to_recv_wqe(struct spdk_mlx5_qp *qp, uint16_t index, void *buf, uint32_t size)
+{
+	struct mlx5_wqe_data_seg *dseg;
+	int max;
+	int copy;
+	int i;
+
+	dseg = (void *)qp->hw.rq_addr + index * qp->hw.rq_stride;
+	max = qp->hw.rq_stride / sizeof(*dseg);
+
+	for (i = 0; i < max; i++) {
+		if (spdk_unlikely(dseg->lkey == htobe32(MLX5_INVALID_LKEY))) {
+			return IBV_WC_LOC_LEN_ERR;
+		}
+
+		copy = spdk_min(size, be32toh(dseg->byte_count));
+
+		memcpy((void *)(uintptr_t)be64toh(dseg->addr), buf, copy);
+
+		size -= copy;
+		if (size == 0) {
+			return IBV_WC_SUCCESS;
+		}
+
+		buf += copy;
+		dseg++;
+	}
+
+	return IBV_WC_LOC_LEN_ERR;
+}
+
+static int
+mlx5_copy_to_recv_srq(struct spdk_mlx5_srq *srq, uint16_t index, void *buf, uint32_t size)
+{
+	struct mlx5_wqe_srq_next_seg *next_seg;
+	struct mlx5_wqe_data_seg *data_seg;
+	uint32_t copy;
+	uint32_t i;
+
+	next_seg = mlx5_srq_get_wqe(&srq->hw, index);
+	data_seg = (struct mlx5_wqe_data_seg *)(next_seg + 1);
+
+	for (i = 0; i < srq->hw.max_sge; i++) {
+		if (spdk_unlikely(data_seg->lkey == htobe32(MLX5_INVALID_LKEY))) {
+			return IBV_WC_LOC_LEN_ERR;
+		}
+
+		copy = spdk_min(size, be32toh(data_seg->byte_count));
+
+		memcpy((void *)(uintptr_t)be64toh(data_seg->addr), buf, copy);
+
+		size -= copy;
+		if (size == 0) {
+			return IBV_WC_SUCCESS;
+		}
+
+		buf += copy;
+		data_seg++;
+	}
+
+	return IBV_WC_LOC_LEN_ERR;
+}
+
+int
+spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc *wc)
+{
+	struct spdk_mlx5_qp *qp;
+	struct spdk_mlx5_srq *srq;
+	struct mlx5_cqe64 *cqe;
+	uint16_t wqe_index;
+	int n = 0;
+
+	do {
+again:
+		cqe = mlx5_cq_poll_one(&cq->hw, 64);
+		if (!cqe) {
+			break;
+		}
+
+		qp = mlx5_cq_find_qp(cq, be32toh(cqe->sop_drop_qpn) & 0xffffff);
+		if (spdk_unlikely(!qp)) {
+			return -ENODEV;
+		}
+
+		wc[n].wc_flags = 0;
+		wc[n].qp_num = qp->hw.qp_num;
+
+		switch (mlx5dv_get_cqe_opcode(cqe)) {
+		case MLX5_CQE_REQ:
+			if (handle_good_cqe_req(cqe, &wc[n])) {
+				return -EINVAL;
+			}
+			wc[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
+			wc[n].status = IBV_WC_SUCCESS;
+			break;
+		case MLX5_CQE_RESP_WR_IMM:
+		case MLX5_CQE_RESP_SEND:
+		case MLX5_CQE_RESP_SEND_IMM:
+		case MLX5_CQE_RESP_SEND_INV:
+			wc[n].status = IBV_WC_SUCCESS;
+			wc[n].byte_len = be32toh(cqe->byte_cnt);
+
+			srq = qp->srq;
+			if (!srq) {
+				wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+				if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
+					wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+					wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe, wc[n].byte_len);
+				} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
+					wqe_index = be16toh(cqe->wqe_counter) & (qp->hw.rq_wqe_cnt - 1);
+					wc[n].status = mlx5_copy_to_recv_wqe(qp, wqe_index, cqe - 1, wc[n].byte_len);
+				}
+			} else {
+				wc[n].wr_id = mlx5_srq_get_comp_wr_id(srq, cqe);
+
+				if (cqe->op_own & MLX5_INLINE_SCATTER_32) {
+					wqe_index = be16toh(cqe->wqe_counter);
+					wc[n].status = mlx5_copy_to_recv_srq(srq, wqe_index, cqe, wc[n].byte_len);
+				} else if (cqe->op_own & MLX5_INLINE_SCATTER_64) {
+					wqe_index = be16toh(cqe->wqe_counter);
+					wc[n].status = mlx5_copy_to_recv_srq(srq, wqe_index, cqe - 1, wc[n].byte_len);
+				}
+			}
+			if (handle_good_cqe_resp(cqe, &wc[n])) {
+				return -EINVAL;
+			}
+			break;
+		case MLX5_CQE_RESIZE_CQ:
+			goto again;
+		case MLX5_CQE_REQ_ERR:
+			wc[n].wr_id = mlx5_qp_get_sq_comp_wr_id(qp, cqe);
+			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
+			break;
+		case MLX5_CQE_RESP_ERR:
+			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
+			break;
+		default:
+			SPDK_ERRLOG("Invalid CQE opcode 0x%x\n", mlx5dv_get_cqe_opcode(cqe));
+			return -EINVAL;
+		}
+		n++;
+
+	} while (n < num_entries);
+
+	return n;
+}
+
 void
 spdk_mlx5_qp_complete_send(struct spdk_mlx5_qp *qp)
 {
-	mlx5_qp_tx_complete(qp);
-}
-
-#ifdef DEBUG
-void
-mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb)
-{
-	struct mlx5_hw_qp *hw = &qp->hw;
-	uint32_t pi;
-	uint32_t to_end;
-	uint32_t *wqe;
-	int i;
-	extern struct spdk_log_flag SPDK_LOG_mlx5_sq;
-
-	if (!SPDK_LOG_mlx5_sq.enabled) {
-		return;
+	if (qp->sigmode == SPDK_MLX5_QP_SIG_LAST) {
+		qp->ctrl->fm_ce_se &= ~SPDK_MLX5_WQE_CTRL_CE_MASK;
+		qp->ctrl->fm_ce_se |= SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
+		mlx5_qp_update_sq_comp(qp);
 	}
-
-	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
-	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
-	wqe = mlx5_qp_get_wqe_bb(hw);
-
-	SPDK_DEBUGLOG(mlx5_sq, "QP: qpn 0x%" PRIx32 ", wqe_index 0x%" PRIx32 ", addr %p\n",
-		      hw->qp_num, pi, wqe);
-	for (i = 0; i < n_wqe_bb; i++) {
-		fprintf(stderr,
-			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
-			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
-			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
-			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n",
-			be32toh(wqe[0]),  be32toh(wqe[1]),  be32toh(wqe[2]),  be32toh(wqe[3]),
-			be32toh(wqe[4]),  be32toh(wqe[5]),  be32toh(wqe[6]),  be32toh(wqe[7]),
-			be32toh(wqe[8]),  be32toh(wqe[9]),  be32toh(wqe[10]), be32toh(wqe[11]),
-			be32toh(wqe[12]), be32toh(wqe[13]), be32toh(wqe[14]), be32toh(wqe[15]));
-		wqe = mlx5_qp_get_next_wqebb(hw, &to_end, wqe);
-	}
+	mlx5_ring_tx_db(qp, qp->ctrl);
 }
-#endif
-
-SPDK_LOG_REGISTER_COMPONENT(mlx5_sq)

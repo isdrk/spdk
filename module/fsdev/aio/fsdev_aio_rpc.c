@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -27,8 +27,10 @@ static const struct spdk_json_object_decoder rpc_aio_create_decoders[] = {
 	{"root_path", offsetof(struct rpc_aio_create, root_path), spdk_json_decode_string},
 	{"enable_xattr", offsetof(struct rpc_aio_create, opts.xattr_enabled), spdk_json_decode_bool, true},
 	{"enable_writeback_cache", offsetof(struct rpc_aio_create, opts.writeback_cache_enabled), spdk_json_decode_bool, true},
-	{"max_write", offsetof(struct rpc_aio_create, opts.max_write), spdk_json_decode_uint32, true},
+	{"max_xfer_size", offsetof(struct rpc_aio_create, opts.max_xfer_size), spdk_json_decode_uint32, true},
+	{"max_readahead", offsetof(struct rpc_aio_create, opts.max_readahead), spdk_json_decode_uint32, true},
 	{"skip_rw", offsetof(struct rpc_aio_create, opts.skip_rw), spdk_json_decode_bool, true},
+	{"enable_notifications", offsetof(struct rpc_aio_create, opts.enable_notifications), spdk_json_decode_bool, true},
 };
 
 static void

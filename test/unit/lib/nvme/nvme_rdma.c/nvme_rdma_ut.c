@@ -1,10 +1,11 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
- *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 #include "spdk_internal/cunit.h"
+#include "spdk_internal/rdma_provider.h"
 #include "nvme/nvme_rdma.c"
 #include "common/lib/nvme/common_stubs.h"
 #include "common/lib/test_rdma.c"
@@ -34,10 +35,15 @@ DEFINE_STUB_V(rdma_destroy_event_channel, (struct rdma_event_channel *channel));
 DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
 DEFINE_STUB(ibv_resize_cq, int, (struct ibv_cq *cq, int cqe), 0);
 
-DEFINE_STUB(spdk_rdma_provider_accel_sequence_supported, bool, (void), false);
-DEFINE_STUB(spdk_memory_domain_get_dma_device_type, enum spdk_dma_device_type,
-	    (struct spdk_memory_domain *device), SPDK_DMA_DEVICE_TYPE_RDMA);
 DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *device));
+DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
+		int num_entries,
+		struct ibv_wc *wc), 0);
+DEFINE_STUB(spdk_rdma_provider_get_opts, int, (struct spdk_rdma_provider_opts *opts,
+		size_t opts_size), 0);
+DEFINE_STUB(spdk_memory_domain_get_context, struct spdk_memory_domain_ctx *,
+	    (struct spdk_memory_domain *device), NULL);
 DEFINE_STUB(spdk_memory_domain_pull_data, int, (struct spdk_memory_domain *src_domain,
 		void *src_domain_ctx, struct iovec *src_iov, uint32_t src_iov_cnt, struct iovec *dst_iov,
 		uint32_t dst_iov_cnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
@@ -62,6 +68,10 @@ spdk_memory_domain_create(struct spdk_memory_domain **domain, enum spdk_dma_devi
 
 	return 0;
 }
+
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
 
 static struct spdk_memory_domain_translation_result g_memory_translation_translation = {.size = sizeof(struct spdk_memory_domain_translation_result) };
 
@@ -587,9 +597,10 @@ test_nvme_rdma_ctrlr_create_qpair(void)
 	SPDK_CU_ASSERT_FATAL(qpair == NULL);
 }
 
-DEFINE_STUB(ibv_create_cq, struct ibv_cq *, (struct ibv_context *context, int cqe, void *cq_context,
-		struct ibv_comp_channel *channel, int comp_vector), (struct ibv_cq *)0xFEEDBEEF);
-DEFINE_STUB(ibv_destroy_cq, int, (struct ibv_cq *cq), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_create, struct spdk_rdma_provider_cq *,
+	    (struct spdk_rdma_provider_cq_init_attr *cq_attr),
+	    (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
+DEFINE_STUB_V(spdk_rdma_provider_cq_destroy, (struct spdk_rdma_provider_cq *cq));
 
 static void
 test_nvme_rdma_poller_create(void)
@@ -604,6 +615,7 @@ test_nvme_rdma_poller_create(void)
 	struct nvme_rdma_poller *poller_1, *poller_2, *poller_3;
 
 	/* Case: calloc and ibv not need to fail test */
+	MOCK_SET(spdk_rdma_utils_get_pd, (struct ibv_pd *)0xFEEDBEEF);
 	STAILQ_INIT(&group.pollers);
 
 	poller_1 = nvme_rdma_poll_group_get_poller(&group, &context);
@@ -612,7 +624,7 @@ test_nvme_rdma_poller_create(void)
 	CU_ASSERT(STAILQ_FIRST(&group.pollers) == poller_1);
 	CU_ASSERT(poller_1->refcnt == 1);
 	CU_ASSERT(poller_1->device == &context);
-	CU_ASSERT(poller_1->cq == (struct ibv_cq *)0xFEEDBEEF);
+	CU_ASSERT(poller_1->cq == (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
 	CU_ASSERT(poller_1->current_num_wc == DEFAULT_NVME_RDMA_CQ_SIZE);
 	CU_ASSERT(poller_1->required_num_wc == 0);
 
@@ -641,6 +653,7 @@ test_nvme_rdma_poller_create(void)
 	CU_ASSERT(group.num_pollers == 0);
 
 	nvme_rdma_poll_group_free_pollers(&group);
+	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
 
 static void
@@ -784,6 +797,7 @@ test_nvme_rdma_req_put_and_get(void)
 
 	/* case 1: nvme_rdma_req_put */
 	TAILQ_INIT(&rqpair.free_reqs);
+	TAILQ_INIT(&rqpair.outstanding_reqs);
 	rdma_req.completion_flags = 1;
 	rdma_req.req = (struct nvme_request *)0xDEADBEFF;
 	rdma_req.id = 10086;
@@ -821,6 +835,7 @@ test_nvme_rdma_req_init(void)
 	rqpair.rdma_qp = (struct spdk_rdma_provider_qp *)0xdeadbeef;
 	rqpair.qpair.ctrlr = &ctrlr;
 	rqpair.cmds = &cmd;
+	rqpair.num_entries = 32;
 	cmd.sgl[0].address = 0x1111;
 	rdma_req.id = 0;
 	req.cmd.opc = SPDK_NVME_DATA_HOST_TO_CONTROLLER;
@@ -976,7 +991,7 @@ test_nvme_rdma_qpair_init(void)
 	CU_ASSERT(rqpair.cm_id->context == &rqpair.qpair);
 	CU_ASSERT(rqpair.max_send_sge == NVME_RDMA_DEFAULT_TX_SGE);
 	CU_ASSERT(rqpair.current_num_sends == 0);
-	CU_ASSERT(rqpair.cq == (struct ibv_cq *)0xFEEDBEEF);
+	CU_ASSERT(rqpair.cq == (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
 
 	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
@@ -1061,7 +1076,8 @@ test_rdma_get_memory_translation(void)
 	struct nvme_rdma_qpair rqpair = {.rdma_qp = &rdma_qp};
 	struct spdk_nvme_ns_cmd_ext_io_opts io_opts = {.memory_domain = domain};
 	struct nvme_request req = {.payload = {.opts = &io_opts}};
-	struct nvme_rdma_memory_translation_ctx ctx = {
+	struct spdk_nvme_rdma_req rdma_req = {.req = &req };
+	struct spdk_rdma_provider_memory_translation_ctx ctx = {
 		.addr = (void *) 0xBAADF00D,
 		.length = 0x100
 	};
@@ -1070,7 +1086,7 @@ test_rdma_get_memory_translation(void)
 	/* case 1, using extended IO opts with DMA device.
 	 * Test 1 - spdk_dma_translate_data error, expect fail */
 	MOCK_SET(spdk_memory_domain_translate_data, -1);
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(rdma_req.req, &rqpair, &ctx);
 	CU_ASSERT(rc != 0);
 	MOCK_CLEAR(spdk_memory_domain_translate_data);
 
@@ -1081,7 +1097,7 @@ test_rdma_get_memory_translation(void)
 	g_memory_translation_translation.rdma.lkey = 123;
 	g_memory_translation_translation.rdma.rkey = 321;
 
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(rdma_req.req, &rqpair, &ctx);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ctx.lkey == g_memory_translation_translation.rdma.lkey);
 	CU_ASSERT(ctx.rkey == g_memory_translation_translation.rdma.rkey);
@@ -1089,15 +1105,15 @@ test_rdma_get_memory_translation(void)
 	CU_ASSERT(ctx.length == g_memory_translation_translation.iov.iov_len);
 
 	/* case 2, using rdma translation
-	 * Test 1 - spdk_rdma_get_translation error, expect fail */
+	 * Test 1 - spdk_rdma_provider_get_translation error, expect fail */
 	req.payload.opts = NULL;
 	MOCK_SET(spdk_rdma_utils_get_translation, -1);
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(rdma_req.req, &rqpair, &ctx);
 	CU_ASSERT(rc != 0);
 	MOCK_CLEAR(spdk_rdma_utils_get_translation);
 
 	/* Test 2 - expect pass */
-	rc = nvme_rdma_get_memory_translation(&req, &rqpair, &ctx);
+	rc = nvme_rdma_get_memory_translation(rdma_req.req, &rqpair, &ctx);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ctx.lkey == RDMA_UT_LKEY);
 	CU_ASSERT(ctx.rkey == RDMA_UT_RKEY);
@@ -1183,6 +1199,7 @@ test_nvme_rdma_poll_group_get_stats(void)
 	memcpy(dev2.name, "/dev/test2", sizeof("/dev/test2"));
 	contexts1.device = &dev1;
 	contexts2.device = &dev2;
+	MOCK_SET(spdk_rdma_utils_get_pd, (struct ibv_pd *)0xFEEDBEEF);
 
 	/* Initialization */
 	STAILQ_INIT(&tgroup.pollers);
@@ -1259,6 +1276,7 @@ test_nvme_rdma_poll_group_get_stats(void)
 
 	nvme_rdma_poll_group_free_stats(&tgroup.group, tpointer);
 	nvme_rdma_poll_group_free_pollers(&tgroup);
+	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
 
 static void
@@ -1285,16 +1303,17 @@ test_nvme_rdma_qpair_set_poller(void)
 	rqpair.qpair.trtype = SPDK_NVME_TRANSPORT_RDMA;
 	rqpair.cm_id = &cm_id;
 
-	/* Test1: Function ibv_create_cq failed */
+	/* Test1: Function spdk_rdma_provider_cq_create failed */
 	cm_id.verbs = (void *)0xFEEDBEEF;
-	MOCK_SET(ibv_create_cq, NULL);
+	MOCK_SET(spdk_rdma_provider_cq_create, NULL);
+	MOCK_SET(spdk_rdma_utils_get_pd, (struct ibv_pd *)0xFEEDBEEF);
 
 	rc = nvme_rdma_qpair_set_poller(&rqpair.qpair);
 	CU_ASSERT(rc == -EINVAL);
 	CU_ASSERT(rqpair.cq == NULL);
 	CU_ASSERT(STAILQ_EMPTY(&group->pollers));
 
-	MOCK_CLEAR(ibv_create_cq);
+	MOCK_CLEAR(spdk_rdma_provider_cq_create);
 
 	/* Test2: Unable to find a cq for qpair on poll group */
 	cm_id.verbs = NULL;
@@ -1305,7 +1324,7 @@ test_nvme_rdma_qpair_set_poller(void)
 	CU_ASSERT(STAILQ_EMPTY(&group->pollers));
 
 	/* Test3: Match cq success, current_num_wc is enough */
-	MOCK_SET(ibv_create_cq, (struct ibv_cq *)0xFEEDBEEF);
+	MOCK_SET(spdk_rdma_provider_cq_create, (struct spdk_rdma_provider_cq *)0xFEEDBEEF);
 
 	cm_id.verbs = (void *)0xFEEDBEEF;
 	rqpair.num_entries = 0;
@@ -1329,17 +1348,17 @@ test_nvme_rdma_qpair_set_poller(void)
 
 	rqpair.qpair.poll_group_tailq_head = &tgroup->connected_qpairs;
 
-	/* Test4: Match cq success, function ibv_resize_cq failed */
+	/* Test4: Match cq success, function spdk_rdma_provider_cq_resize failed */
 	rqpair.cq = NULL;
 	rqpair.num_entries = DEFAULT_NVME_RDMA_CQ_SIZE - 1;
-	MOCK_SET(ibv_resize_cq, -1);
+	MOCK_SET(spdk_rdma_provider_cq_resize, -1);
 
 	rc = nvme_rdma_qpair_set_poller(&rqpair.qpair);
 	CU_ASSERT(rc == -EPROTO);
 	CU_ASSERT(STAILQ_EMPTY(&group->pollers));
 
 	/* Test5: Current_num_wc is not enough, resize success */
-	MOCK_SET(ibv_resize_cq, 0);
+	MOCK_SET(spdk_rdma_provider_cq_resize, 0);
 
 	rc = nvme_rdma_qpair_set_poller(&rqpair.qpair);
 	CU_ASSERT(rc == 0);
@@ -1358,6 +1377,7 @@ test_nvme_rdma_qpair_set_poller(void)
 
 	rc = nvme_rdma_poll_group_destroy(tgroup);
 	CU_ASSERT(rc == 0);
+	MOCK_CLEAR(spdk_rdma_utils_get_pd);
 }
 
 int

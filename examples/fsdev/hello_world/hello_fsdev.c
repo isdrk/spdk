@@ -39,6 +39,7 @@ struct hello_thread_t {
 	char *file_name;
 	struct spdk_fsdev_file_object *fobject;
 	struct spdk_fsdev_file_handle *fhandle;
+	struct spdk_fsdev_file_attr attr;
 	struct iovec iov[2];
 };
 
@@ -77,31 +78,25 @@ hello_app_done(struct hello_context_t *hello_context, int rc)
 }
 
 static void
-root_forget_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
+umount_complete(void *cb_arg, struct spdk_io_channel *ch)
 {
 	struct hello_context_t *hello_context = cb_arg;
 
-	SPDK_NOTICELOG("Root forget complete (status=%d)\n", status);
-	if (status) {
-		SPDK_ERRLOG("Root forget failed: error %d\n", status);
-		g_result = EINVAL;
-	}
-
+	SPDK_NOTICELOG("Unmount complete\n");
 	hello_app_done(hello_context, g_result);
 }
 
 static void
-hello_root_release(struct hello_context_t *hello_context)
+hello_umount(struct hello_context_t *hello_context)
 {
 	int res;
 
-	SPDK_NOTICELOG("Forget root\n");
-	res = spdk_fsdev_forget(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
-				hello_context->root_fobject, 1,
-				root_forget_complete, hello_context);
+	SPDK_NOTICELOG("Unmount\n");
+	res = spdk_fsdev_umount(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
+				umount_complete, hello_context);
 	if (res) {
-		SPDK_ERRLOG("Failed to forget root (err=%d)\n", res);
-		hello_app_done(hello_context, EINVAL);
+		SPDK_ERRLOG("Failed to unmount (err=%d)\n", res);
+		hello_app_done(hello_context, res);
 	}
 }
 
@@ -113,7 +108,7 @@ hello_app_notify_thread_done(void *ctx)
 	assert(hello_context->thread_count > 0);
 	hello_context->thread_count--;
 	if (hello_context->thread_count == 0) {
-		hello_root_release(hello_context);
+		hello_umount(hello_context);
 	}
 }
 
@@ -181,6 +176,72 @@ hello_unlink(struct hello_thread_t *hello_thread)
 }
 
 static void
+setattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+		 const struct spdk_fsdev_file_attr *attr)
+{
+	struct hello_thread_t *hello_thread = cb_arg;
+
+	SPDK_NOTICELOG("Setattr complete (status=%d)\n", status);
+	if (!hello_check_complete(hello_thread, status, "setattr")) {
+		return;
+	}
+
+	hello_thread->attr = *attr;
+	hello_unlink(hello_thread);
+}
+
+static void
+hello_setattr(struct hello_thread_t *hello_thread)
+{
+	struct hello_context_t *hello_context = hello_thread->hello_context;
+	int res;
+
+	SPDK_NOTICELOG("Setattr file %s\n", hello_thread->file_name);
+
+	hello_thread->attr.mode &= ~S_IRWXO;
+	res = spdk_fsdev_setattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				 hello_thread->unique, hello_thread->fobject, NULL,
+				 &hello_thread->attr, SPDK_FSDEV_ATTR_MODE,
+				 setattr_complete, hello_thread);
+	if (res) {
+		SPDK_ERRLOG("setattr failed with %d\n", res);
+		hello_thread_done(hello_thread, EIO);
+	}
+}
+
+static void
+getattr_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+		 const struct spdk_fsdev_file_attr *attr)
+{
+	struct hello_thread_t *hello_thread = cb_arg;
+
+	SPDK_NOTICELOG("Getattr complete (status=%d)\n", status);
+	if (!hello_check_complete(hello_thread, status, "getattr")) {
+		return;
+	}
+
+	hello_thread->attr = *attr;
+	hello_setattr(hello_thread);
+}
+
+static void
+hello_getattr(struct hello_thread_t *hello_thread)
+{
+	struct hello_context_t *hello_context = hello_thread->hello_context;
+	int res;
+
+	SPDK_NOTICELOG("Getattr file %s\n", hello_thread->file_name);
+
+	res = spdk_fsdev_getattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+				 hello_thread->unique, hello_thread->fobject, NULL,
+				 getattr_complete, hello_thread);
+	if (res) {
+		SPDK_ERRLOG("getattr failed with %d\n", res);
+		hello_thread_done(hello_thread, EIO);
+	}
+}
+
+static void
 release_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	struct hello_thread_t *hello_thread = cb_arg;
@@ -191,7 +252,7 @@ release_complete(void *cb_arg, struct spdk_io_channel *ch, int status)
 	}
 
 	hello_thread->fhandle = NULL;
-	hello_unlink(hello_thread);
+	hello_getattr(hello_thread);
 }
 
 static void
@@ -391,7 +452,7 @@ hello_mknod(void *ctx)
 
 	res = spdk_fsdev_mknod(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			       hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0, 0, mknod_complete, hello_thread);
+			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0022, 0, 0, mknod_complete, hello_thread);
 	if (res) {
 		SPDK_ERRLOG("mknod failed with %d\n", res);
 		hello_thread_done(hello_thread, EIO);
@@ -469,39 +530,23 @@ hello_create_threads(struct hello_context_t *hello_context)
 	}
 }
 
-
 static void
-root_lookup_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
-		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr)
+mount_complete(void *cb_arg, struct spdk_io_channel *ch, int status,
+	       const struct spdk_fsdev_mount_opts *opts,
+	       struct spdk_fsdev_file_object *root_fobject)
 {
 	struct hello_context_t *hello_context = cb_arg;
 
-	SPDK_NOTICELOG("Root lookup complete (status=%d)\n", status);
+	SPDK_NOTICELOG("Mount complete (status=%d)\n", status);
 	if (status) {
-		SPDK_ERRLOG("Fuse init failed: error %d\n", status);
+		SPDK_ERRLOG("Mount failed: error %d\n", status);
 		hello_app_done(hello_context, status);
 		return;
 	}
 
-	hello_context->root_fobject = fobject;
+	hello_context->root_fobject = root_fobject;
 
 	hello_create_threads(hello_context);
-}
-
-static void
-root_lookup(struct hello_context_t *hello_context)
-{
-	int res;
-
-	SPDK_NOTICELOG("Lookup for the root\n");
-
-	res = spdk_fsdev_lookup(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
-				NULL /* root */, "" /* will be ignored */, root_lookup_complete, hello_context);
-	if (res) {
-		SPDK_ERRLOG("Failed to initiate lookup for the root (err=%d)\n", res);
-		hello_app_done(hello_context, res);
-		return;
-	}
 }
 
 static void
@@ -517,6 +562,7 @@ static void
 hello_start(void *arg1)
 {
 	struct hello_context_t *hello_context = arg1;
+	struct spdk_fsdev_mount_opts opts = {};
 	int rc = 0;
 	hello_context->fsdev_desc = NULL;
 
@@ -551,7 +597,15 @@ hello_start(void *arg1)
 		return;
 	}
 
-	root_lookup(hello_context);
+	SPDK_NOTICELOG("Mount\n");
+	opts.opts_size = sizeof(opts);
+	rc = spdk_fsdev_mount(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0, &opts,
+			      mount_complete, hello_context);
+	if (rc) {
+		SPDK_ERRLOG("Failed to initiate mount (err=%d)\n", rc);
+		hello_app_done(hello_context, rc);
+		return;
+	}
 }
 
 int

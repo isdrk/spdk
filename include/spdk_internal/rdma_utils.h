@@ -1,9 +1,8 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
-
-#ifndef SPDK_UTILS_RDMA_H
-#define SPDK_UTILS_RDMA_H
+#ifndef SPDK_RDMA_UTILS_H
+#define SPDK_RDMA_UTILS_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +12,8 @@ extern "C" {
 #include "spdk/nvme.h"
 
 #include <infiniband/verbs.h>
+#include <rdma/rdma_cma.h>
+#include <rdma/rdma_verbs.h>
 
 union spdk_rdma_utils_mr {
 	struct ibv_mr	*mr;
@@ -119,17 +120,19 @@ void spdk_rdma_utils_put_pd(struct ibv_pd *pd);
  * If memory domain already exists, reference will be increased.
  *
  * \param pd Protection domain of memory domain
+ * \param type Memory domain type, allows flexible customization
  * \return Pointer to memory domain or NULL;
  */
-struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd);
+struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
+		enum spdk_dma_device_type type);
 
 /**
  * Release a reference to a memory domain, which will be destroyed when reference becomes 0.
  *
- * \param _domain Pointer to memory domain
+ * \param domain Pointer to memory domain
  * \return 0 on success, negated errno on failure
  */
-int spdk_rdma_utils_put_memory_domain(struct spdk_memory_domain *_domain);
+int spdk_rdma_utils_put_memory_domain(struct spdk_memory_domain *domain);
 
 struct rdma_cm_id;
 /**

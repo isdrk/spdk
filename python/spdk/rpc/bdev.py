@@ -1,13 +1,13 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2017 Intel Corporation.
-#  All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
-#  Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 
 def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
                      bdev_auto_examine=None, iobuf_small_cache_size=None,
-                     iobuf_large_cache_size=None):
+                     iobuf_large_cache_size=None, qos_io_slice=None, qos_byte_slice=None,
+                     qos_timeslice_us=None):
     """Set parameters for the bdev subsystem.
     Args:
         bdev_io_pool_size: number of bdev_io structures in shared buffer pool (optional)
@@ -15,6 +15,9 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         bdev_auto_examine: if set to false, the bdev layer will not examine every disks automatically (optional)
         iobuf_small_cache_size: size of the small iobuf per thread cache
         iobuf_large_cache_size: size of the large iobuf per thread cache
+        qos_io_slice: QoS IO slice allocated from global pool to local cache (optional)
+        qos_byte_slice: QoS byte slice allocated from global pool to local cache (optional)
+        qos_timeslice_us: QoS timeslice in microseconds (optional)
     """
     params = dict()
     if bdev_io_pool_size is not None:
@@ -27,6 +30,12 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         params['iobuf_small_cache_size'] = iobuf_small_cache_size
     if iobuf_large_cache_size is not None:
         params['iobuf_large_cache_size'] = iobuf_large_cache_size
+    if qos_io_slice is not None:
+        params['qos_io_slice'] = qos_io_slice
+    if qos_byte_slice is not None:
+        params['qos_byte_slice'] = qos_byte_slice
+    if qos_timeslice_us is not None:
+        params['qos_timeslice_us'] = qos_timeslice_us
     return client.call('bdev_set_options', params)
 
 
@@ -255,7 +264,8 @@ def bdev_ocf_flush_status(client, name):
 
 
 def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None, name=None, uuid=None, optimal_io_boundary=None,
-                       md_size=None, md_interleave=None, dif_type=None, dif_is_head_of_md=None, dif_pi_format=None):
+                       md_size=None, md_interleave=None, dif_type=None, dif_is_head_of_md=None, dif_pi_format=None,
+                       enable_io_channel_weight=None, disable_accel_support=None):
     """Construct a malloc block device.
     Args:
         num_blocks: size of block device in blocks
@@ -269,6 +279,9 @@ def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None,
         dif_type: protection information type (optional)
         dif_is_head_of_md: protection information is in the first 8 bytes of metadata (optional)
         dif_pi_format: protection information format (optional)
+        enable_io_channel_weight: Enable IO channel weight (optional)
+        disable_accel_support: Don't report support of accel sequence (optional)
+
     Returns:
         Name of created block device.
     """
@@ -293,6 +306,11 @@ def bdev_malloc_create(client, num_blocks, block_size, physical_block_size=None,
         params['dif_is_head_of_md'] = dif_is_head_of_md
     if dif_pi_format is not None:
         params['dif_pi_format'] = dif_pi_format
+    if enable_io_channel_weight:
+        params['enable_io_channel_weight'] = enable_io_channel_weight
+    if disable_accel_support:
+        params['disable_accel_support'] = disable_accel_support
+
     return client.call('bdev_malloc_create', params)
 
 
@@ -578,7 +596,9 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
                           fast_io_fail_timeout_sec=None, disable_auto_failback=None, generate_uuids=None,
                           transport_tos=None, nvme_error_stat=None, rdma_srq_size=None, io_path_stat=None,
                           allow_accel_sequence=None, rdma_max_cq_size=None, rdma_cm_event_timeout_ms=None,
-                          dhchap_digests=None, dhchap_dhgroups=None, rdma_umr_per_io=None):
+                          dhchap_digests=None, dhchap_dhgroups=None,
+                          poll_group_requests=None, small_cache_size=None, large_cache_size=None,
+                          rdma_umr_per_io=None):
     """Set options for the bdev nvme. This is startup command.
     Args:
         action_on_timeout:  action to take on command time out. Valid values are: none, reset, abort (optional)
@@ -627,6 +647,9 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         rdma_cm_event_timeout_ms: Time to wait for RDMA CM event. Only applicable for RDMA transports.
         dhchap_digests: List of allowed DH-HMAC-CHAP digests. (optional)
         dhchap_dhgroups: List of allowed DH-HMAC-CHAP DH groups. (optional)
+        poll_group_requests: The number of requests allocated for each poll group. Default: 0 (optional)
+        small_cache_size: The number of small iobuf elements in cache. Default: 128
+        large_cache_size: The number of large iobuf elements in cache. Default: 128
         rdma_umr_per_io: Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system (optional).
     """
     params = dict()
@@ -688,6 +711,12 @@ def bdev_nvme_set_options(client, action_on_timeout=None, timeout_us=None, timeo
         params['dhchap_digests'] = dhchap_digests
     if dhchap_dhgroups is not None:
         params['dhchap_dhgroups'] = dhchap_dhgroups
+    if poll_group_requests is not None:
+        params['poll_group_requests'] = poll_group_requests
+    if small_cache_size is not None:
+        params['small_cache_size'] = small_cache_size
+    if large_cache_size is not None:
+        params['large_cache_size'] = large_cache_size
     if rdma_umr_per_io is not None:
         params['rdma_umr_per_io'] = rdma_umr_per_io
     return client.call('bdev_nvme_set_options', params)
@@ -1654,9 +1683,9 @@ def bdev_set_qos_limit(
     Args:
         name: name of block device
         rw_ios_per_sec: R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.
-        rw_mbytes_per_sec: R/W megabytes per second limit (>=10, example: 100). 0 means unlimited.
-        r_mbytes_per_sec: Read megabytes per second limit (>=10, example: 100). 0 means unlimited.
-        w_mbytes_per_sec: Write megabytes per second limit (>=10, example: 100). 0 means unlimited.
+        rw_mbytes_per_sec: R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.
+        r_mbytes_per_sec: Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.
+        w_mbytes_per_sec: Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.
     """
     params = dict()
     params['name'] = name
@@ -1777,3 +1806,134 @@ def bdev_nvme_get_mdns_discovery_info(client):
     """Get information about the automatic mdns discovery
     """
     return client.call('bdev_nvme_get_mdns_discovery_info')
+
+
+def bdev_group_create(client, name):
+    """Construct bdev group.
+
+    Args:
+        name: name of bdev group
+
+    Returns:
+        Name of created bdev group.
+    """
+    params = {'name': name}
+    return client.call('bdev_group_create', params)
+
+
+def bdev_group_add_bdev(client, name, bdev):
+    """Add bdev to a group.
+
+    Args:
+        name: name of bdev group
+        bdev: name of bdev
+
+    Returns:
+        result of the operation
+    """
+    params = {'name': name, 'bdev': bdev}
+    return client.call('bdev_group_add_bdev', params)
+
+
+def bdev_group_set_qos_limit(
+        client,
+        name,
+        rw_ios_per_sec=None,
+        rw_mbytes_per_sec=None,
+        r_mbytes_per_sec=None,
+        w_mbytes_per_sec=None):
+    """Set QoS rate limit on a bdev group.
+
+    Args:
+        name: name of block device group
+        rw_ios_per_sec: R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.
+        rw_mbytes_per_sec: R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.
+        r_mbytes_per_sec: Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.
+        w_mbytes_per_sec: Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.
+    """
+    params = {}
+    params['name'] = name
+    if rw_ios_per_sec is not None:
+        params['rw_ios_per_sec'] = rw_ios_per_sec
+    if rw_mbytes_per_sec is not None:
+        params['rw_mbytes_per_sec'] = rw_mbytes_per_sec
+    if r_mbytes_per_sec is not None:
+        params['r_mbytes_per_sec'] = r_mbytes_per_sec
+    if w_mbytes_per_sec is not None:
+        params['w_mbytes_per_sec'] = w_mbytes_per_sec
+    return client.call('bdev_group_set_qos_limit', params)
+
+
+def bdev_group_remove_bdev(client, name, bdev):
+    """Remove bdev from a group.
+
+    Args:
+        name: name of bdev group
+        bdev: name of bdev
+    """
+    params = {'name': name, 'bdev': bdev}
+    return client.call('bdev_group_remove_bdev', params)
+
+
+def bdev_group_delete(client, name):
+    """Delete bdev group.
+
+    Args:
+        name: name of bdev group
+
+    Returns:
+        Result of the operation.
+    """
+    params = {'name': name}
+    return client.call('bdev_group_delete', params)
+
+
+def bdev_groups_get(client, name):
+    """Get bdev group info.
+
+    Args:
+        name: name of bdev group
+
+    Returns:
+        bdev groups info
+    """
+    params = {}
+    if name is not None:
+        params['name'] = name
+
+    return client.call('bdev_groups_get', params)
+
+
+def bdev_group_get_iostat(client, name=None):
+    """Get I/O statistics for bdev groups.
+
+    Args:
+        name: bdev group name to query (optional; if omitted, query all bdev groups)
+
+    Returns:
+        I/O statistics for the requested bdev groups.
+    """
+    params = {}
+    if name:
+        params['name'] = name
+    return client.call('bdev_group_get_iostat', params)
+
+
+def bdev_set_ro(client, name):
+    """Set a bdev in a read-only state.
+
+    Args:
+        name: name of the bdev to set
+    """
+    params = {'name': name}
+    return client.call('bdev_set_ro', params)
+
+
+def bdev_set_rw(client, name):
+    """Set a bdev in a read/write state.
+
+    Args:
+        name: name of the bdev to set
+    """
+    params = {'name': name}
+    return client.call('bdev_set_rw', params)

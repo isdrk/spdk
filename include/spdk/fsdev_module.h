@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_FSDEV_MODULE_H
@@ -77,6 +77,8 @@ struct spdk_fsdev_module {
 
 typedef void (*spdk_fsdev_unregister_cb)(void *cb_arg, int rc);
 
+typedef void (*spdk_fsdev_reset_done_cb)(void *cb_arg, int rc);
+
 /**
  * Function table for a filesystem device backend.
  *
@@ -107,6 +109,36 @@ struct spdk_fsdev_fn_table {
 	 * Vfsdev module must inspect types of memory domains returned by base fsdev and report only those
 	 * memory domains that it can work with. */
 	int (*get_memory_domains)(void *ctx, struct spdk_memory_domain **domains, int array_size);
+
+	/**
+	 * Perform an asynchronous device reset. Optional - may be NULL. NULL means that the device cannot be reset.
+	 *
+	 * Resets all the IOs associated with the fsdev.
+	 * This will pass a message to every other thread associated with the fsdev for which an I/O channel exists for the fsdev.
+	 * Regardless of device type, all outstanding I/Os to the filesystem device will be completed prior to the reset completing.
+	 * Moreover, the module must guarantee to complete all pending IOs, and not depend on existence of remote services which may be down.
+	 */
+	int (*reset)(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg);
+
+	/**
+	 * Check whether the device state was recovered upon creation. Optional - may be NULL.
+	 * NULL means that the device does not support recovery.
+	 */
+	bool (*is_recovered)(void *ctx);
+
+	/**
+	 * Output driver-specific information to a JSON stream. Optional - may be NULL.
+	 *
+	 * The JSON write context will be initialized with an open object, so the fsdev
+	 * driver should write a name (based on the driver name) followed by a JSON value
+	 * (most likely another nested object).
+	 */
+	int (*dump_info_json)(void *ctx, struct spdk_json_write_ctx *w);
+
+	/**
+	 * Enable or disable notifications.
+	 */
+	int (*set_notifications)(void *ctx, bool enabled);
 };
 
 /**
@@ -122,9 +154,6 @@ struct spdk_fsdev_name {
 	struct spdk_fsdev *fsdev;
 	RB_ENTRY(spdk_fsdev_name) node;
 };
-
-typedef TAILQ_HEAD(, spdk_fsdev_io) fsdev_io_tailq_t;
-typedef STAILQ_HEAD(, spdk_fsdev_io) fsdev_io_stailq_t;
 
 struct spdk_fsdev_file_handle;
 struct spdk_fsdev_file_object;
@@ -148,6 +177,9 @@ struct spdk_fsdev {
 	/** function table for all ops */
 	const struct spdk_fsdev_fn_table *fn_table;
 
+	/** Maximum size of variable sized notification data in bytes. */
+	uint32_t notify_max_data_size;
+
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.
 	 */
@@ -167,49 +199,23 @@ struct spdk_fsdev {
 		/** List of open descriptors for this filesystem device. */
 		TAILQ_HEAD(, spdk_fsdev_desc) open_descs;
 
+		/** Notifications callback. */
+		spdk_fsdev_notify_cb_t notify_cb;
+
+		/** Notifications callback context. */
+		void *notify_ctx;
+
 		TAILQ_ENTRY(spdk_fsdev) link;
 
 		/** Fsdev name used for quick lookup */
 		struct spdk_fsdev_name fsdev_name;
-	} internal;
-};
 
-enum spdk_fsdev_io_type {
-	SPDK_FSDEV_IO_MOUNT,
-	SPDK_FSDEV_IO_UMOUNT,
-	SPDK_FSDEV_IO_LOOKUP,
-	SPDK_FSDEV_IO_FORGET,
-	SPDK_FSDEV_IO_GETATTR,
-	SPDK_FSDEV_IO_SETATTR,
-	SPDK_FSDEV_IO_READLINK,
-	SPDK_FSDEV_IO_SYMLINK,
-	SPDK_FSDEV_IO_MKNOD,
-	SPDK_FSDEV_IO_MKDIR,
-	SPDK_FSDEV_IO_UNLINK,
-	SPDK_FSDEV_IO_RMDIR,
-	SPDK_FSDEV_IO_RENAME,
-	SPDK_FSDEV_IO_LINK,
-	SPDK_FSDEV_IO_OPEN,
-	SPDK_FSDEV_IO_READ,
-	SPDK_FSDEV_IO_WRITE,
-	SPDK_FSDEV_IO_STATFS,
-	SPDK_FSDEV_IO_RELEASE,
-	SPDK_FSDEV_IO_FSYNC,
-	SPDK_FSDEV_IO_SETXATTR,
-	SPDK_FSDEV_IO_GETXATTR,
-	SPDK_FSDEV_IO_LISTXATTR,
-	SPDK_FSDEV_IO_REMOVEXATTR,
-	SPDK_FSDEV_IO_FLUSH,
-	SPDK_FSDEV_IO_OPENDIR,
-	SPDK_FSDEV_IO_READDIR,
-	SPDK_FSDEV_IO_RELEASEDIR,
-	SPDK_FSDEV_IO_FSYNCDIR,
-	SPDK_FSDEV_IO_FLOCK,
-	SPDK_FSDEV_IO_CREATE,
-	SPDK_FSDEV_IO_ABORT,
-	SPDK_FSDEV_IO_FALLOCATE,
-	SPDK_FSDEV_IO_COPY_FILE_RANGE,
-	__SPDK_FSDEV_IO_LAST
+		/** true if fsdev reset is in progress */
+		bool reset_in_progress;
+
+		/** accumulated I/O statistics for previously deleted channels of this fsdev */
+		struct spdk_fsdev_io_stat *hist_stat;
+	} internal;
 };
 
 struct spdk_fsdev_io {
@@ -258,6 +264,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *parent_fobject;
 			char *name;
 			mode_t mode;
+			uint32_t umask;
 			dev_t rdev;
 			uid_t euid;
 			gid_t egid;
@@ -266,6 +273,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *parent_fobject;
 			char *name;
 			mode_t mode;
+			uint32_t umask;
 			uid_t euid;
 			gid_t egid;
 		} mkdir;
@@ -330,7 +338,7 @@ struct spdk_fsdev_io {
 			char *name;
 			char *value;
 			size_t size;
-			uint32_t flags;
+			uint64_t flags;
 		} setxattr;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -359,7 +367,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint64_t offset;
-			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg);
+			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget);
 			spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn;
 		} readdir;
 		struct {
@@ -374,7 +382,7 @@ struct spdk_fsdev_io {
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
-			int operation; /* see man flock */
+			enum spdk_fsdev_file_lock_op operation;
 		} flock;
 		struct {
 			struct spdk_fsdev_file_object *parent_fobject;
@@ -405,6 +413,51 @@ struct spdk_fsdev_io {
 			size_t len;
 			uint32_t flags;
 		} copy_file_range;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+		} syncfs;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t events;
+			bool wait;
+		} poll;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint32_t request;
+			uint64_t arg;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
+		} ioctl;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+		} getlk;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			struct spdk_fsdev_file_lock lock;
+			uint64_t owner;
+			bool wait;
+		} setlk;
 	} u_in;
 
 	union {
@@ -477,6 +530,29 @@ struct spdk_fsdev_io {
 		struct {
 			size_t data_size;
 		} copy_file_range;
+		struct {
+			struct spdk_fsdev_file_attr attr;
+			uint32_t mask;
+			uid_t uid;
+			uid_t gid;
+		} access;
+		struct {
+			off_t offset;
+			enum spdk_fsdev_seek_whence whence;
+		} lseek;
+		struct {
+			uint32_t revents;
+		} poll;
+		struct {
+			int32_t result;
+			struct iovec *in_iov;
+			uint32_t in_iovcnt;
+			struct iovec *out_iov;
+			uint32_t out_iovcnt;
+		} ioctl;
+		struct {
+			struct spdk_fsdev_file_lock lock;
+		} getlk;
 	} u_out;
 
 	/**
@@ -527,6 +603,9 @@ struct spdk_fsdev_io {
 
 		/** Entry to the list io_submitted of struct spdk_fsdev_channel */
 		TAILQ_ENTRY(spdk_fsdev_io) ch_link;
+
+		/* Timestamp */
+		uint64_t submit_tsc;
 	} internal;
 
 	/**
@@ -684,6 +763,45 @@ spdk_fsdev_io_from_ctx(void *ctx)
 {
 	return SPDK_CONTAINEROF(ctx, struct spdk_fsdev_io, driver_ctx);
 }
+
+/**
+ * Send a SPDK_FSDEV_NOTIFY_INVAL_DATA notification to the user.
+ *
+ * \param fsdev Filesystem device.
+ * \param fobject File object to invalidate.
+ * \param offset Offset of data region to invalidate.
+ * \param size Size of data region to invalidate.
+ * \param reply_cb Callback to deliver notification handling status
+ * Fsdev should be ready to get the reply callback in the context of this call.
+ * \param reply_ctx Reply context
+ *
+ * \return 0 on success.
+ * \return -ENODEV if notifications are not enabled.
+ */
+int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
+				 struct spdk_fsdev_file_object *fobject,
+				 uint64_t offset, size_t size,
+				 spdk_fsdev_notify_reply_cb_t reply_cb,
+				 void *reply_ctx);
+
+/**
+ * Send a SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification to the user.
+ *
+ * \param fsdev Filesystem device.
+ * \param parent_fobject Parent file object to invalidate.
+ * \param name Name of entry in the parent_fobject to invalidate.
+ * \param reply_cb Callback to deliver notification handling status
+ * Fsdev should be ready to get the reply callback in the context of this call.
+ * \param reply_ctx Reply context
+ *
+ * \return 0 on success.
+ * \return -ENODEV if notifications are not enabled.
+ */
+int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
+				  struct spdk_fsdev_file_object *parent_fobject,
+				  const char *name,
+				  spdk_fsdev_notify_reply_cb_t reply_cb,
+				  void *reply_ctx);
 
 /*
  *  Macro used to register module for later initialization.

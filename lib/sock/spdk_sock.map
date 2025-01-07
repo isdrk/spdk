@@ -41,6 +41,11 @@
 	spdk_sock_get_impl_name;
 	spdk_sock_group_register_interrupt;
 	spdk_sock_group_unregister_interrupt;
+	spdk_sock_get_caps;
+	spdk_sock_recv_zcopy;
+	spdk_sock_free_bufs;
+	spdk_sock_initialize;
+	spdk_sock_deinitialize;
 
 	# internal function in spdk_internal/sock.h
 	spdk_net_impl_register;

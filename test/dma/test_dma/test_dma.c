@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2021, 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -890,7 +890,7 @@ verify_tasks(void)
 
 	/* bdev request can be split, so the total number of pull_push +translate operations
 	 * can be bigger than total_number of requests */
-	if (num_translations + num_pull_push + num_memzero < total_requests) {
+	if (num_translations + num_pull_push + num_memzero < total_requests && !g_corrupt_mkey_counter) {
 		fprintf(stderr,
 			"Operations number mismatch: translate %"PRIu64", pull_push %"PRIu64", mem_zero %"PRIu64" expected total %"PRIu64"\n",
 			num_translations, num_pull_push, num_memzero, total_requests);

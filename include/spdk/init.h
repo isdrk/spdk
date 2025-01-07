@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.  All rights reserved.
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /**
@@ -105,6 +105,8 @@ typedef void (*spdk_subsystem_fini_fn)(void *ctx);
  */
 void spdk_subsystem_fini(spdk_subsystem_fini_fn cb_fn, void *cb_arg);
 
+struct spdk_json_write_ctx;
+
 /**
  * Check if the specified subsystem exists in the application.
  *
@@ -127,8 +129,109 @@ void spdk_rpc_server_pause(const char *listen_addr);
  */
 void spdk_rpc_server_resume(const char *listen_addr);
 
-#ifdef __cplusplus
-}
+/**
+ * Represents an SPDK subsystem.
+ */
+struct spdk_subsystem {
+	const char *name;
+	/**
+	 * This function must initialize the subsystem.
+	 *
+	 * User must call `spdk_subsystem_init_next()` when they are done with their initialization.
+	 */
+	void (*init)(void);
+
+	/**
+	 * This function must finalize and release resources for the subsystem.
+	 *
+	 * User must call `spdk_subsystem_fini_next()` when they are done with their initialization.
+	 */
+	void (*fini)(void);
+
+	/**
+	 * Write JSON configuration handler.
+	 *
+	 * A subsystem should dump all state in the form of JSON-RPC calls to this write context.
+	 *
+	 * \param w JSON write context
+	 */
+	void (*write_config_json)(struct spdk_json_write_ctx *w);
+
+	TAILQ_ENTRY(spdk_subsystem) tailq;
+
+	/**
+	 * Whether this subsystem is currently enabled. By default, all registered subsystems are enabled.
+	 */
+	bool enabled;
+};
+
+/**
+ * Tracks SPDK subsystem dependencies.
+ */
+struct spdk_subsystem_depend {
+	const char *name;
+	const char *depends_on;
+	TAILQ_ENTRY(spdk_subsystem_depend) tailq;
+};
+
+/**
+ * Register a subsystem with SPDK. Prefer SPDK_SUBSYSTEM_REGISTER instead.
+ *
+ * \param subsystem The subsystem to register.
+ */
+void spdk_add_subsystem(struct spdk_subsystem *subsystem);
+
+/**
+ * Add a dependency to a subsystem. Prefer SPDK_SUBSYSTEM_DEPEND instead.
+ *
+ * \param depend The subsystem dependency.
+ */
+void spdk_add_subsystem_depend(struct spdk_subsystem_depend *depend);
+
+/**
+ * Indicate that the current subsystem is done initializing and the system can move to the next subsystem.
+ *
+ * This may only be called in response to an spdk_subsystem::init call.
+ *
+ * \param rc The return code for the initialization. 0 is success.
+ */
+void spdk_subsystem_init_next(int rc);
+
+/**
+ * Indicate that the current subsystem is done finalizing and the system can move to the next subsystem.
+ *
+ * This may only be called in response to an spdk_subsystem::fini call.
+ *
+ * \param rc The return code for the finalization. 0 is success.
+ */
+void spdk_subsystem_fini_next(void);
+
+/**
+ * \brief Register a new subsystem
+ *
+ * Typically, a `struct spdk_subsystem` object will be created statically and then this macro will register it.
+ */
+#define SPDK_SUBSYSTEM_REGISTER(_name) \
+	__attribute__((constructor)) static void _name ## _register(void)	\
+	{									\
+		spdk_add_subsystem(&_name);					\
+	}
+
+/**
+ * \brief Declare that a subsystem depends on another subsystem.
+ */
+#define SPDK_SUBSYSTEM_DEPEND(_name, _depends_on)						\
+	static struct spdk_subsystem_depend __subsystem_ ## _name ## _depend_on ## _depends_on = { \
+	.name = #_name,										\
+	.depends_on = #_depends_on,								\
+	};											\
+	__attribute__((constructor)) static void _name ## _depend_on ## _depends_on(void)	\
+	{											\
+		spdk_add_subsystem_depend(&__subsystem_ ## _name ## _depend_on ## _depends_on); \
+	}
+
 #endif
 
+#ifdef __cplusplus
+}
 #endif

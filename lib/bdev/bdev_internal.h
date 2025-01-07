@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2019 Intel Corporation.
+ *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -7,6 +8,7 @@
 #define SPDK_BDEV_INTERNAL_H
 
 #include "spdk/bdev.h"
+#include "spdk/bdev_module.h"
 
 #define ZERO_BUFFER_SIZE	0x100000
 

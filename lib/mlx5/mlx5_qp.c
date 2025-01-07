@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include <infiniband/mlx5dv.h>
@@ -8,6 +8,8 @@
 #include "mlx5_ifc.h"
 #include "spdk/log.h"
 #include "spdk/util.h"
+#include "spdk/string.h"
+#include "spdk/likely.h"
 
 #include "spdk_internal/assert.h"
 #include "spdk_internal/rdma_utils.h"
@@ -24,19 +26,21 @@
 #define MLX5_QP_MAX_RD_ATOMIC      16
 #define MLX5_QP_SQ_PSN         0x4242
 
+/* TODO: there is no definition for 8K MTU */
+#define MLX5_QP_8K_MTU		6
+
 struct mlx5_qp_conn_caps {
 	bool resources_on_nvme_emulation_manager;
 	bool roce_enabled;
 	bool fl_when_roce_disabled;
 	bool fl_when_roce_enabled;
 	bool port_ib_enabled;
+	bool qp_8k_mtu;
 	uint8_t roce_version;
 	uint8_t port;
 	uint16_t pkey_idx;
 	enum ibv_mtu mtu;
 };
-
-static int mlx5_qp_connect(struct spdk_mlx5_qp *qp);
 
 static void
 mlx5_cq_deinit(struct spdk_mlx5_cq *cq)
@@ -90,6 +94,7 @@ mlx5_cq_init(struct ibv_pd *pd, const struct spdk_mlx5_cq_attr *attr, struct spd
 	}
 
 	cq->hw.cq_addr = (uintptr_t)mlx5_cq.buf;
+	cq->hw.dbrec_addr = (uintptr_t)mlx5_cq.dbrec;
 	cq->hw.ci = 0;
 	cq->hw.cqe_cnt = mlx5_cq.cqe_cnt;
 	cq->hw.cqe_size = mlx5_cq.cqe_size;
@@ -104,8 +109,12 @@ mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 	if (qp->verbs_qp) {
 		ibv_destroy_qp(qp->verbs_qp);
 	}
-	if (qp->completions) {
-		free(qp->completions);
+
+	if (qp->sq_completions) {
+		free(qp->sq_completions);
+	}
+	if (qp->rq_completions) {
+		free(qp->rq_completions);
 	}
 }
 
@@ -115,14 +124,17 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 {
 	struct mlx5dv_qp dv_qp;
 	struct mlx5dv_obj dv_obj;
+	struct spdk_mlx5_device_caps caps = {};
 	struct ibv_qp_init_attr_ex dv_qp_attr = {
+		.qp_context = attr->qp_context,
 		.cap = attr->cap,
 		.qp_type = IBV_QPT_RC,
 		.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS,
 		.pd = pd,
-		.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_BIND_MW,
+		.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |  IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_BIND_MW,
 		.send_cq = cq,
 		.recv_cq = cq,
+		.srq = attr->srq ? attr->srq->verbs_srq : NULL,
 		.sq_sig_all = attr->sigall,
 	};
 	/* Attrs required for MKEYs registration */
@@ -135,6 +147,15 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	if (attr->sigall && attr->siglast) {
 		SPDK_ERRLOG("Params sigall and siglast can't be enabled simultaneously\n");
 		return -EINVAL;
+	}
+	if (attr->srq && attr->cap.max_recv_wr) {
+		SPDK_ERRLOG("SRQ and RQ can't be enabled simultaneously\n");
+		return -EINVAL;
+	}
+	rc = spdk_mlx5_device_query_caps(pd->context, &caps);
+	if (rc) {
+		SPDK_ERRLOG("Failed to query dev %s crypto caps\n", pd->context->device->name);
+		return rc;
 	}
 
 	qp->verbs_qp = mlx5dv_create_qp(pd->context, &dv_qp_attr, &mlx5_qp_attr);
@@ -158,33 +179,55 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->hw.dbr_addr = (uint64_t)dv_qp.dbrec;
 	qp->hw.sq_bf_addr = (uint64_t)dv_qp.bf.reg;
 	qp->hw.sq_wqe_cnt = dv_qp.sq.wqe_cnt;
+	qp->hw.rq_addr = (uint64_t)dv_qp.rq.buf;
+	qp->hw.rq_wqe_cnt = dv_qp.rq.wqe_cnt;
+	qp->hw.rq_stride = dv_qp.rq.stride;
 
-	SPDK_NOTICELOG("mlx5 QP, sq size %u WQE_BB. %u send_wrs -> %u WQE_BB per send WR\n",
-		       qp->hw.sq_wqe_cnt, attr->cap.max_send_wr, qp->hw.sq_wqe_cnt / attr->cap.max_send_wr);
+	SPDK_NOTICELOG("mlx5 QP, sq size %u WQE_BB, srqn 0x%x. %u send_wrs -> %u WQE_BB per send WR\n",
+		       qp->hw.sq_wqe_cnt, attr->srq ? attr->srq->hw.srqn : 0, attr->cap.max_send_wr,
+		       qp->hw.sq_wqe_cnt / attr->cap.max_send_wr);
 
 	qp->hw.qp_num = qp->verbs_qp->qp_num;
+	qp->srq = attr->srq;
 
+	/*
+	 * Verify that the memory is indeed non-cachable. It relies on a fact (hack) that
+	 * rdma-core is going to allocate NC uar if blue flame is disabled.
+	 * This is a short term solution.
+	 *
+	 * The right solution is to allocate uars explicitly with the
+	 * mlx5dv_devx_alloc_uar()
+	 */
 	qp->hw.sq_tx_db_nc = dv_qp.bf.size == 0;
 	qp->tx_available = qp->hw.sq_wqe_cnt;
 	qp->max_send_sge = attr->cap.max_send_sge;
-	rc = posix_memalign((void **)&qp->completions, 4096, qp->hw.sq_wqe_cnt * sizeof(*qp->completions));
+	qp->rx_available = qp->hw.rq_wqe_cnt;
+	qp->max_recv_sge = attr->cap.max_recv_sge;
+	qp->aes_xts_inc_64 = caps.crypto.tweak_inc_64;
+	rc = posix_memalign((void **)&qp->sq_completions, 4096,
+			    qp->hw.sq_wqe_cnt * sizeof(*qp->sq_completions));
 	if (rc) {
 		ibv_destroy_qp(qp->verbs_qp);
 		SPDK_ERRLOG("Failed to alloc completions\n");
 		return rc;
 	}
+
+	if (qp->hw.rq_wqe_cnt) {
+		rc = posix_memalign((void **)&qp->rq_completions, 4096,
+				    qp->hw.rq_wqe_cnt * sizeof(*qp->rq_completions));
+		if (rc) {
+			free(qp->sq_completions);
+			ibv_destroy_qp(qp->verbs_qp);
+			SPDK_ERRLOG("Failed to alloc RQ completions\n");
+			return rc;
+		}
+	}
+
 	qp->sigmode = SPDK_MLX5_QP_SIG_NONE;
 	if (attr->sigall) {
 		qp->sigmode = SPDK_MLX5_QP_SIG_ALL;
 	} else if (attr->siglast) {
 		qp->sigmode = SPDK_MLX5_QP_SIG_LAST;
-	}
-
-	rc = mlx5_qp_connect(qp);
-	if (rc) {
-		ibv_destroy_qp(qp->verbs_qp);
-		free(qp->completions);
-		return rc;
 	}
 
 	return 0;
@@ -228,7 +271,12 @@ mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 			SPDK_ERRLOG("IB enabled and GRH addressing is required but only local addressing is supported\n");
 			return -1;
 		}
-		conn_caps->mtu = port_attr.active_mtu;
+
+		if (conn_caps->qp_8k_mtu) {
+			conn_caps->mtu = MLX5_QP_8K_MTU;
+		} else {
+			conn_caps->mtu = port_attr.active_mtu;
+		}
 		conn_caps->port_ib_enabled = true;
 		return 0;
 	}
@@ -237,7 +285,11 @@ mlx5_check_port(struct ibv_context *ctx, struct mlx5_qp_conn_caps *conn_caps)
 		return -1;
 	}
 
-	conn_caps->mtu = IBV_MTU_4096;
+	if (conn_caps->qp_8k_mtu) {
+		conn_caps->mtu = MLX5_QP_8K_MTU;
+	} else {
+		conn_caps->mtu = IBV_MTU_4096;
+	}
 
 	return 0;
 }
@@ -246,9 +298,15 @@ static int
 mlx5_fill_qp_conn_caps(struct ibv_context *context,
 		       struct mlx5_qp_conn_caps *conn_caps)
 {
+	struct spdk_mlx5_device_caps caps = {};
 	uint8_t in[DEVX_ST_SZ_BYTES(query_hca_cap_in)] = {0};
 	uint8_t out[DEVX_ST_SZ_BYTES(query_hca_cap_out)] = {0};
 	int rc;
+
+	rc = spdk_mlx5_device_query_caps(context, &caps);
+	if (rc) {
+		return rc;
+	}
 
 	DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
 	DEVX_SET(query_hca_cap_in, in, op_mod,
@@ -264,6 +322,7 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 			 capability.cmd_hca_cap.resources_on_nvme_emulation_manager);
 	conn_caps->fl_when_roce_disabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.fl_rc_qp_when_roce_disabled);
+	conn_caps->qp_8k_mtu = caps.crypto_supported && caps.crypto.large_mtu_tweak;
 	conn_caps->roce_enabled = DEVX_GET(query_hca_cap_out, out,
 					   capability.cmd_hca_cap.roce);
 	if (!conn_caps->roce_enabled) {
@@ -285,10 +344,11 @@ mlx5_fill_qp_conn_caps(struct ibv_context *context,
 	conn_caps->fl_when_roce_enabled = DEVX_GET(query_hca_cap_out,
 					  out, capability.roce_caps.fl_rc_qp_when_roce_enabled);
 out:
-	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d\n",
+	SPDK_DEBUGLOG(mlx5, "RoCE Caps: enabled %d ver %d fl allowed %d; 8K MTU %d\n",
 		      conn_caps->roce_enabled, conn_caps->roce_version,
 		      conn_caps->roce_enabled ? conn_caps->fl_when_roce_enabled :
-		      conn_caps->fl_when_roce_disabled);
+		      conn_caps->fl_when_roce_disabled,
+		      conn_caps->qp_8k_mtu);
 	return 0;
 }
 
@@ -480,8 +540,8 @@ mlx5_qp_loopback_conn(struct spdk_mlx5_qp *qp, struct mlx5_qp_conn_caps *caps)
 	return mlx5_qp_loopback_conn_rtr_2_rts(qp, &qp_attr, attr_mask);
 }
 
-static int
-mlx5_qp_connect(struct spdk_mlx5_qp *qp)
+int
+spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp)
 {
 	struct mlx5_qp_conn_caps conn_caps = {};
 	struct ibv_context *context = qp->verbs_qp->context;
@@ -510,6 +570,55 @@ mlx5_qp_connect(struct spdk_mlx5_qp *qp)
 	}
 
 	return mlx5_qp_loopback_conn(qp, &conn_caps);
+}
+
+int
+spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *mlx5_qp, struct rdma_cm_id *cm_id)
+{
+	struct ibv_qp_attr qp_attr;
+	int qp_attr_mask, rc;
+
+	qp_attr.qp_state = IBV_QPS_INIT;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_INIT, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_INIT) failed, rc %d\n", rc);
+		return rc;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTR;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_RTR, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_RTR) failed, rc %d\n", rc);
+		return rc;
+	}
+
+	qp_attr.qp_state = IBV_QPS_RTS;
+	rc = rdma_init_qp_attr(cm_id, &qp_attr, &qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init attr IBV_QPS_RTR, errno %s (%d)\n", spdk_strerror(errno), errno);
+		return rc;
+	}
+
+	rc = ibv_modify_qp(mlx5_qp->verbs_qp, &qp_attr, qp_attr_mask);
+	if (rc) {
+		SPDK_ERRLOG("ibv_modify_qp(IBV_QPS_RTS) failed, rc %d\n", rc);
+	}
+	mlx5_qp->cached_extra_flags = SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE;
+
+	return rc;
+
 }
 
 static void
@@ -590,6 +699,53 @@ spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
 	return 0;
 }
 
+static inline void
+mlx5_cq_update_consumer_index(struct spdk_mlx5_cq *cq)
+{
+	*((uint32_t *)(uintptr_t)cq->hw.dbrec_addr) = htobe32(cq->hw.ci & 0xffffff);
+}
+
+int
+spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe)
+{
+	struct mlx5dv_obj dv_obj;
+	struct mlx5dv_cq mlx5_cq;
+	int rc;
+
+	/*
+	 * The resize operation fails if the number of outstanding CQEs exceeds the new CQ size.
+	 * Since we do not update the consumer index in the poll function, we must update it here
+	 * to let the HW calculate the number of outstanding CQEs correctly.
+	 */
+	mlx5_cq_update_consumer_index(cq);
+
+	rc = ibv_resize_cq(cq->verbs_cq, cqe);
+	if (rc) {
+		SPDK_ERRLOG("ibv_resize_cq failed, rc %d\n", rc);
+		return rc;
+	}
+
+	dv_obj.cq.in = cq->verbs_cq;
+	dv_obj.cq.out = &mlx5_cq;
+
+	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_CQ);
+	if (rc) {
+		SPDK_ERRLOG("Failed to init DV CQ, rc %d\n", rc);
+		return rc;
+	}
+
+	cq->hw.cq_addr = (uintptr_t)mlx5_cq.buf;
+	cq->hw.cqe_cnt = mlx5_cq.cqe_cnt;
+	/*
+	 * The HW produces an extra CQE before switching to a new CQ buffer, and the CQ resize function
+	 * copies non-polled CQEs to the new CQ buffer, excluding the extra one. The index in the new
+	 * buffer is incremented to fill the gap made by the dropped CQE.
+	 */
+	cq->hw.ci++;
+
+	return 0;
+}
+
 int
 spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq, struct spdk_mlx5_qp_attr *qp_attr,
 		    struct spdk_mlx5_qp **qp_out)
@@ -628,6 +784,16 @@ spdk_mlx5_qp_destroy(struct spdk_mlx5_qp *qp)
 }
 
 int
+spdk_mlx5_qp_modify(struct spdk_mlx5_qp *qp, struct ibv_qp_attr *attr, int attr_mask)
+{
+	assert(qp);
+	assert(qp->verbs_qp);
+	assert(attr);
+
+	return ibv_modify_qp(qp->verbs_qp, attr, attr_mask);
+}
+
+int
 spdk_mlx5_qp_set_error_state(struct spdk_mlx5_qp *qp)
 {
 	struct ibv_qp_attr attr = {
@@ -642,3 +808,165 @@ spdk_mlx5_qp_get_verbs_qp(struct spdk_mlx5_qp *qp)
 {
 	return qp->verbs_qp;
 }
+
+static void
+mlx5_srq_fill_buf(struct spdk_mlx5_srq *srq)
+{
+	struct mlx5_wqe_srq_next_seg *srq_next_seg;
+	uint32_t i;
+
+	for (i = srq->hw.head; i < srq->hw.tail; i++) {
+		srq_next_seg = mlx5_srq_get_wqe(&srq->hw, i);
+		srq_next_seg->next_wqe_index = htobe16(i + 1);
+	}
+}
+
+int
+spdk_mlx5_srq_create(struct ibv_pd *pd, struct ibv_srq_init_attr *srq_attr,
+		     struct spdk_mlx5_srq **srq_out)
+{
+	struct spdk_mlx5_srq *srq;
+	struct mlx5dv_srq dv_srq = {
+		.comp_mask = MLX5DV_SRQ_MASK_SRQN
+	};
+	struct mlx5dv_obj dv_obj = {
+		.srq = {
+			.out = &dv_srq
+		}
+	};
+	int rc;
+
+	SPDK_DEBUGLOG(mlx5, "Create SRQ: max_wr %u, max_sge %u\n", srq_attr->attr.max_wr,
+		      srq_attr->attr.max_sge);
+	srq = calloc(1, sizeof(*srq));
+	if (!srq) {
+		return -ENOMEM;
+	}
+
+	srq->verbs_srq = ibv_create_srq(pd, srq_attr);
+	if (!srq->verbs_srq) {
+		SPDK_ERRLOG("Failed to create SRQ, rc %d (%s)\n", errno, spdk_strerror(errno));
+		rc = -errno;
+		goto err_free_srq;
+	}
+
+	dv_obj.srq.in = srq->verbs_srq;
+	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_SRQ);
+	if (rc) {
+		SPDK_ERRLOG("Failed to initialize DV object, rc %d (%s)\n", rc, spdk_strerror(rc));
+		goto err_destroy_srq;
+	}
+
+	srq->hw.dbrec_addr = (uintptr_t)dv_srq.dbrec;
+	srq->hw.rq_addr = (uintptr_t)dv_srq.buf;
+	srq->hw.stride = dv_srq.stride;
+	srq->hw.head = dv_srq.head;
+	srq->hw.tail = dv_srq.tail;
+	/*
+	 * We cannot use srq_attr->attr.max_wr here because the actual SRQ buffer is bigger.
+	 * The below calculation is correct because dv_srq.tail is an index of the last WQE for
+	 * a new SRQ.
+	 */
+	srq->hw.max_wr = dv_srq.tail + 1;
+	srq->hw.max_sge = srq_attr->attr.max_sge;
+	srq->hw.srqn = dv_srq.srqn;
+	SPDK_DEBUGLOG(mlx5, "Create SRQ: srgn 0x%x, dbrec_addr 0x%lx, rq_addr 0x%lx, stride %u,"
+		      " head %u, tail %u, max_wr %u, max_sge %u\n",
+		      srq->hw.srqn, srq->hw.dbrec_addr, srq->hw.rq_addr, srq->hw.stride, srq->hw.head,
+		      srq->hw.tail, srq->hw.max_wr, srq->hw.max_sge);
+
+	srq->wr_id = calloc(srq->hw.max_wr, sizeof(*srq->wr_id));
+	if (!srq->wr_id) {
+		rc = -ENOMEM;
+		SPDK_ERRLOG("Failed to allocate memory for wr_id\n");
+		goto err_destroy_srq;
+	}
+
+	mlx5_srq_fill_buf(srq);
+	*srq_out = srq;
+
+	return 0;
+
+err_destroy_srq:
+	ibv_destroy_srq(srq->verbs_srq);
+err_free_srq:
+	free(srq);
+
+	return rc;
+}
+
+int
+spdk_mlx5_srq_destroy(struct spdk_mlx5_srq *srq)
+{
+	assert(srq);
+	assert(srq->wr_id);
+
+	int rc;
+
+	free(srq->wr_id);
+
+	rc = ibv_destroy_srq(srq->verbs_srq);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy SRQ, rc %d (%s)\n", rc, spdk_strerror(rc));
+	}
+	free(srq);
+
+	return rc;
+}
+
+int
+spdk_mlx5_srq_recv(struct spdk_mlx5_srq *srq, struct ibv_sge *sge, uint32_t num_sge,
+		   uint64_t wrid)
+{
+	struct mlx5_wqe_srq_next_seg *srq_next_seg;
+	struct mlx5_wqe_data_seg *data_seg;
+	uint32_t i;
+
+	if (num_sge > srq->hw.max_sge) {
+		return EINVAL;
+	}
+
+	if (srq->hw.head == srq->hw.tail) {
+		/* SRQ is full */
+		return ENOMEM;
+	}
+
+	srq->wr_id[srq->hw.head] = wrid;
+
+	srq_next_seg = mlx5_srq_get_wqe(&srq->hw, srq->hw.head);
+	data_seg = (struct mlx5_wqe_data_seg *)(srq_next_seg + 1);
+
+	for (i = 0; i < num_sge; i++) {
+		data_seg[i].byte_count	= htobe32(sge[i].length);
+		data_seg[i].lkey	= htobe32(sge[i].lkey);
+		data_seg[i].addr	= htobe64(sge[i].addr);
+	}
+
+	/*
+	 * The SRQ WQE has a fixed size defined in the create SRQ command. When num_sge is
+	 * lower than srq->hw.max_sge, the last entries of the data segment are not used.
+	 * Set lkey to MLX5_INVALID_LKEY for the first unused entry to let the HW recognize
+	 * the end of the data segment.
+	 */
+	if (i < srq->hw.max_sge) {
+		data_seg[i].byte_count	= 0;
+		data_seg[i].lkey	= htobe32(MLX5_INVALID_LKEY);
+		data_seg[i].addr	= 0;
+	}
+
+	mlx5_srq_dump_wqe(srq, srq->hw.head);
+	srq->hw.head = be16toh(srq_next_seg->next_wqe_index);
+	srq->hw.wqe_cnt++;
+
+	return 0;
+}
+
+void
+spdk_mlx5_srq_complete_recv(struct spdk_mlx5_srq *srq)
+{
+	spdk_smp_wmb();
+	*((uint32_t *)(uintptr_t)srq->hw.dbrec_addr) = htobe32(srq->hw.wqe_cnt);
+	spdk_memory_bus_store_fence();
+}
+
+SPDK_LOG_REGISTER_COMPONENT(mlx5_srq)

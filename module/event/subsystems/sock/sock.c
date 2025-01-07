@@ -1,11 +1,12 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 #include "spdk/sock.h"
-#include "spdk_internal/init.h"
+#include "spdk/init.h"
 #include "spdk_internal/sock.h"
 #include "spdk/log.h"
 
@@ -27,12 +28,14 @@ sock_subsystem_init(void)
 		}
 	}
 
+	spdk_sock_initialize();
 	spdk_subsystem_init_next(rc);
 }
 
 static void
 sock_subsystem_fini(void)
 {
+	spdk_sock_deinitialize();
 	spdk_subsystem_fini_next();
 }
 
@@ -50,3 +53,6 @@ static struct spdk_subsystem g_spdk_subsystem_sock = {
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_sock);
+#ifdef SPDK_CONFIG_XLIO
+SPDK_SUBSYSTEM_DEPEND(sock, xlio);
+#endif

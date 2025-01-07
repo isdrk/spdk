@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2021 Intel Corporation
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES
 #  All rights reserved.
 #
 
@@ -103,8 +104,15 @@ $rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode$subsystem -t $TEST
 # test_dma doesn't use RPC, but we change the sock path since nvmf target is already using the default RPC sock
 "$rootdir/test/dma/test_dma/test_dma" -q 16 -o 4096 -w randrw -M 70 -t 5 -m 0xc --json <(gen_nvmf_target_json $subsystem) -b "Nvme${subsystem}n1" -f -x translate
 
-# test data pull/push with split against local malloc
-"$rootdir/test/dma/test_dma/test_dma" -q 16 -o 4096 -w randrw -M 70 -t 5 -m 0xc --json <(gen_malloc_json) -b "Malloc0" -x pull_push
+if grep -q '#define SPDK_CONFIG_RDMA_PROV mlx5_dv' $rootdir/include/spdk/config.h; then
+	# Malloc reports all available memory domains, it must support RDMA memory domain which comes from accel_mlx5
+	expected_op="translate"
+else
+	# test data pull/push with split against local malloc
+	expected_op="pull_push"
+fi
+
+"$rootdir/test/dma/test_dma/test_dma" -q 16 -o 4096 -w randrw -M 70 -t 5 -m 0xc --json <(gen_malloc_json) -b "Malloc0" -x $expected_op -r /var/tmp/dma.sock
 
 # test memzero with logical volumes. All clusters are unallocated, read should trigger memzero
 "$rootdir/test/dma/test_dma/test_dma" -q 16 -o 4096 -w randread -M 70 -t 5 -m 0xc --json <(gen_lvol_nvme_json $subsystem) -b "lvs${subsystem}/lvol${subsystem}" -f -x memzero

@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/config.h"
@@ -14,6 +15,16 @@
 
 struct nvme_driver	*g_spdk_nvme_driver;
 pid_t			g_spdk_nvme_pid;
+
+static pthread_mutex_t g_zcopy_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct spdk_zcopy_pool_opts g_zcopy_pool_opts = {
+	.zcopy_iov_small_pool_size = NVME_DEFAULT_SMALL_ZCOPY_IOV_POOL_SIZE,
+	.zcopy_small_iov_num = NVME_DEFAULT_SMALL_ZCOPY_IOVS,
+	.zcopy_iov_large_pool_size = NVME_DEFAULT_LARGE_ZCOPY_IOV_POOL_SIZE,
+	.zcopy_large_iov_num = NVME_DEFAULT_LARGE_ZCOPY_IOVS,
+	.zcopy_data_buf_pool_size = NVME_DEFAULT_ZCOPY_NUM_SHARED_BUFFERS,
+	.zcopy_data_buf_size = NVME_DEFAULT_ZCOPY_BUFFER_SIZE,
+};
 
 /* gross timeout of 180 seconds in milliseconds */
 static int g_nvme_driver_timeout_ms = 3 * 60 * 1000;
@@ -102,6 +113,230 @@ nvme_ctrlr_detach_poll_async(struct nvme_ctrlr_detach_ctx *ctx)
 	free(ctx);
 
 	return rc;
+}
+
+void
+spdk_nvme_zcopy_io_get_iovec(struct spdk_nvme_zcopy_io *zcopy_io, struct iovec **iovs, int *iovcnt)
+{
+	if (zcopy_io == NULL) {
+		return;
+	}
+
+	if (iovs) {
+		*iovs = zcopy_io->iovs;
+	}
+
+	if (iovcnt) {
+		*iovcnt = zcopy_io->iovcnt;
+	}
+}
+
+void
+nvme_request_free_zcopy_buffers(struct nvme_request *req)
+{
+	int i;
+
+	if (!req->zcopy.data_from_pool) {
+		return;
+	}
+
+	for (i = 0; i < req->zcopy.iovcnt; i++) {
+		spdk_mempool_put(g_spdk_nvme_driver->zcopy_data_buf_pool, req->zcopy.iovs[i].iov_base);
+	}
+
+	req->zcopy.data_from_pool = false;
+}
+
+static inline int
+nvme_request_set_buffer(struct nvme_request *req, void *buf, uint32_t length,
+			uint32_t buf_unit_size)
+{
+	/* TODO: keep 4K alignment? */
+	req->zcopy.iovs[req->zcopy.iovcnt].iov_base = buf;
+	req->zcopy.iovs[req->zcopy.iovcnt].iov_len = spdk_min(length, buf_unit_size);
+	length -= req->zcopy.iovs[req->zcopy.iovcnt].iov_len;
+	req->zcopy.iovcnt++;
+
+	return length;
+}
+
+int
+nvme_request_get_zcopy_buffers(struct nvme_request *req, uint32_t length)
+{
+	uint32_t buf_unit_size = g_zcopy_pool_opts.zcopy_data_buf_size;
+	uint32_t num_buffers, j;
+	void *buffers[NVME_MAX_ZCOPY_IOVS];
+	int rc;
+
+	/* If the number of buffers is too large, then we know the I/O is larger than allowed.
+	 * Fail it.
+	 */
+	num_buffers = SPDK_CEIL_DIV(length, buf_unit_size);
+	if (num_buffers > NVME_MAX_ZCOPY_IOVS) {
+		SPDK_ERRLOG("Try to get %d buffers than limit %d\n", num_buffers, NVME_MAX_ZCOPY_IOVS);
+		return -EINVAL;
+	}
+
+	assert(req->zcopy.iovcnt == 0);
+	req->zcopy.iovcnt = num_buffers;
+	rc = nvme_request_get_zcopy_iovs(&req->zcopy);
+	if (rc != 0) {
+		return -EINVAL;
+	}
+
+	if (spdk_mempool_get_bulk(g_spdk_nvme_driver->zcopy_data_buf_pool, buffers,
+				  num_buffers)) {
+		SPDK_ERRLOG("Failed to get data buffer from pool\n");
+		nvme_request_put_zcopy_iovs(&req->zcopy);
+		return -ENOMEM;
+	}
+
+	req->zcopy.iovcnt = 0;
+	for (j = 0; j < num_buffers; j++) {
+		length = nvme_request_set_buffer(req, buffers[j], length, buf_unit_size);
+	}
+
+	assert(length == 0);
+
+	req->zcopy.data_from_pool = true;
+	return 0;
+}
+
+int
+nvme_init_zcopy_resource(void)
+{
+	size_t cache_count;
+
+	pthread_mutex_lock(&g_zcopy_pool_mutex);
+	if (g_spdk_nvme_driver->zcopy_pool_ref_count == 0) {
+		char mempool_name[32];
+
+		snprintf(mempool_name, sizeof(mempool_name), "iov_small_pool_%d", getpid());
+		cache_count = (g_zcopy_pool_opts.zcopy_iov_small_pool_size * 3 / 4) / spdk_env_get_core_count();
+		g_spdk_nvme_driver->zcopy_iov_small_pool = spdk_mempool_create(mempool_name,
+				g_zcopy_pool_opts.zcopy_iov_small_pool_size,
+				g_zcopy_pool_opts.zcopy_small_iov_num * sizeof(struct iovec),
+				cache_count, SPDK_ENV_SOCKET_ID_ANY);
+		if (!g_spdk_nvme_driver->zcopy_iov_small_pool) {
+			SPDK_ERRLOG("create %s failed: pool_size %u elem_size %lu\n",
+				    mempool_name, g_zcopy_pool_opts.zcopy_iov_small_pool_size,
+				    g_zcopy_pool_opts.zcopy_small_iov_num * sizeof(struct iovec));
+			pthread_mutex_unlock(&g_zcopy_pool_mutex);
+			return -ENOMEM;
+		}
+
+		snprintf(mempool_name, sizeof(mempool_name), "iov_large_pool_%d", getpid());
+		cache_count = (g_zcopy_pool_opts.zcopy_iov_large_pool_size * 3 / 4) / spdk_env_get_core_count();
+		g_spdk_nvme_driver->zcopy_iov_large_pool = spdk_mempool_create(mempool_name,
+				g_zcopy_pool_opts.zcopy_iov_large_pool_size,
+				g_zcopy_pool_opts.zcopy_large_iov_num * sizeof(struct iovec),
+				cache_count, SPDK_ENV_SOCKET_ID_ANY);
+		if (!g_spdk_nvme_driver->zcopy_iov_large_pool) {
+			SPDK_ERRLOG("create %s failed: pool_size %u elem_size %lu\n",
+				    mempool_name, g_zcopy_pool_opts.zcopy_iov_large_pool_size,
+				    g_zcopy_pool_opts.zcopy_large_iov_num * sizeof(struct iovec));
+			spdk_mempool_free(g_spdk_nvme_driver->zcopy_iov_small_pool);
+			pthread_mutex_unlock(&g_zcopy_pool_mutex);
+			return -ENOMEM;
+		}
+
+		snprintf(mempool_name, sizeof(mempool_name), "zcopy_data_buf_pool");
+		cache_count = (g_zcopy_pool_opts.zcopy_data_buf_pool_size * 3 / 4) / spdk_env_get_core_count();
+		g_spdk_nvme_driver->zcopy_data_buf_pool = spdk_mempool_create(mempool_name,
+				g_zcopy_pool_opts.zcopy_data_buf_pool_size,
+				g_zcopy_pool_opts.zcopy_data_buf_size,
+				cache_count, SPDK_ENV_SOCKET_ID_ANY);
+		if (!g_spdk_nvme_driver->zcopy_data_buf_pool) {
+			SPDK_ERRLOG("Failed to allocate pool %s\n", mempool_name);
+			spdk_mempool_free(g_spdk_nvme_driver->zcopy_iov_small_pool);
+			spdk_mempool_free(g_spdk_nvme_driver->zcopy_iov_large_pool);
+			pthread_mutex_unlock(&g_zcopy_pool_mutex);
+			return -ENOMEM;
+		}
+
+		SPDK_NOTICELOG("Zcopy resource are allocated\n");
+
+		g_spdk_nvme_driver->zcopy_pool_ref_count = 1;
+	} else {
+		g_spdk_nvme_driver->zcopy_pool_ref_count++;
+	}
+
+	pthread_mutex_unlock(&g_zcopy_pool_mutex);
+
+	return 0;
+}
+
+void
+nvme_free_zcopy_resource(void)
+{
+	pthread_mutex_lock(&g_zcopy_pool_mutex);
+	assert(g_spdk_nvme_driver->zcopy_pool_ref_count > 0);
+	g_spdk_nvme_driver->zcopy_pool_ref_count--;
+	if (g_spdk_nvme_driver->zcopy_pool_ref_count == 0) {
+		spdk_mempool_free(g_spdk_nvme_driver->zcopy_iov_small_pool);
+		spdk_mempool_free(g_spdk_nvme_driver->zcopy_iov_large_pool);
+		spdk_mempool_free(g_spdk_nvme_driver->zcopy_data_buf_pool);
+		SPDK_NOTICELOG("Zcopy resource has been deallocated\n");
+	}
+	pthread_mutex_unlock(&g_zcopy_pool_mutex);
+}
+
+int
+nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
+{
+	assert(zcopy->iovcnt > 0);
+
+	if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_small_iov_num) {
+		zcopy->iovs = spdk_mempool_get(g_spdk_nvme_driver->zcopy_iov_small_pool);
+		zcopy->iovs_from_pool = true;
+	} else if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_large_iov_num) {
+		zcopy->iovs = spdk_mempool_get(g_spdk_nvme_driver->zcopy_iov_large_pool);
+		zcopy->iovs_from_pool = true;
+	}
+
+	if (spdk_unlikely(!zcopy->iovs)) {
+		SPDK_DEBUGLOG(nvme, "Failed to get %d iov from pool\n", zcopy->iovcnt);
+		zcopy->iovs_from_pool = false;
+		zcopy->iovs = malloc(sizeof(struct iovec) * zcopy->iovcnt);
+		if (!zcopy->iovs) {
+			zcopy->iovcnt = 0;
+			return -ENOMEM;
+		}
+		zcopy->iovs_from_malloc = true;
+	}
+
+	return 0;
+}
+
+/* If zcopy buffers have been allocated, firstly call spdk_nvme_request_free_zcopy_buffers */
+void
+nvme_request_put_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy)
+{
+	if (spdk_unlikely(!zcopy->iovs || zcopy->iovcnt == 0)) {
+		return;
+	}
+
+	if (spdk_likely(zcopy->iovs_from_pool)) {
+		zcopy->iovs_from_pool = false;
+		if (zcopy->iovcnt <= g_zcopy_pool_opts.zcopy_small_iov_num) {
+			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_small_pool, zcopy->iovs);
+		} else {
+			spdk_mempool_put(g_spdk_nvme_driver->zcopy_iov_large_pool, zcopy->iovs);
+		}
+	} else if (zcopy->iovs_from_malloc) {
+		zcopy->iovs_from_malloc = false;
+		free(zcopy->iovs);
+	}
+
+	zcopy->iovs = NULL;
+	zcopy->iovcnt = 0;
+}
+
+void
+nvme_request_free_zcopy(struct nvme_request *req)
+{
+	nvme_request_free_zcopy_buffers(req);
+	nvme_request_put_zcopy_iovs(&req->zcopy);
 }
 
 int
@@ -683,6 +918,9 @@ nvme_ctrlr_probe(const struct spdk_nvme_transport_id *trid,
 			probe_ctx->attach_fail_cb(probe_ctx->cb_ctx, trid, -ENODEV);
 			return -1;
 		}
+		ctrlr->construct_cb = probe_ctx->construct_cb;
+		ctrlr->lazy_fabric_connect = probe_ctx->lazy_fabric_connect;
+
 		ctrlr->remove_cb = probe_ctx->remove_cb;
 		ctrlr->cb_ctx = probe_ctx->cb_ctx;
 
@@ -747,8 +985,13 @@ nvme_ctrlr_poll_internal(struct spdk_nvme_ctrlr *ctrlr,
 	/*
 	 * Increase the ref count before calling attach_cb() as the user may
 	 * call nvme_detach() immediately.
+	 *
+	 * In case of lazy connect the ref is already taken before calling
+	 * construct_cb().
 	 */
-	nvme_ctrlr_proc_get_ref(ctrlr);
+	if (!ctrlr->lazy_fabric_connect) {
+		nvme_ctrlr_proc_get_ref(ctrlr);
+	}
 	nvme_robust_mutex_unlock(&g_spdk_nvme_driver->lock);
 
 	if (probe_ctx->attach_cb) {
@@ -903,6 +1146,7 @@ nvme_probe_ctx_init(struct spdk_nvme_probe_ctx *probe_ctx,
 		    const struct spdk_nvme_transport_id *trid,
 		    const struct spdk_nvme_ctrlr_opts *opts,
 		    void *cb_ctx,
+		    spdk_nvme_construct_cb construct_cb,
 		    spdk_nvme_probe_cb probe_cb,
 		    spdk_nvme_attach_cb attach_cb,
 		    spdk_nvme_attach_fail_cb attach_fail_cb,
@@ -919,6 +1163,8 @@ nvme_probe_ctx_init(struct spdk_nvme_probe_ctx *probe_ctx,
 		probe_ctx->attach_fail_cb = nvme_dummy_attach_fail_cb;
 	}
 	probe_ctx->remove_cb = remove_cb;
+	probe_ctx->construct_cb = construct_cb;
+	probe_ctx->lazy_fabric_connect = !!construct_cb;
 	TAILQ_INIT(&probe_ctx->init_ctrlrs);
 	TAILQ_INIT(&probe_ctx->failed_ctxs.head);
 }
@@ -1027,6 +1273,8 @@ nvme_ctrlr_opts_init(struct spdk_nvme_ctrlr_opts *opts,
 	SET_FIELD(dhchap_ctrlr_key);
 	SET_FIELD(dhchap_digests);
 	SET_FIELD(dhchap_dhgroups);
+	SET_FIELD(disable_io_split);
+	SET_FIELD(vlan_tag);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -1101,6 +1349,7 @@ spdk_nvme_trid_populate_transport(struct spdk_nvme_transport_id *trid,
 		trstring = SPDK_NVME_TRANSPORT_NAME_VFIOUSER;
 		break;
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		trstring = SPDK_NVME_TRANSPORT_NAME_CUSTOM;
 		break;
 	default:
@@ -1156,7 +1405,13 @@ spdk_nvme_transport_id_parse_trtype(enum spdk_nvme_transport_type *trtype, const
 	} else if (strcasecmp(str, "VFIOUSER") == 0) {
 		*trtype = SPDK_NVME_TRANSPORT_VFIOUSER;
 	} else {
-		*trtype = SPDK_NVME_TRANSPORT_CUSTOM;
+		const struct spdk_nvme_transport *transport = nvme_get_transport(str);
+
+		if (transport) {
+			*trtype = nvme_transport_get_trtype(transport);
+		} else {
+			return -ENOENT;
+		}
 	}
 	return 0;
 }
@@ -1176,6 +1431,7 @@ spdk_nvme_transport_id_trtype_str(enum spdk_nvme_transport_type trtype)
 	case SPDK_NVME_TRANSPORT_VFIOUSER:
 		return "VFIOUSER";
 	case SPDK_NVME_TRANSPORT_CUSTOM:
+	case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
 		return "CUSTOM";
 	default:
 		return NULL;
@@ -1558,7 +1814,7 @@ spdk_nvme_scan_attached(const struct spdk_nvme_transport_id *trid)
 		return -ENOMEM;
 	}
 
-	nvme_probe_ctx_init(probe_ctx, trid, NULL, NULL, NULL, NULL, NULL, NULL);
+	nvme_probe_ctx_init(probe_ctx, trid, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 
 	nvme_robust_mutex_lock(&g_spdk_nvme_driver->lock);
 	rc = nvme_transport_ctrlr_scan_attached(probe_ctx);
@@ -1599,7 +1855,7 @@ spdk_nvme_probe_async_ext(const struct spdk_nvme_transport_id *trid,
 		return NULL;
 	}
 
-	nvme_probe_ctx_init(probe_ctx, trid, NULL, cb_ctx, probe_cb, attach_cb, attach_fail_cb,
+	nvme_probe_ctx_init(probe_ctx, trid, NULL, cb_ctx, NULL, probe_cb, attach_cb, attach_fail_cb,
 			    remove_cb);
 	rc = nvme_probe_internal(probe_ctx, false);
 	if (rc != 0) {
@@ -1652,10 +1908,11 @@ spdk_nvme_probe_poll_async(struct spdk_nvme_probe_ctx *probe_ctx)
 	return -EAGAIN;
 }
 
-struct spdk_nvme_probe_ctx *
-spdk_nvme_connect_async(const struct spdk_nvme_transport_id *trid,
-			const struct spdk_nvme_ctrlr_opts *opts,
-			spdk_nvme_attach_cb attach_cb)
+static struct spdk_nvme_probe_ctx *
+nvme_connect_async(const struct spdk_nvme_transport_id *trid,
+		   const struct spdk_nvme_ctrlr_opts *opts,
+		   spdk_nvme_construct_cb construct_cb,
+		   spdk_nvme_attach_cb attach_cb)
 {
 	int rc;
 	spdk_nvme_probe_cb probe_cb = NULL;
@@ -1675,7 +1932,8 @@ spdk_nvme_connect_async(const struct spdk_nvme_transport_id *trid,
 		probe_cb = nvme_connect_probe_cb;
 	}
 
-	nvme_probe_ctx_init(probe_ctx, trid, opts, (void *)opts, probe_cb, attach_cb, NULL, NULL);
+	nvme_probe_ctx_init(probe_ctx, trid, opts, (void *)opts, construct_cb, probe_cb, attach_cb, NULL,
+			    NULL);
 	rc = nvme_probe_internal(probe_ctx, true);
 	if (rc != 0) {
 		free(probe_ctx);
@@ -1736,6 +1994,23 @@ nvme_get_default_hostnqn(char *buf, int len)
 	}
 
 	return 0;
+}
+
+struct spdk_nvme_probe_ctx *
+spdk_nvme_connect_async(const struct spdk_nvme_transport_id *trid,
+			const struct spdk_nvme_ctrlr_opts *opts,
+			spdk_nvme_attach_cb attach_cb)
+{
+	return nvme_connect_async(trid, opts, NULL, attach_cb);
+}
+
+struct spdk_nvme_probe_ctx *
+spdk_nvme_connect_lazy(const struct spdk_nvme_transport_id *trid,
+		       const struct spdk_nvme_ctrlr_opts *opts,
+		       spdk_nvme_construct_cb construct_cb,
+		       spdk_nvme_attach_cb attach_cb)
+{
+	return nvme_connect_async(trid, opts, construct_cb, attach_cb);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(nvme)

@@ -8,6 +8,7 @@
 	spdk_thread_create;
 	spdk_thread_get_app_thread;
 	spdk_thread_is_app_thread;
+	spdk_thread_get_next_thread;
 	spdk_set_thread;
 	spdk_thread_exit;
 	spdk_thread_is_running;
@@ -56,6 +57,8 @@
 	spdk_io_channel_iter_get_channel;
 	spdk_io_channel_iter_get_ctx;
 	spdk_for_each_channel_continue;
+	spdk_io_channel_send_msg;
+	spdk_for_each_channel_broadcast;
 	spdk_interrupt_register;
 	spdk_interrupt_register_for_events;
 	spdk_interrupt_register_ext;
@@ -84,6 +87,7 @@
 	spdk_iobuf_get;
 	spdk_iobuf_put;
 	spdk_iobuf_get_stats;
+	spdk_thread_post_poller_handler_register;
 
 	# internal functions in spdk_internal/thread.h
 	spdk_poller_get_name;

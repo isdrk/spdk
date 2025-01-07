@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2022 Intel Corporation.
- *   Copyright (c) 2022, 2023 NVIDIA CORPORATION & AFFILIATES
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES
  *   All rights reserved.
  */
 
@@ -102,6 +102,8 @@ sw_accel_supports_opcode(enum spdk_accel_opcode opc)
 	case SPDK_ACCEL_OPC_COMPARE:
 	case SPDK_ACCEL_OPC_CRC32C:
 	case SPDK_ACCEL_OPC_COPY_CRC32C:
+	case SPDK_ACCEL_OPC_CHECK_CRC32C:
+	case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
 	case SPDK_ACCEL_OPC_COMPRESS:
 	case SPDK_ACCEL_OPC_DECOMPRESS:
 	case SPDK_ACCEL_OPC_ENCRYPT:
@@ -192,6 +194,14 @@ static void
 _sw_accel_crc32cv(uint32_t *crc_dst, struct iovec *iov, uint32_t iovcnt, uint32_t seed)
 {
 	*crc_dst = spdk_crc32c_iov_update(iov, iovcnt, ~seed);
+}
+
+static int
+_sw_accel_check_crc32cv(uint32_t *expected_crc, struct iovec *iov, uint32_t iovcnt, uint32_t seed)
+{
+	uint32_t actual_crc = spdk_crc32c_iov_update(iov, iovcnt, ~seed);
+
+	return actual_crc == *expected_crc ? 0 : -EINVAL;
 }
 
 static int
@@ -742,6 +752,16 @@ sw_accel_submit_tasks(struct spdk_io_channel *ch, struct spdk_accel_task *accel_
 					    accel_task->s.iovs, accel_task->s.iovcnt);
 			_sw_accel_crc32cv(accel_task->crc_dst, accel_task->s.iovs,
 					  accel_task->s.iovcnt, accel_task->seed);
+			break;
+		case SPDK_ACCEL_OPC_CHECK_CRC32C:
+			rc = _sw_accel_check_crc32cv(accel_task->crc_dst, accel_task->s.iovs, accel_task->s.iovcnt,
+						     accel_task->seed);
+			break;
+		case SPDK_ACCEL_OPC_COPY_CHECK_CRC32C:
+			_sw_accel_copy_iovs(accel_task->d.iovs, accel_task->d.iovcnt,
+					    accel_task->s.iovs, accel_task->s.iovcnt);
+			rc = _sw_accel_check_crc32cv(accel_task->crc_dst, accel_task->s.iovs, accel_task->s.iovcnt,
+						     accel_task->seed);
 			break;
 		case SPDK_ACCEL_OPC_COMPRESS:
 			rc = _sw_accel_compress(sw_ch, accel_task);

@@ -1,6 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2016 Intel Corporation.
-#  Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
+#  Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -31,9 +31,6 @@ endif
 
 ifeq ($(CONFIG_CRYPTO),y)
 BLOCKDEV_MODULES_LIST += bdev_crypto
-ifeq ($(CONFIG_CRYPTO_MLX5),y)
-BLOCKDEV_MODULES_PRIVATE_LIBS += -lmlx5 -libverbs
-endif
 endif
 
 ifeq ($(CONFIG_OCF),y)
@@ -103,6 +100,10 @@ SOCK_MODULES_LIST += sock_uring
 endif
 endif
 
+ifeq ($(CONFIG_XLIO),y)
+SOCK_MODULES_LIST += sock_xlio
+endif
+
 ACCEL_MODULES_LIST = accel_error accel_ioat ioat
 ifeq ($(CONFIG_IDXD),y)
 ACCEL_MODULES_LIST += accel_dsa accel_iaa idxd
@@ -134,8 +135,11 @@ endif
 
 EVENT_BDEV_SUBSYSTEM = event_bdev event_accel event_vmd event_sock event_iobuf
 
+FSDEV_MODULES_LIST = fsdev
+FSDEV_MODULES_PRIVATE_LIBS = $(shell pkg-config --libs glib-2.0)
+
 ifeq ($(CONFIG_AIO_FSDEV), y)
-FSDEV_MODULES_LIST = fsdev_aio
+FSDEV_MODULES_LIST += fsdev_aio
 endif
 
 ALL_MODULES_LIST = $(BLOCKDEV_MODULES_LIST) $(ACCEL_MODULES_LIST) $(SCHEDULER_MODULES_LIST) $(SOCK_MODULES_LIST)

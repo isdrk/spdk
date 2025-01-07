@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #  SPDX-License-Identifier: BSD-3-Clause
-#  Copyright (c) 2024, NVIDIA CORPORATION & AFFILIATES.
+#  Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -46,8 +46,8 @@ $accelperf -c <(gen_accel_mlx5_json) -w crc32c -t 5 -m 0x3 -y -C 77 -o 524288 -q
 $accelperf -c <(gen_accel_mlx5_json) -w copy_crc32c -t 5 -m 0xf -y -C 1 -o 4096 -q 64
 $accelperf -c <(gen_accel_mlx5_json) -w copy_crc32c -t 5 -m 0xf -y -C 33 -o 4096 -q 64
 $accelperf -c <(gen_accel_mlx5_json) -w copy_crc32c -t 5 -m 0xf -y -C 33 -o 131072 -q 128
-# accel perf consumes to much memory in this test, lower qd and number of cores
-$accelperf -c <(gen_accel_mlx5_json) -w copy_crc32c -t 5 -m 0x3 -y -C 77 -o 524288 -q 64
+# accel perf consumes to much memory in this test, use lower qd and number of cores
+$accelperf -c <(gen_accel_mlx5_json) -w copy_crc32c -t 5 -m 0x3 -y -C 77 -o 524288 -q 32
 
 # Test with small amount of resources
 $accelperf -c <(gen_accel_mlx5_json 16 2047) -w crc32c -t 5 -m 0x3 -y -C 17 -o 131072 -q 128

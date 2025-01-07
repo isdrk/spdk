@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019-2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
@@ -138,6 +138,9 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_options_decoders[] = 
 	{"rdma_cm_event_timeout_ms", offsetof(struct spdk_bdev_nvme_opts, rdma_cm_event_timeout_ms), spdk_json_decode_uint16, true},
 	{"dhchap_digests", offsetof(struct spdk_bdev_nvme_opts, dhchap_digests), rpc_decode_digest_array, true},
 	{"dhchap_dhgroups", offsetof(struct spdk_bdev_nvme_opts, dhchap_dhgroups), rpc_decode_dhgroup_array, true},
+	{"poll_group_requests", offsetof(struct spdk_bdev_nvme_opts, poll_group_requests), spdk_json_decode_uint32, true},
+	{"small_cache_size", offsetof(struct spdk_bdev_nvme_opts, small_cache_size), spdk_json_decode_uint32, true},
+	{"large_cache_size", offsetof(struct spdk_bdev_nvme_opts, large_cache_size), spdk_json_decode_uint32, true},
 	{"rdma_umr_per_io", offsetof(struct spdk_bdev_nvme_opts, rdma_umr_per_io), spdk_json_decode_bool, true},
 };
 
@@ -1180,6 +1183,7 @@ rpc_bdev_nvme_rdma_stats(struct spdk_json_write_ctx *w,
 		spdk_json_write_named_uint64(w, "send_doorbell_updates", device_stats->send_doorbell_updates);
 		spdk_json_write_named_uint64(w, "total_recv_wrs", device_stats->total_recv_wrs);
 		spdk_json_write_named_uint64(w, "recv_doorbell_updates", device_stats->recv_doorbell_updates);
+		spdk_json_write_named_uint64(w, "accel_sequences_executed", device_stats->accel_sequences_executed);
 		spdk_json_write_object_end(w);
 	}
 	spdk_json_write_array_end(w);
@@ -1212,6 +1216,12 @@ rpc_bdev_nvme_tcp_stats(struct spdk_json_write_ctx *w,
 	spdk_json_write_named_uint64(w, "nvme_completions", stat->tcp.nvme_completions);
 	spdk_json_write_named_uint64(w, "queued_requests", stat->tcp.queued_requests);
 	spdk_json_write_named_uint64(w, "submitted_requests", stat->tcp.submitted_requests);
+	spdk_json_write_named_uint64(w, "outstanding_reqs", stat->tcp.outstanding_reqs);
+	spdk_json_write_named_uint64(w, "received_data_pdus", stat->tcp.received_data_pdus);
+	spdk_json_write_named_uint64(w, "received_data_iovs", stat->tcp.received_data_iovs);
+	spdk_json_write_named_uint64(w, "max_data_iovs_per_pdu", stat->tcp.max_data_iovs_per_pdu);
+	spdk_json_write_named_uint64(w, "recv_ddgsts", stat->tcp.recv_ddgsts);
+	spdk_json_write_named_uint64(w, "send_ddgsts", stat->tcp.send_ddgsts);
 }
 
 static void
@@ -1242,7 +1252,11 @@ rpc_bdev_nvme_stats_per_channel(struct spdk_io_channel_iter *i)
 	for (j = 0; j < stat->num_transports; j++) {
 		tr_stat = stat->transport_stat[j];
 		spdk_json_write_object_begin(ctx->w);
-		spdk_json_write_named_string(ctx->w, "trname", spdk_nvme_transport_id_trtype_str(tr_stat->trtype));
+		if (!strlen(tr_stat->trname)) {
+			spdk_json_write_named_string(ctx->w, "trname", spdk_nvme_transport_id_trtype_str(tr_stat->trtype));
+		} else {
+			spdk_json_write_named_string(ctx->w, "trname", tr_stat->trname);
+		}
 
 		switch (stat->transport_stat[j]->trtype) {
 		case SPDK_NVME_TRANSPORT_RDMA:
@@ -1254,6 +1268,11 @@ rpc_bdev_nvme_stats_per_channel(struct spdk_io_channel_iter *i)
 			break;
 		case SPDK_NVME_TRANSPORT_TCP:
 			rpc_bdev_nvme_tcp_stats(ctx->w, tr_stat);
+			break;
+		case SPDK_NVME_TRANSPORT_CUSTOM_FABRICS:
+			if (strcasecmp(tr_stat->trname, "NVDA_TCP") == 0) {
+				rpc_bdev_nvme_tcp_stats(ctx->w, tr_stat);
+			}
 			break;
 		default:
 			SPDK_WARNLOG("Can't handle trtype %d %s\n", tr_stat->trtype,

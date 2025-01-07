@@ -50,6 +50,7 @@
 <string.h>
 <strings.h>
 <stropts.h>
+<sys/fanotify.h>
 <sys/ipc.h>
 <sys/mman.h>
 <sys/msg.h>

@@ -89,6 +89,30 @@ if ! echo "$response" | grep -q "$message"; then
 	exit 1
 fi
 
+# send message using hello_sock client bound to specific address
+message="**MESSAGE:This is a test message from the client**"
+response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -a $TARGET_IP)
+
+if ! echo "$response" | grep -q "$message"; then
+	exit 1
+fi
+
+# send message using hello_sock client bound to specific port
+message="**MESSAGE:This is a test message from the client**"
+response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -b $((ISCSI_PORT + 1)))
+
+if ! echo "$response" | grep -q "$message"; then
+	exit 1
+fi
+
+# send message using hello_sock client bound to specific address and port
+message="**MESSAGE:This is a test message from the client**"
+response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -a $TARGET_IP -b $((ISCSI_PORT + 1)))
+
+if ! echo "$response" | grep -q "$message"; then
+	exit 1
+fi
+
 trap '-' SIGINT SIGTERM EXIT
 # NOTE: socat returns code 143 on SIGINT
 killprocess $server_pid || true

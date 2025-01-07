@@ -1,6 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
-#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
+#  Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -24,7 +24,7 @@ DEPDIRS-idxd := log util
 DEPDIRS-sock := log $(JSON_LIBS) trace
 DEPDIRS-util := log
 DEPDIRS-vmd := log util
-DEPDIRS-dma := log
+DEPDIRS-dma := log thread
 DEPDIRS-trace_parser := log
 ifeq ($(OS),Linux)
 DEPDIRS-vfio_user := log
@@ -44,12 +44,16 @@ DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 DEPDIRS-keyring := log util $(JSON_LIBS)
 
-DEPDIRS-nvme := log keyring sock util trace dma
+DEPDIRS-nvme := log keyring sock util trace dma thread
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-nvme += vfio_user
 endif
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-nvme += rdma_provider rdma_utils
+endif
+ifeq ($(CONFIG_XLIO),y)
+DEPDIRS-nvme += xlio accel
+DEPDIRS-xlio += log
 endif
 
 DEPDIRS-blob := log util thread dma trace
@@ -76,7 +80,7 @@ DEPDIRS-nbd := log util thread $(JSON_LIBS) bdev
 ifeq ($(CONFIG_UBLK),y)
 DEPDIRS-ublk := log util thread $(JSON_LIBS) bdev
 endif
-DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev keyring
+DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev keyring dma
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-nvmf += rdma_provider rdma_utils
 endif
@@ -88,8 +92,9 @@ DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
-DEPDIRS-fsdev := log thread util $(JSON_LIBS) notify
-DEPDIRS-fuse_dispatcher := log thread util fsdev
+DEPDIRS-fsdev := log thread util $(JSON_LIBS) notify dma
+DEPDIRS-fuse_dispatcher := log thread util fsdev rmem
+DEPDIRS-rmem := log $(JSON_LIBS)
 
 # ------------------------------------------------------------------------
 # Start module/ directory - This section extends the organizational pattern from
@@ -118,7 +123,7 @@ DEPDIRS-accel_dpdk_compressdev := log thread $(JSON_LIBS) accel util
 DEPDIRS-accel_error := accel $(JSON_LIBS) thread util
 
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma_utils util
+DEPDIRS-accel_mlx5 := accel thread log mlx5 rdma_utils util dma json jsonrpc rpc
 endif
 
 # module/env_dpdk
@@ -127,6 +132,7 @@ DEPDIRS-env_dpdk_rpc := $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util thread trace
 DEPDIRS-sock_uring := log sock util thread trace
+DEPDIRS-sock_xlio := log sock util xlio
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util json
@@ -194,10 +200,15 @@ DEPDIRS-event_iscsi := init iscsi event_scheduler event_scsi event_sock
 DEPDIRS-event_vhost_blk := init vhost
 DEPDIRS-event_vhost_scsi := init vhost event_scheduler event_scsi
 DEPDIRS-event_sock := init sock log
+ifeq ($(CONFIG_XLIO),y)
+DEPDIRS-event_sock += event_xlio
+DEPDIRS-event_xlio := init xlio
+endif
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
 DEPDIRS-event_fsdev := init fsdev
+DEPDIRS-event_rmem := init rmem
 
 # module/vfu_device
 

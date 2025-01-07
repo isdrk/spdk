@@ -1,12 +1,13 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring
+DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring rmem
 
 ifeq ($(OS),Linux)
 DIRS-y += nbd
@@ -15,9 +16,12 @@ DIRS-y += ublk
 endif
 endif
 
+DIRS-$(CONFIG_XLIO) += xlio
+
 DIRS-$(CONFIG_VHOST) += vhost_blk vhost_scsi
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
 DIRS-$(CONFIG_FSDEV) += fsdev
+DIRS-$(CONFIG_RDMA) += rdma_provider
 
 # These dependencies are not based specifically on symbols, but rather
 # the subsystem dependency tree defined within the event subsystem C files
@@ -31,6 +35,9 @@ DEPDIRS-ublk := bdev
 DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost_scsi := scsi
+ifeq ($(CONFIG_XLIO),y)
+DEPDIRS-sock := xlio
+endif
 
 .PHONY: all clean $(DIRS-y)
 

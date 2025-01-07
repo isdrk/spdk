@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   All rights reserved.
  */
 
@@ -64,6 +65,12 @@ spdk_env_get_next_core(uint32_t prev_core)
 		return UINT32_MAX;
 	}
 	return lcore;
+}
+
+uint32_t
+spdk_env_get_core_index(uint32_t core_id)
+{
+	return (uint32_t)rte_lcore_index(core_id);
 }
 
 int32_t

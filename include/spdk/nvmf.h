@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2018-2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021, 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -110,8 +110,12 @@ struct spdk_nvmf_transport_opts {
 	uint32_t ack_timeout;
 	/* Size of RDMA data WR pool */
 	uint32_t data_wr_pool_size;
+	/* Maximum SGL Data Block Descriptors
+	 * Value 0 means use default transport-specific value, unlimited value is not supported. The transport may
+	 * limit the configured msdbd by implementation-specific maximum value or ignore this parameter */
+	uint8_t msdbd;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 72, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 73, "Incorrect size");
 
 struct spdk_nvmf_listen_opts {
 	/**
@@ -1390,6 +1394,17 @@ spdk_nvme_transport_type_t spdk_nvmf_get_transport_type(struct spdk_nvmf_transpo
  * \return the transport name for the given transport
  */
 const char *spdk_nvmf_get_transport_name(struct spdk_nvmf_transport *transport);
+
+/**
+ * Parse the string representation of a transport ID transport type.
+ *
+ * \param trtype Output transport type (allocated by caller).
+ * \param str Input string representation of transport type (e.g. "PCIe", "RDMA").
+ *
+ * \return 0 if parsing was successful and trtype is filled out, or negated errno
+ * values on failure.
+ */
+int spdk_nvmf_transport_id_parse_trtype(enum spdk_nvme_transport_type *trtype, const char *str);
 
 /**
  * Function to be called once transport add is complete

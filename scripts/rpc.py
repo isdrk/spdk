@@ -3,7 +3,7 @@
 #  Copyright (C) 2016 Intel Corporation
 #  All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
-#  Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 import logging
@@ -60,7 +60,8 @@ if __name__ == "__main__":
                                 pipes and can be used as a faster way to send RPC commands. If enabled, rpc.py \
                                 must be executed without any other parameters.")
     parser.set_defaults(is_server=False)
-    parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+    parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                        help='Module name of plugin with additional RPC commands. May be specified multiple times.')
     subparsers = parser.add_subparsers(help='RPC methods', dest='called_rpc_name', metavar='')
 
     def framework_start_init(args):
@@ -93,7 +94,7 @@ if __name__ == "__main__":
 
     def save_config(args):
         rpc.save_config(args.client,
-                        sys.stdout,
+                        args.output,
                         indent=args.indent,
                         subsystems=args.subsystems)
 
@@ -102,6 +103,7 @@ if __name__ == "__main__":
     p.add_argument('-i', '--indent', help="""Indent level. Value less than 0 mean compact mode. Default indent level is 2.
     """, type=int, default=2)
     p.add_argument('-s', '--subsystems', help="""Comma-separated list of subsystems (and their dependencies) to save""")
+    p.add_argument('-o', '--output', help="""Output file. By default, output to stdout.""", default=sys.stdout)
     p.set_defaults(func=save_config)
 
     def load_config(args):
@@ -229,7 +231,10 @@ if __name__ == "__main__":
                                   bdev_io_cache_size=args.bdev_io_cache_size,
                                   bdev_auto_examine=args.bdev_auto_examine,
                                   iobuf_small_cache_size=args.iobuf_small_cache_size,
-                                  iobuf_large_cache_size=args.iobuf_large_cache_size)
+                                  iobuf_large_cache_size=args.iobuf_large_cache_size,
+                                  qos_io_slice=args.qos_io_slice,
+                                  qos_byte_slice=args.qos_byte_slice,
+                                  qos_timeslice_us=args.qos_timeslice_us)
 
     p = subparsers.add_parser('bdev_set_options',
                               help="""Set options of bdev subsystem""")
@@ -240,6 +245,9 @@ if __name__ == "__main__":
     group.add_argument('-d', '--disable-auto-examine', dest='bdev_auto_examine', help='Not allow to auto examine', action='store_false')
     p.add_argument('--iobuf-small-cache-size', help='Size of the small iobuf per thread cache', type=int)
     p.add_argument('--iobuf-large-cache-size', help='Size of the large iobuf per thread cache', type=int)
+    p.add_argument('--qos-io-slice', help='QoS IO slice allocated from global pool to local cache', type=int)
+    p.add_argument('--qos-byte-slice', help='QoS byte slice allocated from global pool to local cache', type=int)
+    p.add_argument('--qos-timeslice-us', help='QoS timeslice in microseconds', type=int)
     p.set_defaults(bdev_auto_examine=True)
     p.set_defaults(func=bdev_set_options)
 
@@ -425,7 +433,9 @@ if __name__ == "__main__":
                                                md_interleave=args.md_interleave,
                                                dif_type=args.dif_type,
                                                dif_is_head_of_md=args.dif_is_head_of_md,
-                                               dif_pi_format=args.dif_pi_format))
+                                               dif_pi_format=args.dif_pi_format,
+                                               enable_io_channel_weight=args.enable_io_channel_weight,
+                                               disable_accel_support=args.disable_accel_support))
     p = subparsers.add_parser('bdev_malloc_create', help='Create a bdev with malloc backend')
     p.add_argument('-b', '--name', help="Name of the bdev")
     p.add_argument('-u', '--uuid', help="UUID of the bdev (optional)")
@@ -447,6 +457,8 @@ if __name__ == "__main__":
     p.add_argument('-f', '--dif-pi-format', type=int, choices=[0, 1, 2],
                    help='Protection infromation format. Parameter --dif-type needs to be set together.'
                         '0=16b Guard PI, 1=32b Guard PI, 2=64b Guard PI. Default=0.')
+    p.add_argument('--enable-io-channel-weight', action='store_true', help='Enable IO channel weight')
+    p.add_argument('--disable-accel-support', action='store_true', help='Don\'t report support of accel sequence')
     p.set_defaults(func=bdev_malloc_create)
 
     def bdev_malloc_delete(args):
@@ -627,6 +639,9 @@ if __name__ == "__main__":
                                        rdma_cm_event_timeout_ms=args.rdma_cm_event_timeout_ms,
                                        dhchap_digests=args.dhchap_digests,
                                        dhchap_dhgroups=args.dhchap_dhgroups,
+                                       poll_group_requests=args.poll_group_requests,
+                                       small_cache_size=args.small_cache_size,
+                                       large_cache_size=args.large_cache_size,
                                        rdma_umr_per_io=args.rdma_umr_per_io)
 
     p = subparsers.add_parser('bdev_nvme_set_options',
@@ -705,7 +720,10 @@ if __name__ == "__main__":
                    action='store_true')
     p.add_argument('--allow-accel-sequence',
                    help='''Allow NVMe bdevs to advertise support for accel sequences if the
-                   controller also supports them.''', action='store_true')
+                   controller also supports them.''', action='store_true', dest='allow_accel_sequence', default=None)
+    p.add_argument('--disallow-accel-sequence',
+                   help='''Disallow NVMe bdevs to advertise support for accel sequences even if the controller supports them''',
+                   action='store_false', dest='allow_accel_sequence')
     p.add_argument('--rdma-max-cq-size',
                    help='The maximum size of a rdma completion queue. Default: 0 (unlimited)', type=int)
     p.add_argument('--rdma-cm-event-timeout-ms',
@@ -714,6 +732,10 @@ if __name__ == "__main__":
                    type=lambda d: d.split(','))
     p.add_argument('--dhchap-dhgroups', help='Comma-separated list of allowed DH-HMAC-CHAP DH groups',
                    type=lambda d: d.split(','))
+    p.add_argument('--poll-group-requests',
+                   help='The number of requests allocated for each NVMe poll group. Default: 0', type=int)
+    p.add_argument('--small-cache-size', help='The number of small iobuf elements in cache. Default: 128', type=int)
+    p.add_argument('--large-cache-size', help='The number of large iobuf elements in cache. Default: 128', type=int)
     p.add_argument('--enable-rdma-umr-per-io',
                    help='''Enable scatter-gather RDMA Memory Region per IO if supported by the system.''',
                    action='store_true', dest='rdma_umr_per_io')
@@ -1350,14 +1372,14 @@ if __name__ == "__main__":
                    help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
                    type=int)
     p.add_argument('--rw-mbytes-per-sec',
-                   help="R/W megabytes per second limit (>=1, example: 100). 0 means unlimited.",
-                   type=int)
+                   help="R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
     p.add_argument('--r-mbytes-per-sec',
-                   help="Read megabytes per second limit (>=1, example: 100). 0 means unlimited.",
-                   type=int)
+                   help="Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
     p.add_argument('--w-mbytes-per-sec',
-                   help="Write megabytes per second limit (>=1, example: 100). 0 means unlimited.",
-                   type=int)
+                   help="Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
     p.set_defaults(func=bdev_set_qos_limit)
 
     def bdev_error_inject_error(args):
@@ -2652,6 +2674,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('--ack-timeout', help='ACK timeout in milliseconds', type=int)
     p.add_argument('--data-wr-pool-size', help='RDMA data WR pool size. Relevant only for RDMA transport', type=int)
     p.add_argument('--disable-command-passthru', help='Disallow command passthru', action='store_true')
+    p.add_argument('--msdbd', help='Set MSDBD value to be used by transport. Some transports may ignore this config', type=int)
     p.set_defaults(func=nvmf_create_transport)
 
     def nvmf_get_transports(args):
@@ -3024,6 +3047,20 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                               help="""Print subsystems array in initialization order. Each subsystem
     entry contain (unsorted) array of subsystems it depends on.""")
     p.set_defaults(func=framework_get_subsystems)
+
+    def framework_disable_subsystem(args):
+        print_dict(rpc.subsystem.framework_disable_subsystem(args.client, args.name))
+
+    p = subparsers.add_parser('framework_disable_subsystem', help="""Disable a subsystem so that it does not consume resources""")
+    p.add_argument('name', help='Name of subsystem to disable')
+    p.set_defaults(func=framework_disable_subsystem)
+
+    def framework_enable_subsystem(args):
+        print_dict(rpc.subsystem.framework_enable_subsystem(args.client, args.name))
+
+    p = subparsers.add_parser('framework_enable_subsystem', help="""Enable a subsystem that was previously disabled""")
+    p.add_argument('name', help='Name of subsystem to enable')
+    p.set_defaults(func=framework_enable_subsystem)
 
     def framework_get_config(args):
         print_dict(rpc.subsystem.framework_get_config(args.client, args.name))
@@ -3411,19 +3448,40 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def mlx5_scan_accel_module(args):
         rpc.mlx5.mlx5_scan_accel_module(args.client,
                                         qp_size=args.qp_size,
+                                        cq_size=args.cq_size,
                                         num_requests=args.num_requests,
-                                        allowed_devs=args.allowed_devs,
                                         crypto_split_blocks=args.crypto_split_blocks,
-                                        enable_driver=args.enable_driver)
+                                        allowed_devs=args.allowed_devs,
+                                        merge=args.merge,
+                                        qp_per_domain=args.qp_per_domain,
+                                        enable_driver=args.enable_driver,
+                                        enable_module=args.enable_module,
+                                        disable_signature=args.disable_signature,
+                                        disable_crypto=args.disable_crypto)
 
     p = subparsers.add_parser('mlx5_scan_accel_module', help='Enable mlx5 accel module.')
     p.add_argument('-q', '--qp-size', type=int, help='QP size')
+    p.add_argument('-c', '--cq-size', type=int, help='CQ size')
     p.add_argument('-r', '--num-requests', type=int, help='Size of the shared requests pool')
+    p.add_argument('-s', '--split-mb-blocks', type=int, dest='crypto_split_blocks',
+                   help="Number of data blocks to be processed in 1 crypto UMR. DEPRECATED, use --crypto-split-blocks")
+    p.add_argument('--crypto-split-blocks', type=int, dest='crypto_split_blocks',
+                   help="Number of data blocks to be processed in 1 crypto UMR.")
     p.add_argument('-d', '--allowed-devs', help="Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1")
-    p.add_argument('-s', '--crypto-split-blocks', type=int,
-                   help="Number of data blocks to be processed in 1 crypto UMR. [0-65535], 0 means no limit")
+    p.add_argument('--allowed-crypto-devs', dest='allowed_devs', help="[DEPRECATED] Comma separated list of allowed crypto device names")
+    p.add_argument('-m', '--merge', dest='merge', action='store_true', help="Merge tasks in the sequence when possible", default=None,)
+    p.add_argument('-f', '--qp-per-domain', dest='qp_per_domain', action='store_true', default=True,
+                   help="Use dedicated qpair per memory domain per channel")
+    p.add_argument('-n', '--qp-per-channel', dest='qp_per_domain', action='store_false', default=None,
+                   help="Use single QP per channel")
     p.add_argument('-e', '--enable-driver', dest='enable_driver', action='store_true', default=None,
-                   help="Enable mlx5 platform driver. Note: the driver supports reduced scope of operations, enable with care")
+                   help="Enable accel mlx5 platform driver")
+    p.add_argument('--disable-module', dest='enable_module', action='store_false', default=None,
+                   help="Disable accel mlx5 module")
+    p.add_argument('--disable-signature', dest='disable_signature', action='store_true', default=None,
+                   help="Disable signature operations support")
+    p.add_argument('--disable-crypto', dest='disable_crypto', action='store_true', default=None,
+                   help="Disable crypto operations support")
     p.set_defaults(func=mlx5_scan_accel_module)
 
     def accel_mlx5_dump_stats(args):
@@ -3683,10 +3741,37 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('fsdev-io-cache-size', help='Size of fsdev IO objects cache per thread', type=int)
     p.set_defaults(func=fsdev_set_opts)
 
+    def fsdev_get_fsdevs(args):
+        print_dict(rpc.fsdev.fsdev_get_fsdevs(args.client, name=args.name))
+
+    p = subparsers.add_parser('fsdev_get_fsdevs',
+                              help='Display current fsdev list or required fsdev')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.set_defaults(func=fsdev_get_fsdevs)
+
+    def fsdev_get_iostat(args):
+        print_json(rpc.fsdev.fsdev_get_iostat(args.client, name=args.name, per_channel=args.per_channel))
+
+    p = subparsers.add_parser('fsdev_get_iostat',
+                              help='Display current I/O statistics of all the fsdevs or specified fsdev.')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.add_argument('-c', '--per-channel', default=False, dest='per_channel', help='Display per channel IO stats for specified device',
+                   action='store_true', required=False)
+    p.set_defaults(func=fsdev_get_iostat)
+
+    def fsdev_reset_iostat(args):
+        print(rpc.fsdev.fsdev_reset_iostat(args.client, name=args.name))
+
+    p = subparsers.add_parser('fsdev_reset_iostat', help='Reset the I/O statictics for all the fsdevs or specified fsdev')
+    p.add_argument('-f', '--name', help="Name of the fsdev. Example: aio0", required=False)
+    p.set_defaults(func=fsdev_reset_iostat)
+
     def fsdev_aio_create(args):
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
-                                         max_write=args.max_write, skip_rw=args.skip_rw))
+                                         max_xfer_size=args.max_xfer_size, skip_rw=args.skip_rw,
+                                         max_readahead=args.max_readahead,
+                                         enable_notifications=args.enable_notifications))
 
     p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
     p.add_argument('name', help='Filesystem name. Example: aio0.')
@@ -3701,10 +3786,11 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     group.add_argument('--disable-writeback-cache', help='Disable writeback cache', dest='enable_writeback_cache', action='store_false',
                        default=None)
 
-    p.add_argument('-w', '--max-write', help='Max write size in bytes', type=int)
-
+    p.add_argument('-w', '--max-xfer-size', help='Max data transfer size in bytes', type=int)
+    p.add_argument('-r', '--max-readahead', help='Max readahead size in bytes', type=int)
     p.add_argument('--skip-rw', dest='skip_rw', help="Do not process read or write commands. This is used for testing.",
                    action='store_true', default=None)
+    p.add_argument('--enable-notifications', help="Enable notifications.", action='store_true', default=None)
 
     p.set_defaults(func=fsdev_aio_create)
 
@@ -3736,7 +3822,15 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                        enable_zerocopy_send_client=args.enable_zerocopy_send_client,
                                        zerocopy_threshold=args.zerocopy_threshold,
                                        tls_version=args.tls_version,
-                                       enable_ktls=args.enable_ktls)
+                                       enable_ktls=args.enable_ktls,
+                                       flush_batch_timeout=args.flush_batch_timeout,
+                                       flush_batch_iovcnt_threshold=args.flush_batch_iovcnt_threshold,
+                                       flush_batch_bytes_threshold=args.flush_batch_bytes_threshold,
+                                       enable_zerocopy_recv=args.enable_zerocopy_recv,
+                                       enable_tcp_nodelay=args.enable_tcp_nodelay,
+                                       buffers_pool_size=args.buffers_pool_size,
+                                       packets_pool_size=args.packets_pool_size,
+                                       enable_early_init=args.enable_early_init)
 
     p = subparsers.add_parser('sock_impl_set_options', help="""Set options of socket layer implementation""")
     p.add_argument('-i', '--impl', help='Socket implementation name, e.g. posix', required=True)
@@ -3768,6 +3862,29 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
                    enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
                    zerocopy_threshold=None, tls_version=None, enable_ktls=None)
+    p.add_argument('--flush-batch-timeout', help='Set flush_batch_timeout (microseconds) for queuing more requests in a batch', type=int)
+    p.add_argument('--flush-batch-iovcnt-threshold', help='Set flush_batch_iovcnt_threshold for flushing requests', type=int)
+    p.add_argument('--flush-batch-bytes-threshold', help='Set flush_batch_bytes_threshold for flushing requests', type=int)
+    p.add_argument('--enable-zerocopy-recv', help='Enable zerocopy on receive',
+                   action='store_true', dest='enable_zerocopy_recv')
+    p.add_argument('--disable-zerocopy-recv', help='Disable zerocopy on receive',
+                   action='store_false', dest='enable_zerocopy_recv')
+    p.add_argument('--enable-tcp-nodelay', help='Enable TCP_NODELAY option',
+                   action='store_true', dest='enable_tcp_nodelay')
+    p.add_argument('--disable-tcp-nodelay', help='Disable TCP_NODELAY',
+                   action='store_false', dest='enable_tcp_nodelay')
+    p.add_argument('--buffers-pool-size', help='Set per poll group socket buffers pool size', type=int)
+    p.add_argument('--packets-pool-size', help='Set per poll group packets pool size', type=int)
+    p.add_argument('--enable-early-init', help='Enable early initialization',
+                   action='store_true', dest='enable_early_init')
+    p.add_argument('--disable-early-init', help='Disable early initialization',
+                   action='store_false', dest='enable_early_init')
+    p.set_defaults(func=sock_impl_set_options, enable_recv_pipe=None, enable_quickack=None,
+                   enable_placement_id=None, enable_zerocopy_send_server=None, enable_zerocopy_send_client=None,
+                   flush_batch_timeout=None, flush_batch_iovcnt_threshold=None, flush_batch_bytes_threshold=None,
+                   zerocopy_threshold=None, tls_version=None, enable_ktls=None, psk_key=None, psk_identity=None,
+                   enable_zerocopy_recv=None, enable_tcp_nodelay=None, buffers_pool_size=None, packets_pool_size=None,
+                   enable_early_init=None)
 
     def sock_set_default_impl(args):
         print_json(rpc.sock.sock_set_default_impl(args.client,
@@ -3960,6 +4077,119 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
         if name in deprecated_aliases:
             print("{} is deprecated, use {} instead.".format(name, deprecated_aliases[name]), file=sys.stderr)
 
+    def bdev_group_create(args):
+        print_json(rpc.bdev.bdev_group_create(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_create', help='Create a bdev group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.set_defaults(func=bdev_group_create)
+
+    def bdev_group_add_bdev(args):
+        print_json(rpc.bdev.bdev_group_add_bdev(args.client, name=args.name, bdev=args.bdev))
+
+    p = subparsers.add_parser('bdev_group_add_bdev', help='Add a bdev to a group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.add_argument('bdev', help="Name of the bdev")
+    p.set_defaults(func=bdev_group_add_bdev)
+
+    def bdev_group_set_qos_limit(args):
+        rpc.bdev.bdev_group_set_qos_limit(args.client,
+                                          name=args.name,
+                                          rw_ios_per_sec=args.rw_ios_per_sec,
+                                          rw_mbytes_per_sec=args.rw_mbytes_per_sec,
+                                          r_mbytes_per_sec=args.r_mbytes_per_sec,
+                                          w_mbytes_per_sec=args.w_mbytes_per_sec)
+
+    p = subparsers.add_parser('bdev_group_set_qos_limit',
+                              help='Set QoS rate limit on a bdev group')
+    p.add_argument('name', help='bdev group name to set QoS. Example: group0')
+    p.add_argument('--rw-ios-per-sec',
+                   help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
+                   type=int, required=False)
+    p.add_argument('--rw-mbytes-per-sec',
+                   help="R/W mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.add_argument('--r-mbytes-per-sec',
+                   help="Read mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.add_argument('--w-mbytes-per-sec',
+                   help="Write mebibytes per second limit (>=10, example: 100). 0 means unlimited.",
+                   type=int, required=False)
+    p.set_defaults(func=bdev_group_set_qos_limit)
+
+    def bdev_group_remove_bdev(args):
+        print_json(rpc.bdev.bdev_group_remove_bdev(args.client, name=args.name, bdev=args.bdev))
+
+    p = subparsers.add_parser('bdev_group_remove_bdev', help='Remove a bdev from a group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.add_argument('bdev', help="Name of the bdev")
+    p.set_defaults(func=bdev_group_remove_bdev)
+
+    def bdev_group_delete(args):
+        print_json(rpc.bdev.bdev_group_delete(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_delete', help='Delete a bdev group')
+    p.add_argument('name', help="Name of the bdev group")
+    p.set_defaults(func=bdev_group_delete)
+
+    def bdev_groups_get(args):
+        print_json(rpc.bdev.bdev_groups_get(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_groups_get', help='Get bdev groups info')
+    p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
+    p.set_defaults(func=bdev_groups_get)
+
+    def bdev_group_get_iostat(args):
+        print_dict(rpc.bdev.bdev_group_get_iostat(args.client, name=args.name))
+
+    p = subparsers.add_parser('bdev_group_get_iostat',
+                              help='Display current I/O statistics of all the groupss or specified group.')
+    p.add_argument('-g', '--name', help="Name of the bdev group", required=False)
+    p.set_defaults(func=bdev_group_get_iostat)
+
+    def bdev_set_ro(args):
+        rpc.bdev.bdev_set_ro(args.client, name=args.name)
+
+    p = subparsers.add_parser('bdev_set_ro', help='Set a bdev in a read-only state.')
+    p.add_argument('-n', '--name', help="Name of the bdev")
+    p.set_defaults(func=bdev_set_ro)
+
+    def bdev_set_rw(args):
+        rpc.bdev.bdev_set_rw(args.client, name=args.name)
+
+    p = subparsers.add_parser('bdev_set_rw', help='Set a bdev in a read/write state.')
+    p.add_argument('-n', '--name', help="Name of the bdev")
+    p.set_defaults(func=bdev_set_rw)
+
+    def rmem_get_config(args):
+        print_json(rpc.rmem.rmem_get_config(args.client))
+
+    p = subparsers.add_parser('rmem_get_config', help='Get the rmem config')
+    p.set_defaults(func=rmem_get_config)
+
+    def rmem_enable(args):
+        print_json(rpc.rmem.rmem_enable(args.client, backend_dir=args.backend_dir))
+
+    p = subparsers.add_parser('rmem_enable', help='Enable rmem if --backend-dir is specified or disable it otherwise')
+    p.add_argument('-d', '--backend-dir', help="Directory where rmem_pool stores backend files", required=False)
+    p.set_defaults(func=rmem_enable)
+
+    def rdma_provider_get_opts(args):
+        print_dict(rpc.rdma_provider.rdma_provider_get_opts(args.client))
+
+    p = subparsers.add_parser('rdma_provider_get_opts', help='Get RDMA provider options')
+    p.set_defaults(func=rdma_provider_get_opts)
+
+    def rdma_provider_set_opts(args):
+        rpc.rdma_provider.rdma_provider_set_opts(args.client, support_offload_on_qp=args.support_offload_on_qp)
+
+    p = subparsers.add_parser('rdma_provider_set_opts', help='Set RDMA provider options.')
+    p.add_argument('--enable-offload-on-qp', dest='support_offload_on_qp', action='store_true', default=None,
+                   help="Enable HW offloads on network QP")
+    p.add_argument('--disable-offload-on-qp', dest='support_offload_on_qp', action='store_false', default=None,
+                   help="Enable HW offloads on network QP")
+    p.set_defaults(func=rdma_provider_set_opts)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))
@@ -3995,16 +4225,27 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def load_plugin(args):
         # Create temporary parser, pull out the plugin parameter, load the module, and then run the real argument parser
         plugin_parser = argparse.ArgumentParser(add_help=False)
-        plugin_parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+        plugin_parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                                   help='Module name of plugin with additional RPC commands. May be specified multiple times.')
 
-        rpc_module = plugin_parser.parse_known_args()[0].rpc_plugin
+        rpc_modules = []
+        tmp_rpc_modules = plugin_parser.parse_known_args()[0].rpc_plugin
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend(tmp_rpc_modules)
+
         if args is not None:
-            rpc_module = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            tmp_rpc_modules = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            if tmp_rpc_modules is not None:
+                rpc_modules.extend(tmp_rpc_modules)
 
-        if rpc_module in plugins:
-            return
+        tmp_rpc_modules = os.environ.get('SPDK_RPC_PLUGIN')
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend([s for s in tmp_rpc_modules.split(':') if s])
 
-        if rpc_module is not None:
+        for rpc_module in rpc_modules:
+            if rpc_module in plugins:
+                return
+
             try:
                 rpc_plugin = importlib.import_module(rpc_module)
                 try:

@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021, 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -42,6 +42,9 @@ enum spdk_bdev_event_type {
 	SPDK_BDEV_EVENT_REMOVE,
 	SPDK_BDEV_EVENT_RESIZE,
 	SPDK_BDEV_EVENT_MEDIA_MANAGEMENT,
+	SPDK_BDEV_EVENT_IO_CHANNEL_WEIGHT_CHANGE,
+	SPDK_BDEV_EVENT_IO_TYPES_CHANGED,
+	SPDK_BDEV_EVENT_CLAIM_RELEASED,
 };
 
 /** Media management event details */
@@ -122,6 +125,10 @@ enum spdk_bdev_io_type {
 	SPDK_BDEV_IO_TYPE_SEEK_DATA,
 	SPDK_BDEV_IO_TYPE_COPY,
 	SPDK_BDEV_IO_TYPE_NVME_IOV_MD,
+	SPDK_BDEV_IO_TYPE_RESERVATION_ACQUIRE,
+	SPDK_BDEV_IO_TYPE_RESERVATION_REGISTER,
+	SPDK_BDEV_IO_TYPE_RESERVATION_RELEASE,
+	SPDK_BDEV_IO_TYPE_RESERVATION_REPORT,
 	SPDK_BDEV_NUM_IO_TYPES /* Keep last */
 };
 
@@ -187,6 +194,8 @@ struct spdk_bdev_io_stat {
 	uint64_t max_copy_latency_ticks;
 	uint64_t min_copy_latency_ticks;
 	uint64_t ticks_rate;
+	uint64_t num_read_split;
+	uint64_t num_write_split;
 
 	/* This data structure is privately defined in the bdev library.
 	 * This data structure is only used by the bdev_get_iostat RPC now.
@@ -215,8 +224,13 @@ struct spdk_bdev_opts {
 	/* Size of the per-thread iobuf caches */
 	uint32_t iobuf_small_cache_size;
 	uint32_t iobuf_large_cache_size;
+	/* QoS slice of quota allocated from global pool to local cache */
+	uint32_t qos_io_slice;
+	uint32_t qos_byte_slice;
+	/* QoS timeslice in microseconds */
+	uint32_t qos_timeslice_us;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 32, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 44, "Incorrect size");
 
 /**
  * Union for controller attributes field, to list whether bdev supports fdp etc.
@@ -472,10 +486,11 @@ void spdk_bdev_open_opts_init(struct spdk_bdev_open_opts *opts, size_t opts_size
  * \param bdev_name Block device name to open.
  * \param write true is read/write access requested, false if read-only
  * \param event_cb notification callback to be called when the bdev triggers
- * asynchronous event such as bdev removal. This will always be called on the
- * same thread that spdk_bdev_open_ext() was called on. In case of removal event
- * the descriptor will have to be manually closed to make the bdev unregister
- * proceed.
+ * asynchronous event such as bdev removal. For almost all event types, this will always
+ * be called on the same thread that spdk_bdev_open_ext() was called on. In case of
+ * removal event the descriptor will have to be manually closed to make the bdev
+ * unregister proceed. However, SPDK_BDEV_EVENT_IO_CHANNEL_WEIGHT_CHANGE is an exception,
+ * and it will always be called on the thread when the weight of an I/O channel is changed.
  * \param event_ctx param for event_cb.
  * \param desc output parameter for the descriptor when operation is successful
  * \return 0 if operation is successful, suitable errno value otherwise
@@ -718,6 +733,14 @@ int spdk_bdev_set_timeout(struct spdk_bdev_desc *desc, uint64_t timeout_in_sec,
 			  spdk_bdev_io_timeout_cb cb_fn, void *cb_arg);
 
 /**
+ * Check whether the block device is currently read-only, i.e. blocks all write IO types.
+ *
+ *\param bdev Block device to check.
+ *\return true if read-only, false otherwise.
+ */
+bool spdk_bdev_is_read_only(struct spdk_bdev *bdev);
+
+/**
  * Check whether the block device supports the I/O type.
  *
  * \param bdev Block device to check.
@@ -742,6 +765,16 @@ const char *spdk_bdev_get_io_type_name(enum spdk_bdev_io_type io_type);
  * This will map to enum spdk_bdev_io_type.
  */
 int spdk_bdev_get_io_type(const char *io_type_string);
+
+/**
+ * Check whether the block device supports the asynchronous event type.
+ *
+ * \param bdev Block device to check.
+ * \param event_type The specific asynchronous event type like remove, resize.
+ * \return true if support, false otherwise.
+ */
+bool spdk_bdev_event_type_supported(struct spdk_bdev *bdev,
+				    enum spdk_bdev_event_type event_type);
 
 /**
  * Output driver-specific information to a JSON stream.
@@ -992,6 +1025,14 @@ bool spdk_bdev_is_dif_check_enabled(const struct spdk_bdev *bdev,
 uint32_t spdk_bdev_get_max_copy(const struct spdk_bdev *bdev);
 
 /**
+ * Get block device max unmap size.
+ *
+ * \param bdev Block device to query.
+ * \return Max unmap size for this bdev in blocks. 0 means unlimited.
+ */
+uint64_t spdk_bdev_get_max_unmap(const struct spdk_bdev *bdev);
+
+/**
  * Get the most recently measured queue depth from a bdev.
  *
  * The reported queue depth is the aggregate of outstanding I/O
@@ -1078,6 +1119,15 @@ uint64_t spdk_bdev_get_weighted_io_time(const struct spdk_bdev *bdev);
  * \return A handle to the I/O channel or NULL on failure.
  */
 struct spdk_io_channel *spdk_bdev_get_io_channel(struct spdk_bdev_desc *desc);
+
+/**
+ * Obtain the current weight of an I/O channel.
+ *
+ * \param ch I/O channel to query.
+ *
+ * \return The weight of this I/O channel.
+ */
+uint32_t spdk_bdev_io_channel_get_weight(struct spdk_io_channel *ch);
 
 /**
  * Obtain a bdev module context for the block device opened by the specified
@@ -2421,6 +2471,43 @@ union spdk_bdev_nvme_ctratt spdk_bdev_get_nvme_ctratt(struct spdk_bdev *bdev);
  * \return Namespace ID or 0 if it's not available.
  */
 uint32_t spdk_bdev_get_nvme_nsid(struct spdk_bdev *bdev);
+
+/**
+ * Called when the bdev is ready to process I/O.
+ *
+ * \param cb_arg Callback argument.
+ * \param status 0 on success, or negated errno on failure.
+ * For negated errno, the following values are possible:
+ *   * -ETIMEDOUT: The timeout period elapsed.
+ *   * -EAGAIN: If timeout is set to 0 and the bdev is not ready.
+ */
+typedef void (*spdk_bdev_wait_for_ready_cb)(void *cb_arg, int status);
+
+/**
+ * Return the calback when the bdev is ready to accept I/O submission.
+ * If the timeout_in_msec is positive, the timeout is enabled.
+ * If the timeout_in_msec is zero, the function returns immediately.
+ *
+ * \param bdev Block device descriptor.
+ * \param timeout_in_msec Timeout value in milliseconds.
+ *   * positive: actual timeout value.
+ *   * zero: return immediately.
+ *   * negative: timeout is disabled.
+ * \param cb_fn Callback function.
+ * \param cb_arg Callback argument.
+ * \return 0 if wait started successfully, or suitable errno otherwise.
+ */
+int spdk_bdev_wait_for_ready(struct spdk_bdev_desc *desc, int64_t timeout_in_msec,
+			     spdk_bdev_wait_for_ready_cb cb_fn, void *cb_arg);
+
+/**
+ * Check if block device supports accel sequence for the given \b io_type
+ *
+ * \param bdev Block device
+ * \param io_type IO type to be checked for the accel sequence support
+ * \return true of accel sequence is supported, false otherwise
+ */
+bool spdk_bdev_accel_sequence_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type);
 
 #ifdef __cplusplus
 }

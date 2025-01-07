@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2022 Intel Corporation.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES
  *   All rights reserved.
  */
 
@@ -296,7 +297,6 @@ struct rpc_vfu_virtio_create_fs {
 	uint16_t	num_queues;
 	uint16_t	qsize;
 	bool		packed_ring;
-	struct spdk_jsonrpc_request *request;
 };
 
 static const struct spdk_json_object_decoder rpc_construct_vfu_virtio_create_fs[] = {
@@ -310,70 +310,47 @@ static const struct spdk_json_object_decoder rpc_construct_vfu_virtio_create_fs[
 };
 
 static void
-free_rpc_vfu_virtio_create_fs(struct rpc_vfu_virtio_create_fs *req)
-{
-	if (req) {
-		free(req->name);
-		free(req->fsdev_name);
-		free(req->tag);
-		free(req->cpumask);
-		free(req);
-	}
-}
-
-static void
-rpc_vfu_virtio_create_fs_endpoint_cpl(void *cb_arg, int status)
-{
-	struct rpc_vfu_virtio_create_fs *req = cb_arg;
-
-	spdk_jsonrpc_send_bool_response(req->request, true);
-
-	free_rpc_vfu_virtio_create_fs(req);
-}
-
-static void
 rpc_vfu_virtio_create_fs_endpoint(struct spdk_jsonrpc_request *request,
 				  const struct spdk_json_val *params)
 {
-	struct rpc_vfu_virtio_create_fs *req;
+	struct rpc_vfu_virtio_create_fs req = {0};
 	int rc;
-
-	req = calloc(1, sizeof(*req));
-	if (!req)  {
-		SPDK_ERRLOG("cannot allocate req\n");
-		rc = -ENOMEM;
-		goto invalid;
-	}
 
 	if (spdk_json_decode_object(params, rpc_construct_vfu_virtio_create_fs,
 				    SPDK_COUNTOF(rpc_construct_vfu_virtio_create_fs),
-				    req)) {
+				    &req)) {
 		SPDK_ERRLOG("spdk_json_decode_object failed\n");
 		rc = -EINVAL;
-		goto invalid;
+		goto do_return;
 	}
 
-	rc = spdk_vfu_create_endpoint(req->name, req->cpumask, "virtio_fs");
+	rc = spdk_vfu_create_endpoint(req.name, req.cpumask, "virtio_fs");
 	if (rc) {
 		SPDK_ERRLOG("Failed to create virtio_fs endpoint\n");
-		goto invalid;
+		goto do_return;
 	}
 
-	req->request = request;
-
-	rc = vfu_virtio_fs_add_fsdev(req->name, req->fsdev_name, req->tag, req->num_queues, req->qsize,
-				     req->packed_ring, rpc_vfu_virtio_create_fs_endpoint_cpl, req);
+	rc = vfu_virtio_fs_add_fsdev(req.name, req.fsdev_name, req.tag, req.num_queues, req.qsize,
+				     req.packed_ring);
 	if (rc < 0) {
-		spdk_vfu_delete_endpoint(req->name);
-		goto invalid;
+		spdk_vfu_delete_endpoint(req.name);
+		goto do_return;
 	}
 
-	return;
+	rc = 0;
 
-invalid:
-	free_rpc_vfu_virtio_create_fs(req);
-	spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-					 spdk_strerror(-rc));
+do_return:
+	free(req.name);
+	free(req.fsdev_name);
+	free(req.tag);
+	free(req.cpumask);
+
+	if (!rc) {
+		spdk_jsonrpc_send_bool_response(request, true);
+	} else {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 spdk_strerror(-rc));
+	}
 }
 SPDK_RPC_REGISTER("vfu_virtio_create_fs_endpoint", rpc_vfu_virtio_create_fs_endpoint,
 		  SPDK_RPC_RUNTIME)

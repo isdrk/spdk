@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -65,6 +65,8 @@ extern "C" {
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <regex.h>
+#include <dlfcn.h>
+#include <execinfo.h>
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/file.h>
@@ -77,6 +79,7 @@ extern "C" {
 #include <sys/xattr.h>
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
+#include <sys/fanotify.h>
 #include <sched.h>
 #endif
 

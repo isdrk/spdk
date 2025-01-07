@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -13,6 +14,7 @@ C_SRCS = base64.c bit_array.c cpuset.c crc16.c crc32.c crc32c.c crc32_ieee.c crc
 	 dif.c fd.c fd_group.c file.c hexlify.c iov.c math.c net.c \
 	 pipe.c strerror_tls.c string.c uuid.c xor.c zipf.c md5.c
 LIBNAME = util
+LOCAL_SYS_LIBS = -luuid -lcrypto
 
 ifneq ($(OS),FreeBSD)
 LOCAL_SYS_LIBS = -luuid

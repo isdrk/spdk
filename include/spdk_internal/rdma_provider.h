@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_RDMA_H
@@ -10,10 +10,11 @@
 #include <rdma/rdma_cma.h>
 #include <rdma/rdma_verbs.h>
 #include "spdk/dma.h"
+#include "spdk/json.h"
 
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
-#define SPDK_RDMA_RXE_VENDOR_ID_OLD 0
-#define SPDK_RDMA_RXE_VENDOR_ID_NEW 0XFFFFFF
+#define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_OLD 0
+#define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_NEW 0XFFFFFF
 
 struct spdk_rdma_provider_wr_stats {
 	/* Total number of submitted requests */
@@ -25,15 +26,15 @@ struct spdk_rdma_provider_wr_stats {
 struct spdk_rdma_provider_qp_stats {
 	struct spdk_rdma_provider_wr_stats send;
 	struct spdk_rdma_provider_wr_stats recv;
+	uint64_t accel_sequences_executed;
 };
 
 struct spdk_rdma_provider_qp_init_attr {
-	void		       *qp_context;
-	struct ibv_cq	       *send_cq;
-	struct ibv_cq	       *recv_cq;
-	struct ibv_srq	       *srq;
-	struct ibv_qp_cap	cap;
-	struct ibv_pd	       *pd;
+	void				*qp_context;
+	struct spdk_rdma_provider_cq	*cq;
+	struct spdk_rdma_provider_srq	*srq;
+	struct ibv_qp_cap		cap;
+	struct ibv_pd			*pd;
 	struct spdk_rdma_provider_qp_stats *stats;
 	spdk_memory_domain_transfer_data_cb domain_transfer;
 };
@@ -69,6 +70,37 @@ struct spdk_rdma_provider_srq {
 	struct spdk_rdma_provider_recv_wr_list recv_wrs;
 	struct spdk_rdma_provider_wr_stats *stats;
 	bool shared_stats;
+};
+
+struct spdk_rdma_provider_cq_init_attr {
+	int				cqe;
+	int				comp_vector;
+	void			       *cq_context;
+	struct ibv_comp_channel	       *comp_channel;
+	struct ibv_pd		       *pd;
+};
+
+struct spdk_rdma_provider_cq {
+	struct ibv_cq *cq;
+};
+
+struct spdk_rdma_provider_memory_translation_ctx {
+	void *addr;
+	size_t length;
+	uint32_t lkey;
+	uint32_t rkey;
+};
+
+struct spdk_rdma_provider_opts {
+	/**
+	 * Size of this structure in bytes
+	 */
+	size_t opts_size;
+	/**
+	 * Support HW offloads on network QP. If set, memory domain created for qpair contains a pointer to the qpair,
+	 * Qpair and CQ might be created with extended size
+	 */
+	bool support_offload_on_qp;
 };
 
 /**
@@ -194,6 +226,87 @@ bool spdk_rdma_provider_qp_queue_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdm
 int spdk_rdma_provider_qp_flush_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
 		struct ibv_recv_wr **bad_wr);
 
+/**
+ * Create RDMA provider specific CQ
+ *
+ * \param cq_attr Pointer to CQ init attributes
+ * \return Pointer to a newly created CQ on success or NULL on failure
+ */
+struct spdk_rdma_provider_cq *spdk_rdma_provider_cq_create(struct spdk_rdma_provider_cq_init_attr
+		*cq_attr);
+
+/**
+ * Destroy RDMA provider specific CQ
+ *
+ * \param rdma_cq Pointer to SPDK RDMA CQ to be destroyed
+ */
+void spdk_rdma_provider_cq_destroy(struct spdk_rdma_provider_cq *rdma_cq);
+
+/**
+ * Resize Completion Queue
+ *
+ * \param rdma_cq CQ to be resized
+ * \param cqe New CQ size
+ * \return 0 on succes, errno on failure
+ */
+int spdk_rdma_provider_cq_resize(struct spdk_rdma_provider_cq *rdma_cq, int cqe);
+
+/**
+ * Poll Completion Queue, save up to \b num_entries into \b wc array
+ *
+ * \param cq Completion Queue
+ * \param num_entries Maximum number of completions to be polled
+ * \param wc Array of work completions to be filled by this function
+ * \return number of polled completions on succes, negated errno on failure
+ */
+int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entries,
+			       struct ibv_wc *wc);
+
+/**
+ * Check whether RDMA provider supports accel sequences
+ *
+ * return true if accel sequence is supported
+ */
 bool spdk_rdma_provider_accel_sequence_supported(void);
+
+/**
+ * Get a reference of the memory key
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_get_ref(void *mkey);
+
+/**
+ * Put a reference of the memory key
+ *
+ * The memory key is released once the count reaches 0.
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_put_ref(void *mkey);
+
+/**
+ * Set the options for the rdma_provide library.
+ *
+ * \param opts options to set
+ * \return 0 on success.
+ * \return -EINVAL if the options are invalid.
+ */
+int spdk_rdma_provider_set_opts(const struct spdk_rdma_provider_opts *opts);
+
+/**
+ * Get the options for the rdma_provide library.
+ *
+ * \param opts Output parameter for options.
+ * \param opts_size sizeof(*opts)
+ */
+int spdk_rdma_provider_get_opts(struct spdk_rdma_provider_opts *opts, size_t opts_size);
+
+/**
+ * Get RDMA provider configuration
+ *
+ * \param w pointer to a JSON write context where the configuration will be written.
+ */
+void spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w);
 
 #endif /* SPDK_RDMA_H */

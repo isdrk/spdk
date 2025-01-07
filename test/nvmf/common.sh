@@ -1,6 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2016 Intel Corporation
-#  Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES
+#  Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES
 #  All rights reserved.
 #
 
@@ -95,7 +95,12 @@ function get_available_rdma_ips() {
 function get_rdma_if_list() {
 	local net_dev rxe_net_dev rxe_net_devs
 
-	mapfile -t rxe_net_devs < <(rxe_cfg rxe-net)
+	if [ -n "$CI_DUT_IFACE" ] && [ -e "/sys/class/net/$CI_DUT_IFACE" ]; then
+		echo "$CI_DUT_IFACE"
+		return 0
+	else
+		mapfile -t rxe_net_devs < <(rxe_cfg rxe-net)
+	fi
 
 	if ((${#net_devs[@]} == 0)); then
 		return 1
@@ -119,6 +124,9 @@ function get_ip_address() {
 
 function nvmfcleanup() {
 	sync
+	if [ -n "$CI_DUT_IFACE" ]; then
+		return
+	fi
 
 	if [ "$TEST_TRANSPORT" == "tcp" ] || [ "$TEST_TRANSPORT" == "rdma" ]; then
 		set +e
@@ -332,16 +340,23 @@ function gather_supported_nvmf_pci_devs() {
 	mlx+=(${pci_bus_cache["$mellanox:0x1021"]})
 	# BlueField 2
 	mlx+=(${pci_bus_cache["$mellanox:0xa2d6"]})
+	# ConnectX-6 VPI
+	mlx+=(${pci_bus_cache["$mellanox:0x101b"]})
+	mlx+=(${pci_bus_cache["$mellanox:0x101c"]})
 	# ConnectX-6 Dx
 	mlx+=(${pci_bus_cache["$mellanox:0x101d"]})
-	# ConnectX-6
-	mlx+=(${pci_bus_cache["$mellanox:0x101b"]})
+	mlx+=(${pci_bus_cache["$mellanox:0x101e"]})
+	# ConnectX-6 LX
+	mlx+=(${pci_bus_cache["$mellanox:0x101f"]})
 	# ConnectX-5
 	mlx+=(${pci_bus_cache["$mellanox:0x1017"]})
 	mlx+=(${pci_bus_cache["$mellanox:0x1019"]})
 	# ConnectX-4
 	mlx+=(${pci_bus_cache["$mellanox:0x1015"]})
 	mlx+=(${pci_bus_cache["$mellanox:0x1013"]})
+	# ConnectX-4 LX
+	mlx+=(${pci_bus_cache["$mellanox:0x1015"]})
+	mlx+=(${pci_bus_cache["$mellanox:0x1016"]})
 
 	pci_devs+=("${e810[@]}")
 	if [[ $TEST_TRANSPORT == rdma ]]; then
@@ -437,7 +452,9 @@ function gather_supported_nvmf_pci_devs() {
 prepare_net_devs() {
 	local -g is_hw=no
 
-	remove_spdk_ns
+	if [ -z "$CI_DUT_IFACE" ]; then
+		remove_spdk_ns
+	fi
 
 	[[ $NET_TYPE != virt ]] && gather_supported_nvmf_pci_devs && is_hw=yes
 
@@ -449,6 +466,9 @@ prepare_net_devs() {
 		fi
 		return 0
 	elif [[ $NET_TYPE == phy ]]; then
+		if [ -n "$CI_DUT_IFACE" ] && [ -e "/sys/class/net/$CI_DUT_IFACE" ]; then
+			return 0
+		fi
 		echo "ERROR: No supported devices were found, cannot run the $TEST_TRANSPORT test"
 		return 1
 	elif [[ $NET_TYPE == phy-fallback ]]; then
@@ -493,6 +513,9 @@ function nvmftestinit() {
 		NVMF_TRANSPORT_OPTS="$NVMF_TRANSPORT_OPTS -o"
 	fi
 
+	if [ -n "$CI_DUT_IFACE" ]; then
+		return 0
+	fi
 	if [ "$TEST_TRANSPORT" == "tcp" ] || [ "$TEST_TRANSPORT" == "rdma" ]; then
 		# currently we run the host/perf test for TCP even on systems without kernel nvme-tcp
 		#  support; that's fine since the host/perf test uses the SPDK initiator
@@ -526,8 +549,10 @@ function nvmftestfini() {
 }
 
 function rdma_device_init() {
-	load_ib_rdma_modules
-	allocate_nic_ips
+	if [ -z "$CI_DUT_IFACE" ]; then
+		load_ib_rdma_modules
+		allocate_nic_ips
+	fi
 }
 
 function nvme_connect() {

@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -51,6 +51,15 @@ DEFINE_STUB(nvme_ctrlr_disable_poll, int, (struct spdk_nvme_ctrlr *ctrlr), 0);
 DEFINE_STUB_V(nvme_transport_ctrlr_disconnect_qpair_done, (struct spdk_nvme_qpair *qpair));
 DEFINE_STUB(spdk_nvme_ctrlr_get_numa_id, int32_t, (struct spdk_nvme_ctrlr *ctrlr),
 	    SPDK_ENV_NUMA_ID_ANY);
+
+struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
+	.rdma_srq_size = 0,
+	.poll_group_requests = 1024,
+};
+
+DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
+		uint32_t num_requests), 0);
+DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
 
 int
 nvme_qpair_init(struct spdk_nvme_qpair *qpair, uint16_t id,
@@ -227,6 +236,7 @@ test_nvme_pcie_ctrlr_cmd_create_delete_io_queue(void)
 
 	ctrlr.adminq = &adminq;
 	STAILQ_INIT(&ctrlr.adminq->free_req);
+	adminq.active_free_req = &adminq.free_req;
 	STAILQ_INSERT_HEAD(&ctrlr.adminq->free_req, &req, stailq);
 	pqpair.qpair.id = 1;
 	pqpair.num_entries = 1;
@@ -312,6 +322,7 @@ test_nvme_pcie_ctrlr_connect_qpair(void)
 	pqpair.qpair.qprio = SPDK_NVME_QPRIO_HIGH;
 	pqpair.stat = NULL;
 	pqpair.qpair.poll_group = &poll_group;
+	pqpair.qpair.active_free_req = &pqpair.qpair.free_req;
 	pctrlr.ctrlr.page_size = 4096;
 
 	/* Shadow doorbell available */
@@ -324,6 +335,7 @@ test_nvme_pcie_ctrlr_connect_qpair(void)
 					     SPDK_MALLOC_DMA | SPDK_MALLOC_SHARE);
 	pctrlr.ctrlr.adminq = &adminq;
 	STAILQ_INIT(&pctrlr.ctrlr.adminq->free_req);
+	pctrlr.ctrlr.adminq->active_free_req = &pctrlr.ctrlr.adminq->free_req;
 	for (int i = 0; i < 2; i++) {
 		STAILQ_INSERT_TAIL(&pctrlr.ctrlr.adminq->free_req, &req[i], stailq);
 	}

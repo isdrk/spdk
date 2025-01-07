@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2024 Intel Corporation.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -14,9 +15,9 @@ DEFINE_STUB(spdk_rpc_listen, int, (const char *listen_addr), 0);
 DEFINE_STUB(spdk_rpc_server_listen, struct spdk_rpc_server *, (const char *listen_addr),
 	    (struct spdk_rpc_server *)0xdeadbeef);
 DEFINE_STUB(spdk_rpc_verify_methods, bool, (void), true);
-DEFINE_STUB_V(spdk_rpc_accept, (void));
+DEFINE_STUB(spdk_rpc_accept, int, (void), 0);
 DEFINE_STUB_V(spdk_rpc_close, (void));
-DEFINE_STUB_V(spdk_rpc_server_accept, (struct spdk_rpc_server *server));
+DEFINE_STUB(spdk_rpc_server_accept, int, (struct spdk_rpc_server *server), 0);
 DEFINE_STUB_V(spdk_rpc_server_close, (struct spdk_rpc_server *server));
 DEFINE_STUB_V(spdk_rpc_set_state, (uint32_t state));
 

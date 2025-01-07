@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -12,7 +13,7 @@ DIRS-$(CONFIG_IDXD) += idxd
 DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_VHOST) += vhost
 DIRS-$(CONFIG_RDMA) += rdma
-DIRS-$(CONFIG_FSDEV) += fsdev
+DIRS-$(CONFIG_FSDEV) += fsdev fuse_dispatcher
 ifeq ($(OS),Linux)
 DIRS-y += ftl
 endif

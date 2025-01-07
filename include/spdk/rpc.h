@@ -44,8 +44,10 @@ int spdk_rpc_listen(const char *listen_addr);
  * Poll the RPC server.
  *
  * Deprecated, will be removed in 24.09 release.
+ *
+ * \return 0 if no incoming RPCs were handled, 1 otherwise
  */
-void spdk_rpc_accept(void);
+int spdk_rpc_accept(void);
 
 /**
  * Stop listening for RPC connections.
@@ -67,8 +69,10 @@ struct spdk_rpc_server *spdk_rpc_server_listen(const char *listen_addr);
  * Poll the RPC server.
  *
  * \param server RPC server, which will be polled for connections.
+ *
+ * \return 0 if no incoming RPCs were handled, 1 otherwise
  */
-void spdk_rpc_server_accept(struct spdk_rpc_server *server);
+int spdk_rpc_server_accept(struct spdk_rpc_server *server);
 
 /**
  * Stop a server from listening and free it.

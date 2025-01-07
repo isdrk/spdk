@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -8,8 +8,7 @@
 #include "spdk/env.h"
 #include "spdk/thread.h"
 
-#include "spdk_internal/init.h"
-#include "spdk/env.h"
+#include "spdk/init.h"
 
 static void
 fsdev_initialize_complete(void *cb_arg, int rc)

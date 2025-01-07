@@ -1,7 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2017 Intel Corporation.
 #  All rights reserved.
-#  Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2021, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/..)
@@ -19,6 +19,8 @@ DPDK_OPTS += -Dplatform=generic
 else
 ifeq ($(shell $(SPDK_ROOT_DIR)/dpdk/config/arm/armv8_machine.py | cut -d' ' -f4),0x0)
 DPDK_OPTS += -Dplatform=generic
+else
+DPDK_OPTS += --cross-file=config/arm/arm64_bluefield_linux_native_gcc
 endif
 endif
 endif
@@ -77,7 +79,7 @@ DPDK_DRIVERS += crypto/qat compress/qat common/qat
 endif
 
 # common mlx5 libs
-ifeq ($(findstring y,$(CONFIG_CRYPTO_MLX5)$(CONFIG_VBDEV_COMPRESS_MLX5)),y)
+ifeq ($(findstring y,$(CONFIG_VBDEV_COMPRESS_MLX5)),y)
 DPDK_DRIVERS += common/mlx5 bus/auxiliary
 endif
 
@@ -90,9 +92,6 @@ ifeq ($(CONFIG_CRYPTO),y)
 DPDK_DRIVERS += crypto
 # aesni_mb is name of the PMD in DPDK 21.08 and earlier
 DPDK_DRIVERS += crypto/aesni_mb
-ifeq ($(CONFIG_CRYPTO_MLX5),y)
-DPDK_DRIVERS += crypto/mlx5
-endif
 ifeq ($(CONFIG_IPSEC_MB),y)
 DPDK_DRIVERS += crypto/ipsec_mb
 DPDK_CFLAGS += -I$(IPSEC_MB_DIR)
@@ -203,10 +202,17 @@ MAKE_PID := $(shell echo $$PPID)
 endif
 
 MAKE_NUMJOBS := $(shell ps T | sed -nE 's/[[:space:]]*$(MAKE_PID)[[:space:]].* (-j|--jobs=)( *[0-9]+).*/\1\2/p')
+MESON_VER := $(shell meson --version)
 
 all: $(SPDK_ROOT_DIR)/dpdk/build-tmp
-	$(Q)# DPDK doesn't handle nested make calls, so unset MAKEFLAGS
-	$(Q)env -u MAKEFLAGS meson compile -C $(SPDK_ROOT_DIR)/dpdk/build-tmp $(MAKE_NUMJOBS)
+	$(Q) \
+	# DPDK doesn't handle nested make calls, so unset MAKEFLAGS. \
+	# meson doesn't support compile option in versions < 0.61.2
+	$(Q)if [ "$(MESON_VER)" \< "0.61.2" ]; then \
+		env -u MAKEFLAGS ninja -C $(SPDK_ROOT_DIR)/dpdk/build-tmp; \
+	else \
+		env -u MAKEFLAGS meson compile -C $(SPDK_ROOT_DIR)/dpdk/build-tmp; \
+	fi
 	$(Q) \
 	# Meson on FreeBSD sometimes appends --prefix value to the default DESTDIR (which is e.g. \
 	# /usr/local) instead of replacing it. --prefix needs to be an absolute path, so we set \

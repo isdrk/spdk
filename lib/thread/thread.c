@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2022, 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -634,6 +634,22 @@ spdk_thread_is_app_thread(struct spdk_thread *thread)
 	}
 
 	return g_app_thread == thread;
+}
+
+struct spdk_thread *
+spdk_thread_get_next_thread(struct spdk_thread *thread)
+{
+	struct spdk_thread *next_thread;
+
+	pthread_mutex_lock(&g_devlist_mutex);
+	if (thread == NULL) {
+		next_thread = TAILQ_FIRST(&g_threads);
+	} else {
+		next_thread = TAILQ_NEXT(thread, tailq);
+	}
+	pthread_mutex_unlock(&g_devlist_mutex);
+
+	return next_thread;
 }
 
 void
@@ -2731,6 +2747,80 @@ end:
 		rc = spdk_thread_send_msg(dev->unregister_thread, __pending_unregister, dev);
 		assert(rc == 0);
 	}
+	pthread_mutex_unlock(&g_devlist_mutex);
+}
+
+struct spdk_io_channel_call {
+	void *io_device;
+	spdk_channel_msg_fn fn;
+	void *ctx;
+};
+
+static void
+_io_channel_send_msg(void *ctx)
+{
+	struct spdk_io_channel_call *c = ctx;
+	struct io_device *dev;
+	struct spdk_io_channel *ch;
+
+	pthread_mutex_lock(&g_devlist_mutex);
+	dev = io_device_get(c->io_device);
+	pthread_mutex_unlock(&g_devlist_mutex);
+
+	if (dev == NULL) {
+		SPDK_ERRLOG("could not find io_device %p\n", c->io_device);
+		free(c);
+		return;
+	}
+
+	ch = thread_get_io_channel(spdk_get_thread(), dev);
+	if (ch != NULL) {
+		c->fn(ch, c->ctx);
+	} else {
+		SPDK_DEBUGLOG(thread, "io_channel was removed before message reached.\n");
+	}
+	free(c);
+}
+
+void
+spdk_io_channel_send_msg(struct spdk_thread *thread, void *io_device,
+			 spdk_channel_msg_fn fn, void *ctx)
+{
+	struct spdk_io_channel_call *c;
+	int rc __attribute__((unused));
+
+	c = calloc(1, sizeof(*c));
+	if (!c) {
+		SPDK_ERRLOG("Unable to allocate caller\n");
+		assert(false);
+		return;
+	}
+
+	c->io_device = io_device;
+	c->fn = fn;
+	c->ctx = ctx;
+
+	rc = spdk_thread_send_msg(thread, _io_channel_send_msg, c);
+	assert(rc == 0);
+}
+
+void
+spdk_for_each_channel_broadcast(void *io_device, spdk_channel_msg_fn fn, void *ctx)
+{
+	struct spdk_thread *thread;
+
+	pthread_mutex_lock(&g_devlist_mutex);
+
+	thread = TAILQ_FIRST(&g_threads);
+	while (thread != NULL) {
+		pthread_mutex_unlock(&g_devlist_mutex);
+
+		spdk_io_channel_send_msg(thread, io_device, fn, ctx);
+
+		pthread_mutex_lock(&g_devlist_mutex);
+		thread = TAILQ_NEXT(thread, tailq);
+	}
+
 	pthread_mutex_unlock(&g_devlist_mutex);
 }
 

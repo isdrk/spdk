@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2016 Intel Corporation.
+#  Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -15,7 +16,6 @@ C_SRCS = conn.c \
 	 tgt_node.c iscsi_subsystem.c \
 	 iscsi_rpc.c task.c
 LIBNAME = iscsi
-LOCAL_SYS_LIBS = -lcrypto
 
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_iscsi.map)
 

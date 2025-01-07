@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef __NVME_INTERNAL_H__
@@ -168,7 +168,7 @@ extern struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts;
 #define DEFAULT_IO_QUEUE_SIZE		(256)
 #define DEFAULT_IO_QUEUE_SIZE_FOR_QUIRK	(1024) /* Matches Linux kernel driver */
 
-#define DEFAULT_IO_QUEUE_REQUESTS	(512)
+#define DEFAULT_IO_QUEUE_REQUESTS	(256)
 
 #define SPDK_NVME_DEFAULT_RETRY_COUNT	(4)
 
@@ -186,16 +186,69 @@ extern struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts;
 						sizeof(struct spdk_nvme_cmd), \
 						sizeof(struct spdk_nvme_cpl)))
 
-/* Default timeout for fabrics connect commands. */
-#ifdef DEBUG
-#define NVME_FABRIC_CONNECT_COMMAND_TIMEOUT 0
-#else
-/* 500 millisecond timeout. */
+/* Default timeout for fabrics connect commands, 500 millisecond */
 #define NVME_FABRIC_CONNECT_COMMAND_TIMEOUT 500000
-#endif
 
 /* This value indicates that a read from a PCIe register is invalid. This can happen when a device is no longer present */
 #define SPDK_NVME_INVALID_REGISTER_VALUE 0xFFFFFFFFu
+
+/* TODO: Configure values by RPC */
+#define NVME_DEFAULT_SMALL_ZCOPY_IOVS		(50)
+#define NVME_DEFAULT_LARGE_ZCOPY_IOVS		(128)
+#define NVME_MAX_ZCOPY_IOVS			(128)
+#define NVME_DEFAULT_SMALL_ZCOPY_IOV_POOL_SIZE	(2048 - 1)
+#define NVME_DEFAULT_LARGE_ZCOPY_IOV_POOL_SIZE	(512 - 1)
+
+/* TODO: Support to configure by rpc */
+#define NVME_DEFAULT_ZCOPY_NUM_SHARED_BUFFERS	(1024 - 1)
+#define NVME_DEFAULT_ZCOPY_BUFFER_SIZE		(16 * 1024)
+
+struct spdk_nvme_zcopy_io {
+	/**
+	 * Array of iovecs allocated for zcopy
+	 */
+	struct iovec			*iovs;
+
+	/**
+	 * Callback for zcopy
+	 */
+	spdk_nvme_cmd_zcopy_cb		zcopy_cb_fn;
+
+	/**
+	 * Number of iovecs in iovec array.
+	 */
+	uint16_t			iovcnt;
+
+	/**
+	 * Whether the buffer should be populated with the real data
+	 */
+	uint8_t				populate : 1;
+
+	/**
+	 * Whether the buffer should be committed back to disk
+	 */
+	uint8_t				commit : 1;
+
+	/**
+	 * True if this request is in the 'start' phase of zcopy. False if in 'end'.
+	 */
+	uint8_t				start : 1;
+
+	/**
+	 * True if iovs is allocated from pool.
+	 */
+	uint8_t				iovs_from_pool : 1;
+
+	/**
+	 * True if iovs is allocated by malloc.
+	 */
+	uint8_t				iovs_from_malloc : 1;
+
+	/**
+	 * True if the buffer is allocated from mem pool
+	 */
+	uint8_t				data_from_pool : 1;
+};
 
 enum nvme_payload_type {
 	NVME_PAYLOAD_TYPE_INVALID = 0,
@@ -205,6 +258,9 @@ enum nvme_payload_type {
 
 	/** nvme_request::u.sgl is valid for this request */
 	NVME_PAYLOAD_TYPE_SGL,
+
+	/** payload for this request is zcopy buffer */
+	NVME_PAYLOAD_TYPE_ZCOPY,
 };
 
 /** Boot partition write states */
@@ -219,6 +275,11 @@ enum nvme_bp_write_state {
  * Descriptor for a request data payload.
  */
 struct nvme_payload {
+	/**
+	 * If zcopy != NULL, this is a zcopy payload.
+	 */
+	struct spdk_nvme_zcopy_io *zcopy;
+
 	/**
 	 * Functions for retrieving physical addresses for scattered payloads.
 	 */
@@ -260,7 +321,16 @@ struct nvme_payload {
 
 static inline enum nvme_payload_type
 nvme_payload_type(const struct nvme_payload *payload) {
-	return payload->reset_sgl_fn ? NVME_PAYLOAD_TYPE_SGL : NVME_PAYLOAD_TYPE_CONTIG;
+	if (payload->zcopy)
+	{
+		return NVME_PAYLOAD_TYPE_ZCOPY;
+	} else if (payload->reset_sgl_fn)
+	{
+		return NVME_PAYLOAD_TYPE_SGL;
+	} else
+	{
+		return NVME_PAYLOAD_TYPE_CONTIG;
+	}
 }
 
 struct nvme_error_cmd {
@@ -274,22 +344,41 @@ struct nvme_error_cmd {
 
 struct nvme_request {
 	struct spdk_nvme_cmd		cmd;
+	/**
+	 * Data payload for this request's command.
+	 */
+	struct nvme_payload		payload;
+	/**
+	 * Zcopy information of this request's command.
+	 */
+	struct spdk_nvme_zcopy_io	zcopy;
+	struct spdk_nvme_cpl		cpl;
+
+	/** Sequence of accel operations associated with this request */
+	void				*accel_sequence;
+
+	spdk_nvme_cmd_cb		cb_fn;
+	void				*cb_arg;
+	STAILQ_ENTRY(nvme_request)	stailq;
+
+	struct spdk_nvme_qpair		*qpair;
 
 	uint8_t				retries;
-
 	uint8_t				timed_out : 1;
 
 	/**
 	 * True if the request is in the queued_req list.
 	 */
 	uint8_t				queued : 1;
-	uint8_t				reserved : 6;
+	uint8_t				is_parent : 1;
+	uint8_t				reserved : 5;
 
 	/**
 	 * Number of children requests still outstanding for this
 	 *  request which was split into multiple child requests.
 	 */
 	uint16_t			num_children;
+	uint16_t			num_zcopy_children;
 
 	/**
 	 * Offset in bytes from the beginning of payload for this request.
@@ -299,29 +388,19 @@ struct nvme_request {
 	uint32_t			md_offset;
 
 	uint32_t			payload_size;
-
-	/**
-	 * Timeout ticks for error injection requests, can be extended in future
-	 * to support per-request timeout feature.
-	 */
-	uint64_t			timeout_tsc;
-
-	/**
-	 * Data payload for this request's command.
-	 */
-	struct nvme_payload		payload;
-
-	spdk_nvme_cmd_cb		cb_fn;
-	void				*cb_arg;
-	STAILQ_ENTRY(nvme_request)	stailq;
-
-	struct spdk_nvme_qpair		*qpair;
+	uint32_t			md_size;
 
 	/*
 	 * The value of spdk_get_ticks() when the request was submitted to the hardware.
 	 * Only set if ctrlr->timeout_enabled is true.
 	 */
 	uint64_t			submit_tick;
+
+	/**
+	 * Timeout ticks for error injection requests, can be extended in future
+	 * to support per-request timeout feature.
+	 */
+	uint64_t			timeout_tsc;
 
 	/**
 	 * The active admin request can be moved to a per process pending
@@ -331,9 +410,6 @@ struct nvme_request {
 	 * NOTE: these below two fields are only used for admin request.
 	 */
 	pid_t				pid;
-	struct spdk_nvme_cpl		cpl;
-
-	uint32_t			md_size;
 
 	/**
 	 * The following members should not be reordered with members
@@ -377,10 +453,9 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		user_cb_fn;
 	void				*user_cb_arg;
 	void				*user_buffer;
-
-	/** Sequence of accel operations associated with this request */
-	void				*accel_sequence;
 };
+
+typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
 
 struct nvme_completion_poll_status {
 	struct spdk_nvme_cpl	cpl;
@@ -451,6 +526,19 @@ struct nvme_auth {
 
 struct spdk_nvme_qpair {
 	struct spdk_nvme_ctrlr			*ctrlr;
+	const struct spdk_nvme_transport	*transport;
+	nvme_request_stailq_t			*active_free_req;
+	nvme_request_stailq_t			free_req;
+	nvme_request_stailq_t			queued_req;
+	struct spdk_nvme_transport_poll_group	*poll_group;
+
+	/* List entry for spdk_nvme_transport_poll_group::qpairs */
+	STAILQ_ENTRY(spdk_nvme_qpair)		poll_group_stailq;
+	struct spdk_nvme_ctrlr_process		*active_proc;
+
+	uint32_t				num_outstanding_reqs;
+	/* Number of zcopy reqs is still using by user application */
+	uint32_t				outstanding_zcopy_reqs;
 
 	uint16_t				id;
 
@@ -488,34 +576,14 @@ struct spdk_nvme_qpair {
 	/* Number of IO outstanding at transport level */
 	uint16_t				queue_depth;
 
+	/* Entries below here are not touched in the main I/O path. */
 	enum spdk_nvme_transport_type		trtype;
-
-	uint32_t				num_outstanding_reqs;
-
-	/* request object used only for this qpair's FABRICS/CONNECT command (if needed) */
-	struct nvme_request			*reserved_req;
-
-	STAILQ_HEAD(, nvme_request)		free_req;
-	STAILQ_HEAD(, nvme_request)		queued_req;
-
-	/* List entry for spdk_nvme_transport_poll_group::qpairs */
-	STAILQ_ENTRY(spdk_nvme_qpair)		poll_group_stailq;
-
 	/** Commands opcode in this list will return error */
 	TAILQ_HEAD(, nvme_error_cmd)		err_cmd_head;
 	/** Requests in this list will return error */
-	STAILQ_HEAD(, nvme_request)		err_req_head;
-
-	struct spdk_nvme_ctrlr_process		*active_proc;
-
-	struct spdk_nvme_transport_poll_group	*poll_group;
+	nvme_request_stailq_t			err_req_head;
 
 	void					*poll_group_tailq_head;
-
-	const struct spdk_nvme_transport	*transport;
-
-	/* Entries below here are not touched in the main I/O path. */
-
 	struct nvme_completion_poll_status	*poll_status;
 
 	/* List entry for spdk_nvme_ctrlr::active_io_qpairs */
@@ -524,12 +592,14 @@ struct spdk_nvme_qpair {
 	/* List entry for spdk_nvme_ctrlr_process::allocated_io_qpairs */
 	TAILQ_ENTRY(spdk_nvme_qpair)		per_process_tailq;
 
-	STAILQ_HEAD(, nvme_request)		aborting_queued_req;
+	nvme_request_stailq_t			aborting_queued_req;
 
 	void					*req_buf;
 
 	/* In-band authentication state */
 	struct nvme_auth			auth;
+	/* request object used only for this qpair's FABRICS/CONNECT command (if needed) */
+	struct nvme_request			*reserved_req;
 };
 
 struct spdk_nvme_poll_group {
@@ -550,6 +620,8 @@ struct spdk_nvme_poll_group {
 struct spdk_nvme_transport_poll_group {
 	struct spdk_nvme_poll_group			*group;
 	const struct spdk_nvme_transport		*transport;
+	void						*req_buf;
+	nvme_request_stailq_t				free_req;
 	STAILQ_HEAD(, spdk_nvme_qpair)			connected_qpairs;
 	STAILQ_HEAD(, spdk_nvme_qpair)			disconnected_qpairs;
 	STAILQ_ENTRY(spdk_nvme_transport_poll_group)	link;
@@ -765,14 +837,24 @@ enum nvme_ctrlr_state {
 	NVME_CTRLR_STATE_WAIT_FOR_KEEP_ALIVE_TIMEOUT,
 
 	/**
-	 * Get Identify I/O Command Set Specific Controller data structure.
+	 * Get Identify I/O Command Set Specific Controller data structure for the NVM command set.
 	 */
-	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC,
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
 
 	/**
-	 * Waiting for Identify I/O Command Set Specific Controller command to be completed.
+	 * Waiting for Identify I/O Command Set Specific Controller NVM command to be completed.
 	 */
-	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC,
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM,
+
+	/**
+	 * Get Identify I/O Command Set Specific Controller data structure for the ZNS command set.
+	 */
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS,
+
+	/**
+	 * Waiting for Identify I/O Command Set Specific Controller ZNS command to be completed.
+	 */
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS,
 
 	/**
 	 * Get Commands Supported and Effects log page for the Zoned Namespace Command Set.
@@ -925,7 +1007,7 @@ struct spdk_nvme_ctrlr_process {
 	pid_t						pid;
 
 	/** Active admin requests to be completed */
-	STAILQ_HEAD(, nvme_request)			active_reqs;
+	nvme_request_stailq_t				active_reqs;
 
 	TAILQ_ENTRY(spdk_nvme_ctrlr_process)		tailq;
 
@@ -1060,6 +1142,11 @@ struct spdk_nvme_ctrlr {
 	struct spdk_nvme_ctrlr_data	cdata;
 
 	/**
+	 * NVM Command Set Specific Identify Controller data.
+	 */
+	struct spdk_nvme_nvm_ctrlr_data *cdata_nvm;
+
+	/**
 	 * Zoned Namespace Command Set Specific Identify Controller data.
 	 */
 	struct spdk_nvme_zns_ctrlr_data	*cdata_zns;
@@ -1078,10 +1165,13 @@ struct spdk_nvme_ctrlr {
 	TAILQ_HEAD(, spdk_nvme_ctrlr_process)	active_procs;
 
 
-	STAILQ_HEAD(, nvme_request)	queued_aborts;
+	nvme_request_stailq_t		queued_aborts;
 	uint32_t			outstanding_aborts;
 
 	uint32_t			lock_depth;
+	/* CB to notify the user when the ctrlr is constructed. */
+	spdk_nvme_construct_cb			construct_cb;
+	bool					lazy_fabric_connect;
 
 	/* CB to notify the user when the ctrlr is removed/failed. */
 	spdk_nvme_remove_cb			remove_cb;
@@ -1137,6 +1227,12 @@ struct spdk_nvme_probe_ctx {
 	struct spdk_nvme_transport_id		trid;
 	const struct spdk_nvme_ctrlr_opts	*opts;
 	void					*cb_ctx;
+	/* Used for letting know that we have to pause before FABRIC CONNECT
+	 * and ->construct_cb can ba called to notify of the event that ctrlr
+	 * is constructed and pre-connected. */
+	bool					lazy_fabric_connect;
+	spdk_nvme_construct_cb			construct_cb;
+
 	spdk_nvme_probe_cb			probe_cb;
 	spdk_nvme_attach_cb			attach_cb;
 	spdk_nvme_attach_fail_cb		attach_fail_cb;
@@ -1177,6 +1273,13 @@ struct nvme_driver {
 
 	/** netlink socket fd for hotplug messages */
 	int				hotplug_fd;
+
+	/* Allocated for zcopy IO fallback memcopy */
+	struct spdk_mempool		*zcopy_data_buf_pool;
+
+	struct spdk_mempool		*zcopy_iov_small_pool;
+	struct spdk_mempool		*zcopy_iov_large_pool;
+	uint32_t			zcopy_pool_ref_count;
 };
 
 #define nvme_ns_cmd_get_ext_io_opt(opts, field, defval) \
@@ -1184,6 +1287,16 @@ struct nvme_driver {
         sizeof((opts)->field) <= (opts)->size ? (opts)->field : (defval))
 
 extern struct nvme_driver *g_spdk_nvme_driver;
+
+struct spdk_zcopy_pool_opts {
+	uint32_t zcopy_iov_small_pool_size;
+	int zcopy_small_iov_num;
+	uint32_t zcopy_iov_large_pool_size;
+	int zcopy_large_iov_num;
+
+	uint32_t zcopy_data_buf_pool_size;
+	uint32_t zcopy_data_buf_size;
+};
 
 int nvme_driver_init(void);
 
@@ -1393,9 +1506,49 @@ typedef int (*spdk_nvme_parse_ana_log_page_cb)(
 int	nvme_ctrlr_parse_ana_log_page(struct spdk_nvme_ctrlr *ctrlr,
 				      spdk_nvme_parse_ana_log_page_cb cb_fn, void *cb_arg);
 
-static inline void
-nvme_request_clear(struct nvme_request *req)
+#define NVME_INIT_REQUEST(req, _cb_fn, _cb_arg, _payload, _payload_size, _md_size)	\
+	do {						\
+		req->cb_fn = _cb_fn;			\
+		req->cb_arg = _cb_arg;			\
+		req->payload = _payload;		\
+		req->payload_size = _payload_size;	\
+		req->md_size = _md_size;		\
+		req->pid = g_spdk_nvme_pid;		\
+		req->submit_tick = 0;			\
+		req->accel_sequence = NULL;		\
+	} while (0);
+
+int	nvme_transport_qpair_free_request(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+static inline int nvme_request_free_children_zcopy(struct spdk_nvme_qpair *qpair,
+		struct nvme_request *req);
+static inline void nvme_free_request(struct nvme_request *req);
+
+void nvme_request_free_zcopy(struct nvme_request *req);
+int nvme_request_get_zcopy_buffers(struct nvme_request *req, uint32_t length);
+void nvme_request_free_zcopy_buffers(struct nvme_request *req);
+
+int nvme_init_zcopy_resource(void);
+void nvme_free_zcopy_resource(void);
+int nvme_request_get_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy);
+void nvme_request_put_zcopy_iovs(struct spdk_nvme_zcopy_io *zcopy);
+
+static inline struct nvme_request *
+nvme_allocate_request(struct spdk_nvme_qpair *qpair,
+		      const struct nvme_payload *payload, uint32_t payload_size, uint32_t md_size,
+		      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
 {
+	struct nvme_request *req;
+
+	assert(qpair->active_free_req != NULL);
+
+	req = STAILQ_FIRST(qpair->active_free_req);
+	if (req == NULL) {
+		return req;
+	}
+
+	STAILQ_REMOVE_HEAD(qpair->active_free_req, stailq);
+	qpair->num_outstanding_reqs++;
+
 	/*
 	 * Only memset/zero fields that need it.  All other fields
 	 *  will be initialized appropriately either later in this
@@ -1407,36 +1560,11 @@ nvme_request_clear(struct nvme_request *req)
 	 *  They will be initialized in nvme_request_add_child()
 	 *  if the request is split.
 	 */
-	memset(req, 0, offsetof(struct nvme_request, payload_size));
-}
-
-#define NVME_INIT_REQUEST(req, _cb_fn, _cb_arg, _payload, _payload_size, _md_size)	\
-	do {						\
-		nvme_request_clear(req);		\
-		req->cb_fn = _cb_fn;			\
-		req->cb_arg = _cb_arg;			\
-		req->payload = _payload;		\
-		req->payload_size = _payload_size;	\
-		req->md_size = _md_size;		\
-		req->pid = g_spdk_nvme_pid;		\
-		req->submit_tick = 0;			\
-		req->accel_sequence = NULL;		\
-	} while (0);
-
-static inline struct nvme_request *
-nvme_allocate_request(struct spdk_nvme_qpair *qpair,
-		      const struct nvme_payload *payload, uint32_t payload_size, uint32_t md_size,
-		      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
-{
-	struct nvme_request *req;
-
-	req = STAILQ_FIRST(&qpair->free_req);
-	if (req == NULL) {
-		return req;
-	}
-
-	STAILQ_REMOVE_HEAD(&qpair->free_req, stailq);
-	qpair->num_outstanding_reqs++;
+	memset(&req->cmd, 0, sizeof(req->cmd));
+	memset(&req->cpl, 0, sizeof(req->cpl));
+	memset(&req->retries, 0, offsetof(struct nvme_request, payload_size) - offsetof(struct nvme_request,
+			retries));
+	req->qpair = qpair;
 
 	NVME_INIT_REQUEST(req, cb_fn, cb_arg, *payload, payload_size, md_size);
 
@@ -1476,7 +1604,8 @@ _nvme_free_request(struct nvme_request *req, struct spdk_nvme_qpair *qpair)
 	 * saved only for use with a FABRICS/CONNECT command.
 	 */
 	if (spdk_likely(qpair->reserved_req != req)) {
-		STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
+		assert(req->qpair->active_free_req != NULL);
+		STAILQ_INSERT_HEAD(req->qpair->active_free_req, req, stailq);
 
 		assert(qpair->num_outstanding_reqs > 0);
 		qpair->num_outstanding_reqs--;
@@ -1539,6 +1668,71 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 
 	if (spdk_likely(cb_fn)) {
 		cb_fn(cb_arg, cpl);
+	} else if (spdk_unlikely(req->zcopy.zcopy_cb_fn &&
+				 !req->parent &&
+				 nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_ZCOPY)) {
+		/* Warning: If nvme_tcp_req is allocated in nvme_request,
+		 * nvme_complete_request_zcopy should be called rather
+		 * than nvme_complete_request, otherwise, it will cause
+		 * resource leak.
+		 */
+		assert(req->queued == true);
+		req->zcopy.zcopy_cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+}
+
+static inline void
+nvme_complete_request_zcopy(spdk_nvme_cmd_zcopy_cb cb_fn,
+			    void *cb_arg,
+			    struct spdk_nvme_qpair *qpair,
+			    struct nvme_request *req,
+			    struct spdk_nvme_cpl *cpl)
+{
+	struct spdk_nvme_cpl		err_cpl;
+	struct nvme_error_cmd		*cmd;
+
+	/* error injection at completion path,
+	 * only inject for successful completed commands
+	 */
+	if (spdk_unlikely(!TAILQ_EMPTY(&qpair->err_cmd_head) &&
+			  !spdk_nvme_cpl_is_error(cpl))) {
+		TAILQ_FOREACH(cmd, &qpair->err_cmd_head, link) {
+
+			if (cmd->do_not_submit) {
+				continue;
+			}
+
+			if ((cmd->opc == req->cmd.opc) && cmd->err_count) {
+
+				err_cpl = *cpl;
+				err_cpl.status.sct = cmd->status.sct;
+				err_cpl.status.sc = cmd->status.sc;
+
+				cpl = &err_cpl;
+				cmd->err_count--;
+				break;
+			}
+		}
+	}
+
+	if (cb_fn) {
+		if (!req->parent && spdk_nvme_cpl_is_success(cpl)) {
+			qpair->outstanding_zcopy_reqs++;
+		}
+
+		cb_fn(cb_arg, cpl, &req->zcopy);
+	}
+
+	if (spdk_unlikely(spdk_nvme_cpl_is_error(cpl))) {
+		if (req->is_parent) {
+			nvme_request_free_children_zcopy(qpair, req);
+			nvme_request_free_zcopy(req);
+			req->is_parent = false;
+			nvme_free_request(req);
+		} else if (!req->queued) {
+			nvme_request_free_zcopy(req);
+			nvme_transport_qpair_free_request(qpair, req);
+		}
 	}
 }
 
@@ -1589,12 +1783,168 @@ nvme_request_remove_child(struct nvme_request *parent, struct nvme_request *chil
 	TAILQ_REMOVE(&parent->children, child, child_tailq);
 }
 
+static inline int
+get_shift_iov(struct iovec *iov, int iovcnt,
+	      struct iovec **siov, int *siovcnt,
+	      size_t shift_sz, size_t *last_iov_offset)
+{
+	int i;
+
+	for (i = 0; i < iovcnt; i++) {
+		*last_iov_offset = spdk_min(iov[i].iov_len, shift_sz);
+		shift_sz -= *last_iov_offset;
+		if (shift_sz == 0) {
+			if (*last_iov_offset == iov[i].iov_len) {
+				/* Jump to next iov */
+				*last_iov_offset = 0;
+				*siov = &iov[++i];
+			} else {
+				*siov = &iov[i];
+			}
+
+			*siovcnt = iovcnt - i;
+			break;
+		}
+	}
+
+	if (i < iovcnt) {
+		return i;
+	} else {
+		return -EINVAL;
+	}
+}
+
+static inline size_t
+copy_iov_with_offset(struct iovec *src_iov, int src_iovcnt,
+		     struct iovec *dst_iov, int dst_iovcnt,
+		     size_t dst_offset)
+{
+	struct iovec *diov = NULL;
+	size_t last_iov_offset = 0, copied_sz;
+	int diovcnt = 0, shift_iov_cnt = 0;
+
+	shift_iov_cnt = get_shift_iov(dst_iov, dst_iovcnt,
+				      &diov, &diovcnt,
+				      dst_offset, &last_iov_offset);
+	assert(shift_iov_cnt >= 0);
+
+	/* shift iov */
+	dst_iov[shift_iov_cnt].iov_base = (uint8_t *)dst_iov[shift_iov_cnt].iov_base + last_iov_offset;
+	dst_iov[shift_iov_cnt].iov_len -= last_iov_offset;
+
+	copied_sz = spdk_iovcpy(src_iov, src_iovcnt, diov, diovcnt);
+
+	/* recover the shift iov */
+	dst_iov[shift_iov_cnt].iov_base = (uint8_t *)dst_iov[shift_iov_cnt].iov_base - last_iov_offset;
+	dst_iov[shift_iov_cnt].iov_len += last_iov_offset;
+
+	return copied_sz;
+}
+
+static inline int
+nvme_request_copy_parent(struct nvme_request *req)
+{
+	struct nvme_request *child, *tmp;
+	size_t dst_offset = 0;
+	int rc;
+
+	assert(req->num_children != 0);
+
+	req->zcopy.iovcnt = 0;
+	rc = nvme_request_get_zcopy_buffers(req,
+					    req->payload_size + req->md_size);
+	if (rc != 0) {
+		return rc;
+	}
+
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		dst_offset += copy_iov_with_offset(child->zcopy.iovs, child->zcopy.iovcnt,
+						   req->zcopy.iovs, req->zcopy.iovcnt,
+						   dst_offset);
+	}
+
+	nvme_request_free_children_zcopy(req->qpair, req);
+
+	return 0;
+}
+
+static inline int
+nvme_request_set_parent_zcopy_iovs(struct nvme_request *req)
+{
+	struct nvme_request *child, *tmp;
+	int rc;
+
+	assert(req->num_children != 0);
+
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		assert(child->zcopy.iovs != NULL);
+		req->zcopy.iovcnt += child->zcopy.iovcnt;
+	}
+
+	if (spdk_unlikely(req->zcopy.iovcnt > NVME_MAX_ZCOPY_IOVS)) {
+		/* fallback memcopy */
+		return nvme_request_copy_parent(req);
+	}
+
+	rc = nvme_request_get_zcopy_iovs(&req->zcopy);
+	if (rc != 0) {
+		return -ENOMEM;
+	}
+
+	req->zcopy.iovcnt = 0;
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		memcpy(req->zcopy.iovs + req->zcopy.iovcnt, child->zcopy.iovs,
+		       child->zcopy.iovcnt * sizeof(child->zcopy.iovs[0]));
+
+		req->zcopy.iovcnt += child->zcopy.iovcnt;
+	}
+
+	return 0;
+}
+
+static inline void
+nvme_cb_complete_child_zcopy(void *child_arg,
+			     const struct spdk_nvme_cpl *cpl,
+			     struct spdk_nvme_zcopy_io *zcopy)
+{
+	struct nvme_request *child = child_arg;
+	struct nvme_request *parent = child->parent;
+
+	assert(nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY);
+
+	/* zcopy children requests will be removed together
+	 * if all children requests complete successfully */
+	parent->num_zcopy_children--;
+
+	if (spdk_nvme_cpl_is_error(cpl)) {
+		memcpy(&parent->parent_status, cpl, sizeof(*cpl));
+		nvme_request_remove_child(parent, child);
+	}
+
+	if (parent->num_zcopy_children == 0) {
+		if (spdk_nvme_cpl_is_success(&parent->parent_status)) {
+			int rc = nvme_request_set_parent_zcopy_iovs(parent);
+			if (rc != 0) {
+				parent->parent_status.status.sct = SPDK_NVME_SCT_GENERIC;
+				parent->parent_status.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			}
+		}
+
+		nvme_complete_request_zcopy(parent->zcopy.zcopy_cb_fn, parent->cb_arg,
+					    parent->qpair, parent, &parent->parent_status);
+	}
+}
+
 static inline void
 nvme_cb_complete_child(void *child_arg, const struct spdk_nvme_cpl *cpl)
 {
 	struct nvme_request *child = child_arg;
 	struct nvme_request *parent = child->parent;
 
+	if (nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+		nvme_cb_complete_child_zcopy(child, cpl, NULL);
+		return;
+	}
 	nvme_request_remove_child(parent, child);
 
 	if (spdk_nvme_cpl_is_error(cpl)) {
@@ -1625,9 +1975,14 @@ nvme_request_add_child(struct nvme_request *parent, struct nvme_request *child)
 	}
 
 	parent->num_children++;
+	parent->is_parent = true;
 	TAILQ_INSERT_TAIL(&parent->children, child, child_tailq);
 	child->parent = parent;
 	child->cb_fn = nvme_cb_complete_child;
+	if (nvme_payload_type(&parent->payload) == NVME_PAYLOAD_TYPE_ZCOPY) {
+		parent->num_zcopy_children++;
+		child->zcopy.zcopy_cb_fn = nvme_cb_complete_child_zcopy;
+	}
 	child->cb_arg = child;
 }
 
@@ -1646,6 +2001,31 @@ nvme_request_free_children(struct nvme_request *req)
 		nvme_request_free_children(child);
 		nvme_free_request(child);
 	}
+}
+
+static inline int
+nvme_request_free_children_zcopy(struct spdk_nvme_qpair *qpair, struct nvme_request *req)
+{
+	struct nvme_request *child, *tmp;
+	int ret = 0;
+
+	if (req->num_children == 0) {
+		return -ENOENT;
+	}
+
+	/* free all child nvme_request */
+	TAILQ_FOREACH_SAFE(child, &req->children, child_tailq, tmp) {
+		int rc;
+		assert(child->queued == false);
+		nvme_request_remove_child(req, child);
+		nvme_request_free_zcopy(child);
+		rc = nvme_transport_qpair_free_request(qpair, child);
+		if (rc != 0) {
+			ret = rc;
+		}
+	}
+
+	return ret;
 }
 
 int	nvme_request_check_timeout(struct nvme_request *req, uint16_t cid,
@@ -1737,13 +2117,18 @@ int64_t nvme_transport_poll_group_process_completions(struct spdk_nvme_transport
 void nvme_transport_poll_group_check_disconnected_qpairs(
 	struct spdk_nvme_transport_poll_group *tgroup,
 	spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb);
+void nvme_transport_poll_group_process_events(struct spdk_nvme_transport_poll_group *tgroup);
 int nvme_transport_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup);
 int nvme_transport_poll_group_get_stats(struct spdk_nvme_transport_poll_group *tgroup,
 					struct spdk_nvme_transport_poll_group_stat **stats);
 void nvme_transport_poll_group_free_stats(struct spdk_nvme_transport_poll_group *tgroup,
 		struct spdk_nvme_transport_poll_group_stat *stats);
+int nvme_transport_poll_group_init(struct spdk_nvme_transport_poll_group *tgroup,
+				   uint32_t num_requests);
+void nvme_transport_poll_group_deinit(struct spdk_nvme_transport_poll_group *tgroup);
 enum spdk_nvme_transport_type nvme_transport_get_trtype(const struct spdk_nvme_transport
 		*transport);
+const char *nvme_transport_get_trname(const struct spdk_nvme_transport *transport);
 /*
  * Below ref related functions must be called with the global
  *  driver lock held for the multi-process condition.

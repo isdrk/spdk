@@ -13,6 +13,10 @@
 	spdk_accel_submit_crc32cv;
 	spdk_accel_submit_copy_crc32c;
 	spdk_accel_submit_copy_crc32cv;
+	spdk_accel_submit_check_crc32c;
+	spdk_accel_submit_check_crc32cv;
+	spdk_accel_submit_copy_check_crc32c;
+	spdk_accel_submit_copy_check_crc32cv;
 	spdk_accel_submit_compress;
 	spdk_accel_submit_decompress;
 	spdk_accel_submit_encrypt;
@@ -25,6 +29,7 @@
 	spdk_accel_submit_dix_generate;
 	spdk_accel_submit_dix_verify;
 	spdk_accel_get_opc_module_name;
+	spdk_accel_get_opc_memory_domain;
 	spdk_accel_assign_opc;
 	spdk_accel_write_config_json;
 	spdk_accel_append_copy;
@@ -33,6 +38,9 @@
 	spdk_accel_append_encrypt;
 	spdk_accel_append_decrypt;
 	spdk_accel_append_crc32c;
+	spdk_accel_append_copy_crc32c;
+	spdk_accel_append_check_crc32c;
+	spdk_accel_append_copy_check_crc32c;
 	spdk_accel_append_dif_verify;
 	spdk_accel_append_dif_verify_copy;
 	spdk_accel_append_dif_generate;
@@ -60,6 +68,7 @@
 	spdk_accel_submit_decompress_ext;
 	spdk_accel_append_decompress_ext;
 	spdk_accel_get_compress_level_range;
+	spdk_accel_get_memory_domain;
 
 	# functions needed by modules
 	spdk_accel_module_list_add;
@@ -67,6 +76,7 @@
 	spdk_accel_task_complete;
 	spdk_accel_sequence_continue;
 	spdk_accel_driver_register;
+	spdk_accel_driver_get_name;
 	spdk_accel_alloc_sequence_buf;
 	spdk_accel_sequence_first_task;
 	spdk_accel_sequence_next_task;

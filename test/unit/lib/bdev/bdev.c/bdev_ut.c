@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2017 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_internal/cunit.h"
@@ -16,6 +16,22 @@
 #include "bdev/bdev.c"
 
 #include "common/lib/bdev/common_stubs.h"
+
+DEFINE_STUB(bdev_qos_limits_cache_queue_io, bool, (struct bdev_qos_limits_cache *caches,
+		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io), false);
+DEFINE_STUB(bdev_qos_limits_queue_io, bool, (struct bdev_qos_limits *limits,
+		struct spdk_bdev_io *bdev_io), true);
+DEFINE_STUB_V(bdev_qos_limits_cache_rewind, (struct bdev_qos_limits_cache *caches,
+		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io));
+DEFINE_STUB_V(bdev_qos_limits_reset_quota, (struct bdev_qos_limits *limits, int timeslice_count));
+DEFINE_STUB_V(bdev_qos_limits_update_max_quota_per_timeslice, (struct bdev_qos_limits *limits));
+DEFINE_STUB_V(bdev_qos_limits_init, (struct bdev_qos_limits *limits, uint32_t io_slice,
+				     uint32_t byte_slice));
+DEFINE_STUB(bdev_qos_limits_check_disabled, bool, (const uint64_t *limits), true);
+DEFINE_STUB_V(bdev_qos_limits_set, (struct bdev_qos_limits *limits, const uint64_t *values));
+DEFINE_STUB_V(bdev_qos_limits_cache_init, (struct bdev_qos_limits_cache *caches,
+		struct bdev_qos_limits *limits));
+DEFINE_STUB_V(bdev_qos_limits_cache_reset, (struct bdev_qos_limits_cache *caches));
 
 static bool g_memory_domain_pull_data_called;
 static bool g_memory_domain_push_data_called;

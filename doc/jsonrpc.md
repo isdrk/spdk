@@ -435,10 +435,18 @@ Example response:
     "iscsi_set_options",
     "bdev_set_options",
     "bdev_set_qos_limit",
+    "bdev_group_create",
+    "bdev_group_add_bdev",
+    "bdev_group_remove_bdev",
+    "bdev_group_delete",
+    "bdev_group_set_qos_limit",
+    "bdev_groups_get",
     "bdev_get_bdevs",
     "bdev_get_iostat",
     "framework_get_config",
     "framework_get_subsystems",
+    "framework_disable_subsystem",
+    "framework_enable_subsystem",
     "framework_monitor_context_switch",
     "spdk_kill_instance",
     "accel_set_options",
@@ -592,6 +600,85 @@ Example response:
       ]
     }
   ]
+}
+~~~
+
+### framework_disable_subsystem {#rpc_framework_disable_subsystem}
+
+Disable an entire subsystem at start up time. The subsystem will not load or consume resources.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | SPDK subsystem name
+
+#### Response
+
+Completion status of the operation is returned as a boolean.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "framework_disable_subsystem",
+  "id": 1,
+  "params": {
+    "name": "iscsi"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### framework_enable_subsystem {#rpc_framework_enable_subsystem}
+
+Enable an entire subsystem at start up time. Subsystems are enabled by default, so this
+RPC is only necessary if a subsystem was previously disabled using `framework_disable_subsystem`.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | SPDK subsystem name
+
+#### Response
+
+Completion status of the operation is returned as a boolean.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "framework_enable_subsystem",
+  "id": 1,
+  "params": {
+    "name": "iscsi"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
 }
 ~~~
 
@@ -2419,10 +2506,18 @@ Enable mlx5 accel offload
 
 #### Parameters
 
-Name                    | Optional | Type   | Description
------------------------ | -------- |--------| -----------
-qp_size                 | Optional | number | qpair size
-num_requests            | Optional | number | Size of the shared requests pool
+Name                    | Optional | Type    | Description
+----------------------- | -------- |---------| -----------
+qp_size                 | Optional | number  | qpair size
+cq_size                 | Optional | number  | Size of the shared CQ
+num_requests            | Optional | number  | Size of the shared requests pool
+crypto_split_blocks     | Optional | number  | Number of data blocks to be processed in 1 UMR
+allowed-devs            | Optional | string  | Comma separated list of allowed device names, e.g. mlx5_0,mlx5_1
+qp_per_domain           | Optional | boolean | Use dedicated qpair per memory domain per channel
+enable_driver           | Optional | boolean | Enable accel mlx5 platform driver
+enable_module           | Optional | boolean | Enable accel mlx5 module
+disable_signature       | Optional | boolean | Disable signature operations support
+disable_crypto          | Optional | boolean | Disable crypto operations support
 
 #### Example
 
@@ -2486,7 +2581,8 @@ Example response:
       "umrs": {
         "crypto_umrs": 1234,
         "sig_umrs": 2345,
-        "total": 3579
+        "sig_crypto_umrs": 3456,
+        "total": 7035
       },
       "rdma": {
         "read": 0,
@@ -2505,8 +2601,12 @@ Example response:
       "tasks": {
         "copy": 0,
         "crypto": 1234,
+        "encrypt_mkey": 0,
+        "decrypt_mkey": 0,
         "crc32c": 2345,
-        "total": 3579
+        "encrypt_crc": 3456,
+        "crc_decrypt": 0,
+        "total": 7035
       }
     }
   }
@@ -2899,9 +2999,9 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | Block device name
 rw_ios_per_sec          | Optional | number      | Number of R/W I/Os per second to allow. 0 means unlimited.
-rw_mbytes_per_sec       | Optional | number      | Number of R/W megabytes per second to allow. 0 means unlimited.
-r_mbytes_per_sec        | Optional | number      | Number of Read megabytes per second to allow. 0 means unlimited.
-w_mbytes_per_sec        | Optional | number      | Number of Write megabytes per second to allow. 0 means unlimited.
+rw_mbytes_per_sec       | Optional | number      | Number of R/W mebibytes per second to allow. 0 means unlimited.
+r_mbytes_per_sec        | Optional | number      | Number of Read mebibytes per second to allow. 0 means unlimited.
+w_mbytes_per_sec        | Optional | number      | Number of Write mebibytes per second to allow. 0 means unlimited.
 
 #### Example
 
@@ -2925,6 +3025,374 @@ Example request:
 Example response:
 
 ~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_create {#rpc_bdev_group_create}
+
+Create a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_create",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_add_bdev {#rpc_bdev_group_add_bdev}
+
+Add a bdev to a group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+bdev                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_add_bdev",
+  "params": {
+    "name": "grp0",
+    "bdev": "Malloc0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_remove_bdev {#rpc_bdev_group_remove_bdev}
+
+Remove a bdev from a group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+bdev                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_remove_bdev",
+  "params": {
+    "name": "grp0",
+    "bdev": "Malloc0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_delete {#rpc_bdev_group_delete}
+
+Delete a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_delete",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_group_set_qos_limit {#rpc_bdev_group_set_qos_limit}
+
+Set QoS rate limit on a bdev group
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Required | string      | Name of the bdev group
+rw_ios_per_sec          | Optional | number      | Number of R/W I/Os per second to allow. 0 means unlimited.
+rw_mbytes_per_sec       | Optional | number      | Number of R/W mebibytes per second to allow. 0 means unlimited.
+r_mbytes_per_sec        | Optional | number      | Number of Read mebibytes per second to allow. 0 means unlimited.
+w_mbytes_per_sec        | Optional | number      | Number of Write mebibytes per second to allow. 0 means unlimited.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_set_qos_limit",
+  "params": {
+    "name": "grp0"
+    "rw_ios_per_sec": 20000
+    "rw_mbytes_per_sec": 100
+    "r_mbytes_per_sec": 50
+    "w_mbytes_per_sec": 50
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_groups_get {#rpc_bdev_groups_get}
+
+Get bdev groups info
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Optional | string      | Name of the bdev group
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_groups_get",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "name": "grp0",
+      "assigned_rate_limits": {
+        "rw_ios_per_sec": 20000,
+        "rw_mbytes_per_sec": 100,
+        "r_mbytes_per_sec": 50,
+        "w_mbytes_per_sec": 50
+      },
+      "bdevs": [
+        "Malloc0",
+        "Malloc1"
+      ]
+    }
+  ]
+}
+~~~
+
+### bdev_group_get_iostat {#rpc_bdev_group_get_iostat}
+
+Get I/O statistics of bdev groups.
+
+#### Parameters
+
+The user may specify no parameters in order to list all bdev groups, or a bdev group may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | Bdev group name
+
+#### Response
+
+The response is an array of objects containing I/O statistics of the requested bdev groups.
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_group_get_iostat",
+  "params": {
+    "name": "grp0"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "tick_rate": 2200000000,
+    "groups" : [
+      {
+        "name": "grp0",
+        "bytes_read": 36864,
+        "num_read_ops": 2,
+        "bytes_written": 0,
+        "num_write_ops": 0,
+        "bytes_unmapped": 0,
+        "num_unmap_ops": 0,
+        "read_latency_ticks": 178904,
+        "write_latency_ticks": 0,
+        "unmap_latency_ticks": 0,
+        "queue_depth_polling_period": 2,
+        "queue_depth": 0,
+        "io_time": 0,
+        "weighted_io_time": 0
+      }
+    ]
+  }
+}
+~~
+
+### bdev_set_ro {#rpc_bdev_set_ro}
+
+Set a bdev to read-only state
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_set_ro",
+  "params": {
+    "name": "test_bdev"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### bdev_set_rw {#rpc_bdev_set_rw}
+
+For a bdev that was previously set to read-only, restore read-write capability.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- |----------| ----------- | -----------
+name                    | Required | string      | Name of the bdev
+
+#### Example
+
+Example request:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_set_rw",
+  "params": {
+    "name": "test_bdev"
+  }
+}
+~
+
+Example response:
+
+~json
 {
   "jsonrpc": "2.0",
   "id": 1,
@@ -3748,6 +4216,8 @@ md_interleave           | Optional | boolean     | Metadata location, interleave
 dif_type                | Optional | number      | Protection information type. Parameter --md-size needs to be set along --dif-type. Default=0 - no protection.
 dif_is_head_of_md       | Optional | boolean     | Protection information is in the first 8 bytes of metadata. Default=false.
 physical_block_size     | Optional | number      | Physical block size of device; must be a power of 2 and at least 512
+enable_io_channel_weight| Optional | boolean     | Enable IO channel weight. Default=false.
+disable_accel_support   | Optional | boolean     | Don't report support of accel sequence.
 
 #### Result
 
@@ -4092,11 +4562,13 @@ transport_tos              | Optional | number      | IPv4 Type of Service value
 nvme_error_stat            | Optional | boolean     | Enable collecting NVMe error counts.
 rdma_srq_size              | Optional | number      | Set the size of a shared rdma receive queue. Default: 0 (disabled).
 io_path_stat               | Optional | boolean     | Enable collecting I/O stat of each nvme bdev io path. Default: `false`.
-allow_accel_sequence       | Optional | boolean     | Allow NVMe bdevs to advertise support for accel sequences if the controller also supports them.  Default: `false`.
+allow_accel_sequence       | Optional | boolean     | Allow NVMe bdevs to advertise support for accel sequences if the controller also supports them. Default: `true`.
+disallow_accel_sequence    | Optional | boolean     | Disallow NVMe bdevs to advertise support for accel sequences even if the controller supports them. Default: `false`.
 rdma_max_cq_size           | Optional | number      | Set the maximum size of a rdma completion queue. Default: 0 (unlimited)
 rdma_cm_event_timeout_ms   | Optional | number      | Time to wait for RDMA CM events. Default: 0 (0 means using default value of driver).
 dhchap_digests             | Optional | list        | List of allowed DH-HMAC-CHAP digests.
 dhchap_dhgroups            | Optional | list        | List of allowed DH-HMAC-CHAP DH groups.
+poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
 rdma_umr_per_io            | Optional | boolean     | Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system
 
 #### Example
@@ -4376,6 +4848,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -4411,6 +4884,8 @@ The `name` parameter is an NVMe bdev controller name and the `cntlid` parameter 
 an NVMe controller in the NVMe bdev controller. Enable only one NVMe-oF controller if the `cntlid`
 parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
 
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
 Returns true if the controller enablement was successful or a controller was already enabled, false otherwise.
 
 #### Parameters
@@ -4419,6 +4894,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -4454,6 +4930,8 @@ The `name` parameter is an NVMe bdev controller name and the `cntlid` parameter 
 an NVMe controller in the NVMe bdev controller. Disable only one NVMe-oF controller if the `cntlid`
 parameter is specified, or all NVMe-oF controllers in an NVMe bdev controller if it is omitted.
 
+Use `cntlid` if `nested_mode` is false or `subnqn` otherwise.
+
 Returns true if the controller disablement was successful or a controller was already disabled, false otherwise.
 
 #### Parameters
@@ -4462,6 +4940,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | NVMe controller name (or NVMe bdev controller name for multipath)
 cntlid                  | Optional | number      | NVMe controller ID (used as NVMe controller name for multipath)
+subnqn                  | Optional | string      | NVMe-oF target subnqn (used as NVMe controller name for multipath)
 
 #### Example
 
@@ -8323,6 +8802,7 @@ zcopy                       | Optional | boolean | Use zero-copy operations if t
 ack_timeout                 | Optional | number  | ACK timeout in milliseconds
 data_wr_pool_size           | Optional | number  | RDMA data WR pool size (RDMA only)
 disable_command_passthru    | Optional | boolean | Disallow command passthru.
+data_wr_pool_size           | Optional | number  | RDMA data WR pool size (RDMA only)
 
 #### Example
 
@@ -12669,6 +13149,10 @@ zerocopy_threshold          | Optional | number      | Set zerocopy_threshold in
 --                          | --       | --          | that fall below this threshold may be sent without zerocopy flag set
 tls_version                 | Optional | number      | TLS protocol version, e.g. 13 for v1.3 (only applies when impl_name == ssl)
 enable_ktls                 | Optional | boolean     | Enable or disable Kernel TLS (only applies when impl_name == ssl)
+enable_zerocopy_recv        | Optional | boolean     | Enable or disable zero copy on receive
+enable_tcp_nodelay          | Optional | boolean     | Enable or disable TCP_NODELAY socket option
+buffers_pool_size           | Optional | number      | Set per poll group socket buffers pool size
+packets_pool_size           | Optional | number      | Set per poll group packets pool size
 
 #### Response
 
@@ -13645,7 +14129,7 @@ Example request:
 {
   "jsonrpc": "2.0",
   "method": "keyring_linux_set_options",
-  "id": 1
+  "id": 1,
   "params": {
     "enable": true
   }
@@ -13728,6 +14212,7 @@ Example response:
   "id": 1,
   "result": true
 }
+~~~
 
 ### fsdev_get_opts {#fsdev_get_opts}
 
@@ -13800,6 +14285,155 @@ Example response:
 }
 ~~~
 
+### fsdev_get_fsdevs {#rpc_fsev_get_fsdevs}
+
+Get information about filesystem devices (fsdevs).
+
+#### Parameters
+
+The user may specify no parameters in order to list all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+
+### fsdev_get_iostat {#rpc_fsdev_get_iostat}
+
+Get I/O statistics of filesystem devices (fsdevs).
+
+#### Parameters
+
+The user may specify no parameters in order to list all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+per_channel             | Optional | bool        | Display per channel data.
+
+#### Response
+
+The response is an array of objects containing I/O statistics of the requested fsdevs.
+
+NOTE: Only the statistics for the I/Os with non-zero `count` are reported.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fsdev_get_iostat",
+  "id": 1,
+  "params": {
+    "name": "aio0",
+    "per_channel": false
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "fsdevs": [
+      {
+        "name": "fsdev0",
+        "io": {
+          "mount": {
+            "count": 1,
+            "max_latency_ticks": 145384,
+            "min_latency_ticks": 145384
+          },
+          "lookup": {
+            "count": 18,
+            "max_latency_ticks": 13828182,
+            "min_latency_ticks": 41132
+          },
+          "forget": {
+            "count": 11,
+            "max_latency_ticks": 71684,
+            "min_latency_ticks": 31922
+          },
+          "getattr": {
+            "count": 43,
+            "max_latency_ticks": 13864914,
+            "min_latency_ticks": 23098
+          },
+          "open": {
+            "count": 7,
+            "max_latency_ticks": 2309832,
+            "min_latency_ticks": 54062
+          },
+          "read": {
+            "count": 1733507,
+            "max_latency_ticks": 45798992,
+            "min_latency_ticks": 447254
+          },
+          "write": {
+            "count": 1734244,
+            "max_latency_ticks": 45676558,
+            "min_latency_ticks": 456126
+          },
+          "getxattr": {
+            "count": 33,
+            "max_latency_ticks": 1722712,
+            "min_latency_ticks": 24690
+          }
+        },
+        "bytes_read": 7100444672,
+        "bytes_written": 7103463424,
+        "num_out_of_io": 0,
+        "num_io_errors": 33
+      }
+    ]
+  }
+}
+~~~
+
+### fsdev_reset_iostat {#rpc_fsdev_reset_iostat}
+
+Reset fsdev statistics.
+
+#### Parameters
+
+The user may specify no parameters in order to reset all filesystem devices, or a filesystem device may be
+specified by name.
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+name                    | Optional | string      | fsdev name
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fsdev_reset_iostat",
+  "id": 1,
+  "params": {
+    "name": "aio0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### fsdev_aio_create {#fsdev_aio_create}
 
 Create an AIO fsdev.
@@ -13812,7 +14446,8 @@ name                    | Required | string      | Name of the AIO fsdev to crea
 root_path               | Required | string      | Path on the system directory to be exposed as an SPDK filesystem
 enable_xattr            | Optional | bool        | true to enable the extended attributes, false otherwise
 enable_writeback_cache  | Optional | bool        | true to enable the writeback cache, false otherwise
-max_write               | Optional | int         | Max write size in bytes
+max_xfer_size           | Optional | int         | The maximum size allowed for data transfers, in bytes
+max_readahead           | Optional | int         | The maximum size allowed for readahead, in bytes
 skip_rw                 | Optional | bool        | Skip processing read and write requests and complete them successfully immediately. This is useful for benchmarking.
 
 #### Example
@@ -13828,7 +14463,8 @@ Example request:
     "root_path": "/tmp/vfio-test",
     "enable_xattr": false,
     "enable_writeback_cache": true,
-    "max_write": 65535,
+    "max_xfer_size": 65535,
+    "max_readahead": 65535,
     "skip_rw": true
   }
 }
@@ -13864,6 +14500,138 @@ Example request:
   "id": 1,
   "params": {
     "name": "aio0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### rmem_enable {#rmem_enable}
+
+Enable/disable the Recovery Memory functionality.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+backend_dir             | Optional | string      | Path on the system directory to be used to store the memory files. If not specified, disables the Recovery Memory functionality.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rmem_enable",
+  "id": 8,
+  "params": {
+    "backend_dir": "/tmp/rmem"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "result": true
+}
+~~~
+
+### rmem_get_config {#rmem_get_config}
+
+Get the Recovery Memory config.
+
+NOTE: the Recovery Memory functionality is disabled if `backend_dir` is `null`.
+
+#### Parameters
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rmem_get_config",
+  "id": 1,
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "params": {
+    "backend_dir": "/tmp/rmem"
+  }
+}
+~~~
+
+### rdma_provider_get_opts {#rdma_provider_get_opts}
+
+Get rdma_provider options.
+
+#### Parameters
+
+None
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_get_opts",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "support_offload_on_qp": true
+  }
+}
+~~~
+
+### rdma_provider_set_opts {#rdma_provider_set_opts}
+
+Set rdma_provider options.
+
+#### Parameters
+
+Name                    | Optional | Type | Description
+----------------------- |----------|------| -----------
+support_offload_on_qp   | Optional | bool | Enable or disable support of HW offloads on network QP.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_set_opts",
+  "id": 1,
+  "params": {
+    "support_offload_on_qp": true
   }
 }
 ~~~

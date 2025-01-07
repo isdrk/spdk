@@ -110,7 +110,7 @@ void spdk_for_each_reactor(spdk_event_fn fn, void *arg1, void *arg2, spdk_event_
  * Currently, this function is only permitted within spdk application thread.
  * Also it requires the corresponding reactor does not have any spdk_thread.
  *
- * \param lcore CPU core index of specified reactor.
+ * \param lcore CPU core ID of specified reactor.
  * \param new_in_interrupt Set interrupt mode for true, or poll mode for false.
  * \param cb_fn This will be called on spdk application thread after setting interrupt mode.
  * \param cb_arg Argument will be passed to cb_fn when called.

@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2022-2025, NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -7,9 +7,12 @@
 #define SPDK_MLX5_H
 
 #include <infiniband/mlx5dv.h>
+#include <rdma/rdma_cma.h>
 
 #include "spdk/tree.h"
 
+#define SPDK_MLX5_DRIVER_NAME "mlx5"
+#define SPDK_MLX5_VENDOR_ID_MELLANOX 0x2c9
 #define SPDK_MLX5_DEV_MAX_NAME_LEN 64
 
 /* API for low level PRM based mlx5 driver implementation. Some terminology:
@@ -27,7 +30,6 @@
 
 #define SPDK_MLX5_VENDOR_ID_MELLANOX 0x2c9
 
-struct spdk_mlx5_crypto_dek_legacy;
 struct spdk_mlx5_crypto_keytag;
 
 enum {
@@ -49,11 +51,24 @@ enum {
 	SPDK_MLX5_WQE_CTRL_STRONG_ORDERING		= 3 << 5,
 };
 
+/*
+ * SPDK_MLX5_CQE_SYNDROME_SIGERR is a fake syndrome that corresponds to opcode
+ * MLX5_CQE_SIG_ERR. It is added to avoid growing spdk_mlx5_cq_completion.
+ *
+ * The size of the syndrome field in the HW CQE is 8 bits. So, the new syndrome
+ * cannot overlap with the HW syndromes.
+ */
+enum {
+	SPDK_MLX5_CQE_SYNDROME_SIGERR = 1 << 8,
+};
+
 struct spdk_mlx5_crypto_dek_create_attr {
 	/* Data Encryption Key in binary form */
 	char *dek;
 	/* Length of the dek */
 	size_t dek_len;
+	/* LBA is located in upper part of a tweak */
+	bool tweak_upper_lba;
 };
 
 struct spdk_mlx5_cq;
@@ -69,6 +84,8 @@ struct spdk_mlx5_cq_attr {
 
 struct spdk_mlx5_qp_attr {
 	struct ibv_qp_cap cap;
+	struct spdk_mlx5_srq *srq;
+	void *qp_context;
 	bool sigall;
 	/* If set then CQ_UPDATE will be cleared for every ctrl WQE and only last ctrl WQE before ringing the doorbell
 	 * will be updated with CQ_UPDATE flag */
@@ -89,7 +106,7 @@ enum spdk_mlx5_mkey_pool_flags {
 	SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO = 1 << 0,
 	SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE = 1 << 1,
 	/* Max number of pools of different types */
-	SPDK_MLX5_MKEY_POOL_FLAG_COUNT = 2,
+	SPDK_MLX5_MKEY_POOL_FLAG_COUNT = 3,
 };
 
 struct spdk_mlx5_mkey_pool_param {
@@ -101,8 +118,8 @@ struct spdk_mlx5_mkey_pool_param {
 
 struct spdk_mlx5_mkey_pool_obj {
 	uint32_t mkey;
-	/* Determines which pool the mkey belongs to. See \ref spdk_mlx5_mkey_pool_flags */
-	uint8_t pool_flag;
+	uint32_t ref_count;
+	struct spdk_mlx5_mkey_pool *pool;
 	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
 	struct {
 		uint32_t sigerr_count;
@@ -135,6 +152,8 @@ enum spdk_mlx5_block_size_selector {
 enum spdk_mlx5_crypto_key_tweak_mode {
 	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE	= 0,
 	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE	= 1,
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE	= 2,
+	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE	= 3
 };
 
 struct spdk_mlx5_crypto_dek_data {
@@ -186,6 +205,8 @@ struct spdk_mlx5_device_crypto_caps {
 	bool single_block_le_tweak;
 	bool multi_block_be_tweak;
 	bool multi_block_le_tweak;
+	bool tweak_inc_64;
+	bool large_mtu_tweak;
 };
 
 struct spdk_mlx5_device_caps {
@@ -226,7 +247,26 @@ int spdk_mlx5_cq_create(struct ibv_pd *pd, struct spdk_mlx5_cq_attr *cq_attr,
 int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
 
 /**
- * Create loopback qpair suitable for RDMA operations
+ * Create Shared Receive Queue
+ *
+ * \param pd Protection Domain
+ * \param srq_attr Attributes to be used to create SRQ
+ * \param srq_out Pointer created SRQ
+ * \return 0 on success, negated errno on failure. \b srq_out is set only on success result
+ */
+int spdk_mlx5_srq_create(struct ibv_pd *pd, struct ibv_srq_init_attr *srq_attr,
+			 struct spdk_mlx5_srq **srq_out);
+
+/**
+ * Destroy Shared Receive Queue
+ *
+ * \param srq SRQ created with \ref spdk_mlx5_srq_create
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_mlx5_srq_destroy(struct spdk_mlx5_srq *srq);
+
+/**
+ * Create qpair suitable for RDMA operations
  *
  * \param pd Protection Domain
  * \param cq Completion Queue to bind QP to
@@ -236,6 +276,33 @@ int spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq);
  */
 int spdk_mlx5_qp_create(struct ibv_pd *pd, struct spdk_mlx5_cq *cq,
 			struct spdk_mlx5_qp_attr *qp_attr, struct spdk_mlx5_qp **qp_out);
+
+/**
+ * Connect QP as loopback
+ *
+ * \param qp QP created with \ref spdk_mlx5_qp_create
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_connect_loopback(struct spdk_mlx5_qp *qp);
+
+/**
+ * Connect QP using RDMA CM
+ *
+ * \param qp QP created with \ref spdk_mlx5_qp_create
+ * \param cm_id RDMA CM id to be used to connect QP
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_connect_cm(struct spdk_mlx5_qp *qp, struct rdma_cm_id *cm_id);
+
+/**
+ * Modify the attributes of QP qp with the attributes in attr according to the mask attr_mask
+ *
+ * \param qp QP to be modified
+ * \param attr QP attributed to be used to modify QP
+ * \param attr_mask specifies the QP attributes to be modified
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_qp_modify(struct spdk_mlx5_qp *qp, struct ibv_qp_attr *attr, int attr_mask);
 
 /**
  * Changes internal qpair state to error causing all unprocessed Work Requests to be completed with IBV_WC_WR_FLUSH_ERR
@@ -273,6 +340,25 @@ int spdk_mlx5_cq_poll_completions(struct spdk_mlx5_cq *cq,
 				  struct spdk_mlx5_cq_completion *comp, int max_completions);
 
 /**
+ * Poll Completion Queue, save up to \b num_entries into \b wc array
+ *
+ * \param cq Completion Queue
+ * \param num_entries Maximum number of completions to be polled
+ * \param wc Array of work completions to be filled by this function
+ * \return
+ */
+int spdk_mlx5_cq_poll_wc(struct spdk_mlx5_cq *cq, int num_entries, struct ibv_wc *wc);
+
+/**
+ * Resize Completion Queue
+ *
+ * \param cq Completion Queue to be resized
+ * \param cqe New size of Completion Queue
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe);
+
+/**
  * Ring Send Queue doorbell, submits all previously posted WQEs to HW
  *
  * \param qp qpair pointer
@@ -308,6 +394,71 @@ int spdk_mlx5_qp_rdma_write(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32
  */
 int spdk_mlx5_qp_rdma_read(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t sge_count,
 			   uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags);
+
+/**
+ * Write a Send WR to the SQ of the given QP
+ *
+ * \param qp QP where WR will be written
+ * \param sge SGE array that represents a source for Send
+ * \param num_sge Size of the sge array
+ * \param wrid Id, that is returned in the Work Completion when WR is executed
+ * \param flags Flags from enum ibv_send_flags
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_send(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint64_t wrid, uint32_t flags);
+
+/**
+ * Write a Send with invalidate WR to the SQ of the given QP
+ *
+ * \param qp QP where WR will be written
+ * \param sge SGE array that represents a source for Send
+ * \param num_sge Size of the sge array
+ * \param invalidate_rkey Remote Key that will be invalidated on the remote host
+ * \param wrid Id, that is returned in the Work Completion when WR is executed
+ * \param flags Flags from enum ibv_send_flags
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_send_inv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+			  uint32_t invalidate_rkey, uint64_t wrid, uint32_t flags);
+
+/**
+ * Write a Receive WR to the RQ of the given QP
+ *
+ * \param qp QP where WR will be written
+ * \param sge SGE array that represents a destination for Receive
+ * \param num_sge Size of the sge array
+ * \param wrid Id, that is returned in the Work Completion when WR is executed
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_qp_recv(struct spdk_mlx5_qp *qp, struct ibv_sge *sge, uint32_t num_sge,
+		      uint64_t wrid);
+
+/**
+ * Update receive doorbell record for the given QP to start executing WRs written by spdk_mlx5_qp_recv()
+ *
+ * \param qp QP where doorbell record will be updated
+ */
+void spdk_mlx5_qp_complete_recv(struct spdk_mlx5_qp *qp);
+
+/**
+ * Write a Receive WR to the SRQ
+ *
+ * \param srq SRQ where WR will be queued
+ * \param sge SGE array that represents a destination for Receive
+ * \param num_sge Size of the sge array
+ * \param wrid Id, that is returned in the Work Completion when WR is executed
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_srq_recv(struct spdk_mlx5_srq *srq, struct ibv_sge *sge, uint32_t num_sge,
+		       uint64_t wrid);
+
+/**
+ * Update receive doorbell record for the given SRQ to start executing WRs written by spdk_mlx5_srq_recv()
+ *
+ * \param srq SRQ where doorbell record will be updated
+ */
+void spdk_mlx5_srq_complete_recv(struct spdk_mlx5_srq *srq);
 
 /**
  * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with crypto capabilities.
@@ -393,6 +544,26 @@ int spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *qp, uint32_t psv_index, uint32_t c
 int spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
 				struct spdk_mlx5_umr_sig_attr *sig_attr, uint64_t wr_id, uint32_t flags);
 
+/**
+ * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with crypto and CRC32C capabilities.
+ *
+ * Besides crypto and signature capabilities, it allows to gather memory chunks into virtually contig (from the NIC point of view)
+ * memory space with start address 0. The user must ensure that \b qp's capacity is enough to perform this operation.
+ *
+ * \param qp Qpair to be used for UMR configuration. If RDMA operation which references this UMR is used on the same \b qp
+ * then it is not necessary to wait for the UMR configuration to complete. Instead, first RDMA operation after UMR
+ * configuration must have flag SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE set to 1
+ * \param umr_attr Common UMR attributes, describe memory layout
+ * \param sig_attr Signature UMR attributes
+ * \param crypto_attr Crypto UMR attributes
+ * \param wr_id wrid which is returned in the CQE
+ * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion; Any of SPDK_MLX5_WQE_CTRL_FENCE* or 0
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+				       struct spdk_mlx5_umr_sig_attr *sig_attr,
+				       struct spdk_mlx5_umr_crypto_attr *crypto_attr,
+				       uint64_t wr_id, uint32_t flags);
 /**
  * Return a NULL terminated array of devices which support crypto operation on Nvidia NICs
  *
@@ -516,6 +687,52 @@ int spdk_mlx5_mkey_pool_get_bulk(struct spdk_mlx5_mkey_pool *pool,
  */
 void spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 				  struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count);
+
+/**
+ * Get an mkey from the pool.
+ *
+ * \param pool mkey pool
+ * \return Pointer to an mkey on success, NULL if the pool is empty
+ */
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_pool *pool);
+
+/**
+ * Return the mkey to the pool
+ *
+ * \param pool mkey pool
+ * \param mkey mkey to return to the pool
+ */
+void spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool,
+			     struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Increment reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_get_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Decrement the reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ * If the reference count is 0, the mkey object is returned to the pool. This function is an alternative to
+ * \ref spdk_mlx5_mkey_pool_put
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Find mkey object by mkey ID
+ *
+ * \param ch mkey pool channel
+ * \param mkey_id mkey ID
+ * \return Pointer to mkey object or NULL
+ */
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey_id);
 
 /**
  * Notify the mlx5 library that a module which can handle UMR configuration is registered or unregistered

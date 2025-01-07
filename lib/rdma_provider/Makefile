@@ -1,7 +1,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2020 Intel Corporation. All rights reserved.
 #  Copyright (c) Mellanox Technologies LTD. All rights reserved.
-#  Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
@@ -14,7 +14,7 @@ SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_rdma_provider.map)
 
 LIBNAME = rdma_provider
 
-C_SRCS = common.c
+C_SRCS = rdma_provider_rpc.c
 
 ifeq ($(CONFIG_RDMA_PROV),verbs)
 C_SRCS += rdma_provider_verbs.c

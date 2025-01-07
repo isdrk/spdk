@@ -1,12 +1,15 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/rpc.h"
 
 struct accel_mlx5_attr {
 	/* The number of entries in qp submission/receive queue */
 	uint16_t qp_size;
+	/* The number of entries in completion queue */
+	uint16_t cq_size;
 	/* The number of requests in the global pool */
 	uint32_t num_requests;
 	/* Comma separated list of allowed device names */
@@ -16,6 +19,13 @@ struct accel_mlx5_attr {
 	uint16_t crypto_split_blocks;
 	/* Enables accel_mlx5 platform driver. The driver can execute a limited scope of operations */
 	bool enable_driver;
+	bool qp_per_domain;
+	/* Enable accel_mlx5 module */
+	bool enable_module;
+	/* Disable signature capabilities */
+	bool disable_signature;
+	/* Disable crypto capabilities */
+	bool disable_crypto;
 };
 
 enum accel_mlx5_dump_state_level {

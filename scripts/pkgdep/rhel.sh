@@ -124,7 +124,7 @@ fi
 if echo "$ID $VERSION_ID" | grep -E -q 'centos 7|rhel 7'; then
 	yum install -y openssl11-devel
 fi
-if echo "$ID $VERSION_ID" | grep -E -q 'centos 8|rhel 8|rocky 8'; then
+if echo "$ID $VERSION_ID" | grep -E -q 'centos 8|rhel 8|rocky 8|ol 8'; then
 	yum install -y python36 python36-devel
 	#Create hard link to use in SPDK as python
 	if [[ ! -e /usr/bin/python && -e /etc/alternatives/python3 ]]; then
@@ -136,6 +136,8 @@ if echo "$ID $VERSION_ID" | grep -E -q 'centos 8|rhel 8|rocky 8'; then
 	# binary.
 	pip3 install --upgrade pip
 	pip3() { /usr/local/bin/pip "$@"; }
+elif [[ $ID == ol ]]; then
+	yum install -y python3 python3-devel
 else
 	yum install -y python python3-devel
 fi
@@ -162,8 +164,10 @@ fi
 yum install -y autoconf automake libtool help2man
 # Additional dependencies for DPDK
 yum install -y numactl-devel nasm
-# Additional dependencies for USDT
-yum install -y systemtap-sdt-devel
+if [[ $ID != ol ]]; then
+	# Additional dependencies for USDT
+	yum install -y systemtap-sdt-devel
+fi
 if [[ $INSTALL_DEV_TOOLS == "true" ]]; then
 	# Tools for developers
 	devtool_pkgs=(git sg3_utils pciutils libabigail bash-completion ruby-devel)
@@ -174,6 +178,8 @@ if [[ $INSTALL_DEV_TOOLS == "true" ]]; then
 	elif [[ $ID == openeuler ]]; then
 		devtool_pkgs+=(python3-pycodestyle)
 		echo "openEuler does not have astyle, lcov and ShellCheck dependencies"
+	elif [[ $ID == ol ]]; then
+		devtool_pkgs+=(python3-pycodestyle astyle)
 	else
 		devtool_pkgs+=(python-pycodestyle astyle lcov ShellCheck)
 	fi

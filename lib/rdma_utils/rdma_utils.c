@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) Intel Corporation. All rights reserved.
- *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_internal/rdma_utils.h"
@@ -440,7 +440,7 @@ _rdma_utils_fini(void)
 }
 
 struct spdk_memory_domain *
-spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd)
+spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd, enum spdk_dma_device_type type)
 {
 	struct rdma_utils_memory_domain *domain = NULL;
 	struct spdk_memory_domain_ctx ctx = {};
@@ -449,7 +449,7 @@ spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd)
 	pthread_mutex_lock(&g_memory_domains_lock);
 
 	TAILQ_FOREACH(domain, &g_memory_domains, link) {
-		if (domain->pd == pd) {
+		if (domain->pd == pd && domain->type == type) {
 			domain->ref++;
 			pthread_mutex_unlock(&g_memory_domains_lock);
 			return domain->domain;
@@ -469,8 +469,7 @@ spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd)
 	ctx.user_ctx = &domain->rdma_ctx;
 	ctx.user_ctx_size = domain->rdma_ctx.size;
 
-	rc = spdk_memory_domain_create(&domain->domain, SPDK_DMA_DEVICE_TYPE_RDMA, &ctx,
-				       SPDK_RDMA_DMA_DEVICE);
+	rc = spdk_memory_domain_create(&domain->domain, type, &ctx, SPDK_RDMA_DMA_DEVICE);
 	if (rc) {
 		SPDK_ERRLOG("Failed to create memory domain\n");
 		free(domain);
@@ -478,6 +477,7 @@ spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd)
 		return NULL;
 	}
 
+	domain->type = type;
 	domain->pd = pd;
 	domain->ref = 1;
 	TAILQ_INSERT_TAIL(&g_memory_domains, domain, link);

@@ -5,6 +5,8 @@
 #include "spdk_internal/cunit.h"
 
 #include "common/lib/ut_multithread.c"
+#define UT_NUM_THREADS 3
+#include "common/lib/ut_call.c"
 #include "unit/lib/json_mock.c"
 
 #include "spdk/config.h"
@@ -22,168 +24,22 @@
 #define UT_AVALUE "xattr1.val"
 #define UT_NUM_LOOKUPS 11
 #define UT_DATA_SIZE 22
-
-
-#define UT_CALL_REC_MAX_CALLS 5
-#define UT_CALL_REC_MAX_PARAMS 15
-#define UT_CALL_REC_MAX_STR_SIZE 255
+#define UT_NOTIFY_MAX_DATA_SIZE 4096
 
 #define UT_SUBMIT_IO_NUM_COMMON_PARAMS 4
 
-static uint64_t
-ut_hash(const void *buf, size_t size)
-{
-	uint64_t hash = 5381;
-	const char *p = buf;
-	size_t i;
+/* No-op ioctl */
+#define UT_IOCTL_CMD 42
+#define UT_IOCTL_ARG ((uint64_t)0xBEEFDEAF)
 
-	for (i = 0; i < size; i++) {
-		hash = ((hash << 5) + hash) + (*p); /* hash * 33 + c */
-		p++;
-	}
+#define UT_IOCTL_IN_IOVCNT 2
+#define UT_IOCTL_OUT_IOVCNT 4
 
-	return hash;
-}
+struct iovec ut_ioctl_in_iov[UT_IOCTL_IN_IOVCNT];
+struct iovec ut_ioctl_out_iov[UT_IOCTL_OUT_IOVCNT];
 
-struct ut_call_record {
-	struct {
-		void *func;
-		union {
-			uint64_t integer;
-			void *ptr;
-			char str[UT_CALL_REC_MAX_STR_SIZE + 1];
-			uint64_t hash;
-		} params[UT_CALL_REC_MAX_PARAMS];
-		size_t param_count;
-	} call[UT_CALL_REC_MAX_CALLS];
-	size_t count;
-};
-
-static struct ut_call_record g_call_list;
-
-static inline void
-ut_calls_reset(void)
-{
-	memset(&g_call_list, 0, sizeof(g_call_list));
-}
-
-static inline void
-ut_call_record_begin(void *pfunc)
-{
-	SPDK_CU_ASSERT_FATAL(g_call_list.count < UT_CALL_REC_MAX_CALLS);
-	g_call_list.call[g_call_list.count].func = pfunc;
-	g_call_list.call[g_call_list.count].param_count = 0;
-}
-
-static inline void
-ut_call_record_param_int(uint64_t val)
-{
-	SPDK_CU_ASSERT_FATAL(g_call_list.call[g_call_list.count].param_count < UT_CALL_REC_MAX_PARAMS);
-	g_call_list.call[g_call_list.count].params[g_call_list.call[g_call_list.count].param_count].integer
-		= val;
-	g_call_list.call[g_call_list.count].param_count++;
-}
-
-static inline void
-ut_call_record_param_ptr(void *ptr)
-{
-	SPDK_CU_ASSERT_FATAL(g_call_list.call[g_call_list.count].param_count < UT_CALL_REC_MAX_PARAMS);
-	g_call_list.call[g_call_list.count].params[g_call_list.call[g_call_list.count].param_count].ptr =
-		ptr;
-	g_call_list.call[g_call_list.count].param_count++;
-}
-
-static inline void
-ut_call_record_param_str(const char *str)
-{
-	SPDK_CU_ASSERT_FATAL(g_call_list.call[g_call_list.count].param_count < UT_CALL_REC_MAX_PARAMS);
-	spdk_strcpy_pad(
-		g_call_list.call[g_call_list.count].params[g_call_list.call[g_call_list.count].param_count].str,
-		str, UT_CALL_REC_MAX_STR_SIZE, 0);
-	g_call_list.call[g_call_list.count].params[g_call_list.call[g_call_list.count].param_count].str[UT_CALL_REC_MAX_STR_SIZE]
-		= 0;
-	g_call_list.call[g_call_list.count].param_count++;
-}
-
-static inline void
-ut_call_record_param_hash(const void *buf, size_t size)
-{
-	SPDK_CU_ASSERT_FATAL(g_call_list.call[g_call_list.count].param_count < UT_CALL_REC_MAX_PARAMS);
-	g_call_list.call[g_call_list.count].params[g_call_list.call[g_call_list.count].param_count].hash =
-		ut_hash(buf, size);
-	g_call_list.call[g_call_list.count].param_count++;
-}
-
-static inline size_t
-ut_call_record_get_current_param_count(void)
-{
-	return g_call_list.call[g_call_list.count].param_count;
-}
-static inline void
-ut_call_record_end(void)
-{
-	g_call_list.count++;
-}
-
-static inline void
-ut_call_record_simple_param_ptr(void *pfunc, void *ptr)
-{
-	ut_call_record_begin(pfunc);
-	ut_call_record_param_ptr(ptr);
-	ut_call_record_end();
-}
-
-static inline size_t
-ut_calls_get_call_count(void)
-{
-	return g_call_list.count;
-}
-
-static inline size_t
-ut_calls_get_param_count(size_t call_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	return g_call_list.call[call_idx].param_count;
-}
-
-static inline void *
-ut_calls_get_func(size_t call_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	return g_call_list.call[call_idx].func;
-}
-
-static inline uint64_t
-ut_calls_param_get_int(size_t call_idx, size_t param_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	SPDK_CU_ASSERT_FATAL(param_idx < g_call_list.call[call_idx].param_count);
-	return g_call_list.call[call_idx].params[param_idx].integer;
-}
-
-static inline void *
-ut_calls_param_get_ptr(size_t call_idx, size_t param_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	SPDK_CU_ASSERT_FATAL(param_idx < g_call_list.call[call_idx].param_count);
-	return g_call_list.call[call_idx].params[param_idx].ptr;
-}
-
-static inline const char *
-ut_calls_param_get_str(size_t call_idx, size_t param_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	SPDK_CU_ASSERT_FATAL(param_idx < g_call_list.call[call_idx].param_count);
-	return g_call_list.call[call_idx].params[param_idx].str;
-}
-
-static inline uint64_t
-ut_calls_param_get_hash(size_t call_idx, size_t param_idx)
-{
-	SPDK_CU_ASSERT_FATAL(call_idx < g_call_list.count);
-	SPDK_CU_ASSERT_FATAL(param_idx < g_call_list.call[call_idx].param_count);
-	return g_call_list.call[call_idx].params[param_idx].hash;
-}
+#define UT_IOCTL_IN_IOV (&ut_ioctl_in_iov[0])
+#define UT_IOCTL_OUT_IOV (&ut_ioctl_out_iov[0])
 
 struct ut_fsdev {
 	struct spdk_fsdev fsdev;
@@ -284,6 +140,11 @@ static bool ut_listxattr_size_only;
 static uint64_t ut_readdir_offset;
 static uint64_t ut_readdir_num_entries;
 static uint64_t ut_readdir_num_entry_cb_calls;
+static int ut_reset_desired_err;
+static bool ut_reset_leak_io;
+static bool ut_complete_next_request = true;
+static struct spdk_fsdev_io *ut_oustanding_io = NULL;
+static struct spdk_fsdev_file_lock ut_fsdev_lock;
 static struct spdk_fsdev_mount_opts ut_mount_opts;
 
 static void
@@ -313,9 +174,9 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_hash(&fsdev_io->u_in.mount.opts, sizeof(fsdev_io->u_in.mount.opts));
 		fsdev_io->u_out.mount.root_fobject = UT_FOBJECT;
 		fsdev_io->u_out.mount.opts.opts_size = fsdev_io->u_in.mount.opts.opts_size;
-		fsdev_io->u_out.mount.opts.max_write = fsdev_io->u_in.mount.opts.max_write / 2;
-		fsdev_io->u_out.mount.opts.writeback_cache_enabled =
-			!fsdev_io->u_in.mount.opts.writeback_cache_enabled;
+		fsdev_io->u_out.mount.opts.max_xfer_size = fsdev_io->u_in.mount.opts.max_xfer_size / 2;
+		fsdev_io->u_out.mount.opts.flags = fsdev_io->u_in.mount.opts.flags;
+		fsdev_io->u_out.mount.opts.flags &= ~SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
 		break;
 	case SPDK_FSDEV_IO_LOOKUP:
 		ut_call_record_param_str(fsdev_io->u_in.lookup.name);
@@ -358,6 +219,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_str(fsdev_io->u_in.mknod.name);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.mode);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.rdev);
+		ut_call_record_param_int(fsdev_io->u_in.mknod.umask);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.euid);
 		ut_call_record_param_int(fsdev_io->u_in.mknod.egid);
 		fsdev_io->u_out.mknod.fobject = UT_FOBJECT + 1;
@@ -367,6 +229,7 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.mkdir.parent_fobject);
 		ut_call_record_param_str(fsdev_io->u_in.mkdir.name);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.mode);
+		ut_call_record_param_int(fsdev_io->u_in.mkdir.umask);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.euid);
 		ut_call_record_param_int(fsdev_io->u_in.mkdir.egid);
 		fsdev_io->u_out.mkdir.fobject = UT_FOBJECT + 1;
@@ -491,11 +354,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_ptr(fsdev_io->u_in.readdir.usr_entry_cb_fn);
 
 		do {
+			bool forget = false;
 			fsdev_io->u_out.readdir.fobject = UT_FOBJECT + i;
 			fsdev_io->u_out.readdir.attr = ut_fsdev_attr;
 			fsdev_io->u_out.readdir.name = UT_FNAME;
 			fsdev_io->u_out.readdir.offset = ut_readdir_offset + i;
-			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg);
+			res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, &forget);
 			i++;
 		} while (!res);
 
@@ -547,6 +411,51 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 		ut_call_record_param_int(fsdev_io->u_in.copy_file_range.flags);
 		fsdev_io->u_out.copy_file_range.data_size = UT_DATA_SIZE;
 		break;
+	case SPDK_FSDEV_IO_SYNCFS:
+		ut_call_record_param_ptr(fsdev_io->u_in.syncfs.fobject);
+		break;
+	case SPDK_FSDEV_IO_ACCESS:
+		ut_call_record_param_ptr(fsdev_io->u_in.access.fobject);
+		ut_call_record_param_int(fsdev_io->u_in.access.mask);
+		ut_call_record_param_int(fsdev_io->u_in.access.uid);
+		ut_call_record_param_int(fsdev_io->u_in.access.gid);
+		break;
+	case SPDK_FSDEV_IO_LSEEK:
+		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.lseek.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.lseek.offset);
+		ut_call_record_param_int(fsdev_io->u_in.lseek.whence);
+		break;
+	case SPDK_FSDEV_IO_POLL:
+		ut_call_record_param_ptr(fsdev_io->u_in.poll.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.poll.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.poll.events);
+		ut_call_record_param_int(fsdev_io->u_in.poll.wait);
+		break;
+	case SPDK_FSDEV_IO_IOCTL:
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.request);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.arg);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.in_iov);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.in_iovcnt);
+		ut_call_record_param_ptr(fsdev_io->u_in.ioctl.out_iov);
+		ut_call_record_param_int(fsdev_io->u_in.ioctl.out_iovcnt);
+		break;
+	case SPDK_FSDEV_IO_GETLK:
+		ut_call_record_param_ptr(fsdev_io->u_in.getlk.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.getlk.fhandle);
+		ut_call_record_param_hash(&fsdev_io->u_in.getlk.lock,
+					  sizeof(fsdev_io->u_in.getlk.lock));
+		fsdev_io->u_out.getlk.lock = ut_fsdev_lock;
+		ut_call_record_param_int(fsdev_io->u_in.getlk.owner);
+		break;
+	case SPDK_FSDEV_IO_SETLK:
+		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fobject);
+		ut_call_record_param_ptr(fsdev_io->u_in.setlk.fhandle);
+		ut_call_record_param_int(fsdev_io->u_in.setlk.owner);
+		ut_call_record_param_int(fsdev_io->u_in.setlk.wait);
+		break;
 	case __SPDK_FSDEV_IO_LAST:
 	default:
 		break;
@@ -554,7 +463,12 @@ ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 
 	ut_call_record_end();
 
-	spdk_fsdev_io_complete(fsdev_io, utfsdev->desired_io_status);
+	if (ut_complete_next_request) {
+		spdk_fsdev_io_complete(fsdev_io, utfsdev->desired_io_status);
+	} else {
+		ut_oustanding_io = fsdev_io;
+		ut_complete_next_request = true;
+	}
 }
 
 static struct spdk_io_channel *
@@ -578,12 +492,42 @@ ut_fsdev_get_memory_domains(void *ctx, struct spdk_memory_domain **domains,
 	return 0;
 }
 
+static int
+ut_fsdev_reset(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
+{
+	ut_call_record_simple_param_ptr(ut_fsdev_reset, ctx);
+
+	if (!ut_reset_leak_io) {
+		spdk_fsdev_io_complete(ut_oustanding_io, -ESTALE);
+		ut_oustanding_io = NULL;
+	}
+
+	if (!ut_reset_desired_err) {
+		/* The callback should only be called in case of success */
+		cb(cb_arg, ut_reset_desired_err);
+	}
+
+	return ut_reset_desired_err;
+}
+
+static int
+ut_fsdev_set_notifications(void *ctx, bool enabled)
+{
+	ut_call_record_begin(ut_fsdev_set_notifications);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(enabled);
+	ut_call_record_end();
+	return 0;
+}
+
 static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.destruct		= ut_fsdev_destruct,
 	.submit_request		= ut_fsdev_submit_request,
 	.get_io_channel		= ut_fsdev_get_io_channel,
 	.write_config_json	= ut_fsdev_write_config_json,
 	.get_memory_domains	= ut_fsdev_get_memory_domains,
+	.reset			= ut_fsdev_reset,
+	.set_notifications	= ut_fsdev_set_notifications,
 };
 
 static void
@@ -643,6 +587,7 @@ ut_fsdev_create(const char *name)
 	ufsdev->fsdev.ctxt = ufsdev;
 	ufsdev->fsdev.fn_table = &ut_fdev_fn_table;
 	ufsdev->fsdev.module = &ut_fsdev_module;
+	ufsdev->fsdev.notify_max_data_size = UT_NOTIFY_MAX_DATA_SIZE;
 
 	rc = spdk_fsdev_register(&ufsdev->fsdev);
 	if (rc) {
@@ -809,6 +754,399 @@ ut_fsdev_test_get_io_channel(void)
 	ut_fsdev_destroy(utfsdev);
 }
 
+static void
+ut_fsdev_for_each_msg_cb(struct spdk_fsdev_channel_iter *i,
+			 struct spdk_fsdev *fsdev, struct spdk_io_channel *ch, void *ctx)
+{
+	uint64_t *desired_res = ctx;
+
+	ut_call_record_begin(ut_fsdev_for_each_msg_cb);
+
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ch);
+	ut_call_record_param_ptr(ctx);
+
+	ut_call_record_end();
+
+	spdk_fsdev_for_each_channel_continue(i, (int)*desired_res);
+}
+
+static void
+ut_fsdev_for_each_done_cb(struct spdk_fsdev *fsdev, void *ctx, int status)
+{
+	ut_call_record_begin(ut_fsdev_for_each_done_cb);
+
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(status);
+
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_test_for_each_channel(uint64_t desired_res)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_io_channel *ch[UT_NUM_THREADS];
+	struct ut_io_channel *ut_ch[UT_NUM_THREADS];
+	struct spdk_fsdev_desc *fsdev_desc;
+	int rc, i;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	CU_ASSERT(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_desc != NULL);
+	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+
+	ut_calls_reset();
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		set_thread(i);
+
+		ch[i] = spdk_fsdev_get_io_channel(fsdev_desc);
+		CU_ASSERT(ch[i] != NULL);
+	}
+
+	CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS * 2);
+
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		int j = i * 2;
+		CU_ASSERT(ut_calls_get_func(j) == ut_fsdev_get_io_channel);
+		CU_ASSERT(ut_calls_get_param_count(j) == 1);
+		CU_ASSERT(ut_calls_param_get_ptr(j, 0) == utfsdev);
+
+		CU_ASSERT(ut_calls_get_func(j + 1) == ut_fsdev_io_channel_create_cb);
+		CU_ASSERT(ut_calls_get_param_count(j + 1) == 1);
+		ut_ch[i] = (struct ut_io_channel *)ut_calls_param_get_ptr(j + 1, 0);
+	}
+
+	set_thread(0);
+	ut_calls_reset();
+	spdk_fsdev_for_each_channel(&utfsdev->fsdev, ut_fsdev_for_each_msg_cb, &desired_res,
+				    ut_fsdev_for_each_done_cb);
+	poll_threads();
+	set_thread(0);
+	poll_thread(0);
+
+	if (!desired_res) {
+		CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS + 1);
+
+		for (i = 0; i < UT_NUM_THREADS; i++) {
+			CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_msg_cb);
+			CU_ASSERT(ut_calls_get_param_count(i) == 3);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 1) != NULL);
+			CU_ASSERT(ut_calls_param_get_ptr(i, 2) == &desired_res);
+		}
+	} else {
+		/* we failed the 1st ut_fsdev_for_each_msg_cb, so it should be called only once */
+
+		CU_ASSERT(ut_calls_get_call_count() == 2);
+
+		i = 0;
+		CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_msg_cb);
+		CU_ASSERT(ut_calls_get_param_count(i) == 3);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 1) != NULL);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 2) == &desired_res);
+
+		i = 1;
+	}
+
+	CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_for_each_done_cb);
+	CU_ASSERT(ut_calls_get_param_count(i) == 3);
+	CU_ASSERT(ut_calls_param_get_ptr(i, 0) == &utfsdev->fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(i, 1) == &desired_res);
+	CU_ASSERT(ut_calls_param_get_int(i, 2) == desired_res);
+
+	ut_calls_reset();
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		set_thread(i);
+		spdk_put_io_channel(ch[i]);
+	}
+
+	poll_threads();
+	set_thread(0);
+
+	CU_ASSERT(ut_calls_get_call_count() == UT_NUM_THREADS);
+
+	for (i = 0; i < UT_NUM_THREADS; i++) {
+		CU_ASSERT(ut_calls_get_func(i) == ut_fsdev_io_channel_destroy_cb);
+		CU_ASSERT(ut_calls_get_param_count(i) == 1);
+		CU_ASSERT(ut_calls_param_get_ptr(i, 0) == ut_ch[i]);
+	}
+
+	set_thread(0);
+	spdk_fsdev_close(fsdev_desc);
+
+	ut_fsdev_destroy(utfsdev);
+}
+
+
+static void
+ut_fsdev_test_for_each_channel_ok(void)
+{
+	ut_fsdev_test_for_each_channel(0);
+}
+
+static void
+ut_fsdev_test_for_each_channel_err(void)
+{
+	ut_fsdev_test_for_each_channel(ENOSR);
+}
+
+static void
+ut_fsdev_reset_flush_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	ut_call_record_begin(ut_fsdev_reset_flush_cpl_cb);
+	ut_call_record_param_ptr(cb_arg);
+	ut_call_record_param_int(status);
+	ut_call_record_end();
+
+}
+
+static void
+ut_fsdev_reset_cpl_cb(struct spdk_fsdev_desc *desc, bool success, void *cb_arg)
+{
+	ut_call_record_begin(ut_fsdev_reset_cpl_cb);
+	ut_call_record_param_ptr(desc);
+	ut_call_record_param_int(success);
+	ut_call_record_param_ptr(cb_arg);
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_io_channel *ch;
+	struct spdk_fsdev_desc *fsdev_desc;
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	CU_ASSERT(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_desc != NULL);
+	CU_ASSERT(spdk_fsdev_desc_get_fsdev(fsdev_desc) == &utfsdev->fsdev);
+
+	ch = spdk_fsdev_get_io_channel(fsdev_desc);
+	CU_ASSERT(ch != NULL);
+
+	ut_calls_reset();
+	ut_complete_next_request = false; /* Make sure the flush IO won't be completed */
+	rc =  spdk_fsdev_flush(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+			       ut_fsdev_reset_flush_cpl_cb, utfsdev);
+	CU_ASSERT(rc == 0);
+
+	poll_thread(0);
+
+	ut_reset_desired_err = fail_module_reset ? EINVAL : 0;
+	ut_reset_leak_io = leak_io;
+
+	ut_calls_reset();
+
+	rc = spdk_fsdev_reset(fsdev_desc, ut_fsdev_reset_cpl_cb, utfsdev);
+	CU_ASSERT(rc == 0);
+
+	poll_thread(0);
+
+	/* IO must be completed either by the module (if it doesn't leak IOs) or by the fsdev core (if it does) */
+	CU_ASSERT(ut_calls_get_call_count() == fail_module_reset ? 2 : 3);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_reset);
+	CU_ASSERT(ut_calls_get_param_count(0) == 1);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_get_func(1) == ut_fsdev_reset_flush_cpl_cb);
+	CU_ASSERT(ut_calls_get_param_count(1) == 2);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == utfsdev);
+	/* fsdev core completes with ECANCELED while ut_fsdev_reset completes with ESTALE */
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == leak_io ? ECANCELED : ESTALE);
+
+	if (!fail_module_reset) {
+		/* The reset completion callback is only called if the module's reset suceeds */
+		CU_ASSERT(ut_calls_get_func(2) == ut_fsdev_reset_cpl_cb);
+		CU_ASSERT(ut_calls_get_param_count(2) == 3);
+		CU_ASSERT(ut_calls_param_get_ptr(2, 0) == fsdev_desc);
+		CU_ASSERT(ut_calls_param_get_int(2, 1) == !ut_reset_desired_err);
+		CU_ASSERT(ut_calls_param_get_ptr(2, 2) == utfsdev);
+	}
+
+	ut_calls_reset();
+	spdk_put_io_channel(ch);
+	poll_thread(0);
+
+	spdk_fsdev_close(fsdev_desc);
+
+	ut_fsdev_destroy(utfsdev);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_succeeds(void)
+{
+	/* Test with a module that succeeds to reset and doesn't leak the IO (i.e. confirms it) */
+	ut_fsdev_do_test_reset(false, false);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_leaks_io(void)
+{
+	/* Test with a module that succeeds to reset and leaks the IO (i.e. doesn't confirm it, so fsdev should) */
+	ut_fsdev_do_test_reset(false, true);
+}
+
+static void
+ut_fsdev_test_reset_module_reset_fails(void)
+{
+	/* Test with a module that fails to reset */
+	ut_fsdev_do_test_reset(true, false);
+}
+
+static void
+ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
+		   void *ctx,
+		   const struct spdk_fsdev_notify_data *notify_data,
+		   spdk_fsdev_notify_reply_cb_t reply_cb,
+		   void *reply_ctx)
+{
+	ut_call_record_begin(ut_fsdev_notify_cb);
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(notify_data->type);
+	switch (notify_data->type) {
+	case SPDK_FSDEV_NOTIFY_INVAL_DATA:
+		ut_call_record_param_hash(&notify_data->inval_data, sizeof(notify_data->inval_data));
+		break;
+	case SPDK_FSDEV_NOTIFY_INVAL_ENTRY:
+		ut_call_record_param_hash(&notify_data->inval_entry, sizeof(notify_data->inval_entry));
+		break;
+	default:
+		CU_ASSERT(false);
+		break;
+	}
+	ut_call_record_param_ptr(reply_cb);
+	ut_call_record_param_ptr(reply_ctx);
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+			 void *reply_ctx)
+{
+}
+
+static void
+ut_fsdev_device_stat_cb(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat, void *cb_arg,
+			int rc)
+{
+}
+
+static void
+ut_fsdev_test_notifications(void)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_fsdev_desc *fsdev_desc;
+	struct spdk_fsdev *fsdev;
+	int notify_ctx;
+	int reply_ctx;
+	int file_object;
+	int parent_file_object;
+	const char *filename = "test_file.txt";
+	struct spdk_fsdev_notify_data notify_data;
+	struct spdk_fsdev_io_stat stat;
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	SPDK_CU_ASSERT_FATAL(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	SPDK_CU_ASSERT_FATAL(fsdev_desc != NULL);
+	fsdev = spdk_fsdev_desc_get_fsdev(fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(fsdev != NULL);
+
+	CU_ASSERT(spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(fsdev_desc)) ==
+		  UT_NOTIFY_MAX_DATA_SIZE);
+
+	/* No subscriber */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
+					  4096, 8192, NULL, NULL);
+	CU_ASSERT(rc == -ENODEV);
+
+	/* Enable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == true);
+
+	/* Enable notifications twice should fail */
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == -EALREADY);
+
+	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_DATA */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
+					  4096, 8192, ut_fsdev_notify_reply_cb, &reply_ctx);
+	CU_ASSERT(rc == 0);
+
+	memset(&notify_data, 0, sizeof(notify_data));
+	notify_data.inval_data.fobject = (struct spdk_fsdev_file_object *)&file_object;
+	notify_data.inval_data.offset = 4096;
+	notify_data.inval_data.size = 8192;
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_DATA);
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_data,
+			sizeof(notify_data.inval_data)));
+	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+
+	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_ENTRY */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_entry(&utfsdev->fsdev,
+					   (struct spdk_fsdev_file_object *)&parent_file_object,
+					   filename, ut_fsdev_notify_reply_cb, &reply_ctx);
+	CU_ASSERT(rc == 0);
+
+	memset(&notify_data, 0, sizeof(notify_data));
+	notify_data.inval_entry.parent_fobject = (struct spdk_fsdev_file_object *)&parent_file_object;
+	notify_data.inval_entry.name = filename;
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_ENTRY);
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_entry,
+			sizeof(notify_data.inval_entry)));
+	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+
+	memset(&stat, 0, sizeof(stat));
+	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
+	poll_threads();
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_DATA] == 1);
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_ENTRY] == 1);
+
+	/* Disable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == false);
+
+	/* Disable notifications twice should fail */
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == -EALREADY);
+
+	spdk_fsdev_close(fsdev_desc);
+	ut_fsdev_destroy(utfsdev);
+}
+
 typedef int (*execute_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status);
 typedef void (*check_clb)(void);
@@ -870,13 +1208,17 @@ ut_fsdev_mount_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
 
 {
 	int *clb_status = cb_arg;
+	bool has_writeback_cache;
+	bool ut_writeback_cache;
 	*clb_status = status;
 	if (!status) {
 		CU_ASSERT(root_fobject == UT_FOBJECT);
 		CU_ASSERT(opts != NULL);
 		CU_ASSERT(opts->opts_size == ut_mount_opts.opts_size);
-		CU_ASSERT(opts->max_write == ut_mount_opts.max_write / 2);
-		CU_ASSERT(opts->writeback_cache_enabled == !ut_mount_opts.writeback_cache_enabled);
+		CU_ASSERT(opts->max_xfer_size == ut_mount_opts.max_xfer_size / 2);
+		has_writeback_cache = !!(opts->flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+		ut_writeback_cache = !!(ut_mount_opts.flags && SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
+		CU_ASSERT(has_writeback_cache == !ut_writeback_cache);
 	}
 }
 
@@ -886,8 +1228,8 @@ ut_fsdev_mount_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 {
 	memset(&ut_mount_opts, 0, sizeof(ut_mount_opts));
 	ut_mount_opts.opts_size = sizeof(ut_mount_opts);
-	ut_mount_opts.max_write = UINT32_MAX;
-	ut_mount_opts.writeback_cache_enabled = true;
+	ut_mount_opts.max_xfer_size = UINT32_MAX;
+	ut_mount_opts.flags = SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
 
 	return spdk_fsdev_mount(fsdev_desc, ch, UT_UNIQUE, &ut_mount_opts, ut_fsdev_mount_cpl_cb, status);
 }
@@ -1160,8 +1502,8 @@ ut_fsdev_mknod_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50, 100, 200,
-				ut_fsdev_mknod_cpl_cb, status);
+	return spdk_fsdev_mknod(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 50,
+				0022, 100, 200, ut_fsdev_mknod_cpl_cb, status);
 }
 
 static void
@@ -1172,14 +1514,15 @@ ut_fsdev_mknod_check_clb(void)
 			   UT_CALL_REC_MAX_STR_SIZE));
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 0x1111);
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 50);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 100);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 200);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 0022);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 100);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 6) == 200);
 }
 
 static void
 ut_fsdev_test_mknod(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MKNOD, 0, 6, ut_fsdev_mknod_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKNOD, 0, 7, ut_fsdev_mknod_execute_clb,
 			 ut_fsdev_mknod_check_clb);
 }
 
@@ -1198,8 +1541,8 @@ ut_fsdev_mkdir_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
 			   struct spdk_fsdev_desc *fsdev_desc, int *status)
 {
 	memset(&ut_fsdev_attr, rand(), sizeof(ut_fsdev_attr));
-	return spdk_fsdev_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111, 100, 200,
-				ut_fsdev_mkdir_cpl_cb, status);
+	return spdk_fsdev_mkdir(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FNAME, 0x1111,
+				0022, 100, 200, ut_fsdev_mkdir_cpl_cb, status);
 }
 
 static void
@@ -1209,14 +1552,15 @@ ut_fsdev_mkdir_check_clb(void)
 	CU_ASSERT(!strncmp(ut_calls_param_get_str(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1), UT_FNAME,
 			   UT_CALL_REC_MAX_STR_SIZE));
 	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 0x1111);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 100);
-	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 200);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 0022);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == 100);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == 200);
 }
 
 static void
 ut_fsdev_test_mkdir(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MKDIR, 0, 5, ut_fsdev_mkdir_execute_clb,
+	ut_fsdev_test_io(SPDK_FSDEV_IO_MKDIR, 0, 6, ut_fsdev_mkdir_execute_clb,
 			 ut_fsdev_mkdir_check_clb);
 }
 
@@ -1773,12 +2117,14 @@ ut_fsdev_test_opendir(void)
 static int
 ut_fsdev_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
 			  struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			  off_t offset)
+			  off_t offset, bool *forget)
 {
 	CU_ASSERT(!strcmp(name, UT_FNAME));
 	CU_ASSERT(fobject == UT_FOBJECT + ut_readdir_num_entry_cb_calls);
 	CU_ASSERT(ut_hash(&ut_fsdev_attr, sizeof(ut_fsdev_attr)) == ut_hash(attr, sizeof(*attr)));
 	CU_ASSERT(offset == (off_t)(ut_readdir_offset + ut_readdir_num_entry_cb_calls));
+	CU_ASSERT(forget != NULL);
+	CU_ASSERT(*forget == false);
 
 	ut_readdir_num_entry_cb_calls++;
 	return (ut_readdir_num_entry_cb_calls == ut_readdir_num_entries) ? -1 : 0;
@@ -1878,6 +2224,175 @@ ut_fsdev_test_fsyncdir(void)
 {
 	ut_fsdev_test_io(SPDK_FSDEV_IO_FSYNCDIR, 0, 3, ut_fsdev_fsyncdir_execute_clb,
 			 ut_fsdev_fsyncdir_check_clb);
+}
+
+static void
+ut_fsdev_syncfs_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_syncfs_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_syncfs(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				 ut_fsdev_syncfs_cpl_cb, status);
+}
+
+static void
+ut_fsdev_syncfs_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+}
+
+static void
+ut_fsdev_test_syncfs(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SYNCFS, 0, 1, ut_fsdev_syncfs_execute_clb,
+			 ut_fsdev_syncfs_check_clb);
+}
+
+static void
+ut_fsdev_access_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		       uint32_t mask, uid_t uid, uid_t gid)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_access_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			    struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_access(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT,
+				 F_OK | R_OK, 42, 43, ut_fsdev_access_cpl_cb, status);
+}
+
+static void
+ut_fsdev_access_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	int mask = (int)ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1);
+	CU_ASSERT(mask >= F_OK && mask <= (F_OK | R_OK | W_OK | X_OK));
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 42);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 43);
+}
+
+static void
+ut_fsdev_test_access(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_ACCESS, 0, 4, ut_fsdev_access_execute_clb,
+			 ut_fsdev_access_check_clb);
+}
+
+static void
+ut_fsdev_lseek_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      off_t offset, enum spdk_fsdev_seek_whence whence)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_lseek_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			      struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_lseek(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				4096, SPDK_FSDEV_SEEK_SET, ut_fsdev_lseek_cpl_cb, status);
+}
+
+static void
+ut_fsdev_lseek_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	off_t offset = (off_t)ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2);
+	enum spdk_fsdev_seek_whence whence = ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3);
+	CU_ASSERT(offset >= 0 && offset != (off_t) -1);
+	CU_ASSERT(whence >= SPDK_FSDEV_SEEK_SET && whence <= SPDK_FSDEV_SEEK_DATA);
+}
+
+static void
+ut_fsdev_test_lseek(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_LSEEK, 0, 4, ut_fsdev_lseek_execute_op_clb,
+			 ut_fsdev_lseek_check_clb);
+}
+
+static void
+ut_fsdev_poll_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		     uint32_t reevents)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_poll_execute_op_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			     struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_poll(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+			       SPDK_FSDEV_POLLIN, false, ut_fsdev_poll_cpl_cb, status);
+}
+
+static void
+ut_fsdev_poll_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == SPDK_FSDEV_POLLIN);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == false);
+}
+
+static void
+ut_fsdev_test_poll(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_POLL, 0, 4, ut_fsdev_poll_execute_op_clb,
+			 ut_fsdev_poll_check_clb);
+}
+
+static void
+ut_fsdev_ioctl_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      int32_t result, struct iovec *in_iov, uint32_t in_iovcnt,
+		      struct iovec *out_iov, uint32_t out_iovcnt)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_ioctl_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_ioctl(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				UT_IOCTL_CMD, UT_IOCTL_ARG,
+				UT_IOCTL_IN_IOV, UT_IOCTL_IN_IOVCNT,
+				UT_IOCTL_OUT_IOV, UT_IOCTL_OUT_IOVCNT,
+				ut_fsdev_ioctl_cpl_cb, status);
+}
+
+static void
+ut_fsdev_ioctl_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == UT_IOCTL_CMD);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == UT_IOCTL_ARG);
+
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 4) == UT_IOCTL_IN_IOV);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 5) == UT_IOCTL_IN_IOVCNT);
+
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 6) == UT_IOCTL_OUT_IOV);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 7) == UT_IOCTL_OUT_IOVCNT);
+}
+
+static void
+ut_fsdev_test_ioctl(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_IOCTL, 0, 8, ut_fsdev_ioctl_execute_clb,
+			 ut_fsdev_ioctl_check_clb);
 }
 
 static void
@@ -2049,19 +2564,85 @@ ut_fsdev_test_copy_file_range(void)
 			 ut_fsdev_copy_file_range_check_clb);
 }
 
-int
-main(int argc, char **argv)
+static void
+ut_fsdev_getlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status,
+		      const struct spdk_fsdev_file_lock *lock)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_getlk_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_getlk(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				&ut_fsdev_lock, 42, ut_fsdev_getlk_cpl_cb, status);
+}
+
+static void
+ut_fsdev_getlk_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_hash(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) ==
+		  ut_hash(&ut_fsdev_lock, sizeof(ut_fsdev_lock)));
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == 42);
+}
+
+static void
+ut_fsdev_test_getlk(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_GETLK, 0, 4, ut_fsdev_getlk_execute_clb,
+			 ut_fsdev_getlk_check_clb);
+}
+
+static void
+ut_fsdev_setlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int status)
+{
+	int *clb_status = cb_arg;
+	*clb_status = status;
+}
+
+static int
+ut_fsdev_setlk_execute_clb(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
+			   struct spdk_fsdev_desc *fsdev_desc, int *status)
+{
+	return spdk_fsdev_setlk(fsdev_desc, ch, UT_UNIQUE, UT_FOBJECT, UT_FHANDLE,
+				&ut_fsdev_lock, 42, true, ut_fsdev_setlk_cpl_cb, status);
+}
+
+static void
+ut_fsdev_setlk_check_clb(void)
+{
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 0) == UT_FOBJECT);
+	CU_ASSERT(ut_calls_param_get_ptr(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 1) == UT_FHANDLE);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 2) == 42);
+	CU_ASSERT(ut_calls_param_get_int(0, UT_SUBMIT_IO_NUM_COMMON_PARAMS + 3) == true);
+}
+
+static void
+ut_fsdev_test_setlk(void)
+{
+	ut_fsdev_test_io(SPDK_FSDEV_IO_SETLK, 0, 4, ut_fsdev_setlk_execute_clb,
+			 ut_fsdev_setlk_check_clb);
+}
+
+static int
+fsdev_ut(int argc, char **argv)
 {
 	CU_pSuite		suite = NULL;
 	unsigned int		num_failures;
-
-	CU_initialize_registry();
 
 	suite = CU_add_suite("fsdev", ut_fsdev_setup, ut_fsdev_teardown);
 
 	CU_ADD_TEST(suite, ut_fsdev_test_open_close);
 	CU_ADD_TEST(suite, ut_fsdev_test_set_opts);
 	CU_ADD_TEST(suite, ut_fsdev_test_get_io_channel);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
+	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_fails);
+	CU_ADD_TEST(suite, ut_fsdev_test_notifications);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_ok);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_err);
 	CU_ADD_TEST(suite, ut_fsdev_test_umount);
@@ -2099,18 +2680,62 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_abort);
 	CU_ADD_TEST(suite, ut_fsdev_test_fallocate);
 	CU_ADD_TEST(suite, ut_fsdev_test_copy_file_range);
+	CU_ADD_TEST(suite, ut_fsdev_test_syncfs);
+	CU_ADD_TEST(suite, ut_fsdev_test_access);
+	CU_ADD_TEST(suite, ut_fsdev_test_lseek);
+	CU_ADD_TEST(suite, ut_fsdev_test_poll);
+	CU_ADD_TEST(suite, ut_fsdev_test_ioctl);
+	CU_ADD_TEST(suite, ut_fsdev_test_getlk);
+	CU_ADD_TEST(suite, ut_fsdev_test_setlk);
 
 	allocate_cores(1);
 	allocate_threads(1);
 	set_thread(0);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
-	CU_cleanup_registry();
 
 	poll_thread(0);
 
 	free_threads();
 	free_cores();
 
+	return num_failures;
+}
+
+static int
+fsdev_mt_ut(int argc, char **argv)
+{
+	CU_pSuite		suite = NULL;
+	unsigned int		num_failures;
+
+	suite = CU_add_suite("fsdev_mt", ut_fsdev_setup, ut_fsdev_teardown);
+
+	CU_ADD_TEST(suite, ut_fsdev_test_for_each_channel_ok);
+	CU_ADD_TEST(suite, ut_fsdev_test_for_each_channel_err);
+
+	allocate_cores(UT_NUM_THREADS);
+	allocate_threads(UT_NUM_THREADS);
+	set_thread(0);
+
+	num_failures = spdk_ut_run_tests(argc, argv, NULL);
+
+	poll_threads();
+
+	free_threads();
+	free_cores();
+
+	return num_failures;
+}
+
+int
+main(int argc, char **argv)
+{
+	unsigned int		num_failures;
+
+	CU_initialize_registry();
+
+	num_failures = fsdev_ut(argc, argv) + fsdev_mt_ut(argc, argv);
+
+	CU_cleanup_registry();
 	return num_failures;
 }

@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -18,6 +19,7 @@ C_SRCS = nvme_ctrlr_cmd.c nvme_ctrlr.c nvme_fabric.c nvme_ns_cmd.c \
 C_SRCS-$(CONFIG_NVME_CUSE) += nvme_cuse.c
 C_SRCS-$(CONFIG_VFIO_USER) += nvme_vfio_user.c
 C_SRCS-$(CONFIG_RDMA) += nvme_rdma.c
+C_SRCS-$(CONFIG_XLIO) += nvme_nvda_tcp.c
 
 LIBNAME = nvme
 LOCAL_SYS_LIBS =
@@ -47,6 +49,9 @@ LOCAL_SYS_LIBS += -lfuse3
 endif
 
 CFLAGS += -Wpointer-arith
+ifneq ($(strip $(CONFIG_XLIO_DIR)),)
+CFLAGS += -I$(CONFIG_XLIO_DIR)/include
+endif
 
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_nvme.map)
 

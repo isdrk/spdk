@@ -2,7 +2,7 @@
 #  Copyright (C) 2015 Intel Corporation.
 #  Copyright (c) 2017, IBM Corporation.
 #  Copyright (c) 2019, 2021 Mellanox Corporation.
-#  Copyright (c) 2022, 2024 NVIDIA CORPORATION & AFFILIATES
+#  Copyright (c) 2022, 2024-2025 NVIDIA CORPORATION & AFFILIATES
 #  All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
 #
@@ -163,6 +163,9 @@ endif
 
 ifeq ($(CONFIG_RDMA),y)
 SYS_LIBS += -libverbs -lrdmacm
+ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
+SYS_LIBS += -lmlx5
+endif
 endif
 
 ifeq ($(CONFIG_URING),y)
@@ -270,10 +273,21 @@ endif
 SYS_LIBS += -lufc
 endif
 
+ifeq ($(CONFIG_STATIC_XLIO), y)
+ifneq ($(CONFIG_XLIO_DIR),)
+SYS_LIBS += -L$(CONFIG_XLIO_DIR)/lib
+endif
+ifneq ($(CONFIG_DPCP_DIR),)
+SYS_LIBS += -L$(CONFIG_DPCP_DIR)/lib
+endif
+SYS_LIBS += -lxlio -lnl-3 -lnl-route-3 -lstdc++
+SYS_LIBS += -ldpcp
+endif
+
 ifeq ($(CONFIG_DEBUG), y)
 COMMON_CFLAGS += -DDEBUG -g3 -O0 -fno-omit-frame-pointer
 else
-COMMON_CFLAGS += -DNDEBUG -O2
+COMMON_CFLAGS += -DNDEBUG -Ofast
 # Enable _FORTIFY_SOURCE checks - these only work when optimizations are enabled.
 COMMON_CFLAGS += -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2
 endif
@@ -581,7 +595,7 @@ $(shell [ "$(call cc_version)" = "$(1)" ] && echo 1 || echo 0)
 endef
 
 version_major := $(shell IFS='-.' read -r v _ _ _ < $(SPDK_ROOT_DIR)/VERSION; echo $$v)
-version_minor := $(shell IFS='-.' read -r _ v _ _ < $(SPDK_ROOT_DIR)/VERSION; echo $${v#0})
+version_minor := $(shell IFS='-.' read -r _ v _ _ < $(SPDK_ROOT_DIR)/VERSION; echo $$(echo $$v | sed 's/^0*//'))
 version_patch := $(shell IFS='-.' read -r _ _ v _ < $(SPDK_ROOT_DIR)/VERSION; echo $$v)
 version_suffix := $(shell IFS='-.' read -r _ _ _ v < $(SPDK_ROOT_DIR)/VERSION; echo $${v:+-$$v})
 

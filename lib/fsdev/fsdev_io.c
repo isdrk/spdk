@@ -1,10 +1,12 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
 #include "spdk/fsdev.h"
 #include "spdk/fsdev_module.h"
+#include "spdk/log.h"
+#include "spdk/likely.h"
 #include "fsdev_internal.h"
 
 #define CALL_USR_CLB(_fsdev_io, ch, type, ...) \
@@ -27,8 +29,11 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	struct spdk_fsdev_io *fsdev_io;
 	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
 
+	channel->stat->io[type].count++;
+
 	fsdev_io = fsdev_channel_get_io(channel);
 	if (!fsdev_io) {
+		channel->stat->num_out_of_io++;
 		return NULL;
 	}
 
@@ -43,6 +48,7 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->internal.cb_fn = cb_fn;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
+	fsdev_io->internal.submit_tsc = spdk_get_ticks();
 
 	return fsdev_io;
 }
@@ -50,6 +56,24 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 static inline void
 fsdev_io_free(struct spdk_fsdev_io *fsdev_io)
 {
+	enum spdk_fsdev_io_type type = fsdev_io->internal.type;
+	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
+	uint64_t tsc_diff;
+
+	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
+
+	if (tsc_diff < channel->stat->io[type].min_latency_ticks) {
+		channel->stat->io[type].min_latency_ticks = tsc_diff;
+	}
+
+	if (tsc_diff > channel->stat->io[type].max_latency_ticks) {
+		channel->stat->io[type].max_latency_ticks = tsc_diff;
+	}
+
+	if (fsdev_io->internal.status) {
+		channel->stat->num_io_errors++;
+	}
+
 	spdk_fsdev_free_io(fsdev_io);
 }
 
@@ -111,6 +135,76 @@ spdk_fsdev_umount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 }
 
 static void
+_spdk_fsdev_lseek_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_lseek_cpl_cb,
+		     fsdev_io->u_out.lseek.offset, fsdev_io->u_out.lseek.whence);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		 struct spdk_fsdev_file_handle *fhandle, off_t offset,
+		 enum spdk_fsdev_seek_whence whence, spdk_fsdev_lseek_cpl_cb cb_fn,
+		 void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_lseek_cb, ch,
+					 SPDK_FSDEV_IO_LSEEK);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.lseek.fobject = fobject;
+	fsdev_io->u_in.lseek.fhandle = fhandle;
+	fsdev_io->u_in.lseek.offset = offset;
+	fsdev_io->u_in.lseek.whence = whence;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_poll_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_poll_cpl_cb,
+		     fsdev_io->u_out.poll.revents);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		struct spdk_fsdev_file_handle *fhandle, uint32_t events,
+		bool wait, spdk_fsdev_poll_cpl_cb cb_fn, void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_poll_cb, ch,
+					 SPDK_FSDEV_IO_POLL);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.poll.fobject = fobject;
+	fsdev_io->u_in.poll.fhandle = fhandle;
+	fsdev_io->u_in.poll.events = events;
+	fsdev_io->u_in.poll.wait = wait;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+
+}
+
+static void
 _spdk_fsdev_lookup_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
@@ -142,6 +236,122 @@ spdk_fsdev_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	}
 
 	fsdev_io->u_in.lookup.parent_fobject = parent_fobject;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_syncfs_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_syncfs_cpl_cb);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		  uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		  spdk_fsdev_syncfs_cpl_cb cb_fn, void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_syncfs_cb, ch,
+					 SPDK_FSDEV_IO_SYNCFS);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.syncfs.fobject = fobject;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_access_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_access_cpl_cb,
+		     fsdev_io->u_out.access.mask, fsdev_io->u_out.access.uid,
+		     fsdev_io->u_out.access.gid);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		  uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		  uint32_t mask, uid_t uid, uid_t gid, spdk_fsdev_access_cpl_cb cb_fn,
+		  void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_access_cb, ch,
+					 SPDK_FSDEV_IO_ACCESS);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.access.fobject = fobject;
+	fsdev_io->u_in.access.mask = mask;
+	fsdev_io->u_in.access.uid = uid;
+	fsdev_io->u_in.access.gid = gid;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_ioctl_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_ioctl_cpl_cb, fsdev_io->u_out.ioctl.result,
+		     fsdev_io->u_out.ioctl.in_iov, fsdev_io->u_out.ioctl.in_iovcnt,
+		     fsdev_io->u_out.ioctl.out_iov, fsdev_io->u_out.ioctl.out_iovcnt);
+
+	/* Can be allocated in the module implementation. */
+	free(fsdev_io->u_out.ioctl.in_iov);
+	free(fsdev_io->u_out.ioctl.out_iov);
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		 struct spdk_fsdev_file_handle *fhandle, uint32_t request,
+		 uint64_t arg, struct iovec *in_iov, uint32_t in_iovcnt,
+		 struct iovec *out_iov, uint32_t out_iovcnt,
+		 spdk_fsdev_ioctl_cpl_cb cb_fn, void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg, _spdk_fsdev_ioctl_cb, ch,
+					 SPDK_FSDEV_IO_IOCTL);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.ioctl.fobject = fobject;
+	fsdev_io->u_in.ioctl.fhandle = fhandle;
+	fsdev_io->u_in.ioctl.request = request;
+	fsdev_io->u_in.ioctl.arg = arg;
+
+	fsdev_io->u_in.ioctl.in_iov = in_iov;
+	fsdev_io->u_in.ioctl.in_iovcnt = in_iovcnt;
+
+	fsdev_io->u_in.ioctl.out_iov = out_iov;
+	fsdev_io->u_in.ioctl.out_iovcnt = out_iovcnt;
+
+	/* Zero out the out values so we know what to free in _spdk_fsdev_ioctl_cb() */
+	fsdev_io->u_out.ioctl.in_iov = NULL;
+	fsdev_io->u_out.ioctl.in_iovcnt = 0;
+	fsdev_io->u_out.ioctl.out_iov = NULL;
+	fsdev_io->u_out.ioctl.out_iovcnt = 0;
 
 	fsdev_io_submit(fsdev_io);
 	return 0;
@@ -304,15 +514,87 @@ spdk_fsdev_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	}
 
 	fsdev_io->u_in.symlink.linkpath = strdup(linkpath);
-	if (!fsdev_io) {
-		fsdev_io_free(fsdev_io);
+	if (!fsdev_io->u_in.symlink.linkpath) {
 		free(fsdev_io->u_in.symlink.target);
+		fsdev_io_free(fsdev_io);
 		return -ENOMEM;
 	}
 
 	fsdev_io->u_in.symlink.parent_fobject = parent_fobject;
 	fsdev_io->u_in.symlink.euid = euid;
 	fsdev_io->u_in.symlink.egid = egid;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_getlk_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_getlk_cpl_cb,
+		     &fsdev_io->u_out.getlk.lock);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_getlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		 struct spdk_fsdev_file_handle *fhandle,
+		 const struct spdk_fsdev_file_lock *lock_to_check,
+		 uint64_t owner, spdk_fsdev_getlk_cpl_cb cb_fn, void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg,
+					 _spdk_fsdev_getlk_cb, ch,
+					 SPDK_FSDEV_IO_GETLK);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.getlk.fobject = fobject;
+	fsdev_io->u_in.getlk.fhandle = fhandle;
+	fsdev_io->u_in.getlk.lock = *lock_to_check;
+	fsdev_io->u_in.getlk.owner = owner;
+
+	fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static void
+_spdk_fsdev_setlk_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+{
+	struct spdk_io_channel *ch = cb_arg;
+
+	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_setlk_cpl_cb);
+
+	fsdev_io_free(fsdev_io);
+}
+
+int
+spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
+		 uint64_t unique, struct spdk_fsdev_file_object *fobject,
+		 struct spdk_fsdev_file_handle *fhandle,
+		 const struct spdk_fsdev_file_lock *lock_to_acquire,
+		 uint64_t owner, bool wait, spdk_fsdev_setlk_cpl_cb cb_fn, void *cb_arg)
+{
+	struct spdk_fsdev_io *fsdev_io;
+
+	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cb_fn, cb_arg,
+					 _spdk_fsdev_setlk_cb, ch,
+					 SPDK_FSDEV_IO_SETLK);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	fsdev_io->u_in.setlk.fobject = fobject;
+	fsdev_io->u_in.setlk.fhandle = fhandle;
+	fsdev_io->u_in.setlk.lock = *lock_to_acquire;
+	fsdev_io->u_in.setlk.owner = owner;
+	fsdev_io->u_in.setlk.wait = wait;
 
 	fsdev_io_submit(fsdev_io);
 	return 0;
@@ -334,7 +616,7 @@ _spdk_fsdev_mknod_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		 struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode, dev_t rdev,
-		 uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg)
+		 uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mknod_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -352,6 +634,7 @@ spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 
 	fsdev_io->u_in.mknod.parent_fobject = parent_fobject;
 	fsdev_io->u_in.mknod.mode = mode;
+	fsdev_io->u_in.mknod.umask = umask;
 	fsdev_io->u_in.mknod.rdev = rdev;
 	fsdev_io->u_in.mknod.euid = euid;
 	fsdev_io->u_in.mknod.egid = egid;
@@ -376,7 +659,7 @@ _spdk_fsdev_mkdir_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		 struct spdk_fsdev_file_object *parent_fobject, const char *name, mode_t mode,
-		 uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg)
+		 uint32_t umask, uid_t euid, gid_t egid, spdk_fsdev_mkdir_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -394,6 +677,7 @@ spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 
 	fsdev_io->u_in.mkdir.parent_fobject = parent_fobject;
 	fsdev_io->u_in.mkdir.mode = mode;
+	fsdev_io->u_in.mkdir.umask = umask;
 	fsdev_io->u_in.mkdir.euid = euid;
 	fsdev_io->u_in.mkdir.egid = egid;
 
@@ -596,8 +880,11 @@ static void
 _spdk_fsdev_read_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
+	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
 
 	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_read_cpl_cb, fsdev_io->u_out.read.data_size);
+
+	channel->stat->bytes_read += fsdev_io->u_out.read.data_size;
 
 	fsdev_io_free(fsdev_io);
 }
@@ -634,8 +921,11 @@ static void
 _spdk_fsdev_write_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
+	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
 
 	CALL_USR_CLB(fsdev_io, ch, spdk_fsdev_write_cpl_cb, fsdev_io->u_out.write.data_size);
+
+	channel->stat->bytes_written += fsdev_io->u_out.write.data_size;
 
 	fsdev_io_free(fsdev_io);
 }
@@ -773,7 +1063,7 @@ _spdk_fsdev_setxattr_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 int
 spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
 		    struct spdk_fsdev_file_object *fobject, const char *name, const char *value, size_t size,
-		    uint32_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg)
+		    uint64_t flags, spdk_fsdev_setxattr_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 
@@ -974,17 +1264,18 @@ spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 }
 
 static int
-_spdk_fsdev_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+_spdk_fsdev_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget)
 {
 	spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn = fsdev_io->u_in.readdir.usr_entry_cb_fn;
 	struct spdk_io_channel *ch = cb_arg;
 
 	return usr_entry_cb_fn(fsdev_io->internal.usr_cb_arg, ch, fsdev_io->u_out.readdir.name,
-			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr, fsdev_io->u_out.readdir.offset);
+			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr,
+			       fsdev_io->u_out.readdir.offset, forget);
 }
 
 static void
-_spdk_fsdev_readdir_emum_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
+_spdk_fsdev_readdir_enum_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 {
 	struct spdk_io_channel *ch = cb_arg;
 
@@ -1001,7 +1292,7 @@ spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	struct spdk_fsdev_io *fsdev_io;
 
 	fsdev_io = fsdev_io_get_and_fill(desc, ch, unique, cpl_cb_fn, cb_arg,
-					 _spdk_fsdev_readdir_emum_clb, ch, SPDK_FSDEV_IO_READDIR);
+					 _spdk_fsdev_readdir_enum_clb, ch, SPDK_FSDEV_IO_READDIR);
 	if (!fsdev_io) {
 		return -ENOBUFS;
 	}
@@ -1089,8 +1380,8 @@ _spdk_fsdev_flock_cb(struct spdk_fsdev_io *fsdev_io, void *cb_arg)
 
 int
 spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64_t unique,
-		 struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle, int operation,
-		 spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg)
+		 struct spdk_fsdev_file_object *fobject, struct spdk_fsdev_file_handle *fhandle,
+		 enum spdk_fsdev_file_lock_op operation, spdk_fsdev_flock_cpl_cb cb_fn, void *cb_arg)
 {
 	struct spdk_fsdev_io *fsdev_io;
 

@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2021-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -18,12 +18,14 @@
 #include "spdk/bdev.h"
 #include "spdk/bdev_zone.h"
 #include "spdk/log.h"
+#include "spdk/bdev_group.h"
 #include "spdk/queue.h"
 #include "spdk/scsi_spec.h"
 #include "spdk/thread.h"
 #include "spdk/tree.h"
 #include "spdk/util.h"
 #include "spdk/uuid.h"
+#include "spdk/bdev_reservations.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -373,6 +375,20 @@ struct spdk_bdev_fn_table {
 
 	/** Check if bdev can handle spdk_accel_sequence to handle I/O of specific type. */
 	bool (*accel_sequence_supported)(void *ctx, enum spdk_bdev_io_type type);
+
+	/**
+	 * Check if the bdev is ready to process I/O.
+	 */
+	int (*wait_for_ready)(void *ctx, int64_t timeout_in_msec,
+			      spdk_bdev_wait_for_ready_cb, void *cb_arg);
+
+	/**
+	 * Return the current weight of an I/O channel.
+	 */
+	uint32_t (*io_channel_get_weight)(struct spdk_io_channel *ch);
+
+	/** Check if the block device supports a specific asynchronous event type. */
+	bool (*event_type_supported)(void *ctx, enum spdk_bdev_event_type type);
 };
 
 /** bdev I/O completion status */
@@ -461,11 +477,19 @@ struct spdk_bdev {
 	 */
 	bool split_on_write_unit;
 
+	/**
+	 * Specifies whether write IO types are disabled for this block device.
+	 */
+	bool write_disabled;
+
 	/** Number of blocks required for write */
 	uint32_t write_unit_size;
 
 	/** Atomic compare & write unit */
 	uint16_t acwu;
+
+	/* Reservation Capabilities */
+	struct spdk_bdev_reservation_caps reservation_caps;
 
 	/**
 	 * Specifies an alignment requirement for data buffers associated with an spdk_bdev_io.
@@ -658,8 +682,13 @@ struct spdk_bdev {
 	 *  must not read or write to these fields.
 	 */
 	struct __bdev_internal_fields {
+		/** Quality of service configuration */
+		uint64_t qos_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+
 		/** Quality of service parameters */
 		struct spdk_bdev_qos *qos;
+
+		struct spdk_bdev_group *group;
 
 		/** True if the state of the QoS is being modified */
 		bool qos_mod_in_progress;
@@ -936,6 +965,63 @@ struct spdk_bdev_io_zone_mgmt_params {
 	void *buf;
 };
 
+struct spdk_bdev_io_reservation_acquire_params {
+	/* Flag to check current reservation key */
+	bool ignore_key;
+
+	/* Specifies the reservation acquire action */
+	enum spdk_bdev_reservation_acquire_action action;
+
+	/* Reservation type for the namespace */
+	enum spdk_bdev_reservation_type type;
+
+	/** current reservation key */
+	uint64_t                crkey;
+	/** preempt reservation key */
+
+	uint64_t                prkey;
+	/* Reservation acquire data */
+};
+
+struct spdk_bdev_io_reservation_register_params {
+	/* Flag to check current reservation key */
+	bool ignore_key;
+
+	/* Specifies the registration action */
+	enum spdk_bdev_reservation_register_action action;
+
+	/* Change the Persist Through Power Loss state */
+	enum spdk_bdev_reservation_register_cptpl cptpl;
+
+	/** current reservation key */
+	uint64_t                crkey;
+
+	/** new reservation key */
+	uint64_t                nrkey;
+};
+
+struct spdk_bdev_io_reservation_release_params {
+	/* Flag to check current reservation key */
+	bool ignore_key;
+
+	/* Specifies the reservation release action */
+	enum spdk_bdev_reservation_release_action action;
+
+	/* Reservation type for the namespace */
+	enum spdk_bdev_reservation_type type;
+
+	/* Current reservation key */
+	uint64_t crkey;
+};
+
+struct spdk_bdev_io_reservation_report_params {
+	/* Length bytes for reservation status data structure */
+	uint32_t len;
+
+	/* Virtual address pointer for reservation status data */
+	struct spdk_bdev_reservation_status_data *status_data;
+};
+
 /**
  *  Fields that are used internally by the bdev subsystem.  Bdev modules
  *  must not read or write to these fields.
@@ -1114,6 +1200,10 @@ struct spdk_bdev_io {
 		struct spdk_bdev_io_abort_params abort;
 		struct spdk_bdev_io_nvme_passthru_params nvme_passthru;
 		struct spdk_bdev_io_zone_mgmt_params zone_mgmt;
+		struct spdk_bdev_io_reservation_acquire_params reservation_acquire;
+		struct spdk_bdev_io_reservation_register_params reservation_register;
+		struct spdk_bdev_io_reservation_release_params reservation_release;
+		struct spdk_bdev_io_reservation_report_params reservation_report;
 	} u;
 
 	uint8_t reserved3[40];
@@ -1430,6 +1520,23 @@ bool spdk_bdev_io_hide_metadata(struct spdk_bdev_io *bdev_io);
  * \return 0 on success, negated errno on failure.
  */
 int spdk_bdev_notify_blockcnt_change(struct spdk_bdev *bdev, uint64_t size);
+
+/**
+ * Notify an event that the weight of an I/O channel was changed for a bdev
+ * to the upper layer.
+ *
+ * \param bdev Block device for which the weight of an I/O channel was changed.
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_bdev_notify_io_channel_weight_change(struct spdk_bdev *bdev);
+
+/**
+ * Sets a bdev to block/allow write IO types
+ *
+ * \param bdev Block device to change.
+ * \new read/write capabilities.
+ */
+int spdk_bdev_set_ro(struct spdk_bdev *bdev, bool write_disabled);
 
 /**
  * Translates NVMe status codes to SCSI status information.
@@ -1884,6 +1991,13 @@ int spdk_bdev_quiesce_range(struct spdk_bdev *bdev, struct spdk_bdev_module *mod
 int spdk_bdev_unquiesce_range(struct spdk_bdev *bdev, struct spdk_bdev_module *module,
 			      uint64_t offset, uint64_t length,
 			      spdk_bdev_quiesce_cb cb_fn, void *cb_arg);
+
+/**
+ * Update internal bdev state when bdev module finishes initialization asynchronously
+ *
+ * \param bdev Block device to update
+ */
+void spdk_bdev_update_connected(struct spdk_bdev *bdev);
 
 /*
  *  Macro used to register module for later initialization.

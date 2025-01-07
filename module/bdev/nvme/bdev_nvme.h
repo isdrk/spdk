@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
@@ -75,6 +75,8 @@ struct nvme_io_path;
 struct nvme_ctrlr_channel_iter;
 struct nvme_bdev_channel_iter;
 
+typedef TAILQ_HEAD(, nvme_io_path) nvme_io_path_tailq_t;
+
 struct nvme_path_id {
 	struct spdk_nvme_transport_id		trid;
 	struct spdk_nvme_host_id		hostid;
@@ -109,6 +111,8 @@ struct nvme_ctrlr {
 	struct spdk_bdev_nvme_ctrlr_opts	opts;
 
 	RB_HEAD(nvme_ns_tree, nvme_ns)		namespaces;
+	struct spdk_thread			**qpair_threads;
+	uint32_t				num_qpair_threads;
 
 	struct spdk_opal_dev			*opal_dev;
 
@@ -179,15 +183,17 @@ struct nvme_qpair {
 	struct spdk_nvme_qpair		*qpair;
 	struct nvme_poll_group		*group;
 	struct nvme_ctrlr_channel	*ctrlr_ch;
+	struct spdk_thread		*thread;
 
 	/* The following is used to update io_path cache of nvme_bdev_channels. */
-	TAILQ_HEAD(, nvme_io_path)	io_path_list;
+	nvme_io_path_tailq_t		io_path_list;
 
 	TAILQ_ENTRY(nvme_qpair)		tailq;
 };
 
 struct nvme_ctrlr_channel {
 	struct nvme_qpair		*qpair;
+	nvme_io_path_tailq_t		io_path_list;
 
 	struct nvme_ctrlr_channel_iter	*reset_iter;
 	struct spdk_poller		*connect_poller;
@@ -196,7 +202,12 @@ struct nvme_ctrlr_channel {
 struct nvme_io_path {
 	struct nvme_ns			*nvme_ns;
 	struct nvme_qpair		*qpair;
+	struct nvme_ctrlr_channel	*ctrlr_ch;
 	STAILQ_ENTRY(nvme_io_path)	stailq;
+
+	struct spdk_io_channel		*remote_ch;
+	bool				updating;
+	bool				pending_delete;
 
 	/* The following are used to update io_path cache of the nvme_bdev_channel. */
 	struct nvme_bdev_channel	*nbdev_ch;
@@ -222,6 +233,7 @@ struct nvme_poll_group {
 	struct spdk_nvme_poll_group		*group;
 	struct spdk_io_channel			*accel_channel;
 	struct spdk_poller			*poller;
+	struct spdk_iobuf_channel		iobuf;
 	bool					collect_spin_stat;
 	uint64_t				spin_ticks;
 	uint64_t				start_ticks;

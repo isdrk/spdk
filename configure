@@ -3,6 +3,7 @@
 #  Copyright (C) 2017 Intel Corporation
 #  All rights reserved.
 #  Copyright (c) 2022 Dell Inc, or its subsidiaries.
+#  Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 set -e
@@ -134,6 +135,11 @@ function usage() {
 	echo " --without-avahi           No path required."
 	echo " --with-golang             Build with components written in Go"
 	echo " --without-golang          No path required."
+	echo " --with-xlio[=DIR]         Build xlio socket layer."
+	echo " --without-xlio            Path to custom libxlio installation directory may be specified."
+	echo "                           If path is given, it should contain 'include/mellanox/xlio_extra.h' file."
+	echo " --with-static-xlio        Link with static libxlio. Requires --with-xlio."
+	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
 	echo " --with-aio-fsdev          Build aio FSDEV component."
 	echo " --without-aio-fsdev       No path required."
 	echo ""
@@ -704,6 +710,26 @@ for i in "$@"; do
 			CONFIG[MAX_NUMA_NODES]="${i#*=}"
 			CONFIG["MAX_NUMA_NODES"]=${CONFIG["MAX_NUMA_NODES"],,}
 			;;
+		--with-xlio=*)
+			check_dir "$i"
+			CONFIG[XLIO_DIR]=$(readlink -f ${i#*=})
+			CONFIG[XLIO]=y
+			;;
+		--with-xlio)
+			CONFIG[XLIO_DIR]=
+			CONFIG[XLIO]=y
+			;;
+		--without-xlio)
+			CONFIG[XLIO_DIR]=
+			CONFIG[XLIO]=n
+			;;
+		--with-static-xlio)
+			CONFIG[STATIC_XLIO]=y
+			;;
+		--with-dpcp=*)
+			check_dir "$i"
+			CONFIG[DPCP_DIR]=$(readlink -f ${i#*=})
+			;;
 		--with-aio-fsdev)
 			CONFIG[AIO_FSDEV]=y
 			AIO_FSDEV_REQUIRED=y
@@ -1015,40 +1041,6 @@ if [[ "${CONFIG[VBDEV_COMPRESS]}" = "y" ]]; then
 	fi
 fi
 
-if [[ "${CONFIG[CRYPTO]}" = "y" ]]; then
-	# Try to enable mlx5 crypto
-	CONFIG[CRYPTO_MLX5]="y"
-
-	# Check if libmlx5 exists to enable mlx5_pci compress PMD
-	if ! mlx5_build; then
-		echo "libmlx5 is not found, so disabling DPDK mlx5_pci crypto PMD"
-		CONFIG[CRYPTO_MLX5]="n"
-	else
-		if [[ "${CONFIG[DPDK_PKG_CONFIG]}" = "y" ]]; then
-			# Check if librte_crypto_mlx5 exists in DPDK package
-			if [ ! -f "${CONFIG[DPDK_LIB_DIR]}"/librte_crypto_mlx5.so ]; then
-				echo "librte_crypto_mlx5 is not found, so disabling DPDK mlx5_pci crypto PMD"
-				CONFIG[CRYPTO_MLX5]="n"
-			fi
-		else
-			# Check DPDK version to determine if mlx5_pci driver is supported
-			dpdk_ver=$(dpdk_version)
-			if [[ $dpdk_ver = "none" ]]; then
-				echo "Cannot get DPDK version, so disabling DPDK mlx5_pci crypto PMD"
-				CONFIG[CRYPTO_MLX5]="n"
-			elif [[ -n $dpdk_ver ]] && lt "$dpdk_ver" 21.11.0; then
-				# mlx5_pci for crypto is supported by DPDK >- 21.11.0
-				echo "DPDK version ${dpdk_ver} doesn't support mlx5_pci crypto PMD"
-				CONFIG[CRYPTO_MLX5]="n"
-			elif [[ -n ${CONFIG[DPDK_LIB_DIR]} ]] && [ ! -f "${CONFIG[DPDK_LIB_DIR]}"/librte_crypto_mlx5.so ]; then
-				# This is only checked when --with-dpdk or --with-dpdk=* is used
-				echo "librte_crypto_mlx5 is not found, so disabling DPDK mlx5_pci crypto PMD"
-				CONFIG[CRYPTO_MLX5]="n"
-			fi
-		fi
-	fi
-fi
-
 if [[ "${CONFIG[NVME_CUSE]}" = "y" ]]; then
 	if ! echo -e '#define FUSE_USE_VERSION 31\n#include <fuse3/cuse_lowlevel.h>\n#include <fuse3/fuse_lowlevel.h>\n#include <fuse3/fuse_opt.h>\nint main(void) { return 0; }\n' \
 		| "${BUILD_CMD[@]}" -lfuse3 -D_FILE_OFFSET_BITS=64 - 2> /dev/null; then
@@ -1268,6 +1260,16 @@ if [[ $arch == x86_64* ]] || [[ $arch == aarch64* ]]; then
 		elif lt "$ver" 2.34; then
 			#For gas v2.24~v2.34, sve2 instructions are not supported. To workaround it, sve2 optimization should be disabled
 			ISAL_CRYPTO_OPTS+=("--disable-sve2")
+		fi
+		# We apply ./ci/dpdk_patch.sh as it's necessary for the NVIDIA DPU
+		DPDK_GCC_CONFIG_FNAME=$(cat $rootdir/.ci/dpdk_patch.sh | tr ' ' '\n' | grep 'dpdk/.*_gcc')
+		if [ ! -f "$rootdir/$DPDK_GCC_CONFIG_FNAME" ]; then
+			echo -n "Applying Nvidia DPU specific DPDK patch..."
+			if ! $rootdir/.ci/dpdk_patch.sh; then
+				echo "Cannot apply the DPDK patch."
+				exit 1
+			fi
+			echo "done."
 		fi
 	fi
 else

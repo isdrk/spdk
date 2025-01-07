@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2021 Intel Corporation.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -108,11 +108,22 @@ spdk_nvme_transport_id_populate_trstring(struct spdk_nvme_transport_id *trid, co
 		return -EINVAL;
 	}
 
+	/**
+	 * W/A for a weird error reported by gcc 13.3.1
+	 * In function 'spdk_nvme_transport_id_populate_trstring',
+	     inlined from 'nvme_fabric_discover_probe' at spdk/lib/nvme/nvme_fabric.c:304:2,
+	     inlined from 'nvme_fabric_ctrlr_discover' at spdk/lib/nvme/nvme_fabric.c:494:4:
+	 nvme_fabric_ut.c:111:15: error: 'strnlen' specified bound 32 exceeds source size 5 [-Werror=stringop-overread]
+	   111 |         len = strnlen(trstring, SPDK_NVMF_TRSTRING_MAX_LEN);
+	       |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+	 */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overread"
 	len = strnlen(trstring, SPDK_NVMF_TRSTRING_MAX_LEN);
 	if (len == SPDK_NVMF_TRSTRING_MAX_LEN) {
 		return -EINVAL;
 	}
-
+#pragma GCC diagnostic pop
 	rc = snprintf(trid->trstring, SPDK_NVMF_TRSTRING_MAX_LEN, "%s", trstring);
 	if (rc < 0) {
 		return rc;
@@ -360,6 +371,7 @@ test_nvme_fabric_qpair_connect(void)
 	req.qpair = &qpair;
 	reserved_req.qpair = &qpair;
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	STAILQ_INSERT_HEAD(&qpair.free_req, &req, stailq);
 	qpair.reserved_req = &reserved_req;
 	memset(&g_nvmf_data, 0, sizeof(g_nvmf_data));

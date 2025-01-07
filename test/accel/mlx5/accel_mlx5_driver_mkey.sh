@@ -103,6 +103,9 @@ if [ "$TEST_TRANSPORT" != "rdma" ]; then
 	exit 0
 fi
 
+bdevperf=$rootdir/build/examples/bdevperf
+testdma="$rootdir/test/dma/test_dma/test_dma"
+
 # Test mlx5 platform driver with crypto bdev and bdev_nvme rdma
 nvmftestinit
 nvmfappstart -m 0x3
@@ -116,7 +119,6 @@ $rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPOR
 sleep 1
 
 # Test with bdevperf, without src memory domain
-bdevperf=$rootdir/build/examples/bdevperf
 $bdevperf --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 4096 -t 10 -w verify -M 50 -m 0xc -r $app_sock
 $bdevperf --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 131072 -t 10 -w verify -M 50 -m 0xc -r $app_sock
 
@@ -147,7 +149,6 @@ sleep 1
 wait $bdev_perf_pid
 
 # Test with dma app which uses memory domains
-testdma="$rootdir/test/dma/test_dma/test_dma"
 $testdma --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 4096 -t 10 -w verify -M 50 -m 0xc -r $app_sock -b "Nvme0n1" -f -x translate &
 testdma_pid=$!
 waitforlisten $testdma_pid $app_sock
@@ -157,7 +158,6 @@ sleep 1
 wait $testdma_pid
 
 # Test with fragmented payload
-testdma="$rootdir/test/dma/test_dma/test_dma"
 $testdma --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 4096 -O 18 -t 10 -w verify -M 50 -m 0xc -r $app_sock -b "Nvme0n1" -f -x translate &
 testdma_pid=$!
 waitforlisten $testdma_pid $app_sock
@@ -167,7 +167,6 @@ sleep 1
 wait $testdma_pid
 
 # Test small qp size and number of MRs
-testdma="$rootdir/test/dma/test_dma/test_dma"
 $testdma --json <(gen_accel_mlx5_driver_rdma_json 16 32) -q 64 -o 32768 -t 10 -w verify -M 50 -m 0xc -r $app_sock -b "Nvme0n1" -f -x translate &
 testdma_pid=$!
 waitforlisten $testdma_pid $app_sock
@@ -177,7 +176,6 @@ sleep 1
 wait $testdma_pid
 
 # Test mkey corruption
-testdma="$rootdir/test/dma/test_dma/test_dma"
 $testdma --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 4096 -t 10 -w randrw -M 50 -m 0xc -r $app_sock -b "Nvme0n1" -f -x translate -Y 500000 &
 testdma_pid=$!
 waitforlisten $testdma_pid $app_sock
@@ -185,6 +183,26 @@ sleep 5
 validate_mkey_stats $app_sock
 sleep 1
 wait $testdma_pid || true
+
+nvmftestfini
+
+nvmfappstart -m 0x3
+
+$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --msdbd 1
+$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
+$rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a -s SPDK00000000000001
+$rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Malloc0
+$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
+
+# Test with fragmented payload and msdbd=1 on target. Each iov except of the last one is 272 bytes which is less than
+# the data block size on target. Such IO can't be split by SW, only with UMR enabled
+$testdma --json <(gen_accel_mlx5_driver_rdma_json) -q 64 -o 4096 -O 15 -t 10 -w verify -M 50 -m 0xc -r $app_sock -b "Nvme0n1" -f -x translate &
+testdma_pid=$!
+waitforlisten $testdma_pid $app_sock
+sleep 5
+validate_mkey_stats $app_sock
+sleep 1
+wait $testdma_pid
 
 nvmftestfini
 

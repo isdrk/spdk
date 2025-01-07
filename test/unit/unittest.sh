@@ -2,7 +2,7 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2018 Intel Corporation
 #  All rights reserved.
-#  Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Environment variables:
 #  $valgrind    Specify the valgrind command line, if not
@@ -152,6 +152,11 @@ function unittest_fsdev() {
 	$valgrind $testdir/lib/fsdev/fsdev.c/fsdev_ut
 }
 
+function unittest_fsdev() {
+	$valgrind $testdir/lib/fsdev/fsdev.c/fsdev_ut
+	$valgrind $testdir/lib/fuse_dispatcher/fuse_dispatcher.c/fuse_dispatcher_ut
+}
+
 function unittest_init() {
 	$valgrind $testdir/lib/init/subsystem.c/subsystem_ut
 }
@@ -219,6 +224,9 @@ if [ $(uname -s) = Linux ]; then
 fi
 
 run_test "unittest_accel" $valgrind $testdir/lib/accel/accel.c/accel_ut
+if [[ $CONFIG_RDMA_PROV == mlx5_dv ]]; then
+	run_test "unittest_accel_mlx5" $valgrind $testdir/lib/accel/accel_mlx5.c/accel_mlx5_ut
+fi
 run_test "unittest_ioat" $valgrind $testdir/lib/ioat/ioat.c/ioat_ut
 if [[ $CONFIG_IDXD == y ]]; then
 	run_test "unittest_idxd_user" $valgrind $testdir/lib/idxd/idxd_user.c/idxd_user_ut
@@ -256,6 +264,8 @@ if [ $(uname -s) = Linux ]; then
 	# There are several intermittent sock_ut failures on FreeBSD that need to be debugged.
 	# So just disable running it on FreeBSD for now.  See issue #2943.
 	run_test "unittest_sock" unittest_sock
+	# fsdev are only avaliable on Linux
+	run_test "unittest_fsdev" unittest_fsdev
 fi
 run_test "unittest_thread" $valgrind $testdir/lib/thread/thread.c/thread_ut
 run_test "unittest_iobuf" $valgrind $testdir/lib/thread/iobuf.c/iobuf_ut

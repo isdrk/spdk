@@ -1,12 +1,12 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2022 Intel Corporation.
-#  Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#  Copyright (c) 2021, 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-SO_VER := 5
+SO_VER := 6
 SO_MINOR := 0
 SO_SUFFIX := $(SO_VER).$(SO_MINOR)
 

@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef __NVMF_INTERNAL_H__
@@ -161,7 +161,12 @@ struct spdk_nvmf_ns {
 	struct spdk_nvmf_subsystem *subsystem;
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_desc *desc;
-	struct spdk_nvmf_ns_opts opts;
+	/* Accel sequence is supported by block device */
+	bool accel_sequence;
+	/* Persist Through Power Loss feature is enabled */
+	bool ptpl_activated;
+	/* ZCOPY supported on bdev device */
+	bool zcopy;
 	/* reservation notification mask */
 	uint32_t mask;
 	/* generation code */
@@ -176,10 +181,6 @@ struct spdk_nvmf_ns {
 	struct spdk_nvmf_registrant *holder;
 	/* Persist Through Power Loss file which contains the persistent reservation */
 	char *ptpl_file;
-	/* Persist Through Power Loss feature is enabled */
-	bool ptpl_activated;
-	/* ZCOPY supported on bdev device */
-	bool zcopy;
 	/* Command Set Identifier */
 	enum spdk_nvme_csi csi;
 	/* Make namespace visible to controllers of these hosts */
@@ -188,6 +189,7 @@ struct spdk_nvmf_ns {
 	bool always_visible;
 	/* Namespace id of the underlying device, used for passthrough commands */
 	uint32_t passthru_nsid;
+	struct spdk_nvmf_ns_opts opts;
 };
 
 /*

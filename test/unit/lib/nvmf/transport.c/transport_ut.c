@@ -52,7 +52,10 @@ DEFINE_STUB(rdma_destroy_id, int, (struct rdma_cm_id *id), 0);
 DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
 DEFINE_STUB(rdma_reject, int, (struct rdma_cm_id *id,
 			       const void *private_data, uint8_t private_data_len), 0);
-DEFINE_STUB(ibv_resize_cq, int, (struct ibv_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
+		int num_entries,
+		struct ibv_wc *wc), 0);
 DEFINE_STUB_V(rdma_destroy_qp, (struct rdma_cm_id *id));
 DEFINE_STUB_V(rdma_destroy_event_channel, (struct rdma_event_channel *channel));
 DEFINE_STUB(ibv_dealloc_pd, int, (struct ibv_pd *pd), 0);
@@ -69,11 +72,12 @@ DEFINE_STUB_V(ibv_ack_async_event, (struct ibv_async_event *event));
 DEFINE_STUB(rdma_get_cm_event, int, (struct rdma_event_channel *channel,
 				     struct rdma_cm_event **event), 0);
 DEFINE_STUB(rdma_ack_cm_event, int, (struct rdma_cm_event *event), 0);
-DEFINE_STUB(ibv_destroy_cq, int, (struct ibv_cq *cq), 0);
-DEFINE_STUB(ibv_create_cq, struct ibv_cq *, (struct ibv_context *context, int cqe,
-		void *cq_context,
-		struct ibv_comp_channel *channel,
-		int comp_vector), NULL);
+DEFINE_STUB_V(spdk_rdma_provider_cq_destroy, (struct spdk_rdma_provider_cq *cq));
+DEFINE_STUB(spdk_rdma_provider_cq_create, struct spdk_rdma_provider_cq *,
+	    (struct spdk_rdma_provider_cq_init_attr *cq_attr),
+	    NULL);
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_get_ref, (void *mkey));
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_put_ref, (void *mkey));
 DEFINE_STUB(ibv_wc_status_str, const char *, (enum ibv_wc_status status), NULL);
 DEFINE_STUB(rdma_get_dst_port, __be16, (struct rdma_cm_id *id), 0);
 DEFINE_STUB(rdma_get_src_port, __be16, (struct rdma_cm_id *id), 0);
@@ -87,6 +91,27 @@ DEFINE_STUB_V(ut_transport_stop_listen, (struct spdk_nvmf_transport *transport,
 		const struct spdk_nvme_transport_id *trid));
 DEFINE_STUB(spdk_mempool_lookup, struct spdk_mempool *, (const char *name), NULL);
 DEFINE_STUB(spdk_rdma_cm_id_get_numa_id, int32_t, (struct rdma_cm_id *cm_id), 0);
+
+static void *g_accel_p = (void *)0xdeadbeaf;
+
+static void
+init_accel(void)
+{
+	spdk_io_device_register(g_accel_p, accel_channel_create, accel_channel_destroy,
+				sizeof(int), "accel_rdma");
+}
+
+static void
+fini_accel(void)
+{
+	spdk_io_device_unregister(g_accel_p, NULL);
+}
+
+struct spdk_io_channel *
+spdk_accel_get_io_channel(void)
+{
+	return spdk_get_io_channel(g_accel_p);
+}
 
 /* ibv_reg_mr can be a macro, need to undefine it */
 #ifdef ibv_reg_mr
@@ -219,6 +244,13 @@ test_nvmf_transport_poll_group_create(void)
 	struct spdk_nvmf_transport_poll_group *poll_group = NULL;
 	struct spdk_nvmf_transport transport = {};
 	struct spdk_nvmf_transport_ops ops = {};
+	struct spdk_thread *thread;
+
+	thread = spdk_thread_create(NULL, NULL);
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+	spdk_set_thread(thread);
+	init_accel();
+
 
 	ops.poll_group_create = ut_poll_group_create;
 	ops.poll_group_destroy = ut_poll_group_destroy;
@@ -236,6 +268,13 @@ test_nvmf_transport_poll_group_create(void)
 	CU_ASSERT(poll_group->transport == &transport);
 
 	nvmf_transport_poll_group_destroy(poll_group);
+
+	fini_accel();
+	spdk_thread_exit(thread);
+	while (!spdk_thread_is_exited(thread)) {
+		spdk_thread_poll(thread, 0, 0);
+	}
+	spdk_thread_destroy(thread);
 }
 
 static void

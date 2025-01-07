@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -9,7 +10,7 @@
 #include "spdk/env.h"
 #include "spdk/thread.h"
 
-#include "spdk_internal/init.h"
+#include "spdk/init.h"
 
 static void
 bdev_initialize_complete(void *cb_arg, int rc)

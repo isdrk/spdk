@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021-2024 NVIDIA CORPORATION & AFFILIATES.
+ *   All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -17,10 +18,20 @@ DEFINE_STUB(spdk_mem_map_clear_translation, int, (struct spdk_mem_map *map, uint
 		uint64_t size), 0);
 DEFINE_STUB(spdk_mem_map_translate, uint64_t, (const struct spdk_mem_map *map, uint64_t vaddr,
 		uint64_t *size), 0);
-DEFINE_STUB(spdk_memory_domain_create, int, (struct spdk_memory_domain **_domain,
-		enum spdk_dma_device_type type,
-		struct spdk_memory_domain_ctx *ctx, const char *id), 0);
-DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *domain));
+DEFINE_STUB_V(spdk_memory_domain_destroy, (struct spdk_memory_domain *device));
+
+static struct spdk_memory_domain *__dma_dev = (struct spdk_memory_domain *)0xdeaddead;
+DEFINE_RETURN_MOCK(spdk_memory_domain_create, int);
+int
+spdk_memory_domain_create(struct spdk_memory_domain **domain, enum spdk_dma_device_type type,
+			  struct spdk_memory_domain_ctx *ctx, const char *id)
+{
+	HANDLE_RETURN_MOCK(spdk_memory_domain_create);
+
+	*domain = __dma_dev;
+
+	return 0;
+}
 
 struct ut_rdma_device {
 	struct ibv_context		*context;
@@ -125,7 +136,7 @@ ut_rdma_remove_dev(struct ut_rdma_device *ut_dev)
 static struct rdma_utils_device *
 _rdma_get_dev(struct ibv_context *context)
 {
-	struct rdma_utils_device *dev;
+	struct rdma_utils_device *dev = NULL;
 
 	TAILQ_FOREACH(dev, &g_dev_list, tailq) {
 		if (dev->context == context) {
@@ -154,7 +165,7 @@ test_spdk_rdma_pd(void)
 	/* There are ut_dev0 and ut_dev1. */
 	ut_dev2->removed = true;
 
-	/* Call spdk_rdma_get_pd() to non-existent ut_dev2. */
+	/* Call spdk_rdma_utils_get_pd() to non-existent ut_dev2. */
 	pd2 = spdk_rdma_utils_get_pd(ut_dev2->context);
 
 	/* Then, spdk_rdma_utils_get_pd() should return NULL and g_dev_list should have dev0 and dev1. */
@@ -217,6 +228,88 @@ test_spdk_rdma_pd(void)
 	ut_rdma_remove_dev(ut_dev2);
 }
 
+static struct rdma_utils_memory_domain *
+_test_get_rdma_utils_domain(struct spdk_memory_domain *_domain)
+{
+	struct rdma_utils_memory_domain *domain;
+
+	TAILQ_FOREACH(domain, &g_memory_domains, link) {
+		if (domain->domain == _domain) {
+			return domain;
+		}
+	}
+
+	return NULL;
+}
+
+static void
+test_spdk_rdma_utils_memory_domain(void)
+{
+	struct spdk_memory_domain *domain_1 = NULL, *domain_2 = NULL, *backup;
+	struct rdma_utils_memory_domain *utils_domain, *domain_tmp;
+	struct ibv_pd *pd_1 = (struct ibv_pd *)0x1, *pd_2 = (struct ibv_pd *)0x2;
+	/* Counters below are used to check the number of created/destroyed rdma_dma_device objects.
+	 * Since other unit tests may create dma_devices, we can't just check that the queue is empty or not */
+	uint32_t dma_dev_count_start = 0, dma_dev_count = 0, dma_dev_count_end = 0;
+
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
+		dma_dev_count_start++;
+	}
+	backup = __dma_dev;
+
+	/* spdk_memory_domain_create failed, expect fail */
+	MOCK_SET(spdk_memory_domain_create, -1);
+	domain_1 = spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA);
+	CU_ASSERT(domain_1 == NULL);
+	MOCK_CLEAR(spdk_memory_domain_create);
+
+	/* Normal scenario */
+	__dma_dev = (struct spdk_memory_domain *)0x1;
+	domain_1 = spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA);
+	SPDK_CU_ASSERT_FATAL(domain_1 != NULL);
+	utils_domain = _test_get_rdma_utils_domain(domain_1);
+	SPDK_CU_ASSERT_FATAL(utils_domain != NULL);
+	CU_ASSERT(utils_domain->domain == domain_1);
+	CU_ASSERT(utils_domain->pd == pd_1);
+	CU_ASSERT(utils_domain->ref == 1);
+
+	/* Request the same pd, ref counter increased */
+	CU_ASSERT(spdk_rdma_utils_get_memory_domain(pd_1, SPDK_DMA_DEVICE_TYPE_RDMA) == domain_1);
+	CU_ASSERT(utils_domain->ref == 2);
+
+	/* Request another pd */
+	__dma_dev = (struct spdk_memory_domain *)0x2;
+	domain_2 = spdk_rdma_utils_get_memory_domain(pd_2, SPDK_DMA_DEVICE_TYPE_RDMA);
+	SPDK_CU_ASSERT_FATAL(domain_2 != NULL);
+	utils_domain = _test_get_rdma_utils_domain(domain_2);
+	SPDK_CU_ASSERT_FATAL(utils_domain != NULL);
+	CU_ASSERT(utils_domain->domain == domain_2);
+	CU_ASSERT(utils_domain->pd == pd_2);
+	CU_ASSERT(utils_domain->ref == 1);
+
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
+		dma_dev_count++;
+	}
+	CU_ASSERT(dma_dev_count == dma_dev_count_start + 2);
+
+	/* put domain_1, decrement refcount */
+	spdk_rdma_utils_put_memory_domain(domain_1);
+
+	/* Release both devices */
+	utils_domain = _test_get_rdma_utils_domain(domain_1);
+	SPDK_CU_ASSERT_FATAL(utils_domain != NULL);
+	CU_ASSERT(utils_domain->ref == 1);
+	spdk_rdma_utils_put_memory_domain(domain_1);
+	spdk_rdma_utils_put_memory_domain(domain_2);
+
+	TAILQ_FOREACH(domain_tmp, &g_memory_domains, link) {
+		dma_dev_count_end++;
+	}
+	CU_ASSERT(dma_dev_count_start == dma_dev_count_end);
+	__dma_dev = backup;
+}
+
+
 int
 main(int argc, char **argv)
 {
@@ -227,6 +320,7 @@ main(int argc, char **argv)
 
 	suite = CU_add_suite("rdma_common", NULL, NULL);
 	CU_ADD_TEST(suite, test_spdk_rdma_pd);
+	CU_ADD_TEST(suite, test_spdk_rdma_utils_memory_domain);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();

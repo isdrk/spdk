@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation.
  *   Copyright (c) NetApp, Inc.
- *   Copyright (c) 2023, NVIDIA CORPORATION & AFFILIATES.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -508,6 +508,16 @@ uint32_t spdk_env_get_next_core(uint32_t prev_core);
 	for (i = spdk_env_get_first_core();	\
 	     i < UINT32_MAX;			\
 	     i = spdk_env_get_next_core(i))
+
+/**
+ * Get the index of the core starting from zero.
+ *
+ * \param core_id ID of core.
+ *
+ * \return  the index of the specified core ID, or UINT32_MAX if the core_id doesn't match a
+ *          core allocated for the application.
+ */
+uint32_t spdk_env_get_core_index(uint32_t core_id);
 
 /**
  * Get the NUMA node ID for the given core.

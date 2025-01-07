@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020 Mellanox Technologies LTD. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk_internal/cunit.h"
@@ -39,6 +40,10 @@ DEFINE_STUB(spdk_pci_event_listen, int, (void), 0);
 DEFINE_STUB(spdk_nvme_poll_group_process_completions, int64_t, (struct spdk_nvme_poll_group *group,
 		uint32_t completions_per_qpair, spdk_nvme_disconnected_qpair_cb disconnected_qpair_cb), 0);
 DEFINE_STUB(nvme_transport_ctrlr_scan_attached, int, (struct spdk_nvme_probe_ctx *probe_ctx), 0);
+DEFINE_STUB(nvme_get_transport, const struct spdk_nvme_transport *, (const char *transport_name),
+	    NULL);
+DEFINE_STUB(nvme_transport_get_trtype, spdk_nvme_transport_type_t,
+	    (const struct spdk_nvme_transport *transport), 0);
 
 static bool ut_destruct_called = false;
 void
@@ -685,6 +690,7 @@ test_nvme_allocate_request_null(void)
 	struct nvme_request dummy_req;
 
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	STAILQ_INIT(&qpair.queued_req);
 
 	/*
@@ -722,6 +728,7 @@ test_nvme_allocate_request(void)
 	/* Fill the whole payload struct with a known pattern */
 	memset(&payload, 0x5a, payload_struct_size);
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	STAILQ_INIT(&qpair.queued_req);
 	qpair.num_outstanding_reqs = 0;
 
@@ -760,6 +767,7 @@ test_nvme_free_request(void)
 	/* the code under tests asserts this condition */
 	match_req.num_children = 0;
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	match_req.qpair->reserved_req = NULL;
 
 	nvme_free_request(&match_req);
@@ -782,6 +790,7 @@ test_nvme_allocate_request_user_copy(void)
 	uint32_t payload_size = sizeof(int);
 
 	STAILQ_INIT(&qpair.free_req);
+	qpair.active_free_req = &qpair.free_req;
 	STAILQ_INIT(&qpair.queued_req);
 
 	/* no buffer or valid payload size, early NULL return */
@@ -856,7 +865,7 @@ test_nvme_ctrlr_probe(void)
 	/* test when probe_cb returns false */
 
 	MOCK_SET(dummy_probe_cb, false);
-	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, dummy_probe_cb, NULL, NULL, NULL);
+	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, NULL, dummy_probe_cb, NULL, NULL, NULL);
 	rc = nvme_ctrlr_probe(&trid, &probe_ctx, devhandle);
 	CU_ASSERT(rc == 1);
 
@@ -865,7 +874,7 @@ test_nvme_ctrlr_probe(void)
 	ut_attach_fail_cb_rc = 0;
 	ctrlr.is_destructed = true;
 	TAILQ_INSERT_TAIL(&g_nvme_attached_ctrlrs, &ctrlr, tailq);
-	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, dummy_probe_cb, NULL,
+	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, NULL, dummy_probe_cb, NULL,
 			    dummy_attach_fail_cb, NULL);
 	rc = nvme_ctrlr_probe(&trid, &probe_ctx, devhandle);
 	CU_ASSERT(rc == -EBUSY);
@@ -877,7 +886,7 @@ test_nvme_ctrlr_probe(void)
 	MOCK_SET(dummy_probe_cb, true);
 	MOCK_SET(nvme_transport_ctrlr_construct, NULL);
 	ut_attach_fail_cb_rc = 0;
-	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, dummy_probe_cb, NULL,
+	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, NULL, dummy_probe_cb, NULL,
 			    dummy_attach_fail_cb, NULL);
 	rc = nvme_ctrlr_probe(&trid, &probe_ctx, devhandle);
 	CU_ASSERT(rc == -1);
@@ -886,7 +895,7 @@ test_nvme_ctrlr_probe(void)
 	/* happy path */
 	MOCK_SET(dummy_probe_cb, true);
 	MOCK_SET(nvme_transport_ctrlr_construct, &ctrlr);
-	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, dummy_probe_cb, NULL, NULL, NULL);
+	nvme_probe_ctx_init(&probe_ctx, &trid, NULL, cb_ctx, NULL, dummy_probe_cb, NULL, NULL, NULL);
 	rc = nvme_ctrlr_probe(&trid, &probe_ctx, devhandle);
 	CU_ASSERT(rc == 0);
 	dummy = TAILQ_FIRST(&probe_ctx.init_ctrlrs);
@@ -1089,8 +1098,7 @@ test_spdk_nvme_transport_id_parse_trtype(void)
 	/* test function returned value when str and strtype not NULL, but str value
 	 * not "PCIe" or "RDMA" */
 	str = "unit_test";
-	CU_ASSERT(spdk_nvme_transport_id_parse_trtype(trtype, str) == 0);
-	CU_ASSERT((*trtype) == SPDK_NVME_TRANSPORT_CUSTOM);
+	CU_ASSERT(spdk_nvme_transport_id_parse_trtype(trtype, str) == -ENOENT);
 
 	/* test trtype value when use function "strcasecmp" to compare str and "PCIe"，not case-sensitive */
 	str = "PCIe";
@@ -1460,7 +1468,7 @@ test_nvme_ctrlr_probe_internal(void)
 	ut_test_probe_internal = true;
 	MOCK_SET(dummy_probe_cb, true);
 	trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
-	nvme_probe_ctx_init(probe_ctx, &trid, NULL, NULL, dummy_probe_cb, NULL, dummy_attach_fail_cb,
+	nvme_probe_ctx_init(probe_ctx, &trid, NULL, NULL, NULL, dummy_probe_cb, NULL, dummy_attach_fail_cb,
 			    NULL);
 	rc = nvme_probe_internal(probe_ctx, false);
 	CU_ASSERT(rc < 0);

@@ -19,8 +19,14 @@
 	spdk_fsdev_set_instance_opts;
 	spdk_fsdev_get_instance_opts;
 	spdk_fsdev_get_memory_domains;
+	spdk_fsdev_for_each_channel;
+	spdk_fsdev_for_each_channel_continue;
+	spdk_fsdev_reset;
+	spdk_fsdev_reset_supported;
+	spdk_fsdev_is_recovered;
 	spdk_fsdev_init;
 	spdk_fsdev_cleanup;
+	spdk_fsdev_get_notify_max_data_size;
 	spdk_fsdev_mount;
 	spdk_fsdev_umount;
 	spdk_fsdev_lookup;
@@ -55,6 +61,21 @@
 	spdk_fsdev_abort;
 	spdk_fsdev_fallocate;
 	spdk_fsdev_copy_file_range;
+	spdk_fsdev_syncfs;
+	spdk_fsdev_access;
+	spdk_fsdev_lseek;
+	spdk_fsdev_poll;
+	spdk_fsdev_getlk;
+	spdk_fsdev_setlk;
+	spdk_fsdev_ioctl;
+	spdk_fsdev_get_io_stat;
+	spdk_fsdev_get_device_stat;
+	spdk_fsdev_reset_device_stat;
+	spdk_fsdev_io_type_get_name;
+	spdk_fsdev_enable_notifications;
+	spdk_fsdev_disable_notifications;
+	spdk_fsdev_dump_info_json;
+	spdk_for_each_fsdev;
 
 	# Public functions in fsdev_module.h
 	spdk_fsdev_register;
@@ -67,6 +88,8 @@
 	spdk_fsdev_io_get_io_channel;
 	spdk_fsdev_module_list_add;
 	spdk_fsdev_module_list_find;
+	spdk_fsdev_notify_inval_data;
+	spdk_fsdev_notify_inval_entry;
 
 	# Everything else
 	local: *;

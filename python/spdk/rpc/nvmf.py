@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2017 Intel Corporation.
+#  Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 
 from .cmd_parser import *
@@ -132,6 +133,7 @@ def nvmf_create_transport(client, **params):
         ack_timeout: ACK timeout in milliseconds (optional)
         data_wr_pool_size: RDMA data WR pool size. RDMA specific (optional)
         disable_command_passthru: Disallow command passthru.
+        msdbd: Set MSDBD value to be used by transport. Some transports may ignore this config (optional)
     Returns:
         True or False
     """

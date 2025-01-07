@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation.
+ *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
- *   Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/bdev.h"
@@ -29,6 +29,9 @@ static const struct spdk_json_object_decoder rpc_set_bdev_opts_decoders[] = {
 	{"bdev_auto_examine", offsetof(struct spdk_bdev_opts, bdev_auto_examine), spdk_json_decode_bool, true},
 	{"iobuf_small_cache_size", offsetof(struct spdk_bdev_opts, iobuf_small_cache_size), spdk_json_decode_uint32, true},
 	{"iobuf_large_cache_size", offsetof(struct spdk_bdev_opts, iobuf_large_cache_size), spdk_json_decode_uint32, true},
+	{"qos_io_slice", offsetof(struct spdk_bdev_opts, qos_io_slice), spdk_json_decode_uint32, true},
+	{"qos_byte_slice", offsetof(struct spdk_bdev_opts, qos_byte_slice), spdk_json_decode_uint32, true},
+	{"qos_timeslice_us", offsetof(struct spdk_bdev_opts, qos_timeslice_us), spdk_json_decode_uint32, true},
 };
 
 static void
@@ -726,8 +729,13 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 			if (i == rc) {
 				spdk_json_write_named_array_begin(w, "memory_domains");
 				for (i = 0; i < rc; i++) {
+					const char *domain_id = spdk_memory_domain_get_dma_device_id(domains[i]);
 					spdk_json_write_object_begin(w);
-					spdk_json_write_named_string(w, "dma_device_id", spdk_memory_domain_get_dma_device_id(domains[i]));
+					if (domain_id) {
+						spdk_json_write_named_string(w, "dma_device_id", domain_id);
+					} else {
+						spdk_json_write_named_null(w, "dma_device_id");
+					}
 					spdk_json_write_named_int32(w, "dma_device_type",
 								    spdk_memory_domain_get_dma_device_type(domains[i]));
 					spdk_json_write_object_end(w);
@@ -943,6 +951,7 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		       const struct spdk_json_val *params)
 {
 	struct rpc_bdev_set_qos_limit req = {NULL, {UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX}};
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	struct spdk_bdev_desc *desc;
 	int i, rc;
 
@@ -954,7 +963,6 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 						 "spdk_json_decode_object failed");
 		goto cleanup;
 	}
-
 	rc = spdk_bdev_open_ext(req.name, false, dummy_bdev_event_cb, NULL, &desc);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to open bdev '%s': %d\n", req.name, rc);
@@ -962,11 +970,14 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
+	/* Check if at least one new rate limit specified */
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (req.limits[i] != UINT64_MAX) {
 			break;
 		}
 	}
+
+	/* Report error if no new rate limits specified */
 	if (i == SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES) {
 		SPDK_ERRLOG("no rate limits specified\n");
 		spdk_bdev_close(desc);
@@ -974,11 +985,20 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), req.limits,
+	/* Get the old limits */
+	spdk_bdev_get_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits);
+
+	/* Merge the new rate limits, so only the diff appears in the limits array */
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		if (req.limits[i] != UINT64_MAX) {
+			limits[i] = req.limits[i];
+		}
+	}
+
+	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits,
 				      rpc_bdev_set_qos_limit_complete, request);
 
 	spdk_bdev_close(desc);
-
 cleanup:
 	free_rpc_bdev_set_qos_limit(&req);
 }
@@ -1171,3 +1191,79 @@ cleanup:
 }
 
 SPDK_RPC_REGISTER("bdev_get_histogram", rpc_bdev_get_histogram, SPDK_RPC_RUNTIME)
+
+struct rpc_bdev_set_ro_in {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_bdev_set_ro_decoders[] = {
+	{"name", offsetof(struct rpc_bdev_set_ro_in, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_bdev_set_ro(struct spdk_jsonrpc_request *request,
+		const struct spdk_json_val *params)
+{
+	struct rpc_bdev_set_ro_in attr = {NULL};
+	struct spdk_bdev *bdev;
+
+	if (spdk_json_decode_object(params, rpc_bdev_set_ro_decoders,
+				    SPDK_COUNTOF(rpc_bdev_set_ro_decoders),
+				    &attr)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
+	bdev = spdk_bdev_get_by_name((const char *)attr.name);
+	if (!bdev) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Block device with the requested name doesn't exist");
+		return;
+	}
+
+	spdk_bdev_set_ro(bdev, true);
+
+	spdk_jsonrpc_send_bool_response(request, true);
+	return;
+}
+
+SPDK_RPC_REGISTER("bdev_set_ro", rpc_bdev_set_ro, SPDK_RPC_RUNTIME);
+
+struct rpc_bdev_set_rw_in {
+	char *name;
+};
+
+static const struct spdk_json_object_decoder rpc_bdev_set_rw_decoders[] = {
+	{"name", offsetof(struct rpc_bdev_set_rw_in, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_bdev_set_rw(struct spdk_jsonrpc_request *request,
+		const struct spdk_json_val *params)
+{
+	struct rpc_bdev_set_rw_in attr = {NULL};
+	struct spdk_bdev *bdev;
+
+	if (spdk_json_decode_object(params, rpc_bdev_set_rw_decoders,
+				    SPDK_COUNTOF(rpc_bdev_set_rw_decoders),
+				    &attr)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
+	bdev = spdk_bdev_get_by_name((const char *)attr.name);
+	if (!bdev) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Block device with the requested name doesn't exist");
+		return;
+	}
+
+	spdk_bdev_set_ro(bdev, false);
+
+	spdk_jsonrpc_send_bool_response(request, true);
+	return;
+}
+
+SPDK_RPC_REGISTER("bdev_set_rw", rpc_bdev_set_rw, SPDK_RPC_RUNTIME);

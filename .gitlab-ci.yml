@@ -1,0 +1,261 @@
+---
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - include/spdk/fsdev.h
+        - include/spdk/fsdev_module.h
+        - include/linux/virtio_fs.h
+        - include/linux/fuse_kernel.h
+        - include/linux/virtio_types.h
+        - python/spdk/rpc/fsdev.py
+        - lib/fsdev/**/*
+        - lib/fuse_dispatcher/**/*
+        - module/event/subsystems/fsdev/**/*
+        - module/fsdev/**/*
+        - test/unit/lib/fsdev/**/*
+      variables:
+        PIPELINE_TYPE: "fsdev"
+    - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
+
+stages:
+  - build
+  - test
+
+.do_build:
+  # https://stackoverflow.com/questions/62689235/gitlab-ci-how-to-ignore-directory-using-rules-syntax
+  rules:
+    - changes:
+        - .ci/
+        - packaging/
+        - go/
+        - rpmbuild/
+      when: never
+    - when: on_success
+  tags: [k8s, linux, x86_64]
+  # tags: [k8s, mtr-rdma, x86_64]
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    GIT_SUBMODULE_DEPTH: 1
+
+build-job:
+  extends: .do_build
+  stage: build
+  image: "$FEDORA_IMAGE"
+  script:
+    # Cache FIO sources && configure results
+    # GET FIO source, run ./configure
+    - (cd .. ; curl -LO http://swx-repos.mtr.labs.mlnx/repository/fio-sources/fio-fio-3.35.tar.gz; tar xf fio-fio-3.35.tar.gz)
+    - cd ../fio-fio-3.35
+    - ./configure --prefix=/usr/local
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --enable-debug --enable-werror
+    - make -j4
+    - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
+  artifacts:
+    expire_in: 3 day
+    paths:
+      - ./build
+      - ./dpdk/build/
+      - .test.tar
+      - ./mk/config.mk
+      - ./mk/cc.mk
+      - ./include/spdk/config.h
+
+build-shared-debug-job:
+  extends: .do_build
+  stage: build
+  image: "$FEDORA_IMAGE"
+  script:
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --with-shared --enable-debug --enable-werror
+    - make -j4
+
+build-shared-release-job:
+  extends: .do_build
+  stage: build
+  image: "$FEDORA_IMAGE"
+  script:
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --with-shared --enable-werror
+    - make -j4
+
+.test-job-vm-template:
+  stage: test
+  tags: [vm, linux, x86_64, f39]
+  needs:
+    - job: build-job
+  rules:
+    - changes:
+        - .ci/
+        - packaging/
+        - go/
+        - rpmbuild/
+      when: never
+    - if: $PIPELINE_TYPE == "fsdev"
+      when: manual
+      allow_failure: true
+    - when: on_success
+  hooks:
+    pre_get_sources_script:
+    - sudo rm -rf python/spdk/rpc/__pycache__
+
+.test-job-k8s-template:
+  extends: .test-job-vm-template
+  tags: [k8s, mtr-rdma, x86_64]
+  image: "$FEDORA_IMAGE"
+  hooks:
+    pre_get_sources_script: []
+
+test-nvmf-k8s-job:
+  extends: .test-job-k8s-template
+  script:
+    - grep -i huge /proc/meminfo
+    - mount
+    - tar xf .test.tar
+    # Run unit-tests in the container (it works)
+    - sudo ./test/unit/unittest.sh
+    # Run NVMf/RDMA tests in the container
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
+    - sudo -E NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
+    # multipath.sh doesn't work in K8s container
+    # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
+
+test-autotest-job:
+  extends: .test-job-vm-template
+  tags: [not-crypto, vm, linux, x86_64, f39]
+  script:
+    - tar xf .test.tar
+    # clean up output of autotest from previous runs
+    - sudo rm -rf $CI_PROJECT_DIR/../output/
+    - sudo HUGEMEM=8192 ./scripts/setup.sh
+    - sudo ./test/accel/mlx5/accel_mlx5.sh
+    - sudo ./test/accel/mlx5/accel_mlx5_crc32c.sh
+    - sudo ./test/accel/mlx5/accel_mlx5_copy.sh
+    - sudo ./autotest.sh .ci/autotest-vm.conf
+    - sudo chown -R $USER $CI_PROJECT_DIR
+
+test-crypto-k8s-job:
+  extends: .test-job-k8s-template
+  tags: [crypto, k8s, x86_64, oci-sriov]
+  script:
+    - export CI_DUT_RDMA=$(rdma link |grep "$CI_DUT_IFACE" |sed -e 's/^link //; s#/.*##')
+    - grep -i huge /proc/meminfo
+    - tar xf .test.tar
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh ${CI_DUT_RDMA}
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA}
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA} --transport=rdma
+
+coverity-job:
+  extends: .do_build
+  stage: build
+  image: "$COV_IMAGE"
+  script:
+    - apt-get -q update
+    - ./scripts/pkgdep.sh
+    - ./configure --with-rdma=mlx5_dv --disable-unit-tests
+    - cov-build --dir cov_build make -j 4
+    - cov-analyze --jobs auto --security --concurrency --dir cov_build
+    - cov-format-errors --dir cov_build --html-output cov_build/html
+    - nr=$(cov-format-errors --dir cov_build |& awk '/Processing [0-9]+ errors?/ { print $2 }')
+    - exit $nr
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/cov/bin
+    CC: gcc-9
+  allow_failure: true
+  artifacts:
+    name: coverity
+    paths:
+      - cov_build/html/
+    expire_in: 1 week
+    when: always
+
+code-style-job:
+  extends: .do_build
+  stage: build
+  image: "$COV_IMAGE"
+  script:
+    - apt-get -q update
+    - ./scripts/pkgdep.sh --developer-tools
+    - ./scripts/check_format.sh
+
+external-code-test-job:
+  extends: .test-job-vm-template
+  tags: [not-crypto, vm, linux, x86_64, f39]
+  rules:
+    - if: $PIPELINE_TYPE == "fsdev"
+      when: on_success
+    - when: manual
+      allow_failure: true
+  script:
+    # clean up output from previous runs
+    - sudo rm -rf $CI_PROJECT_DIR/../output/
+    # clean up previous build to have a clean new one
+    - rm -rf ./mk/config.mk
+    - rm -rf ./build
+    - ./test/external_code/test_make.sh ./
+
+test-virtio-fs-app:
+  stage: test
+  tags: [k8s, mtr-rdma, x86_64]
+  image: "$FEDORA_IMAGE"
+  variables:
+    VIRTIO_FS_TARGET_REF: main
+    GIT_STRATEGY: none
+  rules:
+    - if: $PIPELINE_TYPE == "fsdev"
+      when: on_success
+    - when: manual
+      allow_failure: true
+  script:
+    - |
+      if [ x"$VIRTIO_FS_CI_WEBREPO_URL" != x"" ]; then
+        REF_NAME=$(echo "$CI_COMMIT_REF_NAME" | tr '/' '_')
+        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$REF_NAME.json || true
+        if [ -f ci-$REF_NAME.json ]; then
+          VIRTIO_FS_TARGET_REF=$(cat ci-$REF_NAME.json | jq .spdk.app_ref)
+          echo ci-$REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        else
+          echo ci-$REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        fi
+      fi
+    - >
+      curl -s --header "PRIVATE-TOKEN: $VIRTIO_FS_TARGET_API_TOKEN" --request POST
+      --form token=$VIRTIO_FS_TARGET_TRIGGER_TOKEN --form ref=$VIRTIO_FS_TARGET_REF
+      --form variables[SPDK_REPO_URL]="$CI_REPOSITORY_URL" --form variables[SPDK_SHA]="$CI_COMMIT_SHA"
+      --form variables[SPDK_PIPELINE_ID]="$CI_PIPELINE_ID" --form variables[SPDK_PIPELINE_URL]="$CI_PIPELINE_URL"
+      --form variables[SPDK_JOB_ID]="$CI_JOB_ID" --form variables[SPDK_JOB_URL]="$CI_JOB_URL"
+      $VIRTIO_FS_TARGET_API_V4_URL/projects/$VIRTIO_FS_TARGET_PROJECT_ID/trigger/pipeline > ./trigger.json
+    - |
+      VIRTIO_FS_PIPELINE_ID=$(cat ./trigger.json | jq .id)
+      VIRTIO_FS_PIPELINE_URL=$(cat ./trigger.json | jq -r .web_url)
+      echo virtio-fs-target app pipeline $VIRTIO_FS_PIPELINE_ID triggered. Pipeline URL: $VIRTIO_FS_PIPELINE_URL
+      echo Waiting for the pipeline to finish...
+      while true; do
+        sleep 10
+        curl -s --header "PRIVATE-TOKEN: $VIRTIO_FS_TARGET_API_TOKEN" $VIRTIO_FS_TARGET_API_V4_URL/projects/$VIRTIO_FS_TARGET_PROJECT_ID/pipelines/$VIRTIO_FS_PIPELINE_ID > ./pipeline.json
+        PIPELINE_STATUS=$(cat ./pipeline.json | jq -r .status)
+        case $PIPELINE_STATUS in
+          created | waiting_for_resource | preparing | pending | running)
+            echo "Pipeline $VIRTIO_FS_PIPELINE_ID current status: $PIPELINE_STATUS"
+            ;;
+          *)
+            echo "Pipeline $VIRTIO_FS_PIPELINE_ID finished with status: $PIPELINE_STATUS"
+            break
+            ;;
+        esac
+      done
+    - |
+      PIPELINE_STATUS=$(cat ./pipeline.json | jq -r .status)
+      if [ "$PIPELINE_STATUS" != "success" ]; then
+          echo "Pipeline $VIRTIO_FS_PIPELINE_ID failed with status: $PIPELINE_STATUS"
+          false
+      fi
+  dependencies: []
+  artifacts:
+    when: always
+    paths:
+      - trigger.json
+      - pipeline.json

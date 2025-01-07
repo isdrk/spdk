@@ -1,6 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2024 Nutanix Inc. All rights reserved.
- *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 /** \file
@@ -101,9 +101,12 @@ struct spdk_bdev_nvme_opts {
 	uint8_t reserved110[2];
 	uint32_t dhchap_digests;
 	uint32_t dhchap_dhgroups;
+	uint32_t poll_group_requests;
+	uint32_t small_cache_size;
+	uint32_t large_cache_size;
 	bool rdma_umr_per_io;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 128, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 136, "Incorrect size");
 
 /**
  * Connect to the NVMe controller and populate namespaces as bdevs.

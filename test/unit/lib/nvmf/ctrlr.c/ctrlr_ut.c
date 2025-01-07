@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/bdev_zone.h"
@@ -953,6 +953,20 @@ test_connect(void)
 	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
 	admin_qpair.group = &group;
 	admin_qpair.state = SPDK_NVMF_QPAIR_CONNECTING;
+
+	/* I/O connect when admin qpair was destroyed */
+	ctrlr.admin_qpair = NULL;
+	memset(&rsp, 0, sizeof(rsp));
+	sgroups[subsystem.id].mgmt_io_outstanding++;
+	TAILQ_INSERT_TAIL(&qpair.outstanding, &req, link);
+	group.current_unassociated_qpairs = 1;
+	rc = nvmf_ctrlr_cmd_connect(&req);
+	poll_threads();
+	CU_ASSERT(rsp.nvme_cpl.status.sct == SPDK_NVME_SCT_COMMAND_SPECIFIC);
+	CU_ASSERT(rsp.nvme_cpl.status.sc == SPDK_NVMF_FABRIC_SC_INVALID_PARAM);
+	CU_ASSERT(qpair.ctrlr == NULL);
+	CU_ASSERT(sgroups[subsystem.id].mgmt_io_outstanding == 0);
+	ctrlr.admin_qpair = &admin_qpair;
 
 	/* I/O connect when admin qpair was destroyed */
 	ctrlr.admin_qpair = NULL;

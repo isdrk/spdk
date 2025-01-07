@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2023-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -15,10 +15,29 @@
  */
 struct mlx5_hw_cq {
 	uint64_t cq_addr;
+	uint64_t dbrec_addr;
 	uint32_t cqe_cnt;
 	uint32_t cqe_size;
 	uint32_t ci;
 	uint32_t cq_num;
+};
+
+struct spdk_mlx5_hw_srq {
+	uint64_t dbrec_addr;
+	uint64_t rq_addr;
+	uint32_t stride;
+	uint32_t head;
+	uint32_t tail;
+	uint16_t wqe_cnt;
+	uint32_t max_wr;
+	uint32_t max_sge;
+	uint32_t srqn;
+};
+
+struct spdk_mlx5_srq {
+	struct spdk_mlx5_hw_srq hw;
+	uint64_t *wr_id;
+	struct ibv_srq *verbs_srq;
 };
 
 /**
@@ -33,6 +52,10 @@ struct mlx5_hw_qp {
 	uint16_t sq_pi;
 	uint32_t sq_tx_db_nc;
 	uint32_t qp_num;
+	uint64_t rq_addr;
+	uint32_t rq_wqe_cnt;
+	uint16_t rq_stride;
+	uint16_t rq_pi;
 };
 
 /* qp_num is 24 bits. 2D lookup table uses upper and lower 12 bits to find a qp by qp_num */
@@ -56,12 +79,18 @@ struct mlx5_qp_sq_completion {
 	uint32_t completions;
 };
 
+struct mlx5_qp_rq_completion {
+	uint64_t wr_id;
+};
+
 struct spdk_mlx5_qp {
 	struct mlx5_hw_qp hw;
-	struct mlx5_qp_sq_completion *completions;
+	struct mlx5_qp_sq_completion *sq_completions;
+	struct mlx5_qp_rq_completion *rq_completions;
 	/* Pointer to a last WQE controll segment written to SQ */
 	struct mlx5_wqe_ctrl_seg *ctrl;
 	struct spdk_mlx5_cq *cq;
+	struct spdk_mlx5_srq *srq;
 	struct ibv_qp *verbs_qp;
 	/* Number of WQEs submitted to HW which won't produce a CQE */
 	uint16_t nonsignaled_outstanding;
@@ -69,7 +98,14 @@ struct spdk_mlx5_qp {
 	/* Number of WQEs available for submission */
 	uint16_t tx_available;
 	uint16_t last_pi;
+	uint16_t max_recv_sge;
+	uint16_t rx_available;
 	uint8_t sigmode;
+	/* flags below are used to automatically add a fence to rdma operations which follow UMR. Applicable to
+	 * connected qpairs. */
+	uint8_t extra_flags;
+	uint8_t cached_extra_flags;
+	bool aes_xts_inc_64;
 };
 
 enum {
@@ -200,19 +236,20 @@ mlx5_qp_get_next_wqebb(struct mlx5_hw_qp *hw_qp, uint32_t *to_end, void *cur)
 }
 
 static inline void
-mlx5_qp_set_comp(struct spdk_mlx5_qp *qp, uint16_t pi,
-		 uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
+
+mlx5_qp_set_sq_comp(struct spdk_mlx5_qp *qp, uint16_t pi,
+		    uint64_t wr_id, uint32_t fm_ce_se, uint32_t n_bb)
 {
-	qp->completions[pi].wr_id = wr_id;
+	qp->sq_completions[pi].wr_id = wr_id;
 	if ((fm_ce_se & SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) != SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE) {
 		/* non-signaled WQE, accumulate it in outstanding */
 		qp->nonsignaled_outstanding += n_bb;
-		qp->completions[pi].completions = 0;
+		qp->sq_completions[pi].completions = 0;
 		return;
 	}
 
 	/* Store number of previous nonsignaled WQEs */
-	qp->completions[pi].completions = qp->nonsignaled_outstanding + n_bb;
+	qp->sq_completions[pi].completions = qp->nonsignaled_outstanding + n_bb;
 	qp->nonsignaled_outstanding = 0;
 }
 
@@ -271,19 +308,37 @@ mlx5_ring_tx_db(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl)
 #endif
 }
 
+static inline void
+mlx5_ring_rx_db(struct spdk_mlx5_qp *qp)
+{
+	/*
+	 * Use cpu barrier to prevent code reordering
+	 */
+	spdk_smp_wmb();
+
+	((uint32_t *)qp->hw.dbr_addr)[MLX5_RCV_DBR] = htobe32(qp->hw.rq_pi);
+
+	spdk_memory_bus_store_fence();
+}
+
 #ifdef DEBUG
-void mlx5_qp_dump_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
+void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
+void mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index);
+void mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index);
+void mlx5_cq_dump_cqe(struct mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe);
 #else
-#define mlx5_qp_dump_wqe(...) do { } while (0)
+#define mlx5_qp_dump_sq_wqe(...) do { } while (0)
+#define mlx5_qp_dump_rq_wqe(...) do { } while (0)
+#define mlx5_srq_dump_wqe(...) do { } while (0)
+#define mlx5_cq_dump_cqe(...) do { } while (0)
 #endif
 
 static inline void
-mlx5_qp_wqe_submit(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb,
-		   uint16_t ctrlr_pi)
+mlx5_qp_submit_sq_wqe(struct spdk_mlx5_qp *qp, struct mlx5_wqe_ctrl_seg *ctrl, uint16_t n_wqe_bb,
+		      uint16_t ctrlr_pi)
 {
-	mlx5_qp_dump_wqe(qp, n_wqe_bb);
+	mlx5_qp_dump_sq_wqe(qp, n_wqe_bb);
 
-	/* Delay ringing the doorbell */
 	qp->hw.sq_pi += n_wqe_bb;
 	qp->last_pi = ctrlr_pi;
 	qp->ctrl = ctrl;
@@ -331,4 +386,23 @@ mlx5_get_pd_id(struct ibv_pd *pd, uint32_t *pd_id)
 	*pd_id = pd_info.pdn;
 
 	return 0;
+}
+
+static inline void *
+mlx5_srq_get_wqe(struct spdk_mlx5_hw_srq *hw_srq, uint16_t index)
+{
+	assert(hw_srq);
+	assert(index < hw_srq->max_wr);
+
+	return (void *)(uintptr_t)(hw_srq->rq_addr + index * hw_srq->stride);
+}
+
+static inline void
+mlx5_srq_free_wqe(struct spdk_mlx5_hw_srq *hw_srq, uint16_t index)
+{
+	struct mlx5_wqe_srq_next_seg *next;
+
+	next = mlx5_srq_get_wqe(hw_srq, hw_srq->tail);
+	next->next_wqe_index = htobe16(index);
+	hw_srq->tail = index;
 }

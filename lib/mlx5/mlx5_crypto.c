@@ -1,5 +1,5 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
- *   Copyright (c) 2022-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include <rdma/rdma_cma.h>
@@ -56,6 +56,8 @@ struct spdk_mlx5_crypto_keytag {
 	uint32_t deks_num;
 	bool has_keytag;
 	char keytag[8];
+	/* Used to verify that the keytag belongs to mlx5 */
+	int vendor_id;
 };
 
 static char **g_allowed_devices;
@@ -270,6 +272,8 @@ spdk_mlx5_device_query_caps(struct ibv_context *context, struct spdk_mlx5_device
 					    capability.cmd_hca_cap.aes_xts_multi_block_be_tweak);
 	caps->crypto.multi_block_le_tweak = DEVX_GET(query_hca_cap_out, out,
 					    capability.cmd_hca_cap.aes_xts_multi_block_le_tweak);
+	caps->crypto.tweak_inc_64 = DEVX_GET(query_hca_cap_out, out,
+					     capability.cmd_hca_cap.aes_xts_tweak_inc_64);
 
 	opmod = MLX5_SET_HCA_CAP_OP_MOD_CRYPTO | HCA_CAP_OPMOD_GET_CUR;
 	memset(&out, 0, sizeof(out));
@@ -290,6 +294,8 @@ spdk_mlx5_device_query_caps(struct ibv_context *context, struct spdk_mlx5_device
 	caps->crypto.wrapped_import_method_aes_xts = (DEVX_GET(query_hca_cap_out, out,
 			capability.crypto_caps.wrapped_import_method) &
 			MLX5_CRYPTO_CAPS_WRAPPED_IMPORT_METHOD_AES) != 0;
+	caps->crypto.large_mtu_tweak = DEVX_GET(query_hca_cap_out, out,
+						capability.crypto_caps.large_mtu_tweak_64);
 
 	return 0;
 }
@@ -391,6 +397,17 @@ mlx5_crypto_dek_query(struct mlx5_crypto_dek *dek, struct mlx5_crypto_dek_query_
 	return 0;
 }
 
+static const enum spdk_mlx5_crypto_key_tweak_mode g_tweak_mode_map[][2] = {
+	[0] = { /* SIMPLE or LOWER LBA */
+		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE,
+		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE,
+	},
+	[1] = { /* UPPER LBA */
+		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE,
+		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE,
+	}
+};
+
 int
 spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 			       struct spdk_mlx5_crypto_keytag **out)
@@ -403,6 +420,10 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 	struct mlx5_crypto_dek_query_attr query_attr;
 	struct spdk_mlx5_device_caps dev_caps;
 	int num_devs = 0, i, rc;
+
+	if (!attr || !attr->dek) {
+		return -EINVAL;
+	}
 
 	dek_attr.dek = attr->dek;
 	dek_attr.key_size_bytes = attr->dek_len;
@@ -487,7 +508,7 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 			goto err_out;
 		}
 		if (query_attr.opaque != 0 || query_attr.state != MLX5_ENCRYPTION_KEY_OBJ_STATE_READY) {
-			SPDK_ERRLOG("DEK on dev %s in bad state %d, oapque %"PRIu64"\n", pd->context->device->name,
+			SPDK_ERRLOG("DEK on dev %s in bad state %d, opaque %"PRIu64"\n", pd->context->device->name,
 				    query_attr.state, query_attr.opaque);
 			rc = -EINVAL;
 			goto err_out;
@@ -495,8 +516,8 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 
 		dek->pd = pd;
 		dek->context = devs[i];
-		dek->tweak_mode = dev_caps.crypto.multi_block_be_tweak ?
-				  SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE : SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE;
+		/* We have only mode one BE mode, if it is not set then tweak is LE */
+		dek->tweak_mode = g_tweak_mode_map[!!attr->tweak_upper_lba][!!dev_caps.crypto.multi_block_be_tweak];
 	}
 
 	if (dek_attr.keytag) {
@@ -505,7 +526,7 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 		memcpy(keytag->keytag, attr->dek + attr->dek_len - SPDK_MLX5_AES_XTS_KEYTAG_SIZE,
 		       SPDK_MLX5_AES_XTS_KEYTAG_SIZE);
 	}
-
+	keytag->vendor_id = SPDK_MLX5_VENDOR_ID_MELLANOX;
 	spdk_mlx5_crypto_devs_release(devs);
 	*out = keytag;
 
@@ -540,6 +561,9 @@ spdk_mlx5_crypto_get_dek_data(struct spdk_mlx5_crypto_keytag *keytag, struct ibv
 {
 	struct mlx5_crypto_dek *dek;
 
+	if (spdk_unlikely(keytag->vendor_id != SPDK_MLX5_VENDOR_ID_MELLANOX)) {
+		return -EINVAL;
+	}
 	dek = mlx5_crypto_get_dek_by_pd(keytag, pd);
 	if (spdk_unlikely(!dek)) {
 		SPDK_ERRLOG("No DEK for pd %p (dev %s)\n", pd, pd->context->device->name);

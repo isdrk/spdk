@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2016 Intel Corporation.
  *   All rights reserved.
- *   Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2021, 2024-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #ifndef SPDK_BDEV_MALLOC_H
@@ -25,6 +25,8 @@ struct malloc_bdev_opts {
 	enum spdk_dif_type dif_type;
 	bool dif_is_head_of_md;
 	enum spdk_dif_pi_format dif_pi_format;
+	bool enable_io_channel_weight;
+	bool disable_accel_support;
 };
 
 int create_malloc_disk(struct spdk_bdev **bdev, const struct malloc_bdev_opts *opts);

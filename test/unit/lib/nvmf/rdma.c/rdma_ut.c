@@ -1,7 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2018 Intel Corporation. All rights reserved.
  *   Copyright (c) 2019, 2021 Mellanox Technologies LTD. All rights reserved.
- *   Copyright (c) 2023, 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
 #include "spdk/stdinc.h"
@@ -49,9 +49,39 @@ DEFINE_STUB_V(spdk_nvmf_tgt_new_qpair, (struct spdk_nvmf_tgt *tgt, struct spdk_n
 DEFINE_STUB(nvmf_ctrlr_abort_request, int, (struct spdk_nvmf_request *req), 0);
 DEFINE_STUB(spdk_nvme_transport_id_adrfam_str, const char *, (enum spdk_nvmf_adrfam adrfam), NULL);
 DEFINE_STUB(ibv_dereg_mr, int, (struct ibv_mr *mr), 0);
-DEFINE_STUB(ibv_resize_cq, int, (struct ibv_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_create, struct spdk_rdma_provider_cq *,
+	    (struct spdk_rdma_provider_cq_init_attr *cq_attr),
+	    NULL);
+DEFINE_STUB_V(spdk_rdma_provider_cq_destroy, (struct spdk_rdma_provider_cq *cq));
+DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq, int cqe), 0);
+DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
+		int num_entries,
+		struct ibv_wc *wc), 0);
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_get_ref, (void *mkey));
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_put_ref, (void *mkey));
 DEFINE_STUB(spdk_mempool_lookup, struct spdk_mempool *, (const char *name), NULL);
 DEFINE_STUB(spdk_rdma_cm_id_get_numa_id, int32_t, (struct rdma_cm_id *cm_id), 0);
+
+static void *g_accel_p = (void *)0xdeadbeaf;
+
+static void
+init_accel(void)
+{
+	spdk_io_device_register(g_accel_p, accel_channel_create, accel_channel_destroy,
+				sizeof(int), "accel_rdma");
+}
+
+static void
+fini_accel(void)
+{
+	spdk_io_device_unregister(g_accel_p, NULL);
+}
+
+struct spdk_io_channel *
+spdk_accel_get_io_channel(void)
+{
+	return spdk_get_io_channel(g_accel_p);
+}
 
 /* ibv_reg_mr can be a macro, need to undefine it */
 #ifdef ibv_reg_mr
@@ -755,7 +785,13 @@ test_nvmf_rdma_get_optimal_poll_group(void)
 	struct spdk_nvmf_rdma_poll_group *rgroups[TEST_GROUPS_COUNT];
 	struct spdk_nvmf_transport_poll_group *result;
 	struct spdk_nvmf_poll_group group = {};
+	struct spdk_thread *thread;
 	uint32_t i;
+
+	thread = spdk_thread_create(NULL, NULL);
+	SPDK_CU_ASSERT_FATAL(thread != NULL);
+	spdk_set_thread(thread);
+	init_accel();
 
 	rqpair.qpair.transport = transport;
 	TAILQ_INIT(&rtransport.poll_groups);
@@ -821,6 +857,13 @@ test_nvmf_rdma_get_optimal_poll_group(void)
 	rqpair.qpair.qid = 1;
 	result = nvmf_rdma_get_optimal_poll_group(&rqpair.qpair);
 	CU_ASSERT(result == NULL);
+
+	fini_accel();
+	spdk_thread_exit(thread);
+	while (!spdk_thread_is_exited(thread)) {
+		spdk_thread_poll(thread, 0, 0);
+	}
+	spdk_thread_destroy(thread);
 }
 #undef TEST_GROUPS_COUNT
 
@@ -1417,7 +1460,7 @@ test_nvmf_rdma_resize_cq(void)
 	tnum_cqe = rpoller.num_cqe;
 	idevice.transport_type = IBV_TRANSPORT_IB;
 	rdevice.attr.max_cqe = 30;
-	MOCK_SET(ibv_resize_cq, -1);
+	MOCK_SET(spdk_rdma_provider_cq_resize, -1);
 
 	rc = nvmf_rdma_resize_cq(&rqpair, &rdevice);
 	CU_ASSERT(rc == -1);
@@ -1427,7 +1470,7 @@ test_nvmf_rdma_resize_cq(void)
 	/* Test5: RDMA CQ resize success. rsize = MIN(MAX(num_cqe * 2, required_num_wr), device->attr.max_cqe). */
 	tnum_wr = rpoller.required_num_wr;
 	tnum_cqe = rpoller.num_cqe;
-	MOCK_SET(ibv_resize_cq, 0);
+	MOCK_SET(spdk_rdma_provider_cq_resize, 0);
 
 	rc = nvmf_rdma_resize_cq(&rqpair, &rdevice);
 	CU_ASSERT(rc == 0);
@@ -1458,6 +1501,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvmf_rdma_resize_cq);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
+
 	CU_cleanup_registry();
 	return num_failures;
 }

@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2022 Intel Corporation.
+ *   Copyright (c) 2024-2025 NVIDIA CORPORATION & AFFILIATES
  *   All rights reserved.
  */
 
@@ -409,6 +410,5 @@ int vfu_virtio_scsi_set_options(const char *name, uint16_t num_io_queues, uint16
 typedef void (*vfu_virtio_fs_add_fsdev_cpl_cb)(void *cb_arg, int status);
 
 int vfu_virtio_fs_add_fsdev(const char *name, const char *bdev_name, const char *tag,
-			    uint16_t num_queues, uint16_t qsize, bool packed_ring,
-			    vfu_virtio_fs_add_fsdev_cpl_cb cb, void *cb_arg);
+			    uint16_t num_queues, uint16_t qsize, bool packed_ring);
 #endif

@@ -1,5 +1,6 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (C) 2015 Intel Corporation.
+ *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES.
  *   All rights reserved.
  */
 
@@ -60,6 +61,10 @@ DEFINE_STUB(nvme_ctrlr_get_current_process,
 DEFINE_STUB(nvme_transport_ctrlr_scan_attached,
 	    int,
 	    (struct spdk_nvme_probe_ctx *probe_ctx),
+	    0);
+DEFINE_STUB(nvme_transport_qpair_free_request,
+	    int,
+	    (struct spdk_nvme_qpair *qpair, struct nvme_request *req),
 	    0);
 
 int
@@ -155,6 +160,12 @@ spdk_nvme_ctrlr_get_default_ctrlr_opts(struct spdk_nvme_ctrlr_opts *opts, size_t
 	memset(opts, 0, sizeof(*opts));
 }
 
+const struct spdk_nvme_ctrlr_data *
+spdk_nvme_ctrlr_get_data(struct spdk_nvme_ctrlr *ctrlr)
+{
+	return &ctrlr->cdata;
+}
+
 uint32_t
 spdk_nvme_ns_get_sector_size(struct spdk_nvme_ns *ns)
 {
@@ -240,6 +251,8 @@ prepare_for_test(struct spdk_nvme_ns *ns, struct spdk_nvme_ctrlr *ctrlr,
 	qpair->ctrlr = ctrlr;
 	qpair->req_buf = calloc(num_requests, sizeof(struct nvme_request));
 	SPDK_CU_ASSERT_FATAL(qpair->req_buf != NULL);
+	STAILQ_INIT(&qpair->free_req);
+	qpair->active_free_req = &qpair->free_req;
 
 	for (i = 0; i < num_requests; i++) {
 		struct nvme_request *req = qpair->req_buf + i * sizeof(struct nvme_request);
