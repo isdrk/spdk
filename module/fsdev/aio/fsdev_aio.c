@@ -34,7 +34,7 @@
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define DEFAULT_XATTR_ENABLED false
 #define DEFAULT_SKIP_RW false
-#define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
+#define DEFAULT_ATTR_VALID_MS 0 /* to prevent the attribute caching */
 #define DEFAULT_NOTIFY_MAX_DATA_SIZE 4096
 #define DEFAULT_ENABLE_NOTIFICATIONS false
 #define FANOTIFY_POLLER_PERIOD_US 1000
@@ -706,7 +706,7 @@ file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_f
 	attr->gid = stbuf.st_gid;
 	attr->rdev = stbuf.st_rdev;
 	attr->blksize = stbuf.st_blksize;
-	attr->valid_ms = DEFAULT_TIMEOUT_MS;
+	attr->valid_ms = fobject->vfsdev->opts.attr_valid_ms;
 
 	return 0;
 }
@@ -4195,6 +4195,7 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
+	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -4212,6 +4213,7 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
+	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
 
 	return 0;
 }
@@ -4497,6 +4499,7 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 	opts->max_readahead = DEFAULT_MAX_READAHEAD;
 	opts->skip_rw = DEFAULT_SKIP_RW;
 	opts->enable_notifications = DEFAULT_ENABLE_NOTIFICATIONS;
+	opts->attr_valid_ms = DEFAULT_ATTR_VALID_MS;
 }
 
 int

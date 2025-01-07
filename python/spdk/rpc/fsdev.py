@@ -49,7 +49,8 @@ def fsdev_get_fsdevs(client, name: str = None):
 
 def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
                      enable_writeback_cache: bool = None, max_xfer_size: int = None,
-                     skip_rw: bool = None, max_readahead: int = None, enable_notifications: bool = None):
+                     skip_rw: bool = None, max_readahead: int = None, enable_notifications: bool = None,
+                     attr_valid_ms: int = None):
     """Create a aio filesystem.
 
     Args:
@@ -61,6 +62,7 @@ def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
         skip_rw: if true skips read/write IOs
         max_readahead: max readahead size
         enable_notifications: enable notifications
+        attr_valid_ms: File attributes validity time in milliseconds
     """
     params = {
         'name': name,
@@ -78,6 +80,8 @@ def fsdev_aio_create(client, name, root_path, enable_xattr: bool = None,
         params['max_readahead'] = max_readahead
     if enable_notifications is not None:
         params['enable_notifications'] = enable_notifications
+    if attr_valid_ms is not None:
+        params['attr_valid_ms'] = attr_valid_ms
     return client.call('fsdev_aio_create', params)
 
 
