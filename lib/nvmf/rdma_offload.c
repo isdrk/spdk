@@ -46,6 +46,8 @@
 
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload;
 
+#define NVMF_RDMA_STA_DEFAULT_POLL_RATE_US 10000
+
 /*
  RDMA Connection Resource Defaults
  */
@@ -784,6 +786,7 @@ struct spdk_nvmf_rdma_sta {
 	struct doca_dev				*dev;
 	struct doca_sta				*sta;
 	struct doca_ctx				*ctx;
+	struct spdk_poller			*poller;
 	struct nvmf_rdma_sta_caps		caps;
 	enum doca_ctx_states			state;
 	TAILQ_HEAD(, spdk_nvmf_rdma_bdev)	bdevs;
@@ -3995,6 +3998,20 @@ nvmf_rdma_sta_create(struct spdk_nvmf_rdma_transport *rtransport)
 }
 
 static int
+nvmf_rdma_sta_progress(void *ctx)
+{
+	struct spdk_nvmf_transport *transport = ctx;
+	struct spdk_nvmf_rdma_transport *rtransport;
+	uint8_t rc;
+
+	rtransport = SPDK_CONTAINEROF(transport, struct spdk_nvmf_rdma_transport, transport);
+
+	rc = doca_pe_progress(rtransport->sta.pe);
+
+	return (rc == 0) ? SPDK_POLLER_IDLE : SPDK_POLLER_BUSY;
+}
+
+static int
 nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
 {
 	struct spdk_nvmf_rdma_device *device;
@@ -4098,6 +4115,13 @@ nvmf_rdma_sta_start(struct spdk_nvmf_rdma_transport *rtransport)
 			SPDK_NOTICELOG("Wrong DOCA STA state %s\n", nvmf_rdma_sta_state_to_str(rtransport->sta.state));
 			return -EINVAL;
 		}
+	}
+
+	rtransport->sta.poller = SPDK_POLLER_REGISTER(nvmf_rdma_sta_progress, &rtransport->transport,
+						      NVMF_RDMA_STA_DEFAULT_POLL_RATE_US);
+	if (!rtransport->sta.poller) {
+		SPDK_ERRLOG("Failed to register nvmf_rdma_sta_progress poller\n");
+		return -EINVAL;
 	}
 
 	return 0;
@@ -4522,6 +4546,9 @@ nvmf_rdma_sta_destroy(struct spdk_nvmf_rdma_transport *rtransport)
 {
 	doca_error_t rc;
 
+	if (rtransport->sta.poller) {
+		spdk_poller_unregister(&rtransport->sta.poller);
+	}
 	if (rtransport->sta.sta) {
 		if (rtransport->sta.state == DOCA_CTX_STATE_RUNNING) {
 			rc = doca_ctx_stop(rtransport->sta.ctx);
