@@ -1410,6 +1410,11 @@ if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then
 	fi
 fi
 
+if echo -e '#include <fcntl.h>\n#include <sys/fanotify.h>\nint main(void) { return FAN_EVENT_INFO_TYPE_DFID_NAME; }\n' \
+	| "${BUILD_CMD[@]}" - 2> /dev/null; then
+	CONFIG[HAVE_FANOTIFY]="y"
+fi
+
 # For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
 if [[ "${CONFIG[DEBUG]}" = "y" && $arch = aarch64* && "$CC_TYPE" = "gcc" ]]; then
 	GCC_VERSION=$($CC -dumpfullversion)
