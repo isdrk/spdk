@@ -222,10 +222,12 @@ struct aio_fsdev {
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
 	struct spdk_spinlock lock;
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	int fanotify_fd;
 	struct spdk_poller *fanotify_poller;
 	pid_t pid;
 	struct aio_fsdev_linux_fh_tree linux_fhs;
+#endif
 };
 
 struct aio_fsdev_io {
@@ -374,6 +376,8 @@ lo_find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 	return NULL;
 }
 
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 static int
 fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
 {
@@ -436,16 +440,19 @@ fsdev_aio_fanotify_remove(struct aio_fsdev_file_object *fobject)
 	RB_REMOVE(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
 	spdk_spin_unlock(&vfsdev->lock);
 }
+#endif
 
 static void
 file_object_destroy(struct aio_fsdev_file_object *fobject)
 {
 	assert(!fobject->hdr.refcount);
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* root is handled on umount */
 	if (fobject->vfsdev->fanotify_fd != -1 && fobject->is_dir && fobject->parent_fobject) {
 		fsdev_aio_fanotify_remove(fobject);
 	}
+#endif
 
 	close(fobject->fd);
 	free(fobject->fd_str);
@@ -533,7 +540,6 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 {
 	struct aio_fsdev_file_object *fobject;
 	uint64_t lut_key = SPDK_LUT_INVALID_KEY;
-	int rc;
 
 	fobject = calloc(1, sizeof(*fobject));
 	if (!fobject) {
@@ -567,13 +573,15 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	TAILQ_INIT(&fobject->handles);
 	TAILQ_INIT(&fobject->leafs);
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* Root is marked on mount */
 	if (vfsdev->fanotify_fd != -1 && fobject->is_dir && parent_fobject) {
-		rc = fsdev_aio_fanotify_add(fobject, parent_fobject->fd, name);
+		int rc = fsdev_aio_fanotify_add(fobject, parent_fobject->fd, name);
 		if (rc) {
 			goto err;
 		}
 	}
+#endif
 
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
@@ -960,6 +968,7 @@ lo_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts *opts)
 static void
 fsdev_aio_fanotify_close(struct aio_fsdev *vfsdev)
 {
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	struct aio_fsdev_linux_fh *entry, *tmp_entry;
 
 	RB_FOREACH_SAFE(entry, aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, tmp_entry) {
@@ -971,7 +980,10 @@ fsdev_aio_fanotify_close(struct aio_fsdev *vfsdev)
 		close(vfsdev->fanotify_fd);
 		vfsdev->fanotify_fd = -1;
 	}
+#endif
 }
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 
 static struct aio_fsdev_file_object *
 fsdev_aio_get_fobject_by_linux_fh(struct aio_fsdev *vfsdev, const struct file_handle *file_handle)
@@ -1097,30 +1109,33 @@ fsdev_aio_fanotify_poller(void *ctx)
 	return SPDK_POLLER_BUSY;
 }
 
+#endif /* SPDK_CONFIG_HAVE_FANOTIFY */
+
 static int
 lo_mount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct spdk_fsdev_mount_opts *in_opts = &fsdev_io->u_in.mount.opts;
-	int rc = 0;
 
 	fsdev_io->u_out.mount.opts = *in_opts;
 	lo_set_mount_opts(vfsdev, &fsdev_io->u_out.mount.opts);
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	if (vfsdev->fanotify_fd != -1) {
+		int rc;
 		spdk_spin_lock(&vfsdev->lock);
 		rc = fsdev_aio_fanotify_add(vfsdev->root, AT_FDCWD, vfsdev->root_path);
 		spdk_spin_unlock(&vfsdev->lock);
 		if (rc) {
-			goto out;
+			return rc;
 		}
 	}
+#endif
 
 	file_object_ref(vfsdev->root);
 	fsdev_io->u_out.mount.root_fobject = fsdev_aio_get_spdk_fobject(vfsdev, vfsdev->root);
 
-out:
-	return rc;
+	return 0;
 }
 
 static int
@@ -1128,9 +1143,11 @@ lo_umount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	if (vfsdev->fanotify_fd != -1) {
 		fsdev_aio_fanotify_remove(vfsdev->root);
 	}
+#endif
 
 	fsdev_free_leafs(vfsdev->root, false);
 	file_object_unref(vfsdev->root, 1);
@@ -4375,6 +4392,7 @@ fsdev_aio_reset(void *_ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	return 0;
 }
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 static int
 fsdev_aio_enable_notifications(struct aio_fsdev *vfsdev)
 {
@@ -4428,6 +4446,20 @@ fsdev_aio_set_notifications(void *ctx, bool enabled)
 
 	return 0;
 }
+#else
+static int
+fsdev_aio_set_notifications(void *ctx, bool enabled)
+{
+	struct aio_fsdev *vfsdev = ctx;
+
+	if (enabled && !vfsdev->opts.enable_notifications) {
+		SPDK_ERRLOG("Notifications are disabled in fsdev_aio\n");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+#endif
 
 static const struct spdk_fsdev_fn_table aio_fn_table = {
 	.destruct		= fsdev_aio_destruct,
@@ -4516,7 +4548,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 
 	vfsdev->proc_self_fd = -1;
-	vfsdev->fanotify_fd = -1;
 
 	vfsdev->fsdev.name = strdup(name);
 	if (!vfsdev->fsdev.name) {
@@ -4540,7 +4571,10 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return -ENOMEM;
 	}
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	vfsdev->fanotify_fd = -1;
 	RB_INIT(&vfsdev->linux_fhs);
+#endif
 
 	spdk_spin_init(&vfsdev->lock);
 
