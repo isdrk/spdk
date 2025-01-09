@@ -89,7 +89,25 @@ struct spdk_fsdev_fn_table {
 	/** Destroy the backend filesystem device object */
 	int (*destruct)(void *ctx);
 
-	/** Process the I/O request. */
+	/** Process the I/O request.
+	 *
+	 * Note regarding the fobject reference counting.
+	 *
+	 * The following IO types increase the fobject reference counter for the result fobject in case of success:
+	 * - SPDK_FSDEV_IO_LOOKUP
+	 * - SPDK_FSDEV_IO_CREATE
+	 * - SPDK_FSDEV_IO_LINK
+	 * - SPDK_FSDEV_IO_MKDIR
+	 * - SPDK_FSDEV_IO_MKNOD
+	 * - SPDK_FSDEV_IO_SYMLINK
+	 * - SPDK_FSDEV_IO_READDIR (depends on the value of \p forget set by the \p spdk_fsdev_readdir_entry_cb)
+	 *
+	 * The SPDK_FSDEV_IO_FORGET decreases the fobject reference counter by \p nlookup.
+	 *
+	 * The SPDK_FSDEV_IO_UMOUNT causes all the fobject reference counters to be implicitly dropped to zero.
+	 * It is not guaranteed that the fsdev will receive corresponding SPDK_FSDEV_IO_FORGET I/Os for the affected
+	 * fobjects.
+	 */
 	void (*submit_request)(struct spdk_io_channel *ch, struct spdk_fsdev_io *);
 
 	/** Get an I/O channel for the specific fsdev for the calling thread. */
