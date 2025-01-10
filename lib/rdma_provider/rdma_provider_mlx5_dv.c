@@ -210,7 +210,7 @@ spdk_rdma_provider_qp_disconnect(struct spdk_rdma_provider_qp *spdk_rdma_qp)
 
 		rc = spdk_mlx5_qp_modify(dv_qp->mlx5_qp, &qp_attr, IBV_QP_STATE);
 		if (rc) {
-			SPDK_ERRLOG("Failed to modify qp %p state to ERR, rc %d\n", dv_qp->mlx5_qp, rc);
+			SPDK_WARNLOG("Failed to modify qp %p state to ERR, rc %d\n", dv_qp->mlx5_qp, rc);
 			return rc;
 		}
 	}
