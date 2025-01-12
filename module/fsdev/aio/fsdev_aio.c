@@ -1733,7 +1733,7 @@ lo_do_ioctl(struct spdk_fsdev_io *fsdev_io)
 		SPDK_DEBUGLOG(fsdev_aio, "Zero-sized ioctl() has been successfully handled.\n");
 		break;
 	default:
-		SPDK_ERRLOG("Unknown ioctl cmd: %u\n", request);
+		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
 		return -ENOTTY;
 	}
 
