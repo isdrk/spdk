@@ -10,6 +10,7 @@ ARG NVMF_TARGET_OFFLOAD_BUILD_ARGS
 ARG SIGN_DPA=false
 ARG DPA_SIGN_USER
 ARG DPA_SIGN_PASS
+ARG DOCA_STA_URL
 
 SHELL ["/bin/bash", "-c"]
 
@@ -24,14 +25,25 @@ RUN apt update && \
 
 # Build and install DOCA STA
 RUN set -x; \
-    DOCA_VERSION=$(echo $DOCA_BUILDER_TAG | grep -o "[0-9]\+\.[0-9]\+\.[0-9]*") && \
-    wget https://urm.nvidia.com/artifactory/sw-nbu-doca-local/doca-sdk/$(echo $DOCA_VERSION | grep -o "[0-9]\+\.[0-9]\+\.[0-9]")/DOCA_${DOCA_VERSION//./-}-1/doca-sdk-sta-${DOCA_VERSION}.tar.gz && \
-    tar xzvf doca-sdk-sta-${DOCA_VERSION}.tar.gz --no-same-owner && \
-    cd doca-sdk-sta-${DOCA_VERSION} && \
-    . ./devtools/public/set_env_variables.sh --deb && \
-    ./devtools/public/doca_package_build.sh --dpu --deb && \
-    cd ../ && \
-    dpkg -i doca-sdk-sta_${DOCA_VERSION}-1_arm64.deb libdoca-sdk-sta-dev_${DOCA_VERSION}-1_arm64.deb
+    if [ ! -z "$DOCA_STA_URL" ]; then \
+        DOCA_STA_VERSION=$(echo $DOCA_STA_URL | grep -o "[0-9]\+\.[0-9]\+\.[0-9]{4}") && \
+        wget $DOCA_STA_URL && \
+        tar xzvf doca-sdk-sta-${DOCA_STA_VERSION}.tar.gz --no-same-owner && \
+        cd doca-sdk-sta-${DOCA_STA_VERSION} && \
+        . ./devtools/public/set_env_variables.sh --deb && \
+        ./devtools/public/doca_package_build.sh --dpu --deb && \
+        cd ../ && \
+        dpkg -i doca-sdk-sta_${DOCA_STA_VERSION}-1_arm64.deb libdoca-sdk-sta-dev_${DOCA_STA_VERSION}-1_arm64.deb ; \
+    else \
+        DOCA_VERSION=$(echo $DOCA_BUILDER_TAG | grep -o "[0-9]\+\.[0-9]\+\.[0-9]*") && \
+        wget https://urm.nvidia.com/artifactory/sw-nbu-doca-local/doca-sdk/$(echo $DOCA_VERSION | grep -o "[0-9]\+\.[0-9]\+\.[0-9]")/DOCA_${DOCA_VERSION//./-}-1/doca-sdk-sta-${DOCA_VERSION}.tar.gz && \
+        tar xzvf doca-sdk-sta-${DOCA_VERSION}.tar.gz --no-same-owner && \
+        cd doca-sdk-sta-${DOCA_VERSION} && \
+        . ./devtools/public/set_env_variables.sh --deb && \
+        ./devtools/public/doca_package_build.sh --dpu --deb && \
+        cd ../ && \
+        dpkg -i doca-sdk-sta_${DOCA_VERSION}-1_arm64.deb libdoca-sdk-sta-dev_${DOCA_VERSION}-1_arm64.deb ; \
+    fi
 
 RUN set -eux; \
     .ci/dpdk_patch.sh && \

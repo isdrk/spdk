@@ -51,6 +51,7 @@ Arguments:
    --push                          Wheather to push image into a registry (default: ${PUSH_IMAGE})
    --sign                          Sign DPA binary (default: ${SIGN}). Requires DPA_SIGN_USER and DPA_SIGN_PASS env variables to be set
    --artifact-prop-name            Key name in artifact.properties (default: ${ARTIFACT_PROP_NAME})
+   --doca-sta-url                  URL for DOCA-STA file (default: empty)
 EOF
 }
 
@@ -101,6 +102,9 @@ while getopts ":h-:" optchar; do
                     ;;
                 artifact-prop-name=*)
                     ARTIFACT_PROP_NAME=${OPTARG#*=}
+                    ;;
+                doca-sta-url=*)
+                    DOCA_STA_URL=${OPTARG#*=}
                     ;;
                 *)
                     if [ "$OPTERR" = 1 ] && [ "${optspec:0:1}" != ":" ]; then
@@ -161,6 +165,10 @@ if [ "$SIGN" = true ]; then
     DOCKER_BUILD_ARGS+=("--build-arg SIGN_DPA=true")
     DOCKER_BUILD_ARGS+=("--build-arg DPA_SIGN_USER=${DPA_SIGN_USER}")
     DOCKER_BUILD_ARGS+=("--build-arg DPA_SIGN_PASS=${DPA_SIGN_PASS}")
+fi
+
+if [ ! -z "$DOCA_STA_URL" ]; then
+    DOCKER_BUILD_ARGS+=("--build-arg DOCA_STA_URL=${$DOCA_STA_URL}")
 fi
 
 cmd="podman build --format docker -f ${DOCKER_FILE} -t ${DOCKER_IMG} ${DOCKER_BUILD_ARGS[@]} ."
