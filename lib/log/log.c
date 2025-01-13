@@ -142,6 +142,7 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 	char *buf, buf1[MAX_TMPBUF], *buf2 = NULL;
 	char timestamp[64];
 	int rc;
+	va_list aq;
 
 	if (g_log) {
 		g_log(level, file, line, func, format, ap);
@@ -157,13 +158,18 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 		return;
 	}
 
+	/* According to the man vsnprintf, v-versions of the printf functions invoke the va_arg macro, so the value of ap is
+	 * undefined after the call. Thus, we have to copy the ap argument list to be able to use the copy for the following
+	 * vasprintf call if needed.
+	 */
+	va_copy(aq, ap);
 	rc = vsnprintf(buf1, sizeof(buf1), format, ap);
 	assert(rc >= 0);
 
-	if (rc <= MAX_TMPBUF) {
+	if (rc < (int)sizeof(buf1)) {
 		buf = buf1;
 	} else {
-		rc = vasprintf(&buf2, format, ap);
+		rc = vasprintf(&buf2, format, aq);
 		if (rc < 0) {
 			/* Allow output to be truncated. */
 			buf = buf1;
@@ -190,6 +196,7 @@ spdk_vlog(enum spdk_log_level level, const char *file, const int line, const cha
 	}
 
 	free(buf2);
+	va_end(aq);
 }
 
 void
