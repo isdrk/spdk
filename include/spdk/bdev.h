@@ -2509,6 +2509,17 @@ int spdk_bdev_wait_for_ready(struct spdk_bdev_desc *desc, int64_t timeout_in_mse
  */
 bool spdk_bdev_accel_sequence_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_type io_type);
 
+/**
+ * Check if block device supports accel sequence for the given \b io_type,
+ * specific to a bdev descriptor.
+ *
+ * \param desc Open block device descriptor.
+ * \param io_type IO type to be checked for the accel sequence support.
+ * \return true of accel sequence is supported, false otherwise.
+ */
+bool spdk_bdev_desc_accel_sequence_supported(struct spdk_bdev_desc *desc,
+		enum spdk_bdev_io_type io_type);
+
 #ifdef __cplusplus
 }
 #endif

@@ -11639,6 +11639,26 @@ spdk_bdev_accel_sequence_supported(struct spdk_bdev *bdev, enum spdk_bdev_io_typ
 	return bdev->fn_table->accel_sequence_supported(bdev->ctxt, io_type);
 }
 
+bool
+spdk_bdev_desc_accel_sequence_supported(struct spdk_bdev_desc *desc,
+					enum spdk_bdev_io_type io_type)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+
+	if (bdev_desc_needs_metadata(desc)) {
+		switch (io_type) {
+		case SPDK_BDEV_IO_TYPE_READ:
+		case SPDK_BDEV_IO_TYPE_WRITE:
+			return true;
+		default:
+			break;
+		}
+	}
+
+	return spdk_bdev_accel_sequence_supported(bdev, io_type);
+}
+
+
 static void
 bdev_group_ch_enable_qos(struct spdk_bdev_group_channel *group_ch)
 {
