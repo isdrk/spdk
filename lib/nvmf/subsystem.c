@@ -2198,8 +2198,8 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
 
 	/* Cache the zcopy and accel sequence capability of the bdev device */
 	ns->zcopy = spdk_bdev_io_type_supported(ns->bdev, SPDK_BDEV_IO_TYPE_ZCOPY);
-	ns->accel_sequence = spdk_bdev_accel_sequence_supported(ns->bdev, SPDK_BDEV_IO_TYPE_READ) &&
-			     spdk_bdev_accel_sequence_supported(ns->bdev, SPDK_BDEV_IO_TYPE_WRITE);
+	ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_READ) &&
+			     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_WRITE);
 
 	if (spdk_uuid_is_null(&opts.uuid)) {
 		opts.uuid = *spdk_bdev_get_uuid(ns->bdev);

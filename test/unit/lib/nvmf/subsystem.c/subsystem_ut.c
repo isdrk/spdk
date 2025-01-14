@@ -45,6 +45,12 @@ DEFINE_STUB(spdk_bdev_accel_sequence_supported, bool,
 	     enum spdk_bdev_io_type io_type), false);
 DEFINE_STUB(spdk_nvmf_qpair_disconnect, int, (struct spdk_nvmf_qpair *qpair), 0);
 
+DEFINE_STUB(spdk_bdev_desc_accel_sequence_supported, bool,
+	    (struct spdk_bdev_desc *desc,
+	     enum spdk_bdev_io_type io_type), false);
+
+DEFINE_STUB_V(nvmf_update_discovery_log,
+	      (struct spdk_nvmf_tgt *tgt, const char *hostnqn));
 DEFINE_STUB(spdk_nvmf_request_complete,
 	    int,
 	    (struct spdk_nvmf_request *req), 0);
