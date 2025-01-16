@@ -14,16 +14,14 @@ def rmem_get_config(client):
     return client.call('rmem_get_config')
 
 
-def rmem_enable(client, backend_dir: str = None):
-    """Enable/disable rmem if --backend-dir is specified or disable it otherwise.
+def rmem_set_config(client, backend_dir: str):
+    """Set backend directory for rmem_pool.
 
     Args:
         backend_dir: directory where rmem_pool stores backend files
     """
     params = {
+        'backend_dir': backend_dir,
     }
 
-    if backend_dir is not None:
-        params['backend_dir'] = backend_dir
-
-    return client.call('rmem_enable', params)
+    return client.call('rmem_set_config', params)

@@ -23,6 +23,9 @@
 #define UT_FHANDLE ((struct spdk_fsdev_file_handle *)0xBEABBEAB)
 #define UT_FNAME "ut_test.file"
 
+#define UT_RMEM_POOL ((struct spdk_rmem_pool *)0xBEADBEAD)
+#define UT_RMEM_POOL_ENTRY ((struct spdk_rmem_entry *)0xDEABDEAB)
+
 DEFINE_STUB_V(spdk_fsdev_close, (struct spdk_fsdev_desc *desc));
 DEFINE_STUB(spdk_fsdev_desc_get_fsdev, struct spdk_fsdev *, (struct spdk_fsdev_desc *desc), NULL);
 DEFINE_STUB(spdk_fsdev_get_opts, int, (struct spdk_fsdev_opts *opts, size_t opts_size), 0);
@@ -193,14 +196,16 @@ DEFINE_STUB(spdk_fsdev_abort, int, (struct spdk_fsdev_desc *desc, struct spdk_io
 				    uint64_t unique_to_abort, spdk_fsdev_abort_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
 
-DEFINE_STUB(spdk_rmem_is_enabled, bool, (void), false);
+DEFINE_STUB(spdk_rmem_get_backend_dir, const char *, (void), NULL);
+DEFINE_STUB(spdk_rmem_set_backend_dir, int, (const char *backend_dir_name), 0);
 DEFINE_STUB(spdk_rmem_pool_create, struct spdk_rmem_pool *, (const char *name, uint32_t entry_size,
-		uint32_t num_entries, uint32_t ext_num_entries), NULL);
+		uint32_t num_entries, uint32_t ext_num_entries), UT_RMEM_POOL);
 DEFINE_STUB(spdk_rmem_pool_restore, struct spdk_rmem_pool *, (const char *name, uint32_t entry_size,
 		spdk_rmem_pool_restore_entry_cb clb, void *ctx), NULL);
-DEFINE_STUB(spdk_rmem_pool_get, struct spdk_rmem_entry *, (struct spdk_rmem_pool *pool), NULL);
+DEFINE_STUB(spdk_rmem_pool_get, struct spdk_rmem_entry *, (struct spdk_rmem_pool *pool),
+	    UT_RMEM_POOL_ENTRY);
 DEFINE_STUB_V(spdk_rmem_entry_write, (struct spdk_rmem_entry *entry, const void *buf));
-DEFINE_STUB(spdk_rmem_entry_read, bool, (struct spdk_rmem_entry *entry, void *buf), false);
+DEFINE_STUB(spdk_rmem_entry_read, int, (struct spdk_rmem_entry *entry, void *buf), 0);
 DEFINE_STUB_V(spdk_rmem_entry_release, (struct spdk_rmem_entry *entry));
 DEFINE_STUB_V(spdk_rmem_pool_destroy, (struct spdk_rmem_pool *pool));
 

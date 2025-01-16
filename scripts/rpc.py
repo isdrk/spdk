@@ -4174,12 +4174,12 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p = subparsers.add_parser('rmem_get_config', help='Get the rmem config')
     p.set_defaults(func=rmem_get_config)
 
-    def rmem_enable(args):
-        print_json(rpc.rmem.rmem_enable(args.client, backend_dir=args.backend_dir))
+    def rmem_set_config(args):
+        print_json(rpc.rmem.rmem_set_config(args.client, backend_dir=args.backend_dir))
 
-    p = subparsers.add_parser('rmem_enable', help='Enable rmem if --backend-dir is specified or disable it otherwise')
-    p.add_argument('-d', '--backend-dir', help="Directory where rmem_pool stores backend files", required=False)
-    p.set_defaults(func=rmem_enable)
+    p = subparsers.add_parser('rmem_set_config', help='Set configuration parameters for rmem')
+    p.add_argument('-d', '--backend-dir', help="Directory where rmem stores backend files", required=True)
+    p.set_defaults(func=rmem_set_config)
 
     def rdma_provider_get_opts(args):
         print_dict(rpc.rdma_provider.rdma_provider_get_opts(args.client))

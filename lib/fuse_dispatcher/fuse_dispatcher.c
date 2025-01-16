@@ -3828,6 +3828,7 @@ fuse_dispatcher_rmem_restore_block_cb(struct spdk_rmem_entry *entry, void *ctx)
 {
 	struct fuse_disp_recovery_data data;
 	struct spdk_fuse_dispatcher *disp = ctx;
+	int rc;
 
 	if (disp->rmem_data) {
 		SPDK_ERRLOG("%s: data has already been restored. Duplicated entry?\n",
@@ -3835,10 +3836,11 @@ fuse_dispatcher_rmem_restore_block_cb(struct spdk_rmem_entry *entry, void *ctx)
 		return -EIO;
 	}
 
-	if (!spdk_rmem_entry_read(entry, &data)) {
-		SPDK_ERRLOG("%s: failed to read restored entry\n",
-			    fuse_dispatcher_name(disp));
-		return -ENODATA;
+	rc = spdk_rmem_entry_read(entry, &data);
+	if (rc) {
+		SPDK_ERRLOG("%s: failed to read restored entry (err=%d)\n",
+			    fuse_dispatcher_name(disp), rc);
+		return rc;
 	}
 
 	disp->rmem_data = entry;
@@ -3871,11 +3873,6 @@ fuse_dispatcher_init_rmem(struct spdk_fuse_dispatcher *disp, bool recovery_mode)
 {
 	bool res = false;
 	char *rmem_pool_name;
-
-	if (!spdk_rmem_is_enabled()) {
-		SPDK_NOTICELOG("rmem is disabled\n");
-		return true;
-	}
 
 	rmem_pool_name = spdk_sprintf_alloc("fuse_disp_%s", fuse_dispatcher_name(disp));
 	if (!rmem_pool_name) {

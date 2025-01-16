@@ -147,6 +147,7 @@ rmem_pool_restore_entry_clb(struct spdk_rmem_entry *entry, void *_ctx)
 {
 	struct rmem_pool_restore_ctx *ctx = _ctx;
 	struct rmem_pool_test_data data;
+	int rc;
 
 	if (ctx->num_entries) {
 		SPDK_ERRLOG("Too many entries: %" PRIu32 "\n", ctx->num_entries);
@@ -154,8 +155,9 @@ rmem_pool_restore_entry_clb(struct spdk_rmem_entry *entry, void *_ctx)
 		return 1;
 	}
 
-	if (!spdk_rmem_entry_read(entry, &data)) {
-		SPDK_ERRLOG("Cannot read entry\n");
+	rc = spdk_rmem_entry_read(entry, &data);
+	if (rc) {
+		SPDK_ERRLOG("Cannot read entry (err=%d)\n", rc);
 		return 1;
 	}
 
@@ -242,9 +244,9 @@ test_main(void *arg1)
 		goto out;
 	}
 
-	if (!spdk_rmem_enable(RMEM_BACKEND_DIR)) {
-		SPDK_ERRLOG("Cannot enable rmem\n");
-		rc = -EINVAL;
+	rc = spdk_rmem_set_backend_dir(RMEM_BACKEND_DIR);
+	if (rc) {
+		SPDK_ERRLOG("Cannot enable rmem (err=%d)\n", rc);
 		goto out;
 	}
 
@@ -255,11 +257,6 @@ test_main(void *arg1)
 	} else {
 		SPDK_ERRLOG("Invalid action: %lu\n", g_action);
 		rmem_pool_test_usage();
-		rc = -EINVAL;
-	}
-
-	if (!spdk_rmem_enable(NULL)) {
-		SPDK_ERRLOG("Cannot disable rmem\n");
 		rc = -EINVAL;
 	}
 

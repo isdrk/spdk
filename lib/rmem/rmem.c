@@ -274,56 +274,98 @@ rmem_pool_extend(struct spdk_rmem_pool *pool, uint32_t num_entries, uint32_t del
 	return true;
 }
 
-int
-spdk_rmem_init(void)
+static int
+rmem_mkdir(const char *backend_dir)
 {
-	TAILQ_INIT(&g_pools);
-	pthread_spin_init(&g_lock, PTHREAD_PROCESS_PRIVATE);
-	g_backend_dir = -1;
-	g_backend_dir_name = NULL;
+	struct stat st = {0};
+	int rc;
+
+	rc = stat(backend_dir, &st);
+	if (!rc) {
+		SPDK_DEBUGLOG(rmem, "backend dir '%s' exists\n", backend_dir);
+		return 0;
+	}
+
+	rc = mkdir(backend_dir, S_IRWXU | S_IRWXG | S_IRWXO);
+	if (rc) {
+		rc = -errno;
+		SPDK_ERRLOG("Cannot mkdir backend dir '%s' (err=%d)\n", backend_dir, rc);
+		return rc;
+	}
+
 	return 0;
 }
 
-bool
-spdk_rmem_is_enabled(void)
+int
+spdk_rmem_init(void)
 {
-	return g_backend_dir != -1;
+	char default_backend_dir_name[] = "/tmp/rmem_2147483647"; /* 2147483647 is INT_MAX */
+
+	TAILQ_INIT(&g_pools);
+	pthread_spin_init(&g_lock, PTHREAD_PROCESS_PRIVATE);
+
+	if (g_backend_dir != -1 && g_backend_dir_name) {
+		/* Has been already set */
+		return 0;
+	}
+
+	snprintf(default_backend_dir_name, sizeof(default_backend_dir_name), "/tmp/rmem_%d", getpid());
+	default_backend_dir_name[sizeof(default_backend_dir_name) - 1] = 0;
+
+	return spdk_rmem_set_backend_dir(default_backend_dir_name);
 }
 
-bool
-spdk_rmem_enable(const char *backend_dir)
+const char *
+spdk_rmem_get_backend_dir(void)
 {
+	return g_backend_dir_name;
+}
+
+int
+spdk_rmem_set_backend_dir(const char *backend_dir_name)
+{
+	int backend_dir = -1;
+	char *backend_dir_name_dup;
+	int rc;
+
 	assert(TAILQ_EMPTY(&g_pools));
+
+	if (!backend_dir_name) {
+		SPDK_ERRLOG("backend dir name is mandatory\n");
+		return -EINVAL;
+	}
+
+	rc = rmem_mkdir(backend_dir_name);
+	if (rc) {
+		SPDK_ERRLOG("Cannot mkdir %s (err=%d)\n", backend_dir_name, rc);
+		return rc;
+	}
+
+	backend_dir = open(backend_dir_name, O_PATH);
+	if (backend_dir == -1) {
+		rc = -errno;
+		SPDK_ERRLOG("Cannot open backend dir '%s' (err=%d)\n", backend_dir_name, rc);
+		return rc;
+	}
+
+	backend_dir_name_dup = strdup(backend_dir_name);
+	if (!backend_dir_name_dup) {
+		SPDK_ERRLOG("Cannot duplicate backend dir path '%s'\n", backend_dir_name);
+		close(backend_dir);
+		return -ENOMEM;
+	}
 
 	if (g_backend_dir != -1) {
 		close(g_backend_dir);
-		g_backend_dir = -1;
 	}
 
 	free(g_backend_dir_name);
-	g_backend_dir_name = NULL;
 
-	if (!backend_dir) {
-		SPDK_INFOLOG(rmem_pool, "Disabled");
-		return true;
-	}
+	g_backend_dir_name = backend_dir_name_dup;
+	g_backend_dir = backend_dir;
 
-	g_backend_dir = open(backend_dir, O_PATH);
-	if (g_backend_dir == -1) {
-		SPDK_ERRLOG("Cannot open backend dir '%s' (err=%d)\n", backend_dir, errno);
-		return false;
-	}
-
-	g_backend_dir_name = strdup(backend_dir);
-	if (!g_backend_dir_name) {
-		SPDK_ERRLOG("Cannot duplicate backend dir path '%s'\n", backend_dir);
-		close(g_backend_dir);
-		g_backend_dir = -1;
-		return false;
-	}
-
-	SPDK_INFOLOG(rmem_pool, "Enabled with backend dir '%s'\n", backend_dir);
-	return true;
+	SPDK_INFOLOG(rmem, "Backend dir name set to '%s'\n", g_backend_dir_name);
+	return 0;
 }
 
 void
@@ -344,7 +386,7 @@ spdk_rmem_subsystem_config_json(struct spdk_json_write_ctx *w)
 	pthread_spin_lock(&g_lock);
 
 	spdk_json_write_object_begin(w);
-	spdk_json_write_named_string(w, "method", "rmem_enable");
+	spdk_json_write_named_string(w, "method", "rmem_set_config");
 	spdk_json_write_named_object_begin(w, "params");
 	if (g_backend_dir_name) {
 		spdk_json_write_named_string(w, "backend_dir", g_backend_dir_name);
@@ -360,11 +402,7 @@ void
 spdk_rmem_dump_info_json(struct spdk_json_write_ctx *w)
 {
 	spdk_json_write_named_object_begin(w, "params");
-	if (g_backend_dir_name) {
-		spdk_json_write_named_string(w, "backend_dir", g_backend_dir_name);
-	} else {
-		spdk_json_write_named_null(w, "backend_dir");
-	}
+	spdk_json_write_named_string(w, "backend_dir", g_backend_dir_name);
 	spdk_json_write_object_end(w); /* params */
 }
 
@@ -378,11 +416,6 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 	int fd;
 	uint32_t i;
 	uint32_t core_count;
-
-	if (!spdk_rmem_is_enabled()) {
-		SPDK_ERRLOG("rmem is disabled\n");
-		goto bad_params;
-	}
 
 	if (!name) {
 		SPDK_ERRLOG("rmem pool name is mandatory\n");
@@ -487,7 +520,7 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 		pool->mirror_entries[i] = entry;
 	}
 
-	SPDK_DEBUGLOG(rmem_pool, "%s: %" PRIu32 " entries reserved for the non-destructive write\n",
+	SPDK_DEBUGLOG(rmem, "%s: %" PRIu32 " entries reserved for the non-destructive write\n",
 		      name, i);
 
 	if (!restore) {
@@ -502,7 +535,7 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 	TAILQ_INSERT_HEAD(&g_pools, pool, link);
 	pthread_spin_unlock(&g_lock);
 
-	SPDK_DEBUGLOG(rmem_pool, "%s: rmem pool successfully %s\n", name, restore ? "restored" : "created");
+	SPDK_DEBUGLOG(rmem, "%s: rmem pool successfully %s\n", name, restore ? "restored" : "created");
 	return pool;
 
 pool_extend_failed:
@@ -585,7 +618,7 @@ spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
 	pthread_spin_destroy(&pool->lock);
 	munmap(pool->mapped.addr, pool->mapped.size);
 	unlinkat(g_backend_dir, pool->name, 0);
-	SPDK_DEBUGLOG(rmem_pool, "%s: rmem pool destroyed\n", pool->name);
+	SPDK_DEBUGLOG(rmem, "%s: rmem pool destroyed\n", pool->name);
 	free(pool->mirror_entries);
 	free(pool);
 }
@@ -668,19 +701,19 @@ spdk_rmem_entry_write(struct spdk_rmem_entry *entry, const void *buf)
 	new_entry->idx = old_entry_idx;
 }
 
-bool
+int
 spdk_rmem_entry_read(struct spdk_rmem_entry *entry, void *buf)
 {
 	struct spdk_rmem_pool *pool = entry->pool;
 	struct rmem_entry_hdr *hdr = rmem_pool_get_mapped_entry(pool, entry->idx);
-	bool res = false;
+	int rc = -EINVAL;
 
 	if (rmem_entry_is_valid(hdr)) {
 		memcpy(buf, rmem_pool_entry_data(entry), rmem_pool_hdr(pool)->entry_size);
-		res = true;
+		rc = 0;
 	}
 
-	return res;
+	return rc;
 }
 
 void
@@ -703,4 +736,4 @@ spdk_rmem_pool_num_entries(struct spdk_rmem_pool *pool)
 	return rmem_pool_hdr(pool)->num_entries - spdk_env_get_core_count();
 }
 
-SPDK_LOG_REGISTER_COMPONENT(rmem_pool)
+SPDK_LOG_REGISTER_COMPONENT(rmem)

@@ -14557,15 +14557,15 @@ Example response:
 }
 ~~~
 
-### rmem_enable {#rmem_enable}
+### rmem_set_config {#rmem_set_config}
 
-Enable/disable the Recovery Memory functionality.
+Set the Recovery Memory configuration.
 
 #### Parameters
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-backend_dir             | Optional | string      | Path on the system directory to be used to store the memory files. If not specified, disables the Recovery Memory functionality.
+backend_dir             | Required | string      | Path on the system directory to be used to store the memory files. Default: /tmp/rmem_PID
 
 #### Example
 
@@ -14574,7 +14574,7 @@ Example request:
 ~~~json
 {
   "jsonrpc": "2.0",
-  "method": "rmem_enable",
+  "method": "rmem_set_config",
   "id": 8,
   "params": {
     "backend_dir": "/tmp/rmem"

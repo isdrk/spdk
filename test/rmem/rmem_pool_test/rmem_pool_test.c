@@ -123,9 +123,9 @@ test_write(bool do_cleanup)
 	SPDK_NOTICELOG("rmem_pool: checking entries by read...\n");
 
 	for (i = 0; i < RMEM_POOL_TEST_SIZE; i++) {
-		if (!spdk_rmem_entry_read(entries[i], &data)) {
-			SPDK_ERRLOG("Cannot read entry %d\n", i);
-			rc = -EINVAL;
+		rc = spdk_rmem_entry_read(entries[i], &data);
+		if (rc) {
+			SPDK_ERRLOG("Cannot read entry %d (err=%d)\n", i, rc);
 			goto cleanup;
 		}
 
@@ -146,9 +146,9 @@ test_write(bool do_cleanup)
 	SPDK_NOTICELOG("rmem_pool: checking modified entries by read...\n");
 
 	for (i = 0; i < RMEM_POOL_TEST_SIZE; i++) {
-		if (!spdk_rmem_entry_read(entries[i], &data)) {
-			SPDK_ERRLOG("Cannot read entry %d\n", i);
-			rc = -EINVAL;
+		rc = spdk_rmem_entry_read(entries[i], &data);
+		if (rc) {
+			SPDK_ERRLOG("Cannot read entry %d (err=%d)\n", i, rc);
 			goto cleanup;
 		}
 
@@ -184,6 +184,7 @@ rmem_pool_restore_entry_clb(struct spdk_rmem_entry *entry, void *_ctx)
 {
 	struct rmem_pool_restore_ctx *ctx = _ctx;
 	struct rmem_pool_test_data data;
+	int rc;
 
 	if (ctx->idx >= SPDK_COUNTOF(ctx->entries)) {
 		SPDK_ERRLOG("Too many entries (%" PRIu32 " >= %zu\n", ctx->idx, SPDK_COUNTOF(ctx->entries));
@@ -191,8 +192,9 @@ rmem_pool_restore_entry_clb(struct spdk_rmem_entry *entry, void *_ctx)
 		return 1;
 	}
 
-	if (!spdk_rmem_entry_read(entry, &data)) {
-		SPDK_ERRLOG("Cannot read entry %" PRIu32 "\n", ctx->idx);
+	rc = spdk_rmem_entry_read(entry, &data);
+	if (rc) {
+		SPDK_ERRLOG("Cannot read entry %" PRIu32 " (err=%d)\n", ctx->idx, rc);
 		return 1;
 	}
 
@@ -373,9 +375,9 @@ test_main(void *arg1)
 {
 	int rc;
 
-	if (!spdk_rmem_enable(RMEM_BACKEND_DIR)) {
-		SPDK_ERRLOG("Cannot enable rmem\n");
-		rc = -EINVAL;
+	rc = spdk_rmem_set_backend_dir(RMEM_BACKEND_DIR);
+	if (rc) {
+		SPDK_ERRLOG("Cannot enable rmem (err=%d)\n", rc);
 		goto out;
 	}
 
@@ -399,11 +401,6 @@ test_main(void *arg1)
 		rmem_pool_test_usage();
 		rc = -EINVAL;
 		break;
-	}
-
-	if (!spdk_rmem_enable(NULL)) {
-		SPDK_ERRLOG("Cannot disable rmem\n");
-		rc = -EINVAL;
 	}
 
 out:

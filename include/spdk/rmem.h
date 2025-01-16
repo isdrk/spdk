@@ -20,11 +20,9 @@
  * One can get a entry object pointer using the spdk_rmem_pool_get() API and release it later using the
  * spdk_rmem_entry_release() API.
  *
- * The rmem (and, in turn, rmem_pool) is currently implemented using shared memory backed by file. The rmem functionality
- * can be enabled and disabled globally using the spdk_rmem_enable() API that gets a backup folder location as an
- * argument. Once enabled, the rmem stores all the backend files in the backup folder - a file per instance. For the
- * rmem_pool, a pool is used as the backend file name. The backend file is deleted once the corresponding rmem_pool object
- * is destroyed.
+ * Each rmem_pool is implemented using a file mmap'ed into shared memory. The rmem stores all of these files in
+ * the backend folder, one file per rmem_pool. The shared memory file associated with a rmem_pool is created on
+ * spdk_rmem_pool_create() and deleted on spdk_rmem_pool_destroy().
  *
  * NOTE 1: Released rmem_pool entries are re-used.
  * NOTE 2: It's important to distinguish between a shared memory region and a rmem_pool entry object (struct
@@ -76,25 +74,26 @@ int spdk_rmem_init(void);
 void spdk_rmem_fini(void);
 
 /**
- * Reports whether the rmem functionality is enabled.
+ * Get rmem backend dir.
  *
- * \return true on if enabled, false otherwise.
+ * \return Path to a dir where the underlying files will be stored.
+ *
+ * NOTE: default backend dir name is /tmp/rmem_<PID>
  */
-bool spdk_rmem_is_enabled(void);
+const char *spdk_rmem_get_backend_dir(void);
 
 /**
- * Enable/disable rmem functionality.
+ * Set rmem backend dir.
  *
- * \param backend_dir Path to a dir where the underlying files will be stored. Enables the
- *                    rmem functionality if not NULL, disables it otherwise.
+ * \param backend_dir_name Path to a dir where the underlying files will be stored.
  *
- * NOTE: an attempt to create/restore an rmem_pool if the rmem functionality is disable will
- *       fail. However, disabling the rmem_pool functionality do not affect the currently instantiated
- *       rmem_pools.
+ * \return 0 on success, a negative error code otherwise.
  *
- * \return true on success, false on failure.
+ * NOTE: The underlying files are not copied when the backend directory is changed. If a rmem pool
+ * is created and then the backend directory is changed, the backend file for the created rmem pool
+ * remains in the old backend directory.
  */
-bool spdk_rmem_enable(const char *backend_dir);
+int spdk_rmem_set_backend_dir(const char *backend_dir_name);
 
 /**
  * Get the full configuration options for the rmem module.
@@ -166,9 +165,9 @@ void spdk_rmem_entry_write(struct spdk_rmem_entry *entry, const void *buf);
  * \param entry Entry object.
  * \param buf Buffer to read the data to.
  *
- * \return true if valid data has been read, false otherwise.
+ * \return 0 on success, a negative error code otherwise.
  */
-bool spdk_rmem_entry_read(struct spdk_rmem_entry *entry, void *buf);
+int spdk_rmem_entry_read(struct spdk_rmem_entry *entry, void *buf);
 
 /**
  * Release rmem entry.
