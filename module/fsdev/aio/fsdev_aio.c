@@ -608,8 +608,11 @@ static struct aio_fsdev_file_handle *
 file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 {
 	struct aio_fsdev_file_handle *fhandle;
-	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	struct aio_fsdev *vfsdev;
 	uint64_t lut_key;
+
+	assert(fobject != NULL);
+	vfsdev = fobject->vfsdev;
 
 	fhandle = calloc(1, sizeof(*fhandle));
 	if (!fhandle) {
@@ -1230,7 +1233,7 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int err;
 	struct aio_fsdev_file_object *parent_fobject;
-	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_object *fobject = NULL;
 	char *name = fsdev_io->u_in.lookup.name;
 
 	/* Don't use is_safe_path_component(), allow "." and ".." for NFS export
@@ -2515,6 +2518,7 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
 		goto fop_failed;
 	}
+	assert(fobject != NULL);
 	attr->mode = (mode & ~umask);
 
 	fhandle = file_handle_create(fobject, fd);
