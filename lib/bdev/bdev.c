@@ -1157,11 +1157,10 @@ _are_iovs_aligned(struct iovec *iovs, int iovcnt, uint32_t alignment)
 }
 
 static inline bool
-bdev_io_needs_metadata(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io)
+bdev_desc_needs_metadata(struct spdk_bdev_desc *desc)
 {
-	return (bdev_io->bdev->md_len != 0) &&
-	       (desc->opts.hide_metadata ||
-		(bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT));
+	return (desc->opts.hide_metadata && desc->bdev->md_len != 0) ||
+	       (desc->bdev->dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT);
 }
 
 static inline bool
@@ -1434,7 +1433,7 @@ bdev_io_pull_data(struct spdk_bdev_io *bdev_io)
 
 	assert(bdev_io->internal.f.has_bounce_buf);
 
-	if (bdev_io_needs_metadata(desc, bdev_io)) {
+	if (bdev_desc_needs_metadata(desc)) {
 		assert(bdev_io->bdev->md_interleave);
 
 		bdev_io->u.bdev.dif_check_flags &= ~SPDK_DIF_FLAGS_NVME_PRACT;
@@ -3932,8 +3931,7 @@ _bdev_io_ext_use_bounce_buffer(struct spdk_bdev_io *bdev_io)
 	 * operation completes, we need to strip metadata in original IO buffer.
 	 *
 	 * This IO request will go through a regular IO flow, so clear memory domains pointers */
-	assert(bdev_io_use_memory_domain(bdev_io) ||
-	       bdev_io_needs_metadata(bdev_io->internal.desc, bdev_io));
+	assert(bdev_io_use_memory_domain(bdev_io) || bdev_desc_needs_metadata(bdev_io->internal.desc));
 
 	bdev_io->u.bdev.memory_domain = NULL;
 	bdev_io->u.bdev.memory_domain_ctx = NULL;
@@ -3945,7 +3943,7 @@ static inline void
 _bdev_io_ext_use_accel_buffer(struct spdk_bdev_io *bdev_io)
 {
 	assert(bdev_io_use_memory_domain(bdev_io));
-	assert(bdev_io_needs_metadata(bdev_io->internal.desc, bdev_io));
+	assert(bdev_desc_needs_metadata(bdev_io->internal.desc));
 
 	bdev_io->u.bdev.memory_domain = NULL;
 	bdev_io->u.bdev.memory_domain_ctx = NULL;
@@ -3966,14 +3964,14 @@ bdev_io_needs_bounce_buffer(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bd
 		if (!desc->memory_domains_supported ||
 		    (bdev_io_needs_sequence_exec(desc, bdev_io) &&
 		     (bdev_io->internal.memory_domain == spdk_accel_get_memory_domain() ||
-		      bdev_io_needs_metadata(desc, bdev_io)))) {
+		      bdev_desc_needs_metadata(desc)))) {
 			return true;
 		}
 
 		return false;
 	}
 
-	if (bdev_io_needs_metadata(desc, bdev_io)) {
+	if (bdev_desc_needs_metadata(desc)) {
 		return true;
 	}
 
@@ -3986,7 +3984,7 @@ bdev_io_needs_bounce_buffer(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bd
 static inline bool
 bdev_io_needs_accel_buffer(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io)
 {
-	if (bdev_io_needs_metadata(desc, bdev_io)) {
+	if (bdev_desc_needs_metadata(desc)) {
 		assert(bdev_io_use_memory_domain(bdev_io));
 		return true;
 	}
@@ -4006,7 +4004,7 @@ _bdev_io_submit_ext(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io)
 		return;
 	}
 
-	if (bdev_io_needs_metadata(desc, bdev_io)) {
+	if (bdev_desc_needs_metadata(desc)) {
 		rc = bdev_io_init_dif_ctx(bdev_io);
 		if (spdk_unlikely(rc != 0)) {
 			bdev_io->internal.status = SPDK_BDEV_IO_STATUS_FAILED;
