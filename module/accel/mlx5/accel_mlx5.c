@@ -429,9 +429,12 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 		case ACCEL_MLX5_OPC_CRC32C:
 		case ACCEL_MLX5_OPC_DIF_GENERATE_COPY:
 		case ACCEL_MLX5_OPC_DIF_VERIFY_COPY:
+			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
+			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
+			break;
 		case ACCEL_MLX5_OPC_DIF_GENERATE_COPY_MKEY:
 		case ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY:
-			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
+			spdk_mlx5_mkey_pool_put(dev->sig_mkeys, task->mkeys[0]);
 			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
 			break;
 		case ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C:
@@ -3383,6 +3386,29 @@ accel_mlx5_dif_task_complete(struct accel_mlx5_task *mlx5_task)
 }
 
 static inline int
+accel_mlx5_task_alloc_dif_mkey_ctx(struct accel_mlx5_task *mlx5_task)
+{
+	struct accel_mlx5_qp *qp = mlx5_task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+
+	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->sig_mkeys);
+	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
+		return -ENOMEM;
+	}
+
+	mlx5_task->num_ops = 1;
+
+	mlx5_task->psv = spdk_mempool_get(dev->dev_ctx->psv_pool);
+	if (spdk_unlikely(mlx5_task->psv == NULL)) {
+		spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
+		mlx5_task->num_ops = 0;
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static inline int
 accel_mlx5_dif_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
@@ -3400,8 +3426,9 @@ accel_mlx5_dif_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 	accel_mlx5_iov_sgl_init(&mlx5_task->dst, task->d.iovs, task->d.iovcnt);
 	mlx5_task->num_reqs = 1;
 
-	rc = accel_mlx5_task_alloc_sig_ctx(mlx5_task, dev->sig_mkeys);
+	rc = accel_mlx5_task_alloc_dif_mkey_ctx(mlx5_task);
 	if (spdk_unlikely(rc)) {
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
 		return rc;
 	}
 
@@ -3494,9 +3521,9 @@ accel_mlx5_dif_mkey_task_continue(struct accel_mlx5_task *task)
 
 	if (task->num_ops == 0) {
 		/* No mkeys allocated, try to allocate now. */
-		rc = accel_mlx5_task_alloc_sig_ctx(task, dev->sig_mkeys);
+		rc = accel_mlx5_task_alloc_dif_mkey_ctx(task);
 		if (spdk_unlikely(rc)) {
-			accel_mlx5_dev_nomem_task_qdepth(dev, task);
+			accel_mlx5_dev_nomem_task_mkey(dev, task);
 			return -ENOMEM;
 		}
 	}
@@ -3512,13 +3539,19 @@ accel_mlx5_dif_mkey_task_continue(struct accel_mlx5_task *task)
 static inline void
 accel_mlx5_dif_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 {
+	struct accel_mlx5_dev *dev = mlx5_task->qp->dev;
 	int sigerr = 0;
 
 	if (mlx5_task->base.op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY) {
 		sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
 	}
 
-	accel_mlx5_sig_task_complete(mlx5_task, sigerr);
+	/* Normal task completion without allocated mkeys is not possible */
+	assert(mlx5_task->num_ops);
+	spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
+	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+
+	spdk_accel_task_complete(&mlx5_task->base, sigerr);
 }
 
 static int
