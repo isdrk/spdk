@@ -570,6 +570,12 @@ mlx5_srq_get_comp_wr_id(struct spdk_mlx5_srq *srq, struct mlx5_cqe64 *cqe)
 	return srq->wr_id[comp_idx];
 }
 
+enum {
+	MLX5_SIGERR_CQE_SYNDROME_REFTAG = 1 << 11,
+	MLX5_SIGERR_CQE_SYNDROME_APPTAG = 1 << 12,
+	MLX5_SIGERR_CQE_SYNDROME_GUARD = 1 << 13,
+};
+
 static void
 mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion *comp,
 		     union spdk_mlx5_cq_error *err)
@@ -588,6 +594,20 @@ mlx5_cqe_sigerr_comp(struct mlx5_sigerr_cqe *cqe, struct spdk_mlx5_cq_completion
 		sigerr->offset = be64toh(cqe->sig_err_offset);
 		sigerr->sig_type = cqe->sig_type & 0x7;
 		sigerr->domain = cqe->domain & 7;
+
+		if (sigerr->syndrome & MLX5_SIGERR_CQE_SYNDROME_REFTAG) {
+			SPDK_WARNLOG("Failed to compare Ref Tag: Offset=%" PRIx64 "," \
+				     " Expected=%" PRIx64 ", Actual=%" PRIx64 "\n",
+				     sigerr->offset, sigerr->expected, sigerr->actual);
+		} else if (sigerr->syndrome & MLX5_SIGERR_CQE_SYNDROME_GUARD) {
+			SPDK_WARNLOG("Failed to compare Guard: Offset=%" PRIx64 "," \
+				     " Expected=%" PRIx64 ", Actual=%" PRIx64 "\n",
+				     sigerr->offset, sigerr->expected >> 48, sigerr->actual >> 48);
+		} else if (sigerr->syndrome & MLX5_SIGERR_CQE_SYNDROME_APPTAG) {
+			SPDK_WARNLOG("Failed to compare App Tag: Offset=%" PRIx64 "," \
+				     " Expected=%" PRIx64 ", Actual=%" PRIx64 "\n",
+				     sigerr->offset, sigerr->expected >> 32, sigerr->actual >> 32);
+		}
 	}
 
 	SPDK_DEBUGLOG(mlx5,
