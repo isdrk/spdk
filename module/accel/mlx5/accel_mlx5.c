@@ -3167,7 +3167,9 @@ accel_mlx5_dif_task_configure_umr(struct accel_mlx5_task *mlx5_task,
 	struct spdk_mlx5_sig_block_domain *wire = &sig_attr.wire;
 	const struct spdk_dif_ctx *dif_ctx = mlx5_task->base.dif.ctx;
 
-	sig_attr.check_mask = SPDK_MLX5_SIG_MASK_T10DIF_GUARD;
+	if (dif_ctx->dif_flags & SPDK_DIF_FLAGS_GUARD_CHECK) {
+		sig_attr.check_mask = SPDK_MLX5_SIG_MASK_T10DIF_GUARD;
+	}
 	if (dif_ctx->dif_flags & SPDK_DIF_FLAGS_REFTAG_CHECK) {
 		sig_attr.check_mask |= SPDK_MLX5_SIG_MASK_T10DIF_REFTAG;
 	}
