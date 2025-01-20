@@ -43,6 +43,8 @@ struct fsdevperf_task {
 		uint64_t			num_ios;
 		uint64_t			num_bytes;
 	} stats;
+	uint64_t				tsc_finish;
+	uint64_t				tsc_start;
 	char					*filename;
 	int					status;
 	struct fsdevperf_request		*requests;
@@ -359,6 +361,53 @@ fsdevperf_init_jobs(void)
 }
 
 static void
+fsdevperf_dump_stats(void)
+{
+	struct fsdevperf_job *job;
+	struct fsdevperf_task *task;
+	double task_iops, job_iops, total_iops;
+	double task_mbps, job_mbps, total_mbps;
+	size_t num_tasks;
+	double runtime;
+	char path[PATH_MAX];
+
+	total_iops = 0;
+	total_mbps = 0;
+
+	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+		job_iops = 0;
+		job_mbps = 0;
+		num_tasks = 0;
+
+		printf("%s (pattern=read, iosize=%zu, iodepth=%zu):\n",
+		       job->name, job->io_size, job->io_depth);
+		printf("  %30s %4s %10s %10s %10s\n", "filename", "core", "runtime", "IOPS", "MiB/s");
+		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+			snprintf(path, sizeof(path), "/%s/%s",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 task->filename);
+			runtime = (double)(task->tsc_finish - task->tsc_start) / spdk_get_ticks_hz();
+			task_iops = (double)task->stats.num_ios / runtime;
+			task_mbps = (double)task->stats.num_bytes / (1024 * 1024 * runtime);
+			printf("  %30s %4u %10.2f %10.2f %10.2f\n", path, task->thread->core,
+			       runtime, task_iops, task_mbps);
+
+			job_iops += task_iops;
+			job_mbps += task_mbps;
+			num_tasks++;
+		}
+
+		if (num_tasks > 1) {
+			printf("  %30s %4s %10s %10.2f %10.2f\n", "", "", "",
+			       job_iops, job_mbps);
+		}
+
+		total_iops += job_iops;
+		total_mbps += job_mbps;
+	}
+}
+
+static void
 fsdevperf_thread_exit(void *ctx)
 {
 	spdk_thread_exit(spdk_get_thread());
@@ -379,6 +428,8 @@ fsdevperf_done(void)
 			return;
 		}
 	}
+
+	fsdevperf_dump_stats();
 
 	while ((job = TAILQ_FIRST(&g_app.jobs))) {
 		TAILQ_REMOVE(&g_app.jobs, job, tailq);
@@ -498,6 +549,7 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 		task->fobj = NULL;
 	}
 
+	task->tsc_finish = spdk_get_ticks();
 	spdk_thread_send_msg(spdk_thread_get_app_thread(), _fsdevperf_task_done, task);
 	spdk_put_io_channel(task->ioch);
 }
@@ -571,6 +623,7 @@ fsdevperf_task_run(struct fsdevperf_task *task)
 	struct fsdevperf_job *job = task->job;
 	size_t i;
 
+	task->tsc_start = spdk_get_ticks();
 	for (i = 0; i < job->io_depth; i++) {
 		fsdevperf_request_submit(&task->requests[i]);
 	}
@@ -590,9 +643,6 @@ fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 		fsdevperf_task_done(task, status);
 		return;
 	}
-
-	printf("opened /%s/%s\n", spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-	       task->filename);
 
 	task->fh = file;
 	fsdevperf_task_run(task);
@@ -696,8 +746,6 @@ fsdevperf_job_mount_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	}
 
 	job->root = root;
-	printf("mounted /%s\n", spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)));
-
 	next = TAILQ_NEXT(job, tailq);
 	if (next != NULL) {
 		fsdevperf_job_mount(next);
