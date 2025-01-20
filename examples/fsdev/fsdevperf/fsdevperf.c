@@ -5,6 +5,7 @@
 #include "spdk/env.h"
 #include "spdk/event.h"
 #include "spdk/fsdev.h"
+#include "spdk/likely.h"
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
 #include "spdk/thread.h"
@@ -20,14 +21,32 @@ struct fsdevperf_thread {
 	TAILQ_ENTRY(fsdevperf_thread)	tailq;
 };
 
+struct fsdevperf_task;
+
+struct fsdevperf_request {
+	struct fsdevperf_task	*task;
+	uint64_t		id;
+	struct iovec		iov;
+};
+
 struct fsdevperf_task {
 	struct fsdevperf_job			*job;
 	struct fsdevperf_thread			*thread;
 	struct spdk_io_channel			*ioch;
 	struct spdk_fsdev_file_object		*fobj;
 	struct spdk_fsdev_file_handle		*fh;
+	uint64_t				offset;
+	uint64_t				filesize;
+	uint64_t				size;
+	uint32_t				num_outstanding;
+	struct {
+		uint64_t			num_ios;
+		uint64_t			num_bytes;
+	} stats;
 	char					*filename;
 	int					status;
+	struct fsdevperf_request		*requests;
+	void					*buf;
 	struct {
 		TAILQ_ENTRY(fsdevperf_task)	job;
 	} tailq;
@@ -35,6 +54,9 @@ struct fsdevperf_task {
 
 struct fsdevperf_job {
 	struct spdk_fsdev_desc		*fsdev_desc;
+	size_t				io_size;
+	size_t				io_depth;
+	size_t				size;
 	struct spdk_fsdev_file_object	*root;
 	struct spdk_io_channel		*ioch;
 	char				*name;
@@ -184,6 +206,8 @@ fsdevperf_init_threads(void)
 static void
 fsdevperf_task_free(struct fsdevperf_task *task)
 {
+	spdk_free(task->buf);
+	free(task->requests);
 	free(task->filename);
 	free(task);
 }
@@ -192,7 +216,9 @@ static struct fsdevperf_task *
 fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_thread *thread)
 {
 	struct fsdevperf_task *task;
+	struct fsdevperf_request *request;
 	char *filename;
+	size_t i;
 
 	task = calloc(1, sizeof(*task));
 	if (task == NULL) {
@@ -211,6 +237,25 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_thread *thread)
 		goto error;
 	}
 	task->filename = filename;
+
+	task->requests = calloc(job->io_depth, sizeof(*task->requests));
+	if (task->requests == NULL) {
+		goto error;
+	}
+
+	task->buf = spdk_zmalloc(job->io_depth * job->io_size, 4096, NULL,
+				 SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (task->buf == NULL) {
+		goto error;
+	}
+
+	for (i = 0; i < job->io_depth; i++) {
+		request = &task->requests[i];
+		request->iov.iov_base = (char *)task->buf + i * job->io_size;
+		request->iov.iov_len = job->io_size;
+		request->task = task;
+		request->id = i;
+	}
 
 	return task;
 error:
@@ -241,6 +286,9 @@ fsdevperf_job_alloc(const char *name)
 		free(job);
 		return NULL;
 	}
+
+	job->io_size = 4096;
+	job->io_depth = 1;
 
 	TAILQ_INIT(&job->tasks);
 
@@ -420,6 +468,10 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 	int rc;
 
 	task->status = status;
+	if (task->num_outstanding > 0) {
+		return;
+	}
+
 	if (task->fh != NULL) {
 		rc = spdk_fsdev_release(job->fsdev_desc, task->ioch, 0, task->fobj, task->fh,
 					fsdevperf_task_release_cb, task);
@@ -450,6 +502,80 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 	spdk_put_io_channel(task->ioch);
 }
 
+static bool
+fsdevperf_task_is_done(struct fsdevperf_task *task)
+{
+	return task->stats.num_bytes >= task->size;
+}
+
+static void fsdevperf_request_submit(struct fsdevperf_request *request);
+
+static void
+fsdevperf_request_read_cb(void *ctx, struct spdk_io_channel *ioch, int status, uint32_t size)
+{
+	struct fsdevperf_request *request = ctx;
+	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_job *job = task->job;
+
+	assert(task->num_outstanding > 0);
+	task->num_outstanding--;
+	task->stats.num_ios++;
+	task->stats.num_bytes += size;
+
+	if (spdk_unlikely(status != 0)) {
+		fsdevperf_errmsg("read /%s/%s failed: %s\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 task->filename, spdk_strerror(-status));
+		fsdevperf_task_done(task, status);
+		return;
+	}
+
+	if (spdk_unlikely(fsdevperf_task_is_done(task))) {
+		fsdevperf_task_done(task, task->status);
+		return;
+	}
+
+	fsdevperf_request_submit(request);
+}
+
+static void
+fsdevperf_request_submit(struct fsdevperf_request *request)
+{
+	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_job *job = task->job;
+	uint64_t offset = task->offset;
+	int rc;
+
+	rc = spdk_fsdev_read(job->fsdev_desc, task->ioch, request->id, task->fobj, task->fh,
+			     job->io_size, offset, 0, &request->iov, 1, NULL,
+			     fsdevperf_request_read_cb, request);
+	if (spdk_unlikely(rc != 0)) {
+		fsdevperf_errmsg("failed to read /%s/%s: %s\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 task->filename, spdk_strerror(-rc));
+		fsdevperf_task_done(task, rc);
+		return;
+	}
+
+	task->num_outstanding++;
+
+	task->offset += job->io_size;
+	if (task->offset >= task->filesize) {
+		task->offset = 0;
+	}
+}
+
+static void
+fsdevperf_task_run(struct fsdevperf_task *task)
+{
+	struct fsdevperf_job *job = task->job;
+	size_t i;
+
+	for (i = 0; i < job->io_depth; i++) {
+		fsdevperf_request_submit(&task->requests[i]);
+	}
+}
+
 static void
 fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 		       struct spdk_fsdev_file_handle *file)
@@ -469,7 +595,7 @@ fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	       task->filename);
 
 	task->fh = file;
-	fsdevperf_task_done(task, 0);
+	fsdevperf_task_run(task);
 }
 
 static void
@@ -489,7 +615,18 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 		return;
 	}
 
+	if (attr->size < job->io_size * job->io_depth) {
+		fsdevperf_errmsg("/%s/%s: %s (minimum size required: %zu)\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 task->filename, spdk_strerror(ENOSPC),
+				 job->io_size * job->io_depth);
+		fsdevperf_task_done(task, -ENOSPC);
+		return;
+	}
+
 	task->fobj = fobj;
+	task->filesize = attr->size;
+	task->size = job->size ? job->size : attr->size;
 	rc = spdk_fsdev_fopen(job->fsdev_desc, task->ioch, 0, fobj, O_RDONLY,
 			      fsdevperf_task_open_cb, task);
 	if (rc != 0) {
@@ -627,6 +764,14 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 	if (fsdevperf_job_check_path(job)) {
 		return -EINVAL;
 	}
+	if (job->io_size == 0) {
+		fsdevperf_errmsg("%s: invalid iosize argument: %zu\n", job->name, job->io_size);
+		return -EINVAL;
+	}
+	if (job->io_depth == 0) {
+		fsdevperf_errmsg("%s: invalid iodepth argument: %zu\n", job->name, job->io_depth);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -634,17 +779,59 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 static struct option g_options[] = {
 #define FSDEVPERF_OPT_PATH 'P'
 	{ "path", required_argument, NULL, FSDEVPERF_OPT_PATH },
+#define FSDEVPERF_OPT_IOSIZE 'o'
+	{ "iosize", required_argument, NULL, FSDEVPERF_OPT_IOSIZE },
+#define FSDEVPERF_OPT_IODEPTH 'q'
+	{ "iodepth", required_argument, NULL, FSDEVPERF_OPT_IODEPTH },
+#define FSDEVPERF_OPT_SIZE 0x1000
+	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
 };
+
+static const char *
+fsdevperf_get_option_name(int val)
+{
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(g_options); i++) {
+		if (g_options[i].val == val) {
+			return g_options[i].name;
+		}
+	}
+
+	return NULL;
+}
 
 static int
 fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 {
+	uint64_t u64;
+
 	switch (ch) {
 	case FSDEVPERF_OPT_PATH:
 		job->path = strdup(arg);
 		if (job->path == NULL) {
 			return -ENOMEM;
+		}
+		break;
+	case FSDEVPERF_OPT_IOSIZE:
+	case FSDEVPERF_OPT_IODEPTH:
+	case FSDEVPERF_OPT_SIZE:
+		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
+			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
+					 job->name, fsdevperf_get_option_name(ch), arg);
+			return -EINVAL;
+		}
+		switch (ch) {
+		case FSDEVPERF_OPT_IOSIZE:
+			job->io_size = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_IODEPTH:
+			job->io_depth = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_SIZE:
+			job->size = (size_t)u64;
+			break;
 		}
 		break;
 	default:
@@ -664,6 +851,9 @@ static void
 fsdevperf_usage(void)
 {
 	printf(" -P, --path=<path>                    path to a file in the form of /<fsdev>/<file>\n");
+	printf(" -o, --iosize=<iosize>                I/O size\n");
+	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
+	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
 }
 
 int
@@ -682,7 +872,7 @@ main(int argc, char **argv)
 
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
-	rc = spdk_app_parse_args(argc, argv, &opts, "P:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:q:", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
