@@ -97,11 +97,11 @@ spdk_aio_mgr_submit_io(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ct
 	res = io_submit(mgr->io_ctx, 1, ios);
 	SPDK_DEBUGLOG(spdk_aio_mgr_io, "%s: aio=%p submitted with res=%d\n", read ? "read" : "write", aio,
 		      res);
-	if (res) {
+	if (res > 0) {
 		TAILQ_INSERT_TAIL(&aio->mgr->in_flight, aio, link);
 		return aio;
 	} else {
-		aio->clb(aio->ctx, 0, aio->err);
+		aio->clb(aio->ctx, 0, res != 0 ? res : -EINVAL);
 		aio_mgr_put_aio(mgr, aio);
 		return NULL;
 	}
