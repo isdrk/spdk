@@ -63,6 +63,7 @@ struct fsdevperf_job {
 	size_t				io_size;
 	size_t				io_depth;
 	size_t				size;
+	uint32_t			runtime;
 	struct spdk_fsdev_file_object	*root;
 	struct spdk_io_channel		*ioch;
 	char				*name;
@@ -590,7 +591,9 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 static bool
 fsdevperf_task_is_done(struct fsdevperf_task *task)
 {
-	return task->stats.num_bytes >= task->size || task->stop;
+	return task->stats.num_bytes >= task->size ||
+	       spdk_get_ticks() >= task->tsc_finish ||
+	       task->stop;
 }
 
 static void fsdevperf_request_submit(struct fsdevperf_request *request);
@@ -673,6 +676,8 @@ fsdevperf_task_run(struct fsdevperf_task *task)
 	size_t i;
 
 	task->tsc_start = spdk_get_ticks();
+	task->tsc_finish = job->runtime != 0 ? task->tsc_start +
+			   (uint64_t)job->runtime * spdk_get_ticks_hz() : UINT64_MAX;
 	for (i = 0; i < job->io_depth; i++) {
 		fsdevperf_request_submit(&task->requests[i]);
 	}
@@ -908,6 +913,8 @@ static struct option g_options[] = {
 	{ "iodepth", required_argument, NULL, FSDEVPERF_OPT_IODEPTH },
 #define FSDEVPERF_OPT_PATTERN 'w'
 	{ "pattern", required_argument, NULL, FSDEVPERF_OPT_PATTERN },
+#define FSDEVPERF_OPT_RUNTIME 't'
+	{ "runtime", required_argument, NULL, FSDEVPERF_OPT_RUNTIME},
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
@@ -951,6 +958,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
 	case FSDEVPERF_OPT_SIZE:
+	case FSDEVPERF_OPT_RUNTIME:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
 			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
 					 job->name, fsdevperf_get_option_name(ch), arg);
@@ -965,6 +973,12 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			break;
 		case FSDEVPERF_OPT_SIZE:
 			job->size = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_RUNTIME:
+			if (job->size == 0) {
+				job->size = SIZE_MAX;
+			}
+			job->runtime = (uint32_t)u64;
 			break;
 		}
 		break;
@@ -989,6 +1003,7 @@ fsdevperf_usage(void)
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
 	printf(" -w, --pattern=<pattern>              I/O pattern (read, write)\n");
+	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
 }
 
 int
@@ -1008,7 +1023,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:q:w:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:t:q:w:", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
