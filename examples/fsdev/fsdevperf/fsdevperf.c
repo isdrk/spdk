@@ -40,6 +40,7 @@ struct fsdevperf_task {
 	uint64_t				filesize;
 	uint64_t				size;
 	uint32_t				num_outstanding;
+	unsigned int				seed;
 	bool					stop;
 	struct {
 		uint64_t			num_ios;
@@ -64,6 +65,7 @@ struct fsdevperf_job {
 	size_t				io_depth;
 	size_t				size;
 	uint32_t			runtime;
+	bool				random;
 	struct spdk_fsdev_file_object	*root;
 	struct spdk_io_channel		*ioch;
 	char				*name;
@@ -86,6 +88,15 @@ struct fsdevperf_app {
 
 #define fsdevperf_errmsg(fmt, ...) \
 	fprintf(stderr, "%s: " fmt, g_app.name, ## __VA_ARGS__)
+
+struct fsdevperf_aux_io_type {
+	const char	*name;
+	int		value;
+	bool		random;
+} g_aux_io_types[] = {
+	{ "randread", SPDK_FSDEV_IO_READ, true },
+	{ "randwrite", SPDK_FSDEV_IO_WRITE, true },
+};
 
 static int
 fsdevperf_get_fsdev_name(const char *path, char *name, size_t len)
@@ -141,11 +152,12 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 }
 
 static int
-fsdevperf_parse_io_pattern(const char *pattern)
+fsdevperf_parse_io_pattern(const char *pattern, bool *random)
 {
 	const char *name;
 	int i;
 
+	*random = false;
 	for (i = 0; i < __SPDK_FSDEV_IO_LAST; i++) {
 		name = spdk_fsdev_io_type_get_name(i);
 		if (name != NULL && strcmp(name, pattern) == 0) {
@@ -153,13 +165,29 @@ fsdevperf_parse_io_pattern(const char *pattern)
 		}
 	}
 
+	for (i = 0; i < (int)SPDK_COUNTOF(g_aux_io_types); i++) {
+		if (strcmp(g_aux_io_types[i].name, pattern) == 0) {
+			*random = g_aux_io_types[i].random;
+			return g_aux_io_types[i].value;
+		}
+	}
+
 	return -EINVAL;
 }
 
 static const char *
-fsdevperf_get_io_pattern_name(int pattern)
+fsdevperf_job_get_io_pattern_name(struct fsdevperf_job *job)
 {
-	return spdk_fsdev_io_type_get_name(pattern);
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(g_aux_io_types); i++) {
+		if (g_aux_io_types[i].value == job->io_pattern &&
+		    g_aux_io_types[i].random == job->random) {
+			return g_aux_io_types[i].name;
+		}
+	}
+
+	return spdk_fsdev_io_type_get_name(job->io_pattern);
 }
 
 static void
@@ -413,7 +441,7 @@ fsdevperf_dump_stats(void)
 		num_tasks = 0;
 
 		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu):\n",
-		       job->name, fsdevperf_get_io_pattern_name(job->io_pattern), job->io_size,
+		       job->name, fsdevperf_job_get_io_pattern_name(job), job->io_size,
 		       job->io_depth);
 		printf("  %30s %4s %10s %10s %10s\n", "filename", "core", "runtime", "IOPS", "MiB/s");
 		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
@@ -596,6 +624,26 @@ fsdevperf_task_is_done(struct fsdevperf_task *task)
 	       task->stop;
 }
 
+static uint64_t
+fsdevperf_task_get_offset(struct fsdevperf_task *task)
+{
+	struct fsdevperf_job *job = task->job;
+	uint64_t offset;
+
+	if (job->random) {
+		offset = (((uint64_t)rand_r(&task->seed) * RAND_MAX + rand_r(&task->seed)) %
+			  (task->filesize / job->io_size)) * job->io_size;
+	} else {
+		offset = task->offset;
+		task->offset += job->io_size;
+		if (task->offset >= task->filesize) {
+			task->offset = 0;
+		}
+	}
+
+	return offset;
+}
+
 static void fsdevperf_request_submit(struct fsdevperf_request *request);
 
 static void
@@ -612,7 +660,7 @@ fsdevperf_request_complete_cb(void *ctx, struct spdk_io_channel *ioch, int statu
 
 	if (spdk_unlikely(status != 0)) {
 		fsdevperf_errmsg("%s /%s/%s failed: %s\n",
-				 fsdevperf_get_io_pattern_name(job->io_pattern),
+				 fsdevperf_job_get_io_pattern_name(job),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
 				 task->filename, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
@@ -632,9 +680,10 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 {
 	struct fsdevperf_task *task = request->task;
 	struct fsdevperf_job *job = task->job;
-	uint64_t offset = task->offset;
+	uint64_t offset;
 	int rc;
 
+	offset = fsdevperf_task_get_offset(task);
 	switch (job->io_pattern) {
 	case SPDK_FSDEV_IO_READ:
 		rc = spdk_fsdev_read(job->fsdev_desc, task->ioch, request->id, task->fobj,
@@ -654,7 +703,7 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 
 	if (spdk_unlikely(rc != 0)) {
 		fsdevperf_errmsg("failed to %s /%s/%s: %s\n",
-				 fsdevperf_get_io_pattern_name(job->io_pattern),
+				 fsdevperf_job_get_io_pattern_name(job),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
 				 task->filename, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
@@ -662,11 +711,6 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	}
 
 	task->num_outstanding++;
-
-	task->offset += job->io_size;
-	if (task->offset >= task->filesize) {
-		task->offset = 0;
-	}
 }
 
 static void
@@ -748,6 +792,7 @@ fsdevperf_task_start(void *ctx)
 	struct fsdevperf_job *job = task->job;
 	int rc;
 
+	task->seed = rand();
 	task->ioch = spdk_fsdev_get_io_channel(job->fsdev_desc);
 	if (task->ioch == NULL) {
 		fsdevperf_errmsg("failed to get IO channel for %s on core %u\n",
@@ -938,6 +983,7 @@ static int
 fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 {
 	uint64_t u64;
+	bool random;
 	int ival;
 
 	switch (ch) {
@@ -948,12 +994,13 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		}
 		break;
 	case FSDEVPERF_OPT_PATTERN:
-		ival = fsdevperf_parse_io_pattern(arg);
+		ival = fsdevperf_parse_io_pattern(arg, &random);
 		if (ival < 0) {
 			fsdevperf_errmsg("%s: invalid pattern argument: %s\n", job->name, arg);
 			return -EINVAL;
 		}
 		job->io_pattern = ival;
+		job->random = random;
 		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
@@ -1002,7 +1049,7 @@ fsdevperf_usage(void)
 	printf(" -o, --iosize=<iosize>                I/O size\n");
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
-	printf(" -w, --pattern=<pattern>              I/O pattern (read, write)\n");
+	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite)\n");
 	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
 }
 
@@ -1012,6 +1059,7 @@ main(int argc, char **argv)
 	struct spdk_app_opts opts = {};
 	int rc;
 
+	srand(getpid());
 	g_app.name = argv[0];
 
 	/* For now, we only support one "main" job */
