@@ -233,6 +233,7 @@ struct aio_fsdev {
 struct aio_fsdev_io {
 	struct spdk_aio_mgr_io *aio;
 	struct aio_io_channel *ch;
+	int status;
 	TAILQ_ENTRY(aio_fsdev_io) link;
 };
 
@@ -2589,14 +2590,16 @@ fsdev_aio_read_cb(void *ctx, uint32_t data_size, int error)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
+	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
+	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 
 	if (vfsdev_io->aio) {
 		TAILQ_REMOVE(&vfsdev_io->ch->ios_in_progress, vfsdev_io, link);
 	}
 
 	fsdev_io->u_out.read.data_size = data_size;
-
-	spdk_fsdev_io_complete(fsdev_io, error);
+	vfsdev_io->status = error;
+	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, vfsdev_io, link);
 }
 
 static int
@@ -2627,6 +2630,7 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		uint32_t i;
 
 		fsdev_io->u_out.read.data_size = 0;
+		vfsdev_io->status = 0;
 
 		for (i = 0; i < outcnt; i++, outvec++) {
 			fsdev_io->u_out.read.data_size += outvec->iov_len;
@@ -2693,6 +2697,8 @@ fsdev_aio_write_cb(void *ctx, uint32_t data_size, int error)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
+	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
+	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 
 	if (vfsdev_io->aio) {
 		TAILQ_REMOVE(&vfsdev_io->ch->ios_in_progress, vfsdev_io, link);
@@ -2736,7 +2742,8 @@ fsdev_aio_write_cb(void *ctx, uint32_t data_size, int error)
 		}
 	}
 
-	spdk_fsdev_io_complete(fsdev_io, error);
+	vfsdev_io->status = error;
+	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, vfsdev_io, link);
 }
 
 static int
@@ -2767,6 +2774,8 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		uint32_t i;
 
 		fsdev_io->u_out.write.data_size = 0;
+		vfsdev_io->status = 0;
+
 		for (i = 0; i < incnt; i++, invec++) {
 			fsdev_io->u_out.write.data_size += invec->iov_len;
 		}
@@ -3980,7 +3989,7 @@ aio_io_poll(void *arg)
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 
 		TAILQ_REMOVE(&ch->ios_to_complete, vfsdev_io, link);
-		spdk_fsdev_io_complete(fsdev_io, 0);
+		spdk_fsdev_io_complete(fsdev_io, vfsdev_io->status);
 		res = SPDK_POLLER_BUSY;
 	}
 
