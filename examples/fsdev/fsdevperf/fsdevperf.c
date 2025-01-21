@@ -15,13 +15,14 @@
  * threads, while fsdevperf_task represents part of that job responsible for submitting IOs to a
  * given file on a given thread.
  */
+struct fsdevperf_task;
+
 struct fsdevperf_thread {
 	struct spdk_thread		*thread;
 	uint32_t			core;
+	TAILQ_HEAD(, fsdevperf_task)	tasks;
 	TAILQ_ENTRY(fsdevperf_thread)	tailq;
 };
-
-struct fsdevperf_task;
 
 struct fsdevperf_request {
 	struct fsdevperf_task	*task;
@@ -39,6 +40,7 @@ struct fsdevperf_task {
 	uint64_t				filesize;
 	uint64_t				size;
 	uint32_t				num_outstanding;
+	bool					stop;
 	struct {
 		uint64_t			num_ios;
 		uint64_t			num_bytes;
@@ -51,6 +53,7 @@ struct fsdevperf_task {
 	void					*buf;
 	struct {
 		TAILQ_ENTRY(fsdevperf_task)	job;
+		TAILQ_ENTRY(fsdevperf_task)	thread;
 	} tailq;
 };
 
@@ -191,6 +194,7 @@ fsdevperf_init_threads(void)
 		spdk_cpuset_set_cpu(&cpuset, core, true);
 		snprintf(name, sizeof(name), "fsdevperf%u", core);
 
+		TAILQ_INIT(&thread->tasks);
 		thread->core = core;
 		thread->thread = spdk_thread_create(name, &cpuset);
 		if (thread->thread == NULL) {
@@ -301,6 +305,7 @@ static void
 fsdevperf_job_cleanup(struct fsdevperf_job *job)
 {
 	struct fsdevperf_task *task;
+	struct fsdevperf_thread *thread;
 
 	assert(spdk_get_thread() == spdk_thread_get_app_thread());
 	if (job->ioch != NULL) {
@@ -314,6 +319,8 @@ fsdevperf_job_cleanup(struct fsdevperf_job *job)
 	}
 
 	while ((task = TAILQ_FIRST(&job->tasks))) {
+		thread = task->thread;
+		TAILQ_REMOVE(&thread->tasks, task, tailq.thread);
 		TAILQ_REMOVE(&job->tasks, task, tailq.job);
 		fsdevperf_task_free(task);
 	}
@@ -338,6 +345,7 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 			return -ENOMEM;
 		}
 
+		TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
 		TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
 	}
 
@@ -557,7 +565,7 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 static bool
 fsdevperf_task_is_done(struct fsdevperf_task *task)
 {
-	return task->stats.num_bytes >= task->size;
+	return task->stats.num_bytes >= task->size || task->stop;
 }
 
 static void fsdevperf_request_submit(struct fsdevperf_request *request);
@@ -802,6 +810,28 @@ error:
 	fsdevperf_done();
 }
 
+static void
+fsdevperf_shutdown_thread(void *ctx)
+{
+	struct fsdevperf_thread *thread = ctx;
+	struct fsdevperf_task *task;
+
+	TAILQ_FOREACH(task, &thread->tasks, tailq.thread) {
+		task->stop = true;
+	}
+}
+
+static void
+fsdevperf_shutdown_cb(void)
+{
+	struct fsdevperf_thread *thread;
+
+	fsdevperf_set_status(-ECANCELED);
+	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
+		spdk_thread_send_msg(thread->thread, fsdevperf_shutdown_thread, thread);
+	}
+}
+
 static int
 fsdevperf_job_check_params(struct fsdevperf_job *job)
 {
@@ -920,6 +950,7 @@ main(int argc, char **argv)
 
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
+	opts.shutdown_cb = fsdevperf_shutdown_cb;
 	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:q:", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
