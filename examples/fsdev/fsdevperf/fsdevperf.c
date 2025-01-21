@@ -59,6 +59,7 @@ struct fsdevperf_task {
 
 struct fsdevperf_job {
 	struct spdk_fsdev_desc		*fsdev_desc;
+	int				io_pattern;
 	size_t				io_size;
 	size_t				io_depth;
 	size_t				size;
@@ -136,6 +137,28 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 	}
 
 	return 0;
+}
+
+static int
+fsdevperf_parse_io_pattern(const char *pattern)
+{
+	const char *name;
+	int i;
+
+	for (i = 0; i < __SPDK_FSDEV_IO_LAST; i++) {
+		name = spdk_fsdev_io_type_get_name(i);
+		if (name != NULL && strcmp(name, pattern) == 0) {
+			return i;
+		}
+	}
+
+	return -EINVAL;
+}
+
+static const char *
+fsdevperf_get_io_pattern_name(int pattern)
+{
+	return spdk_fsdev_io_type_get_name(pattern);
 }
 
 static void
@@ -295,6 +318,7 @@ fsdevperf_job_alloc(const char *name)
 
 	job->io_size = 4096;
 	job->io_depth = 1;
+	job->io_pattern = -1;
 
 	TAILQ_INIT(&job->tasks);
 
@@ -387,8 +411,9 @@ fsdevperf_dump_stats(void)
 		job_mbps = 0;
 		num_tasks = 0;
 
-		printf("%s (pattern=read, iosize=%zu, iodepth=%zu):\n",
-		       job->name, job->io_size, job->io_depth);
+		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu):\n",
+		       job->name, fsdevperf_get_io_pattern_name(job->io_pattern), job->io_size,
+		       job->io_depth);
 		printf("  %30s %4s %10s %10s %10s\n", "filename", "core", "runtime", "IOPS", "MiB/s");
 		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 			snprintf(path, sizeof(path), "/%s/%s",
@@ -571,7 +596,7 @@ fsdevperf_task_is_done(struct fsdevperf_task *task)
 static void fsdevperf_request_submit(struct fsdevperf_request *request);
 
 static void
-fsdevperf_request_read_cb(void *ctx, struct spdk_io_channel *ioch, int status, uint32_t size)
+fsdevperf_request_complete_cb(void *ctx, struct spdk_io_channel *ioch, int status, uint32_t size)
 {
 	struct fsdevperf_request *request = ctx;
 	struct fsdevperf_task *task = request->task;
@@ -583,7 +608,8 @@ fsdevperf_request_read_cb(void *ctx, struct spdk_io_channel *ioch, int status, u
 	task->stats.num_bytes += size;
 
 	if (spdk_unlikely(status != 0)) {
-		fsdevperf_errmsg("read /%s/%s failed: %s\n",
+		fsdevperf_errmsg("%s /%s/%s failed: %s\n",
+				 fsdevperf_get_io_pattern_name(job->io_pattern),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
 				 task->filename, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
@@ -606,11 +632,26 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	uint64_t offset = task->offset;
 	int rc;
 
-	rc = spdk_fsdev_read(job->fsdev_desc, task->ioch, request->id, task->fobj, task->fh,
-			     job->io_size, offset, 0, &request->iov, 1, NULL,
-			     fsdevperf_request_read_cb, request);
+	switch (job->io_pattern) {
+	case SPDK_FSDEV_IO_READ:
+		rc = spdk_fsdev_read(job->fsdev_desc, task->ioch, request->id, task->fobj,
+				     task->fh, job->io_size, offset, 0, &request->iov, 1, NULL,
+				     fsdevperf_request_complete_cb, request);
+		break;
+	case SPDK_FSDEV_IO_WRITE:
+		rc = spdk_fsdev_write(job->fsdev_desc, task->ioch, request->id, task->fobj,
+				      task->fh, job->io_size, offset, 0, &request->iov, 1, NULL,
+				      fsdevperf_request_complete_cb, request);
+		break;
+	default:
+		rc = -EINVAL;
+		assert(0);
+		break;
+	}
+
 	if (spdk_unlikely(rc != 0)) {
-		fsdevperf_errmsg("failed to read /%s/%s: %s\n",
+		fsdevperf_errmsg("failed to %s /%s/%s: %s\n",
+				 fsdevperf_get_io_pattern_name(job->io_pattern),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
 				 task->filename, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
@@ -685,7 +726,7 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	task->fobj = fobj;
 	task->filesize = attr->size;
 	task->size = job->size ? job->size : attr->size;
-	rc = spdk_fsdev_fopen(job->fsdev_desc, task->ioch, 0, fobj, O_RDONLY,
+	rc = spdk_fsdev_fopen(job->fsdev_desc, task->ioch, 0, fobj, O_RDWR,
 			      fsdevperf_task_open_cb, task);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to open /%s/%s: %s\n",
@@ -850,6 +891,10 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 		fsdevperf_errmsg("%s: invalid iodepth argument: %zu\n", job->name, job->io_depth);
 		return -EINVAL;
 	}
+	if (job->io_pattern < 0) {
+		fsdevperf_errmsg("%s: missing argument: pattern\n", job->name);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -861,6 +906,8 @@ static struct option g_options[] = {
 	{ "iosize", required_argument, NULL, FSDEVPERF_OPT_IOSIZE },
 #define FSDEVPERF_OPT_IODEPTH 'q'
 	{ "iodepth", required_argument, NULL, FSDEVPERF_OPT_IODEPTH },
+#define FSDEVPERF_OPT_PATTERN 'w'
+	{ "pattern", required_argument, NULL, FSDEVPERF_OPT_PATTERN },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
@@ -884,6 +931,7 @@ static int
 fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 {
 	uint64_t u64;
+	int ival;
 
 	switch (ch) {
 	case FSDEVPERF_OPT_PATH:
@@ -891,6 +939,14 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		if (job->path == NULL) {
 			return -ENOMEM;
 		}
+		break;
+	case FSDEVPERF_OPT_PATTERN:
+		ival = fsdevperf_parse_io_pattern(arg);
+		if (ival < 0) {
+			fsdevperf_errmsg("%s: invalid pattern argument: %s\n", job->name, arg);
+			return -EINVAL;
+		}
+		job->io_pattern = ival;
 		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
@@ -932,6 +988,7 @@ fsdevperf_usage(void)
 	printf(" -o, --iosize=<iosize>                I/O size\n");
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
+	printf(" -w, --pattern=<pattern>              I/O pattern (read, write)\n");
 }
 
 int
@@ -951,7 +1008,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:q:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:q:w:", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
