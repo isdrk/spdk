@@ -598,7 +598,7 @@ app_setup_trace(struct spdk_app_opts *opts)
 		}
 
 		for (group_id = 0; group_id < SPDK_TRACE_MAX_GROUP_ID; ++group_id) {
-			if (tpoint_group_mask & (1 << group_id)) {
+			if (tpoint_group_mask & (1ull << group_id)) {
 				spdk_trace_set_tpoints(group_id, tpoint_mask);
 			}
 		}
