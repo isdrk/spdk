@@ -31,6 +31,11 @@ struct fsdevperf_request {
 	struct iovec		iov;
 };
 
+struct fsdevperf_stats {
+	uint64_t	num_ios;
+	uint64_t	num_bytes;
+};
+
 struct fsdevperf_task {
 	struct fsdevperf_job			*job;
 	struct fsdevperf_thread			*thread;
@@ -43,10 +48,7 @@ struct fsdevperf_task {
 	uint32_t				num_outstanding;
 	unsigned int				seed;
 	bool					stop;
-	struct {
-		uint64_t			num_ios;
-		uint64_t			num_bytes;
-	} stats;
+	struct fsdevperf_stats			stats;
 	uint64_t				tsc_finish;
 	uint64_t				tsc_start;
 	char					*filename;
@@ -80,6 +82,9 @@ struct fsdevperf_app {
 	struct fsdevperf_job		*main_job;
 	size_t				num_active;
 	int				status;
+	struct fsdevperf_stats		stats;
+	struct spdk_poller		*poller;
+	uint64_t			tsc_start;
 	TAILQ_HEAD(, fsdevperf_job)	jobs;
 	TAILQ_HEAD(, fsdevperf_thread)	threads;
 } g_app = {
@@ -189,6 +194,20 @@ fsdevperf_job_get_io_pattern_name(struct fsdevperf_job *job)
 	}
 
 	return spdk_fsdev_io_type_get_name(job->io_pattern);
+}
+
+static struct fsdevperf_thread *
+fsdevperf_get_thread(void)
+{
+	struct fsdevperf_thread *thread;
+
+	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
+		if (thread->thread == spdk_get_thread()) {
+			return thread;
+		}
+	}
+
+	return NULL;
 }
 
 static void
@@ -504,6 +523,7 @@ fsdevperf_done(void)
 		spdk_thread_send_msg(thread->thread, fsdevperf_thread_exit, NULL);
 	}
 
+	spdk_poller_unregister(&g_app.poller);
 	spdk_app_stop(g_app.status);
 }
 
@@ -875,6 +895,63 @@ error:
 }
 
 static void
+fsdevperf_poller_update_done(void *ctx)
+{
+	struct fsdevperf_stats *stats = &g_app.stats;
+	double runtime, iops, mbps;
+	static int lastlen;
+	int len;
+
+	if (g_app.poller == NULL) {
+		return;
+	}
+
+	runtime = (double)(spdk_get_ticks() - g_app.tsc_start) / spdk_get_ticks_hz();
+	iops = (double)stats->num_ios / runtime;
+	mbps = (double)stats->num_bytes / (1024 * 1024 * runtime);
+
+	spdk_poller_resume(g_app.poller);
+
+	len = printf("IOPS: %.2f, %.2fMiB/s", iops, mbps);
+	printf("%*s\r", lastlen - spdk_min(len, lastlen), "");
+	lastlen = len;
+	fflush(stdout);
+}
+
+static void
+fsdevperf_poller_update(void *ctx)
+{
+	struct fsdevperf_thread *thread;
+	struct fsdevperf_task *task;
+	struct fsdevperf_stats *stats = &g_app.stats;
+
+	if (g_app.poller == NULL) {
+		return;
+	}
+
+	thread = fsdevperf_get_thread();
+	if (thread == NULL) {
+		return;
+	}
+
+	TAILQ_FOREACH(task, &thread->tasks, tailq.thread) {
+		stats->num_ios += task->stats.num_ios;
+		stats->num_bytes += task->stats.num_bytes;
+	}
+}
+
+static int
+fsdevperf_poller(void *ctx)
+{
+	spdk_poller_pause(g_app.poller);
+
+	memset(&g_app.stats, 0, sizeof(g_app.stats));
+	spdk_for_each_thread(fsdevperf_poller_update, NULL, fsdevperf_poller_update_done);
+
+	return SPDK_POLLER_BUSY;
+}
+
+static void
 fsdevperf_run(void *ctx)
 {
 	int rc;
@@ -891,6 +968,12 @@ fsdevperf_run(void *ctx)
 
 	rc = fsdevperf_init_jobs();
 	if (rc != 0) {
+		goto error;
+	}
+
+	g_app.tsc_start = spdk_get_ticks();
+	g_app.poller = SPDK_POLLER_REGISTER(fsdevperf_poller, NULL, 1000 * 1000);
+	if (g_app.poller == NULL) {
 		goto error;
 	}
 
