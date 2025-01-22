@@ -2,6 +2,7 @@
  * Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include "spdk/conf.h"
 #include "spdk/env.h"
 #include "spdk/event.h"
 #include "spdk/fsdev.h"
@@ -960,6 +961,8 @@ static struct option g_options[] = {
 	{ "pattern", required_argument, NULL, FSDEVPERF_OPT_PATTERN },
 #define FSDEVPERF_OPT_RUNTIME 't'
 	{ "runtime", required_argument, NULL, FSDEVPERF_OPT_RUNTIME},
+#define FSDEVPERF_OPT_JOBS 'j'
+	{ "jobs", required_argument, NULL, FSDEVPERF_OPT_JOBS },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
@@ -977,6 +980,86 @@ fsdevperf_get_option_name(int val)
 	}
 
 	return NULL;
+}
+
+static int fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg);
+
+static int
+fsdevperf_load_jobs(const char *filename)
+{
+	struct spdk_conf *conf;
+	struct spdk_conf_section *section;
+	struct fsdevperf_job *job = NULL;
+	TAILQ_HEAD(, fsdevperf_job) jobs = TAILQ_HEAD_INITIALIZER(jobs);
+	int cmdline_options[] = {
+		FSDEVPERF_OPT_JOBS
+	};
+	size_t i, j;
+	char *str;
+	int rc;
+
+	conf = spdk_conf_allocate();
+	if (conf == NULL) {
+		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+		return -ENOMEM;
+	}
+
+	rc = spdk_conf_read(conf, filename);
+	if (rc != 0) {
+		fsdevperf_errmsg("failed to load job config: %s\n", filename);
+		rc = -EINVAL;
+		goto error;
+	}
+
+	for (section = spdk_conf_first_section(conf); section != NULL;
+	     section = spdk_conf_next_section(section)) {
+		job = fsdevperf_job_alloc(spdk_conf_section_get_name(section));
+		if (job == NULL) {
+			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+			goto error;
+		}
+
+		TAILQ_INSERT_TAIL(&jobs, job, tailq);
+
+		for (i = 0; i < SPDK_COUNTOF(g_options); i++) {
+			/* Skip the command-line-only options */
+			for (j = 0; j < SPDK_COUNTOF(cmdline_options); j++) {
+				if (g_options[i].val == cmdline_options[j]) {
+					break;
+				}
+			}
+			if (j < SPDK_COUNTOF(cmdline_options)) {
+				continue;
+			}
+			str = spdk_conf_section_get_val(section, g_options[i].name);
+			if (str == NULL) {
+				continue;
+			}
+			rc = fsdevperf_job_parse_option(job, g_options[i].val, str);
+			if (rc != 0) {
+				goto error;
+			}
+		}
+
+		rc = fsdevperf_job_check_params(job);
+		if (rc != 0) {
+			goto error;
+		}
+	}
+
+	while ((job = TAILQ_FIRST(&jobs))) {
+		TAILQ_REMOVE(&jobs, job, tailq);
+		TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+	}
+error:
+	while ((job = TAILQ_FIRST(&jobs))) {
+		TAILQ_REMOVE(&jobs, job, tailq);
+		fsdevperf_job_free(job);
+	}
+
+	spdk_conf_free(conf);
+
+	return rc;
 }
 
 static int
@@ -1001,6 +1084,11 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		}
 		job->io_pattern = ival;
 		job->random = random;
+		break;
+	case FSDEVPERF_OPT_JOBS:
+		if (fsdevperf_load_jobs(arg)) {
+			return -EINVAL;
+		}
 		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
@@ -1051,6 +1139,7 @@ fsdevperf_usage(void)
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
 	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite)\n");
 	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
+	printf(" -j, --jobs=<file>                    job configuration file\n");
 }
 
 int
@@ -1071,17 +1160,28 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "o:P:t:q:w:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "j:o:P:t:q:w:", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
 	}
 
-	if (fsdevperf_job_check_params(g_app.main_job)) {
-		return EXIT_FAILURE;
+	/* Only add the main job if the path was specified */
+	if (g_app.main_job->path != NULL) {
+		if (fsdevperf_job_check_params(g_app.main_job)) {
+			return EXIT_FAILURE;
+		}
+
+		TAILQ_INSERT_TAIL(&g_app.jobs, g_app.main_job, tailq);
+	} else {
+		fsdevperf_job_free(g_app.main_job);
+		g_app.main_job = NULL;
 	}
 
-	TAILQ_INSERT_TAIL(&g_app.jobs, g_app.main_job, tailq);
+	if (TAILQ_EMPTY(&g_app.jobs)) {
+		fsdevperf_errmsg("no job(s) were defined\n");
+		return EXIT_FAILURE;
+	}
 
 	rc = spdk_app_start(&opts, fsdevperf_run, NULL);
 
