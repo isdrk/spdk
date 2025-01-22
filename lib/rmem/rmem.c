@@ -574,10 +574,12 @@ spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
 	for (i = 0; i < spdk_env_get_core_count(); i++) {
 		free(pool->mirror_entries[i]);
 	}
-	TAILQ_FOREACH(entry, &pool->active_entries, link) {
+	while ((entry = TAILQ_FIRST(&pool->active_entries))) {
+		TAILQ_REMOVE(&pool->active_entries, entry, link);
 		free(entry);
 	}
-	TAILQ_FOREACH(entry, &pool->free_entries, link) {
+	while ((entry = TAILQ_FIRST(&pool->free_entries))) {
+		TAILQ_REMOVE(&pool->free_entries, entry, link);
 		free(entry);
 	}
 	pthread_spin_destroy(&pool->lock);
