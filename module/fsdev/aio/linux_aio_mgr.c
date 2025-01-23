@@ -81,7 +81,7 @@ spdk_aio_mgr_submit_io(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ct
 	aio = aio_mgr_get_aio(mgr, clb, ctx);
 	if (!aio) {
 		SPDK_ERRLOG("Cannot get aio\n");
-		clb(ctx, 0, EFAULT);
+		clb(ctx, 0, -EFAULT);
 		return NULL;
 	}
 
