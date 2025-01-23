@@ -7,6 +7,7 @@
 #include "spdk/event.h"
 #include "spdk/fsdev.h"
 #include "spdk/likely.h"
+#include "spdk/rpc.h"
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
 #include "spdk/thread.h"
@@ -78,15 +79,19 @@ struct fsdevperf_job {
 };
 
 struct fsdevperf_app {
-	const char			*name;
-	struct fsdevperf_job		*main_job;
-	size_t				num_active;
-	int				status;
-	struct fsdevperf_stats		stats;
-	struct spdk_poller		*poller;
-	uint64_t			tsc_start;
-	TAILQ_HEAD(, fsdevperf_job)	jobs;
-	TAILQ_HEAD(, fsdevperf_thread)	threads;
+	const char				*name;
+	struct fsdevperf_job			*main_job;
+	size_t					num_active;
+	int					status;
+	struct fsdevperf_stats			stats;
+	struct spdk_poller			*poller;
+	uint64_t				tsc_start;
+	TAILQ_HEAD(, fsdevperf_job)		jobs;
+	TAILQ_HEAD(, fsdevperf_thread)		threads;
+	struct {
+		bool				enabled;
+		struct spdk_jsonrpc_request	*request;
+	} rpc;
 } g_app = {
 	.jobs = TAILQ_HEAD_INITIALIZER(g_app.jobs),
 	.threads = TAILQ_HEAD_INITIALIZER(g_app.threads),
@@ -490,6 +495,71 @@ fsdevperf_dump_stats(void)
 }
 
 static void
+fsdevperf_rpc_done(void)
+{
+	struct spdk_jsonrpc_request *request = g_app.rpc.request;
+	struct spdk_json_write_ctx *w;
+	struct fsdevperf_job *job;
+	struct fsdevperf_task *task;
+	char path[PATH_MAX];
+	uint64_t runtime;
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_int32(w, "status", g_app.status);
+	spdk_json_write_named_array_begin(w, "jobs");
+	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string(w, "name", job->name);
+		spdk_json_write_named_string(w, "pattern",
+					     fsdevperf_job_get_io_pattern_name(job));
+		spdk_json_write_named_uint64(w, "iosize", job->io_size);
+		spdk_json_write_named_uint64(w, "iodepth", job->io_depth);
+		spdk_json_write_named_array_begin(w, "tasks");
+		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+			snprintf(path, sizeof(path), "/%s/%s",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 task->filename);
+			runtime = (task->tsc_finish - task->tsc_start) * SPDK_SEC_TO_USEC /
+				  spdk_get_ticks_hz();
+			spdk_json_write_object_begin(w);
+			spdk_json_write_named_string(w, "filename", path);
+			spdk_json_write_named_uint32(w, "core", task->thread->core);
+			spdk_json_write_named_uint64(w, "runtime", runtime);
+			spdk_json_write_named_uint64(w, "num_ios", task->stats.num_ios);
+			spdk_json_write_named_uint64(w, "num_bytes", task->stats.num_bytes);
+			spdk_json_write_object_end(w);
+		}
+		spdk_json_write_array_end(w);
+		spdk_json_write_object_end(w);
+	}
+	spdk_json_write_array_end(w);
+	spdk_json_write_object_end(w);
+	spdk_jsonrpc_end_result(request, w);
+	g_app.rpc.request = NULL;
+}
+
+static void fsdevperf_run(void);
+
+static void
+fsdevperf_rpc_perform_tests(struct spdk_jsonrpc_request *request,
+			    const struct spdk_json_val *params)
+{
+	if (!g_app.rpc.enabled) {
+		spdk_jsonrpc_send_error_response(request, -ENOTSUP, spdk_strerror(ENOTSUP));
+		return;
+	}
+	if (g_app.rpc.request != NULL) {
+		spdk_jsonrpc_send_error_response(request, -EINPROGRESS, spdk_strerror(EINPROGRESS));
+		return;
+	}
+
+	g_app.rpc.request = request;
+	fsdevperf_run();
+}
+SPDK_RPC_REGISTER("perform_tests", fsdevperf_rpc_perform_tests, SPDK_RPC_RUNTIME)
+
+static void
 fsdevperf_thread_exit(void *ctx)
 {
 	spdk_thread_exit(spdk_get_thread());
@@ -512,6 +582,9 @@ fsdevperf_done(void)
 	}
 
 	fsdevperf_dump_stats();
+	if (g_app.rpc.request != NULL) {
+		fsdevperf_rpc_done();
+	}
 
 	while ((job = TAILQ_FIRST(&g_app.jobs))) {
 		TAILQ_REMOVE(&g_app.jobs, job, tailq);
@@ -952,7 +1025,7 @@ fsdevperf_poller(void *ctx)
 }
 
 static void
-fsdevperf_run(void *ctx)
+fsdevperf_run(void)
 {
 	int rc;
 
@@ -986,6 +1059,16 @@ error:
 }
 
 static void
+fsdevperf_start_app(void *ctx)
+{
+	if (g_app.rpc.enabled) {
+		return;
+	}
+
+	fsdevperf_run();
+}
+
+static void
 fsdevperf_shutdown_thread(void *ctx)
 {
 	struct fsdevperf_thread *thread = ctx;
@@ -1002,8 +1085,12 @@ fsdevperf_shutdown_cb(void)
 	struct fsdevperf_thread *thread;
 
 	fsdevperf_set_status(-ECANCELED);
-	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
-		spdk_thread_send_msg(thread->thread, fsdevperf_shutdown_thread, thread);
+	if (g_app.rpc.enabled && g_app.rpc.request == NULL) {
+		fsdevperf_done();
+	} else {
+		TAILQ_FOREACH(thread, &g_app.threads, tailq) {
+			spdk_thread_send_msg(thread->thread, fsdevperf_shutdown_thread, thread);
+		}
 	}
 }
 
@@ -1046,6 +1133,8 @@ static struct option g_options[] = {
 	{ "runtime", required_argument, NULL, FSDEVPERF_OPT_RUNTIME},
 #define FSDEVPERF_OPT_JOBS 'j'
 	{ "jobs", required_argument, NULL, FSDEVPERF_OPT_JOBS },
+#define FSDEVPERF_OPT_WAIT_FOR_START 'z'
+	{ "wait-for-start", no_argument, NULL, FSDEVPERF_OPT_WAIT_FOR_START },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
@@ -1075,7 +1164,7 @@ fsdevperf_load_jobs(const char *filename)
 	struct fsdevperf_job *job = NULL;
 	TAILQ_HEAD(, fsdevperf_job) jobs = TAILQ_HEAD_INITIALIZER(jobs);
 	int cmdline_options[] = {
-		FSDEVPERF_OPT_JOBS
+		FSDEVPERF_OPT_JOBS, FSDEVPERF_OPT_WAIT_FOR_START,
 	};
 	size_t i, j;
 	char *str;
@@ -1173,6 +1262,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			return -EINVAL;
 		}
 		break;
+	case FSDEVPERF_OPT_WAIT_FOR_START:
+		g_app.rpc.enabled = true;
+		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
 	case FSDEVPERF_OPT_SIZE:
@@ -1223,6 +1315,8 @@ fsdevperf_usage(void)
 	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite)\n");
 	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
 	printf(" -j, --jobs=<file>                    job configuration file\n");
+	printf(" -z, --wait-for-start                 don't start the test immediately, wait for the perform_tests\n");
+	printf("                                      RPC (see examples/fsdev/fsdevperf/fsdevperf.py)\n");
 }
 
 int
@@ -1243,7 +1337,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "j:o:P:t:q:w:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "j:o:P:t:q:w:z", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
@@ -1266,7 +1360,7 @@ main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	rc = spdk_app_start(&opts, fsdevperf_run, NULL);
+	rc = spdk_app_start(&opts, fsdevperf_start_app, NULL);
 
 	spdk_app_fini();
 
