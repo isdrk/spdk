@@ -16,7 +16,6 @@ struct spdk_aio_mgr_io {
 	fsdev_aio_done_cb clb;
 	void *ctx;
 	uint32_t data_size;
-	int err;
 };
 
 struct spdk_aio_mgr {
@@ -39,7 +38,6 @@ aio_mgr_get_aio(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ctx)
 		aio->mgr = mgr;
 		aio->clb = clb;
 		aio->ctx = ctx;
-		aio->err = 0;
 		aio->data_size = 0;
 		TAILQ_REMOVE(&mgr->aios.pool, aio, link);
 	}
