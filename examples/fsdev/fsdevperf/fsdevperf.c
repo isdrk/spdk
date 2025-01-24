@@ -37,6 +37,11 @@ struct fsdevperf_stats {
 	uint64_t	num_bytes;
 };
 
+struct fsdevperf_file {
+	char				*name;
+	TAILQ_ENTRY(fsdevperf_file)	tailq;
+};
+
 struct fsdevperf_task {
 	struct fsdevperf_job			*job;
 	struct fsdevperf_thread			*thread;
@@ -52,7 +57,7 @@ struct fsdevperf_task {
 	struct fsdevperf_stats			stats;
 	uint64_t				tsc_finish;
 	uint64_t				tsc_start;
-	char					*filename;
+	struct fsdevperf_file			*file;
 	int					status;
 	struct fsdevperf_request		*requests;
 	void					*buf;
@@ -99,6 +104,7 @@ struct fsdevperf_app {
 	uint64_t				tsc_start;
 	TAILQ_HEAD(, fsdevperf_job)		jobs;
 	TAILQ_HEAD(, fsdevperf_thread)		threads;
+	TAILQ_HEAD(, fsdevperf_file)		files;
 	struct {
 		bool				enabled;
 		struct spdk_jsonrpc_request	*request;
@@ -106,6 +112,7 @@ struct fsdevperf_app {
 } g_app = {
 	.jobs = TAILQ_HEAD_INITIALIZER(g_app.jobs),
 	.threads = TAILQ_HEAD_INITIALIZER(g_app.threads),
+	.files = TAILQ_HEAD_INITIALIZER(g_app.files),
 };
 
 #define fsdevperf_errmsg(fmt, ...) \
@@ -171,6 +178,17 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 	}
 
 	return 0;
+}
+
+static const char *
+fsdevperf_get_filename(const char *path)
+{
+	path = strstr(path + 1, "/");
+	if (path == NULL || strlen(path + 1) == 0) {
+		return NULL;
+	}
+
+	return path + 1;
 }
 
 static int
@@ -310,16 +328,15 @@ fsdevperf_task_free(struct fsdevperf_task *task)
 {
 	spdk_free(task->buf);
 	free(task->requests);
-	free(task->filename);
 	free(task);
 }
 
 static struct fsdevperf_task *
-fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_thread *thread)
+fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
+		     struct fsdevperf_thread *thread)
 {
 	struct fsdevperf_task *task;
 	struct fsdevperf_request *request;
-	char *filename;
 	size_t i;
 
 	task = calloc(1, sizeof(*task));
@@ -329,17 +346,7 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_thread *thread)
 
 	task->job = job;
 	task->thread = thread;
-
-	filename = strstr(job->path + 1, "/");
-	if (filename == NULL || strlen(filename + 1) == 0) {
-		goto error;
-	}
-	filename = strdup(filename + 1);
-	if (filename == NULL) {
-		goto error;
-	}
-	task->filename = filename;
-
+	task->file = file;
 	task->requests = calloc(job->io_depth, sizeof(*task->requests));
 	if (task->requests == NULL) {
 		goto error;
@@ -363,6 +370,53 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_thread *thread)
 error:
 	fsdevperf_task_free(task);
 	return NULL;
+}
+
+static void
+fsdevperf_file_free(struct fsdevperf_file *file)
+{
+	free(file->name);
+	free(file);
+}
+
+static struct fsdevperf_file *
+fsdevperf_file_alloc(const char *filename)
+{
+	struct fsdevperf_file *file;
+
+	file = calloc(1, sizeof(*file));
+	if (file == NULL) {
+		return NULL;
+	}
+
+	file->name = strdup(filename);
+	if (file->name == NULL) {
+		fsdevperf_file_free(file);
+		return NULL;
+	}
+
+	return file;
+}
+
+static struct fsdevperf_file *
+fsdevperf_file_get(const char *filename)
+{
+	struct fsdevperf_file *file;
+
+	TAILQ_FOREACH(file, &g_app.files, tailq) {
+		if (strcmp(filename, file->name) == 0) {
+			return file;
+		}
+	}
+
+	file = fsdevperf_file_alloc(filename);
+	if (file == NULL) {
+		return NULL;
+	}
+
+	TAILQ_INSERT_TAIL(&g_app.files, file, tailq);
+
+	return file;
 }
 
 static void
@@ -429,6 +483,13 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 {
 	struct fsdevperf_thread *thread;
 	struct fsdevperf_task *task;
+	struct fsdevperf_file *file;
+
+	file = fsdevperf_file_get(fsdevperf_get_filename(job->path));
+	if (file == NULL) {
+		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+		return -ENOMEM;
+	}
 
 	job->ioch = spdk_fsdev_get_io_channel(job->fsdev_desc);
 	if (job->ioch == NULL) {
@@ -438,7 +499,7 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 	}
 
 	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
-		task = fsdevperf_task_alloc(job, thread);
+		task = fsdevperf_task_alloc(job, file, thread);
 		if (task == NULL) {
 			return -ENOMEM;
 		}
@@ -492,7 +553,7 @@ fsdevperf_dump_stats(void)
 		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 			snprintf(path, sizeof(path), "/%s/%s",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename);
+				 task->file->name);
 			runtime = (double)(task->tsc_finish - task->tsc_start) / spdk_get_ticks_hz();
 			task_iops = (double)task->stats.num_ios / runtime;
 			task_mbps = (double)task->stats.num_bytes / (1024 * 1024 * runtime);
@@ -539,7 +600,7 @@ fsdevperf_rpc_done(void)
 		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 			snprintf(path, sizeof(path), "/%s/%s",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename);
+				 task->file->name);
 			runtime = (task->tsc_finish - task->tsc_start) * SPDK_SEC_TO_USEC /
 				  spdk_get_ticks_hz();
 			spdk_json_write_object_begin(w);
@@ -592,6 +653,7 @@ fsdevperf_done(void)
 {
 	struct fsdevperf_job *job;
 	struct fsdevperf_thread *thread;
+	struct fsdevperf_file *file;
 
 	/* Make sure all fsdevs are umounted */
 	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
@@ -610,6 +672,11 @@ fsdevperf_done(void)
 		TAILQ_REMOVE(&g_app.jobs, job, tailq);
 		fsdevperf_job_cleanup(job);
 		fsdevperf_job_free(job);
+	}
+
+	while ((file = TAILQ_FIRST(&g_app.files))) {
+		TAILQ_REMOVE(&g_app.files, file, tailq);
+		fsdevperf_file_free(file);
 	}
 
 	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
@@ -654,7 +721,7 @@ fsdevperf_task_release_cb(void *ctx, struct spdk_io_channel *ch, int status)
 	if (status != 0) {
 		fsdevperf_errmsg("release /%s/%s failed: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-status));
+				 task->file->name, spdk_strerror(-status));
 	}
 
 	task->fh = NULL;
@@ -670,7 +737,7 @@ fsdevperf_task_forget_cb(void *ctx, struct spdk_io_channel *ch, int status)
 	if (status != 0) {
 		fsdevperf_errmsg("forget /%s/%s failed: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-status));
+				 task->file->name, spdk_strerror(-status));
 	}
 
 	task->fobj = NULL;
@@ -693,6 +760,7 @@ static void
 fsdevperf_task_done(struct fsdevperf_task *task, int status)
 {
 	struct fsdevperf_job *job = task->job;
+	struct fsdevperf_file *file = task->file;
 	int rc;
 
 	task->status = status;
@@ -709,7 +777,7 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 
 		fsdevperf_errmsg("failed to release /%s/%s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-rc));
+				 file->name, spdk_strerror(-rc));
 		task->fh = NULL;
 	}
 
@@ -722,7 +790,7 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 
 		fsdevperf_errmsg("failed to forget /%s/%s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-rc));
+				 file->name, spdk_strerror(-rc));
 		task->fobj = NULL;
 	}
 
@@ -777,7 +845,7 @@ fsdevperf_request_complete_cb(void *ctx, struct spdk_io_channel *ioch, int statu
 		fsdevperf_errmsg("%s /%s/%s failed: %s\n",
 				 fsdevperf_job_get_io_pattern_name(job),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-status));
+				 task->file->name, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
 		return;
 	}
@@ -820,7 +888,7 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 		fsdevperf_errmsg("failed to %s /%s/%s: %s\n",
 				 fsdevperf_job_get_io_pattern_name(job),
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-rc));
+				 task->file->name, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
 		return;
 	}
@@ -852,7 +920,7 @@ fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	if (status != 0) {
 		fsdevperf_errmsg("open /%s/%s failed: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-status));
+				 task->file->name, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
 		return;
 	}
@@ -868,13 +936,14 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 {
 	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_job *job = task->job;
+	struct fsdevperf_file *file = task->file;
 	size_t min_size;
 	int rc;
 
 	if (status != 0) {
 		fsdevperf_errmsg("lookup /%s/%s failed: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-status));
+				 file->name, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
 		return;
 	}
@@ -883,7 +952,7 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	if (attr->size < min_size) {
 		fsdevperf_errmsg("/%s/%s: %s (minimum size required: %zu)\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(ENOSPC), min_size);
+				 file->name, spdk_strerror(ENOSPC), min_size);
 		fsdevperf_task_done(task, -ENOSPC);
 		return;
 	}
@@ -896,7 +965,7 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to open /%s/%s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-rc));
+				 file->name, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
 	}
 }
@@ -905,14 +974,15 @@ static void
 fsdevperf_task_lookup(struct fsdevperf_task *task)
 {
 	struct fsdevperf_job *job = task->job;
+	struct fsdevperf_file *file = task->file;
 	int rc;
 
-	rc = spdk_fsdev_lookup(job->fsdev_desc, task->ioch, 0, job->root, task->filename,
+	rc = spdk_fsdev_lookup(job->fsdev_desc, task->ioch, 0, job->root, file->name,
 			       fsdevperf_task_lookup_cb, task);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to lookup /%s/%s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(-rc));
+				 file->name, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
 	}
 }
