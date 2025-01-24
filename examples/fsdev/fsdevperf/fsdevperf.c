@@ -67,6 +67,7 @@ struct fsdevperf_job {
 	int				io_pattern;
 	size_t				io_size;
 	size_t				io_depth;
+	size_t				filesize;
 	size_t				size;
 	uint32_t			runtime;
 	bool				random;
@@ -847,6 +848,7 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 {
 	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_job *job = task->job;
+	size_t min_size;
 	int rc;
 
 	if (status != 0) {
@@ -857,17 +859,17 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 		return;
 	}
 
-	if (attr->size < job->io_size * job->io_depth) {
+	min_size = spdk_max(job->io_size * job->io_depth, job->filesize);
+	if (attr->size < min_size) {
 		fsdevperf_errmsg("/%s/%s: %s (minimum size required: %zu)\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 task->filename, spdk_strerror(ENOSPC),
-				 job->io_size * job->io_depth);
+				 task->filename, spdk_strerror(ENOSPC), min_size);
 		fsdevperf_task_done(task, -ENOSPC);
 		return;
 	}
 
 	task->fobj = fobj;
-	task->filesize = attr->size;
+	task->filesize = job->filesize ? job->filesize : attr->size;
 	task->size = job->size ? job->size : attr->size;
 	rc = spdk_fsdev_fopen(job->fsdev_desc, task->ioch, 0, fobj, O_RDWR,
 			      fsdevperf_task_open_cb, task);
@@ -1135,6 +1137,8 @@ static struct option g_options[] = {
 	{ "jobs", required_argument, NULL, FSDEVPERF_OPT_JOBS },
 #define FSDEVPERF_OPT_WAIT_FOR_START 'z'
 	{ "wait-for-start", no_argument, NULL, FSDEVPERF_OPT_WAIT_FOR_START },
+#define FSDEVPERF_OPT_FILESIZE 'f'
+	{ "filesize", required_argument, NULL, FSDEVPERF_OPT_FILESIZE },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 	{},
@@ -1269,6 +1273,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_IODEPTH:
 	case FSDEVPERF_OPT_SIZE:
 	case FSDEVPERF_OPT_RUNTIME:
+	case FSDEVPERF_OPT_FILESIZE:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
 			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
 					 job->name, fsdevperf_get_option_name(ch), arg);
@@ -1289,6 +1294,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 				job->size = SIZE_MAX;
 			}
 			job->runtime = (uint32_t)u64;
+			break;
+		case FSDEVPERF_OPT_FILESIZE:
+			job->filesize = (uint64_t)u64;
 			break;
 		}
 		break;
@@ -1317,6 +1325,7 @@ fsdevperf_usage(void)
 	printf(" -j, --jobs=<file>                    job configuration file\n");
 	printf(" -z, --wait-for-start                 don't start the test immediately, wait for the perform_tests\n");
 	printf("                                      RPC (see examples/fsdev/fsdevperf/fsdevperf.py)\n");
+	printf(" -f, --filesize=<filesize>            maximum size of each file\n");
 }
 
 int
@@ -1337,7 +1346,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "j:o:P:t:q:w:z", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "f:j:o:P:t:q:w:z", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
