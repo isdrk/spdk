@@ -62,9 +62,17 @@ struct fsdevperf_task {
 	} tailq;
 };
 
+struct fsdevperf_job;
+
+struct fsdevperf_job_ops {
+	void (*start_task)(struct fsdevperf_task *task);
+	void (*job_done)(struct fsdevperf_job *job, int status);
+};
+
 struct fsdevperf_job {
 	struct spdk_fsdev_desc		*fsdev_desc;
 	int				io_pattern;
+	int				status;
 	size_t				io_size;
 	size_t				io_depth;
 	size_t				filesize;
@@ -75,6 +83,8 @@ struct fsdevperf_job {
 	struct spdk_io_channel		*ioch;
 	char				*name;
 	char				*path;
+	size_t				num_active;
+	struct fsdevperf_job_ops	ops;
 	TAILQ_HEAD(, fsdevperf_task)	tasks;
 	TAILQ_ENTRY(fsdevperf_job)	tailq;
 };
@@ -217,6 +227,14 @@ fsdevperf_get_thread(void)
 }
 
 static void
+fsdevperf_job_set_status(struct fsdevperf_job *job, int status)
+{
+	if (job->status == 0) {
+		job->status = status;
+	}
+}
+
+static void
 fsdevperf_set_status(int status)
 {
 	if (g_app.status == 0) {
@@ -356,7 +374,7 @@ fsdevperf_job_free(struct fsdevperf_job *job)
 }
 
 static struct fsdevperf_job *
-fsdevperf_job_alloc(const char *name)
+fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops)
 {
 	struct fsdevperf_job *job;
 
@@ -374,6 +392,7 @@ fsdevperf_job_alloc(const char *name)
 	job->io_size = 4096;
 	job->io_depth = 1;
 	job->io_pattern = -1;
+	job->ops = *ops;
 
 	TAILQ_INIT(&job->tasks);
 
@@ -662,10 +681,11 @@ static void
 _fsdevperf_task_done(void *ctx)
 {
 	struct fsdevperf_task *task = ctx;
+	struct fsdevperf_job *job = task->job;
 
-	fsdevperf_set_status(task->status);
-	if (--g_app.num_active == 0) {
-		fsdevperf_done();
+	fsdevperf_job_set_status(job, task->status);
+	if (--job->num_active == 0) {
+		job->ops.job_done(job, job->status);
 	}
 }
 
@@ -882,21 +902,10 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 }
 
 static void
-fsdevperf_task_start(void *ctx)
+fsdevperf_task_lookup(struct fsdevperf_task *task)
 {
-	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_job *job = task->job;
 	int rc;
-
-	task->seed = rand();
-	task->ioch = spdk_fsdev_get_io_channel(job->fsdev_desc);
-	if (task->ioch == NULL) {
-		fsdevperf_errmsg("failed to get IO channel for %s on core %u\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
-				 spdk_env_get_current_core());
-		fsdevperf_task_done(task, -ENOMEM);
-		return;
-	}
 
 	rc = spdk_fsdev_lookup(job->fsdev_desc, task->ioch, 0, job->root, task->filename,
 			       fsdevperf_task_lookup_cb, task);
@@ -909,16 +918,52 @@ fsdevperf_task_start(void *ctx)
 }
 
 static void
-fsdevperf_start_tasks(void)
+fsdevperf_task_start(void *ctx)
 {
-	struct fsdevperf_job *job;
+	struct fsdevperf_task *task = ctx;
+	struct fsdevperf_job *job = task->job;
+
+	task->seed = rand();
+	task->ioch = spdk_fsdev_get_io_channel(job->fsdev_desc);
+	if (task->ioch == NULL) {
+		fsdevperf_errmsg("failed to get IO channel for %s on core %u\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(job->fsdev_desc)),
+				 spdk_env_get_current_core());
+		fsdevperf_task_done(task, -ENOMEM);
+		return;
+	}
+
+	job->ops.start_task(task);
+}
+
+static void
+fsdevperf_job_start(struct fsdevperf_job *job)
+{
 	struct fsdevperf_task *task;
 
+	TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+		spdk_thread_send_msg(task->thread->thread, fsdevperf_task_start, task);
+		job->num_active++;
+	}
+}
+
+static void
+fsdevperf_job_done(struct fsdevperf_job *job, int status)
+{
+	fsdevperf_set_status(status);
+	if (--g_app.num_active == 0) {
+		fsdevperf_done();
+	}
+}
+
+static void
+fsdevperf_start_jobs(void)
+{
+	struct fsdevperf_job *job;
+
 	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
-		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
-			spdk_thread_send_msg(task->thread->thread, fsdevperf_task_start, task);
-			g_app.num_active++;
-		}
+		fsdevperf_job_start(job);
+		g_app.num_active++;
 	}
 }
 
@@ -945,7 +990,7 @@ fsdevperf_job_mount_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	if (next != NULL) {
 		fsdevperf_job_mount(next);
 	} else {
-		fsdevperf_start_tasks();
+		fsdevperf_start_jobs();
 	}
 }
 
@@ -1122,6 +1167,11 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 	return 0;
 }
 
+static const struct fsdevperf_job_ops g_default_job_ops = {
+	.start_task = fsdevperf_task_lookup,
+	.job_done = fsdevperf_job_done,
+};
+
 static struct option g_options[] = {
 #define FSDEVPERF_OPT_PATH 'P'
 	{ "path", required_argument, NULL, FSDEVPERF_OPT_PATH },
@@ -1189,7 +1239,7 @@ fsdevperf_load_jobs(const char *filename)
 
 	for (section = spdk_conf_first_section(conf); section != NULL;
 	     section = spdk_conf_next_section(section)) {
-		job = fsdevperf_job_alloc(spdk_conf_section_get_name(section));
+		job = fsdevperf_job_alloc(spdk_conf_section_get_name(section), &g_default_job_ops);
 		if (job == NULL) {
 			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 			goto error;
@@ -1338,7 +1388,7 @@ main(int argc, char **argv)
 	g_app.name = argv[0];
 
 	/* For now, we only support one "main" job */
-	g_app.main_job = fsdevperf_job_alloc("main");
+	g_app.main_job = fsdevperf_job_alloc("main", &g_default_job_ops);
 	if (g_app.main_job == NULL) {
 		return EXIT_FAILURE;
 	}
