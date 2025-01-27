@@ -10,7 +10,7 @@ APP = hello_fsdev
 
 C_SRCS := hello_fsdev.c
 
-SPDK_LIB_LIST = $(ALL_MODULES_LIST) $(FSDEV_MODULES_LIST) event event_fsdev
+SPDK_LIB_LIST = $(ALL_MODULES_LIST) event event_fsdev
 SYS_LIBS += $(FSDEV_MODULES_PRIVATE_LIBS)
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
