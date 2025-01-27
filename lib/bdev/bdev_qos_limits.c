@@ -42,7 +42,7 @@ bdev_qos_limit_is_read_io(struct spdk_bdev_io *bdev_io)
 static uint64_t
 bdev_qos_limit_get_io_size_in_bytes(struct spdk_bdev_io *bdev_io)
 {
-	struct spdk_bdev *bdev = bdev_io->bdev;
+	uint32_t blocklen = bdev_io_get_block_size(bdev_io);
 
 	switch (bdev_io->type) {
 	case SPDK_BDEV_IO_TYPE_NVME_IO:
@@ -50,11 +50,11 @@ bdev_qos_limit_get_io_size_in_bytes(struct spdk_bdev_io *bdev_io)
 		return bdev_io->u.nvme_passthru.nbytes;
 	case SPDK_BDEV_IO_TYPE_READ:
 	case SPDK_BDEV_IO_TYPE_WRITE:
-		return bdev_io->u.bdev.num_blocks * bdev->blocklen;
+		return bdev_io->u.bdev.num_blocks * blocklen;
 	case SPDK_BDEV_IO_TYPE_ZCOPY:
 		/* Track the data in the start phase only */
 		if (bdev_io->u.bdev.zcopy.start) {
-			return bdev_io->u.bdev.num_blocks * bdev->blocklen;
+			return bdev_io->u.bdev.num_blocks * blocklen;
 		} else {
 			return 0;
 		}

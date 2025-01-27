@@ -33,4 +33,6 @@ typedef void (*bdev_reset_device_stat_cb)(struct spdk_bdev *bdev, void *cb_arg, 
 void bdev_reset_device_stat(struct spdk_bdev *bdev, enum spdk_bdev_reset_stat_mode mode,
 			    bdev_reset_device_stat_cb cb, void *cb_arg);
 
+uint32_t bdev_io_get_block_size(struct spdk_bdev_io *bdev_io);
+
 #endif /* SPDK_BDEV_INTERNAL_H */

@@ -1055,7 +1055,7 @@ bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
 	}
 }
 
-static inline uint32_t
+uint32_t
 bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev *bdev = bdev_io->bdev;
@@ -5715,9 +5715,7 @@ spdk_bdev_get_nvme_nsid(struct spdk_bdev *bdev)
 uint32_t
 spdk_bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
 {
-	struct spdk_bdev *bdev = desc->bdev;
-
-	return desc->opts.hide_metadata ? bdev->blocklen - bdev->md_len : bdev->blocklen;
+	return bdev_desc_get_block_size(desc);
 }
 
 uint32_t
