@@ -2902,8 +2902,7 @@ accel_sequence_merge_tasks(struct spdk_accel_sequence *seq, struct spdk_accel_ta
 		    next->op_code != SPDK_ACCEL_OPC_DECRYPT &&
 		    next->op_code != SPDK_ACCEL_OPC_COPY_CRC32C &&
 		    next->op_code != SPDK_ACCEL_OPC_DIF_GENERATE_COPY &&
-		    next->op_code != SPDK_ACCEL_OPC_DIF_VERIFY_COPY &&
-		    next->op_code != SPDK_ACCEL_OPC_COPY_CRC32C) {
+		    next->op_code != SPDK_ACCEL_OPC_DIF_VERIFY_COPY) {
 			break;
 		}
 		if (task->dst_domain != next->src_domain) {
