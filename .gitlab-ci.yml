@@ -61,6 +61,8 @@ build-job:
       - ./mk/config.mk
       - ./mk/cc.mk
       - ./include/spdk/config.h
+      - ./include/spdk/version.h
+      - ./python
 
 build-shared-debug-job:
   extends: .do_build
