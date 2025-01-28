@@ -133,25 +133,13 @@ struct accel_mlx5_iov_sgl {
 	uint32_t	iov_offset;
 };
 
-struct accel_mlx5_psv_wrapper {
-	uint32_t psv_index;
-	struct {
-		uint32_t error : 1;
-		uint32_t reserved : 31;
-	} bits;
-	/* mlx5 engine requires DMAable memory, use this member to copy user's crc value since we don't know which
-	 * memory it is in */
-	uint32_t crc;
-	uint32_t crc_lkey;
-};
-
 struct accel_mlx5_task {
 	struct spdk_accel_task base;
 	struct accel_mlx5_iov_sgl src;
 	struct accel_mlx5_iov_sgl dst;
 	STAILQ_ENTRY(accel_mlx5_task) link;
 	struct accel_mlx5_qp *qp;
-	struct accel_mlx5_psv_wrapper *psv;
+	struct spdk_mlx5_psv_pool_obj *psv;
 	union {
 		/* The struct is used for crypto */
 		struct {
@@ -4848,7 +4836,7 @@ accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, un
 {
 	struct spdk_rdma_utils_memory_translation translation = {};
 	struct accel_mlx5_psv_pool_iter_cb_args *args = cb_arg;
-	struct accel_mlx5_psv_wrapper *wrapper = _psv;
+	struct spdk_mlx5_psv_pool_obj *wrapper = _psv;
 	struct accel_mlx5_dev_ctx *dev_ctx = args->dev;
 	int rc;
 
@@ -4902,7 +4890,7 @@ accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 	}
 	cache_size = num_psvs * 3 / 4 / spdk_env_get_core_count();
 	dev_ctx->psv_pool = spdk_mempool_create_ctor(pool_name, num_psvs,
-			    sizeof(struct accel_mlx5_psv_wrapper),
+			    sizeof(struct spdk_mlx5_psv_pool_obj),
 			    cache_size, SPDK_ENV_SOCKET_ID_ANY,
 			    accel_mlx5_set_psv_in_pool, &args);
 	if (!dev_ctx->psv_pool) {

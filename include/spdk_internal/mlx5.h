@@ -147,6 +147,18 @@ struct spdk_mlx5_mkey_pool_obj {
 	} sig;
 };
 
+struct spdk_mlx5_psv_pool_obj {
+	uint32_t psv_index;
+	struct {
+		uint32_t error : 1;
+		uint32_t reserved : 31;
+	} bits;
+	/* mlx5 engine requires DMAable memory, use this member to copy user's crc value since we don't know which
+	 * memory it is in */
+	uint32_t crc;
+	uint32_t crc_lkey;
+};
+
 struct spdk_mlx5_umr_attr {
 	struct ibv_sge *sge;
 	uint32_t mkey; /* User Memory Region key to configure */
