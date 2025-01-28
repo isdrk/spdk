@@ -1044,7 +1044,8 @@ accel_mlx5_task_check_sigerr(struct accel_mlx5_task *task)
 	int rc;
 
 	assert(task->base.op_code == SPDK_ACCEL_OPC_CHECK_CRC32C ||
-	       task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C);
+	       task->base.op_code == SPDK_ACCEL_OPC_COPY_CHECK_CRC32C ||
+	       task->base.op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY);
 
 	rc = 0;
 	for (i = 0; i < task->num_ops; i++) {
@@ -4244,7 +4245,7 @@ accel_mlx5_poll_cq(struct accel_mlx5_dev *dev)
 	uint16_t completed;
 
 	dev->stats.polls++;
-	reaped = spdk_mlx5_cq_poll_completions(dev->cq, wc, NULL, ACCEL_MLX5_MAX_WC);
+	reaped = spdk_mlx5_cq_poll_completions(dev->cq, wc, err, ACCEL_MLX5_MAX_WC);
 	if (spdk_unlikely(reaped < 0)) {
 		SPDK_ERRLOG("Error polling CQ! (%d): %s\n", errno, spdk_strerror(errno));
 		return reaped;
