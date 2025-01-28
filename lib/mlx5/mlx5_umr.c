@@ -79,6 +79,13 @@ struct spdk_mlx5_mkey_pool {
 	TAILQ_ENTRY(spdk_mlx5_mkey_pool) link;
 };
 
+struct spdk_mlx5_psv_pool {
+	struct ibv_pd *pd;
+	struct spdk_mempool *mpool;
+	struct spdk_mlx5_psv **psvs;
+	uint32_t num_psvs;
+};
+
 static bool g_umr_implementer_registered;
 
 static int
@@ -561,6 +568,163 @@ spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey)
 	find.mkey = mkey;
 
 	return RB_FIND(mlx5_mkeys_tree, &pool->tree, &find);
+}
+
+struct mlx5_psv_pool_ctor_args {
+	struct spdk_mlx5_psv_pool *pool;
+	struct spdk_rdma_utils_mem_map *map;
+	int rc;
+};
+
+static void
+mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, unsigned i)
+{
+	struct mlx5_psv_pool_ctor_args *args = cb_arg;
+	struct spdk_mlx5_psv_pool *pool = args->pool;
+	struct spdk_mlx5_psv_pool_obj *psv = _psv;
+	struct spdk_rdma_utils_memory_translation translation = {};
+	int rc;
+
+	if (args->rc) {
+		return;
+	}
+
+	assert(i < pool->num_psvs);
+	assert(pool->psvs[i] != NULL);
+
+	memset(psv, 0, sizeof(*psv));
+	psv->psv_index = pool->psvs[i]->index;
+	psv->pool = pool;
+
+	rc = spdk_rdma_utils_get_translation(args->map, &psv->crc, sizeof(uint32_t), &translation);
+	if (rc) {
+		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", &psv->crc, sizeof(uint32_t));
+		args->rc = -EINVAL;
+	} else {
+		psv->crc_lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
+	}
+}
+
+void
+spdk_mlx5_psv_pool_destroy(struct spdk_mlx5_psv_pool *pool)
+{
+	uint32_t i, num_psvs_in_pool;
+
+	if (pool->psvs) {
+		for (i = 0; i < pool->num_psvs; i++) {
+			if (pool->psvs[i]) {
+				spdk_mlx5_destroy_psv(pool->psvs[i]);
+			}
+		}
+		free(pool->psvs);
+	}
+
+	if (pool->mpool) {
+		num_psvs_in_pool = spdk_mempool_count(pool->mpool);
+		if (num_psvs_in_pool != pool->num_psvs) {
+			SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n",
+				    pool->num_psvs, num_psvs_in_pool);
+		}
+		spdk_mempool_free(pool->mpool);
+	}
+
+	free(pool);
+}
+
+struct spdk_mlx5_psv_pool *
+spdk_mlx5_psv_pool_create(struct spdk_mlx5_psv_pool_param *params, struct ibv_pd *pd)
+{
+	struct mlx5_psv_pool_ctor_args args;
+	struct spdk_mlx5_psv_pool *pool;
+	char name[32];
+	uint32_t i;
+	int rc;
+
+	if (!pd) {
+		return NULL;
+	}
+
+	if (!params || !params->psv_count) {
+		return NULL;
+	}
+	if (params->cache_per_thread > params->psv_count || !params->cache_per_thread) {
+		params->cache_per_thread = params->psv_count * 3 / 4 / spdk_env_get_core_count();
+	}
+
+	pool = calloc(1, sizeof(*pool));
+	if (!pool) {
+		return NULL;
+	}
+
+	pool->num_psvs = params->psv_count;
+	pool->pd = pd;
+
+	pool->psvs = calloc(params->psv_count, sizeof(struct spdk_mlx5_psv *));
+	if (!pool->psvs) {
+		SPDK_ERRLOG("Failed to alloc PSVs array\n");
+		goto err;
+	}
+
+	for (i = 0; i < params->psv_count; i++) {
+		pool->psvs[i] = spdk_mlx5_create_psv(pd);
+		if (!pool->psvs[i]) {
+			SPDK_ERRLOG("Failed to create PSV on dev %s\n",
+				    pd->context->device->dev_name);
+			goto err;
+		}
+	}
+
+	rc = snprintf(name, sizeof(name), "psv_%s", pd->context->device->dev_name);
+	if (rc < 0) {
+		goto err;
+	}
+
+	args.rc = 0;
+	args.pool = pool;
+	args.map = params->map;
+
+	pool->mpool = spdk_mempool_create_ctor(name, params->psv_count,
+					       sizeof(struct spdk_mlx5_psv_pool_obj),
+					       params->cache_per_thread, SPDK_ENV_SOCKET_ID_ANY,
+					       mlx5_set_psv_in_pool, &args);
+	if (!pool->mpool) {
+		SPDK_ERRLOG("Failed to create PSV memory pool\n");
+		goto err;
+	}
+
+	if (args.rc) {
+		SPDK_ERRLOG("Failed to init PSV memory pool objects, rc %d\n", args.rc);
+		goto err;
+	}
+
+	return pool;
+
+err:
+	spdk_mlx5_psv_pool_destroy(pool);
+	return NULL;
+}
+
+struct spdk_mlx5_psv_pool_obj *
+spdk_mlx5_psv_pool_get(struct spdk_mlx5_psv_pool *pool)
+{
+	return spdk_mempool_get(pool->mpool);
+}
+
+void
+spdk_mlx5_psv_pool_put(struct spdk_mlx5_psv_pool_obj **ppsv)
+{
+	struct spdk_mlx5_psv_pool_obj *psv;
+
+	psv = *ppsv;
+	if (psv == NULL) {
+		return;
+	}
+
+	*ppsv = NULL;
+
+	assert(psv->pool != NULL);
+
+	spdk_mempool_put(psv->pool->mpool, psv);
 }
 
 static inline void

@@ -147,6 +147,14 @@ struct spdk_mlx5_mkey_pool_obj {
 	} sig;
 };
 
+struct spdk_mlx5_psv_pool;
+
+struct spdk_mlx5_psv_pool_param {
+	uint32_t psv_count;
+	uint32_t cache_per_thread;
+	struct spdk_rdma_utils_mem_map *map;
+};
+
 struct spdk_mlx5_psv_pool_obj {
 	uint32_t psv_index;
 	struct {
@@ -157,6 +165,7 @@ struct spdk_mlx5_psv_pool_obj {
 	 * memory it is in */
 	uint32_t crc;
 	uint32_t crc_lkey;
+	struct spdk_mlx5_psv_pool *pool;
 };
 
 struct spdk_mlx5_umr_attr {
@@ -832,6 +841,43 @@ void spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
  * \return Pointer to mkey object or NULL
  */
 struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey_id);
+
+/**
+ * Create a pool of PSVs for a given PD.
+ *
+ * Can be called several times for different PDs.
+ *
+ * \param params Parameter of the memory pool
+ * \param pd Protection Domain
+ * \return Pointer to the PSV pool on success or NULL on error
+ */
+struct spdk_mlx5_psv_pool *spdk_mlx5_psv_pool_create(struct spdk_mlx5_psv_pool_param *params,
+		struct ibv_pd *pd);
+
+/**
+ * Destroy a pool of PSVs which was created by \ref spdk_mlx5_psv_pool_create.
+ *
+ * \param pool Pointer to the PSV pool to destroy.
+ */
+void spdk_mlx5_psv_pool_destroy(struct spdk_mlx5_psv_pool *pool);
+
+/**
+ * Get a PSV from the pool.
+ *
+ * \param pool PSV pool
+ * \return Pointer to a PSV on success, NULL if the pool is empty
+ */
+struct spdk_mlx5_psv_pool_obj *spdk_mlx5_psv_pool_get(struct spdk_mlx5_psv_pool *pool);
+
+/**
+ * Return the PSV to the pool.
+ *
+ * This function will also write NULL to the PSV pointer pointed to by ppsv,
+ * to not reuse a PSV pointer after returned.
+ *
+ * \param ppsv PSV to return to the pool
+ */
+void spdk_mlx5_psv_pool_put(struct spdk_mlx5_psv_pool_obj **ppsv);
 
 /**
  * Notify the mlx5 library that a module which can handle UMR configuration is registered or unregistered
