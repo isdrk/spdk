@@ -1815,6 +1815,20 @@ spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type)
 	return (type < SPDK_COUNTOF(fsdev_io_type_names)) ? fsdev_io_type_names[type] : NULL;
 }
 
+int
+spdk_fsdev_io_type_from_name(const char *name)
+{
+	int i;
+
+	for (i = 0; i < (int)SPDK_COUNTOF(fsdev_io_type_names); i++) {
+		if (strcmp(fsdev_io_type_names[i], name) == 0) {
+			return i;
+		}
+	}
+
+	return -EINVAL;
+}
+
 const char *
 fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type)
 {

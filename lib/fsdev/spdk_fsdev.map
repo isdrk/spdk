@@ -72,6 +72,7 @@
 	spdk_fsdev_get_device_stat;
 	spdk_fsdev_reset_device_stat;
 	spdk_fsdev_io_type_get_name;
+	spdk_fsdev_io_type_from_name;
 	spdk_fsdev_enable_notifications;
 	spdk_fsdev_disable_notifications;
 	spdk_fsdev_dump_info_json;

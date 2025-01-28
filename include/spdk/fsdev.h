@@ -335,6 +335,15 @@ int spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn);
 const char *spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type);
 
 /**
+ * Return spdk_fsdev_io_type from its name.
+ *
+ * \param name name of the IO type.
+ *
+ * \return Corresponding spdk_fsdev_io_type or -EINVAL on failure.
+ */
+int spdk_fsdev_io_type_from_name(const char *name);
+
+/**
  * Get filesystem device name.
  *
  * \param fsdev filesystem device to query.
