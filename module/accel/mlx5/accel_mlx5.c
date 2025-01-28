@@ -59,10 +59,9 @@ struct accel_mlx5_dev_ctx {
 	struct ibv_context *context;
 	struct ibv_pd *pd;
 	struct spdk_memory_domain *domain;
-	struct spdk_mempool *psv_pool;
+	struct spdk_mlx5_psv_pool *psv_pool;
 	struct spdk_rdma_utils_mem_map *map;
 	TAILQ_ENTRY(accel_mlx5_dev_ctx) link;
-	struct spdk_mlx5_psv **psvs;
 	bool mkeys;
 	bool crypto_mkeys;
 	bool sig_mkeys;
@@ -263,12 +262,6 @@ struct accel_mlx5_task_operations {
 	void (*complete)(struct accel_mlx5_task *task);
 };
 
-struct accel_mlx5_psv_pool_iter_cb_args {
-	struct accel_mlx5_dev_ctx *dev;
-	struct spdk_rdma_utils_mem_map *map;
-	int rc;
-};
-
 struct accel_mlx5_dump_stats_ctx {
 	struct accel_mlx5_stats total;
 	struct spdk_json_write_ctx *w;
@@ -418,17 +411,17 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 		case ACCEL_MLX5_OPC_DIF_GENERATE_COPY:
 		case ACCEL_MLX5_OPC_DIF_VERIFY_COPY:
 			spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, task->mkeys, task->num_ops);
-			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
+			spdk_mlx5_psv_pool_put(&task->psv);
 			break;
 		case ACCEL_MLX5_OPC_DIF_GENERATE_COPY_MKEY:
 		case ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY:
 			spdk_mlx5_mkey_pool_put(dev->sig_mkeys, task->mkeys[0]);
-			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
+			spdk_mlx5_psv_pool_put(&task->psv);
 			break;
 		case ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C:
 		case ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT:
 			spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, task->mkeys, task->num_ops);
-			spdk_mempool_put(dev->dev_ctx->psv_pool, task->psv);
+			spdk_mlx5_psv_pool_put(&task->psv);
 			break;
 		case ACCEL_MLX5_OPC_MKEY:
 			spdk_mlx5_mkey_pool_put(dev->mkeys, task->mkeys[0]);
@@ -1247,7 +1240,7 @@ accel_mlx5_encrypt_crc_task_complete(struct accel_mlx5_task *mlx5_task)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
-	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, 0);
 }
 
@@ -1263,7 +1256,7 @@ accel_mlx5_crc_decrypt_task_complete(struct accel_mlx5_task *mlx5_task)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
-	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, sigerr);
 }
 
@@ -1732,7 +1725,7 @@ accel_mlx5_sig_task_complete(struct accel_mlx5_task *mlx5_task, int status)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
-	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, status);
 }
 
@@ -2246,7 +2239,7 @@ accel_mlx5_task_alloc_sig_ctx(struct accel_mlx5_task *task, struct spdk_mlx5_mke
 			      dev->dev_ctx->pd->context->device->name, rc);
 		return rc;
 	}
-	task->psv = spdk_mempool_get(dev->dev_ctx->psv_pool);
+	task->psv = spdk_mlx5_psv_pool_get(dev->dev_ctx->psv_pool);
 	if (spdk_unlikely(!task->psv)) {
 		SPDK_DEBUGLOG(accel_mlx5, "no reqs in psv pool, dev %s\n", dev->dev_ctx->pd->context->device->name);
 		spdk_mlx5_mkey_pool_put_bulk(pool, task->mkeys, task->num_ops);
@@ -3387,7 +3380,7 @@ accel_mlx5_task_alloc_dif_mkey_ctx(struct accel_mlx5_task *mlx5_task)
 
 	mlx5_task->num_ops = 1;
 
-	mlx5_task->psv = spdk_mempool_get(dev->dev_ctx->psv_pool);
+	mlx5_task->psv = spdk_mlx5_psv_pool_get(dev->dev_ctx->psv_pool);
 	if (spdk_unlikely(mlx5_task->psv == NULL)) {
 		spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
 		mlx5_task->num_ops = 0;
@@ -3538,7 +3531,7 @@ accel_mlx5_dif_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
-	spdk_mempool_put(dev->dev_ctx->psv_pool, mlx5_task->psv);
+	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 
 	spdk_accel_task_complete(&mlx5_task->base, sigerr);
 }
@@ -4717,35 +4710,6 @@ accel_mlx5_enable(struct accel_mlx5_attr *attr)
 }
 
 static void
-accel_mlx5_psvs_release(struct accel_mlx5_dev_ctx *dev_ctx)
-{
-	uint32_t i, num_psvs, num_psvs_in_pool;
-
-	if (!dev_ctx->psvs) {
-		return;
-	}
-
-	num_psvs = g_accel_mlx5.attr.num_requests;
-
-	for (i = 0; i < num_psvs; i++) {
-		if (dev_ctx->psvs[i]) {
-			spdk_mlx5_destroy_psv(dev_ctx->psvs[i]);
-			dev_ctx->psvs[i] = NULL;
-		}
-	}
-	free(dev_ctx->psvs);
-
-	if (!dev_ctx->psv_pool) {
-		return;
-	}
-	num_psvs_in_pool = spdk_mempool_count(dev_ctx->psv_pool);
-	if (num_psvs_in_pool != num_psvs) {
-		SPDK_ERRLOG("Expected %u reqs in the pool, but got only %u\n", num_psvs, num_psvs_in_pool);
-	}
-	spdk_mempool_free(dev_ctx->psv_pool);
-}
-
-static void
 accel_mlx5_free_resources(void)
 {
 	struct accel_mlx5_dev_ctx *dev_ctx;
@@ -4753,7 +4717,9 @@ accel_mlx5_free_resources(void)
 
 	for (i = 0; i < g_accel_mlx5.num_ctxs; i++) {
 		dev_ctx = &g_accel_mlx5.dev_ctxs[i];
-		accel_mlx5_psvs_release(dev_ctx);
+		if (dev_ctx->psv_pool) {
+			spdk_mlx5_psv_pool_destroy(dev_ctx->psv_pool);
+		}
 		spdk_rdma_utils_put_memory_domain(dev_ctx->domain);
 		if (dev_ctx->map) {
 			spdk_rdma_utils_free_mem_map(&dev_ctx->map);
@@ -4831,75 +4797,18 @@ accel_mlx5_mkeys_create(struct ibv_pd *pd, uint32_t num_mkeys, uint32_t flags)
 	return spdk_mlx5_mkey_pool_init(&pool_param, pd);
 }
 
-static void
-accel_mlx5_set_psv_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_psv, unsigned obj_idx)
-{
-	struct spdk_rdma_utils_memory_translation translation = {};
-	struct accel_mlx5_psv_pool_iter_cb_args *args = cb_arg;
-	struct spdk_mlx5_psv_pool_obj *wrapper = _psv;
-	struct accel_mlx5_dev_ctx *dev_ctx = args->dev;
-	int rc;
-
-	if (args->rc) {
-		return;
-	}
-	assert(obj_idx < g_accel_mlx5.attr.num_requests);
-	assert(dev_ctx->psvs[obj_idx] != NULL);
-	memset(wrapper, 0, sizeof(*wrapper));
-	wrapper->psv_index = dev_ctx->psvs[obj_idx]->index;
-
-	rc = spdk_rdma_utils_get_translation(args->map, &wrapper->crc, sizeof(uint32_t), &translation);
-	if (rc) {
-		SPDK_ERRLOG("Memory translation failed, addr %p, length %zu\n", &wrapper->crc, sizeof(uint32_t));
-		args->rc = -EINVAL;
-	} else {
-		wrapper->crc_lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
-	}
-}
-
 static int
 accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 {
-	struct accel_mlx5_psv_pool_iter_cb_args args = {
-		.dev = dev_ctx,
-		.map = dev_ctx->map
+	struct spdk_mlx5_psv_pool_param params = {
+		.psv_count = g_accel_mlx5.attr.num_requests,
+		.map = dev_ctx->map,
 	};
-	char pool_name[32];
-	uint32_t i;
-	uint32_t num_psvs = g_accel_mlx5.attr.num_requests;
-	uint32_t cache_size;
-	int rc;
 
-	dev_ctx->psvs = calloc(num_psvs, (sizeof(struct spdk_mlx5_psv *)));
-	if (!dev_ctx->psvs) {
-		SPDK_ERRLOG("Failed to alloc PSVs array\n");
-		return -ENOMEM;
-	}
-	for (i = 0; i < num_psvs; i++) {
-		dev_ctx->psvs[i] = spdk_mlx5_create_psv(dev_ctx->pd);
-		if (!dev_ctx->psvs[i]) {
-			SPDK_ERRLOG("Failed to create PSV on dev %s\n", dev_ctx->context->device->name);
-			return -EINVAL;
-		}
-	}
-
-	rc = snprintf(pool_name, sizeof(pool_name), "accel_psv_%s", dev_ctx->context->device->name);
-	if (rc < 0) {
-		assert(0);
-		return -EINVAL;
-	}
-	cache_size = num_psvs * 3 / 4 / spdk_env_get_core_count();
-	dev_ctx->psv_pool = spdk_mempool_create_ctor(pool_name, num_psvs,
-			    sizeof(struct spdk_mlx5_psv_pool_obj),
-			    cache_size, SPDK_ENV_SOCKET_ID_ANY,
-			    accel_mlx5_set_psv_in_pool, &args);
+	dev_ctx->psv_pool = spdk_mlx5_psv_pool_create(&params, dev_ctx->pd);
 	if (!dev_ctx->psv_pool) {
 		SPDK_ERRLOG("Failed to create PSV memory pool\n");
-		return -ENOMEM;
-	}
-	if (args.rc) {
-		SPDK_ERRLOG("Failed to init PSV memory pool objects, rc %d\n", args.rc);
-		return args.rc;
+		return -1;
 	}
 
 	return 0;
