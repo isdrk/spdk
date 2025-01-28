@@ -78,7 +78,6 @@ struct spdk_rmem_pool {
 		uint8_t *addr;
 		uint64_t size;
 	} mapped;
-	pthread_spinlock_t lock;
 	TAILQ_ENTRY(spdk_rmem_pool) link;
 	char name[MAX_RMEM_POOL_NAME_LEN + 1];
 	TAILQ_HEAD(, spdk_rmem_entry) active_entries;
@@ -531,7 +530,6 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 		rmem_pool_hdr(pool)->ext_num_entries = ext_num_entries;
 	}
 
-	pthread_spin_init(&pool->lock, PTHREAD_PROCESS_PRIVATE);
 	TAILQ_INSERT_HEAD(&g_pools, pool, link);
 	pthread_spin_unlock(&g_lock);
 
@@ -615,7 +613,6 @@ spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
 		TAILQ_REMOVE(&pool->free_entries, entry, link);
 		free(entry);
 	}
-	pthread_spin_destroy(&pool->lock);
 	munmap(pool->mapped.addr, pool->mapped.size);
 	unlinkat(g_backend_dir, pool->name, 0);
 	SPDK_DEBUGLOG(rmem, "%s: rmem pool destroyed\n", pool->name);
@@ -628,7 +625,6 @@ spdk_rmem_pool_get(struct spdk_rmem_pool *pool)
 {
 	struct spdk_rmem_entry *entry = NULL;
 
-	pthread_spin_lock(&pool->lock);
 	if (TAILQ_EMPTY(&pool->free_entries)) {
 		if (!rmem_pool_extend(pool, rmem_pool_hdr(pool)->num_entries,
 				      rmem_pool_hdr(pool)->ext_num_entries,
@@ -643,8 +639,6 @@ spdk_rmem_pool_get(struct spdk_rmem_pool *pool)
 	TAILQ_INSERT_TAIL(&pool->active_entries, entry, link);
 
 out:
-	pthread_spin_unlock(&pool->lock);
-
 	return entry;
 }
 
@@ -722,12 +716,10 @@ spdk_rmem_entry_release(struct spdk_rmem_entry *entry)
 	struct spdk_rmem_pool *pool = entry->pool;
 	struct rmem_entry_hdr *hdr;
 
-	pthread_spin_lock(&pool->lock);
 	hdr = rmem_pool_get_mapped_entry(pool, entry->idx);
 	rmem_entry_set_state(hdr, false, INVALID_MIRROR_IDX);
 	TAILQ_REMOVE(&pool->active_entries, entry, link);
 	TAILQ_INSERT_TAIL(&pool->free_entries, entry, link);
-	pthread_spin_unlock(&pool->lock);
 }
 
 uint32_t
