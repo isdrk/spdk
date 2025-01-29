@@ -130,8 +130,8 @@ endif
 DEPDIRS-env_dpdk_rpc := $(JSON_LIBS)
 
 # module/sock
-DEPDIRS-sock_posix := log sock util thread trace
-DEPDIRS-sock_uring := log sock util thread trace
+DEPDIRS-sock_posix := log sock util trace
+DEPDIRS-sock_uring := log sock util trace
 DEPDIRS-sock_xlio := log sock util xlio
 
 # module/scheduler
