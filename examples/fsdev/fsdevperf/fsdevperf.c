@@ -65,6 +65,9 @@ struct fsdevperf_task {
 	uint64_t				size;
 	uint32_t				num_outstanding;
 	unsigned int				seed;
+	size_t					io_size;
+	size_t					io_depth;
+	int					io_pattern;
 	bool					stop;
 	struct fsdevperf_stats			stats;
 	uint64_t				tsc_finish;
@@ -416,21 +419,24 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 	task->thread = thread;
 	task->file = file;
 	task->fs = file->fs;
-	task->requests = calloc(job->io_depth, sizeof(*task->requests));
+	task->io_size = job->io_size;
+	task->io_depth = job->io_depth;
+	task->io_pattern = job->io_pattern;
+	task->requests = calloc(task->io_depth, sizeof(*task->requests));
 	if (task->requests == NULL) {
 		goto error;
 	}
 
-	task->buf = spdk_zmalloc(job->io_depth * job->io_size, 4096, NULL,
+	task->buf = spdk_zmalloc(task->io_depth * task->io_size, 4096, NULL,
 				 SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
 	if (task->buf == NULL) {
 		goto error;
 	}
 
-	for (i = 0; i < job->io_depth; i++) {
+	for (i = 0; i < task->io_depth; i++) {
 		request = &task->requests[i];
-		request->iov.iov_base = (char *)task->buf + i * job->io_size;
-		request->iov.iov_len = job->io_size;
+		request->iov.iov_base = (char *)task->buf + i * task->io_size;
+		request->iov.iov_len = task->io_size;
 		request->task = task;
 		request->id = i;
 	}
@@ -1002,10 +1008,10 @@ fsdevperf_task_get_offset(struct fsdevperf_task *task)
 
 	if (job->random) {
 		offset = (((uint64_t)rand_r(&task->seed) * RAND_MAX + rand_r(&task->seed)) %
-			  (task->filesize / job->io_size)) * job->io_size;
+			  (task->filesize / task->io_size)) * task->io_size;
 	} else {
 		offset = task->offset;
-		task->offset += job->io_size;
+		task->offset += task->io_size;
 		if (task->offset >= task->filesize) {
 			task->offset = 0;
 		}
@@ -1056,15 +1062,15 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	int rc;
 
 	offset = fsdevperf_task_get_offset(task);
-	switch (job->io_pattern) {
+	switch (task->io_pattern) {
 	case SPDK_FSDEV_IO_READ:
 		rc = spdk_fsdev_read(fs->fsdev_desc, task->ioch, request->id, task->fobj,
-				     task->fh, job->io_size, offset, 0, &request->iov, 1, NULL,
+				     task->fh, task->io_size, offset, 0, &request->iov, 1, NULL,
 				     fsdevperf_request_complete_cb, request);
 		break;
 	case SPDK_FSDEV_IO_WRITE:
 		rc = spdk_fsdev_write(fs->fsdev_desc, task->ioch, request->id, task->fobj,
-				      task->fh, job->io_size, offset, 0, &request->iov, 1, NULL,
+				      task->fh, task->io_size, offset, 0, &request->iov, 1, NULL,
 				      fsdevperf_request_complete_cb, request);
 		break;
 	default:
@@ -1093,7 +1099,7 @@ fsdevperf_task_run(struct fsdevperf_task *task)
 	struct fsdevperf_file *file = task->file;
 	size_t i, min_size;
 
-	min_size = spdk_max(job->io_size * job->io_depth, job->filesize);
+	min_size = spdk_max(task->io_size * task->io_depth, job->filesize);
 	if (file->size < min_size) {
 		fsdevperf_errmsg("/%s/%s: %s (minimum size required: %zu)\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
@@ -1109,7 +1115,7 @@ fsdevperf_task_run(struct fsdevperf_task *task)
 	task->tsc_start = spdk_get_ticks();
 	task->tsc_finish = job->runtime != 0 ? task->tsc_start +
 			   (uint64_t)job->runtime * spdk_get_ticks_hz() : UINT64_MAX;
-	for (i = 0; i < job->io_depth; i++) {
+	for (i = 0; i < task->io_depth; i++) {
 		fsdevperf_request_submit(&task->requests[i]);
 	}
 }
