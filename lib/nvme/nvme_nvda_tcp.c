@@ -46,7 +46,8 @@ struct xlio_sock_packet {
 };
 
 struct xlio_sock_buf {
-	struct spdk_sock_buf sock_buf;
+	struct iovec iov;
+	struct xlio_sock_buf *next;
 	struct xlio_sock_packet *packet;
 };
 
@@ -177,7 +178,7 @@ struct nvme_tcp_req {
 	struct spdk_iobuf_entry			iobuf_entry;
 	struct iovec				iobuf_iov;
 	TAILQ_ENTRY(nvme_tcp_req)		link;
-	struct spdk_sock_buf			*sock_buf;
+	struct xlio_sock_buf			*sock_buf;
 	/* Used to hold a value received from subsequent R2T while we are still
 	 * waiting for H2C ack */
 	uint32_t				r2tl_remain_next;
@@ -1174,7 +1175,7 @@ xlio_sock_group_impl_close(struct nvme_tcp_poll_group *group)
 }
 
 static ssize_t
-xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct spdk_sock_buf **sock_buf)
+xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct xlio_sock_buf **sock_buf)
 {
 	struct nvme_tcp_poll_group *group = tqpair->group;
 	struct xlio_sock_buf *prev_buf = NULL;
@@ -1231,15 +1232,15 @@ xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct spdk_sock
 			break;
 		}
 
-		buf->sock_buf.iov.iov_base = data;
-		buf->sock_buf.iov.iov_len = chunk_len;
-		buf->sock_buf.next = NULL;
+		buf->iov.iov_base = data;
+		buf->iov.iov_len = chunk_len;
+		buf->next = NULL;
 		buf->packet = packet;
 		packet->refs++;
 		if (prev_buf) {
-			prev_buf->sock_buf.next = &buf->sock_buf;
+			prev_buf->next = buf;
 		} else {
-			*sock_buf = &buf->sock_buf;
+			*sock_buf = buf;
 		}
 
 		packets_advance(tqpair, chunk_len);
@@ -1247,7 +1248,7 @@ xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct spdk_sock
 		ret += chunk_len;
 		prev_buf = buf;
 		SPDK_DEBUGLOG(nvme_xlio, "tqpair %p: add buffer %p, len %lu, total_len %d\n",
-			      tqpair, buf, buf->sock_buf.iov.iov_len, ret);
+			      tqpair, buf, buf->iov.iov_len, ret);
 	}
 
 	SPDK_DEBUGLOG(nvme_xlio, "tqpair %p: recv_zcopy ret %d\n", tqpair, ret);
@@ -1257,19 +1258,16 @@ xlio_sock_recv_zcopy(struct nvme_tcp_qpair *tqpair, size_t len, struct spdk_sock
 #define BUFS_BULK_SIZE 32
 
 static int
-xlio_sock_free_bufs(struct nvme_tcp_qpair *tqpair, struct spdk_sock_buf *sock_buf)
+xlio_sock_free_bufs(struct nvme_tcp_qpair *tqpair, struct xlio_sock_buf *sock_buf)
 {
 	void *bufs_bulk[BUFS_BULK_SIZE];
 	uint32_t bufs_count = 0;
 
 	while (sock_buf) {
-		struct xlio_sock_buf *buf = SPDK_CONTAINEROF(sock_buf,
-					    struct xlio_sock_buf,
-					    sock_buf);
-		struct xlio_sock_packet *packet = buf->packet;
-		struct spdk_sock_buf *next = buf->sock_buf.next;
+		struct xlio_sock_packet *packet = sock_buf->packet;
+		struct xlio_sock_buf *next = sock_buf->next;
 
-		bufs_bulk[bufs_count++] = (void *)buf;
+		bufs_bulk[bufs_count++] = (void *)sock_buf;
 		if (bufs_count == BUFS_BULK_SIZE) {
 			spdk_mempool_put_bulk(g_xlio_nvme_buffers_pool, bufs_bulk, bufs_count);
 			bufs_count = 0;
@@ -1726,7 +1724,7 @@ static uint32_t
 nvme_tcp_pdu_calc_data_digest_with_sock_buf(struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
-	struct spdk_sock_buf *sock_buf = tcp_req->sock_buf;
+	struct xlio_sock_buf *sock_buf = tcp_req->sock_buf;
 	uint32_t crc32c = SPDK_CRC32C_XOR;
 	uint32_t mod;
 
@@ -2606,7 +2604,7 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 
 	if (xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
 		struct spdk_nvme_poll_group *group = tqpair->qpair.poll_group->group;
-		struct spdk_sock_buf *sock_buf;
+		struct xlio_sock_buf *sock_buf;
 
 		assert(group != 0);
 
@@ -3108,7 +3106,7 @@ nvme_tcp_prepare_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_t
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
 	struct nvme_request *req;
-	struct spdk_sock_buf *sock_buf;
+	struct xlio_sock_buf *sock_buf;
 	int rc;
 
 	req = &tcp_req->req;
@@ -3961,7 +3959,7 @@ static int
 nvme_tcp_read_payload_data_zcopy(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
-	struct spdk_sock_buf *sock_buf;
+	struct xlio_sock_buf *sock_buf;
 	int ret = 0;
 
 	if (pdu->data_len > pdu->rw_offset) {
@@ -3975,7 +3973,7 @@ nvme_tcp_read_payload_data_zcopy(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 
 		SPDK_DEBUGLOG(nvme, "tqpair %p, pdu %p: requested %zu, got %d bytes\n", tqpair, pdu, len, ret);
 		if (tcp_req->sock_buf) {
-			struct spdk_sock_buf *cur_buf = tcp_req->sock_buf;
+			struct xlio_sock_buf *cur_buf = tcp_req->sock_buf;
 
 			while (cur_buf->next) {
 				cur_buf = cur_buf->next;
@@ -4081,7 +4079,7 @@ nvme_tcp_read_payload_data_memory_domain(struct nvme_tcp_qpair *tqpair,
 		struct nvme_tcp_pdu *recv_pdu)
 {
 	struct nvme_tcp_req *tcp_req = recv_pdu->req;
-	struct spdk_sock_buf *sock_buf;
+	struct xlio_sock_buf *sock_buf;
 	int ret = 0;
 
 	if (recv_pdu->data_len > recv_pdu->rw_offset) {
@@ -4094,7 +4092,7 @@ nvme_tcp_read_payload_data_memory_domain(struct nvme_tcp_qpair *tqpair,
 		SPDK_DEBUGLOG(nvme, "tqpair %p, pdu %p: requested %zu, got %d bytes\n", tqpair, recv_pdu, len, ret);
 
 		if (tcp_req->sock_buf) {
-			struct spdk_sock_buf *cur_buf = tcp_req->sock_buf;
+			struct xlio_sock_buf *cur_buf = tcp_req->sock_buf;
 
 			while (cur_buf->next) {
 				cur_buf = cur_buf->next;
