@@ -823,6 +823,42 @@ fsdevperf_task_forget_cb(void *ctx, struct spdk_io_channel *ch, int status)
 	fsdevperf_task_done(task, task->status);
 }
 
+static int
+fsdevperf_task_cleanup(struct fsdevperf_task *task)
+{
+	struct fsdevperf_filesystem *fs = task->fs;
+	struct fsdevperf_file *file = task->file;
+	int rc;
+
+	if (task->fh != NULL) {
+		rc = spdk_fsdev_release(fs->fsdev_desc, task->ioch, 0, task->fobj, task->fh,
+					fsdevperf_task_release_cb, task);
+		if (rc == 0) {
+			return -EINPROGRESS;
+		}
+
+		fsdevperf_errmsg("failed to release /%s/%s: %s\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
+				 file->name, spdk_strerror(-rc));
+		task->fh = NULL;
+	}
+
+	if (task->fobj != NULL) {
+		rc = spdk_fsdev_forget(fs->fsdev_desc, task->ioch, 0, task->fobj, 1,
+				       fsdevperf_task_forget_cb, task);
+		if (rc == 0) {
+			return -EINPROGRESS;
+		}
+
+		fsdevperf_errmsg("failed to forget /%s/%s: %s\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
+				 file->name, spdk_strerror(-rc));
+		task->fobj = NULL;
+	}
+
+	return 0;
+}
+
 static void
 _fsdevperf_task_done(void *ctx)
 {
@@ -838,8 +874,6 @@ _fsdevperf_task_done(void *ctx)
 static void
 fsdevperf_task_done(struct fsdevperf_task *task, int status)
 {
-	struct fsdevperf_filesystem *fs = task->fs;
-	struct fsdevperf_file *file = task->file;
 	int rc;
 
 	task->status = status;
@@ -847,30 +881,9 @@ fsdevperf_task_done(struct fsdevperf_task *task, int status)
 		return;
 	}
 
-	if (task->fh != NULL) {
-		rc = spdk_fsdev_release(fs->fsdev_desc, task->ioch, 0, task->fobj, task->fh,
-					fsdevperf_task_release_cb, task);
-		if (rc == 0) {
-			return;
-		}
-
-		fsdevperf_errmsg("failed to release /%s/%s: %s\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 file->name, spdk_strerror(-rc));
-		task->fh = NULL;
-	}
-
-	if (task->fobj != NULL) {
-		rc = spdk_fsdev_forget(fs->fsdev_desc, task->ioch, 0, task->fobj, 1,
-				       fsdevperf_task_forget_cb, task);
-		if (rc == 0) {
-			return;
-		}
-
-		fsdevperf_errmsg("failed to forget /%s/%s: %s\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 file->name, spdk_strerror(-rc));
-		task->fobj = NULL;
+	rc = fsdevperf_task_cleanup(task);
+	if (rc == -EINPROGRESS) {
+		return;
 	}
 
 	task->tsc_finish = spdk_get_ticks();
