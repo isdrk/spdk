@@ -719,7 +719,7 @@ fsdevperf_thread_exit(void *ctx)
 	spdk_thread_exit(spdk_get_thread());
 }
 
-static void fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs);
+static int fsdevperf_cleanup(void);
 
 static void
 fsdevperf_done(void)
@@ -729,12 +729,9 @@ fsdevperf_done(void)
 	struct fsdevperf_filesystem *fs;
 	struct fsdevperf_file *file;
 
-	/* Make sure all fsdevs are umounted */
-	TAILQ_FOREACH(fs, &g_app.filesystems, tailq) {
-		if (fs->root != NULL) {
-			fsdevperf_filesystem_umount(fs);
-			return;
-		}
+	/* Make sure we clean up after ourselves */
+	if (fsdevperf_cleanup() == -EINPROGRESS) {
+		return;
 	}
 
 	fsdevperf_dump_stats();
@@ -775,7 +772,7 @@ fsdevperf_filesystem_umount_cb(void *ctx, struct spdk_io_channel *ioch)
 	fsdevperf_done();
 }
 
-static void
+static int
 fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
 {
 	int rc;
@@ -785,8 +782,9 @@ fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
 		fsdevperf_errmsg("failed to umount %s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
 				 spdk_strerror(-rc));
-		fsdevperf_filesystem_umount_cb(fs, fs->ioch);
 	}
+
+	return rc;
 }
 
 static void fsdevperf_task_done(struct fsdevperf_task *task, int status);
@@ -854,6 +852,26 @@ fsdevperf_task_cleanup(struct fsdevperf_task *task)
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
 				 file->name, spdk_strerror(-rc));
 		task->fobj = NULL;
+	}
+
+	return 0;
+}
+
+static int
+fsdevperf_cleanup(void)
+{
+	struct fsdevperf_filesystem *fs;
+	int rc;
+
+	TAILQ_FOREACH(fs, &g_app.filesystems, tailq) {
+		if (fs->root != NULL) {
+			rc = fsdevperf_filesystem_umount(fs);
+			if (rc == 0) {
+				rc = -EINPROGRESS;
+			}
+
+			return rc;
+		}
 	}
 
 	return 0;
