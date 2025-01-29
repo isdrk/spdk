@@ -7,37 +7,24 @@
 #include "spdk/stdinc.h"
 #include "spdk/env.h"
 
-#include <sys/epoll.h>
-#include <linux/errqueue.h>
-
-#include <infiniband/verbs.h>
-
-#include "spdk/log.h"
-#include "spdk/pipe.h"
-#include "spdk/sock.h"
-#include "spdk/util.h"
-#include "spdk/string.h"
-#include "spdk_internal/sock.h"
-#include "spdk_internal/event.h"
-
 #include "nvme_internal.h"
 
-#include "spdk/endian.h"
+#include "spdk/log.h"
+#include "spdk/string.h"
 #include "spdk/likely.h"
 #include "spdk/crc32.h"
 #include "spdk/assert.h"
 #include "spdk/thread.h"
 #include "spdk/trace.h"
 #include "spdk/bit_pool.h"
-#include "spdk/dma.h"
-#include "spdk/util.h"
+#include "spdk/accel_module.h"
 
 #include "spdk_internal/nvme_nvda_tcp.h"
 #include "spdk_internal/trace_defs.h"
 #include "spdk_internal/rdma_provider.h"
 #include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/xlio.h"
-#include "spdk/accel_module.h"
+#include "spdk_internal/sock.h"
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32
