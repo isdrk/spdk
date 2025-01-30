@@ -178,18 +178,11 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 		return -EINVAL;
 	}
 
-	/* For now, we require the user to specify a path to a filename */
-	path = strstr(path + 1, "/");
-	if (path == NULL || strlen(path + 1) == 0) {
-		fsdevperf_errmsg("%s: invalid path: '%s', path must point to a file in "
-				 "fsdev's root\n", job->name, job->path);
-		return -EINVAL;
-	}
-
 	/* We don't support files inside subdirectories */
-	if (strstr(path + 1, "/") != NULL) {
-		fsdevperf_errmsg("%s: invalid path: '%s', path must point to a file in "
-				 "fsdev's root, not to a subdirectory\n", job->name, job->path);
+	path = strstr(path + 1, "/");
+	if (path != NULL && strstr(path + 1, "/") != NULL) {
+		fsdevperf_errmsg("%s: invalid path: '%s', path must point to fsdev's root or a file "
+				 "in fsdev's root, not a subdirectory\n", job->name, job->path);
 		return -EINVAL;
 	}
 
@@ -565,8 +558,9 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 {
 	struct fsdevperf_thread *thread;
 	struct fsdevperf_task *task;
-	struct fsdevperf_file *file;
-	char fsname[PATH_MAX];
+	struct fsdevperf_file *file = NULL;
+	char fsname[PATH_MAX], namebuf[PATH_MAX];
+	const char *filename;
 	int rc;
 
 	rc = fsdevperf_get_fsdev_name(job->path, fsname, sizeof(fsname));
@@ -575,13 +569,32 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 		return rc;
 	}
 
-	file = fsdevperf_file_get(fsname, fsdevperf_get_filename(job->path), job->filesize);
-	if (file == NULL) {
-		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
-		return -ENOMEM;
+	filename = fsdevperf_get_filename(job->path);
+	if (filename != NULL) {
+		file = fsdevperf_file_get(fsname, filename, job->filesize);
+		if (file == NULL) {
+			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+			return -ENOMEM;
+		}
 	}
 
 	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
+		/* If the user didn't specify a filename, we need to generate a file for each core */
+		if (filename == NULL) {
+			rc = snprintf(namebuf, sizeof(namebuf), "%s.%02u", job->name, thread->core);
+			if (rc < 0 || rc >= (int)sizeof(namebuf)) {
+				fsdevperf_errmsg("%s: /%s: %s\n", job->name, fsname,
+						 spdk_strerror(ENAMETOOLONG));
+				return -ENAMETOOLONG;
+			}
+
+			file = fsdevperf_file_get(fsname, namebuf, job->filesize);
+			if (file == NULL) {
+				fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+				return -ENOMEM;
+			}
+		}
+
 		task = fsdevperf_task_alloc(job, file, thread);
 		if (task == NULL) {
 			return -ENOMEM;
@@ -1765,7 +1778,9 @@ fsdevperf_parse_arg(int ch, char *arg)
 static void
 fsdevperf_usage(void)
 {
-	printf(" -P, --path=<path>                    path to a file in the form of /<fsdev>/<file>\n");
+	printf(" -P, --path=<path>                    path to a file in the form of /<fsdev>[/<file>]\n");
+	printf("                                      If <file> is omitted, fsdevperf will create a file\n");
+	printf("                                      on each thread\n");
 	printf(" -o, --iosize=<iosize>                I/O size\n");
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
