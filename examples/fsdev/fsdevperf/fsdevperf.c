@@ -99,6 +99,7 @@ struct fsdevperf_job {
 	size_t				io_depth;
 	size_t				filesize;
 	size_t				size;
+	size_t				num_files;
 	uint32_t			runtime;
 	uint32_t			flags;
 	char				*name;
@@ -552,6 +553,7 @@ fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops, uint3
 	job->io_depth = 1;
 	job->io_pattern = -1;
 	job->flags = flags;
+	job->num_files = 1;
 	job->ops = *ops;
 
 	TAILQ_INIT(&job->tasks);
@@ -581,6 +583,7 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 	struct fsdevperf_file *file = NULL;
 	char fsname[PATH_MAX], namebuf[PATH_MAX];
 	const char *filename;
+	size_t i;
 	int rc;
 
 	rc = fsdevperf_get_fsdev_name(job->path, fsname, sizeof(fsname));
@@ -599,29 +602,33 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 	}
 
 	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
-		/* If the user didn't specify a filename, we need to generate a file for each core */
-		if (filename == NULL) {
-			rc = snprintf(namebuf, sizeof(namebuf), "%s.%02u", job->name, thread->core);
-			if (rc < 0 || rc >= (int)sizeof(namebuf)) {
-				fsdevperf_errmsg("%s: /%s: %s\n", job->name, fsname,
-						 spdk_strerror(ENAMETOOLONG));
-				return -ENAMETOOLONG;
+		for (i = 0; i < job->num_files; i++) {
+			/* If the user didn't specify a filename, we need to generate a file
+			 * for each core */
+			if (filename == NULL) {
+				rc = snprintf(namebuf, sizeof(namebuf), "%s.%02u.%0*zu", job->name,
+					      thread->core, (int)log10(job->num_files) + 1, i);
+				if (rc < 0 || rc >= (int)sizeof(namebuf)) {
+					fsdevperf_errmsg("%s: /%s: %s\n", job->name, fsname,
+							 spdk_strerror(ENAMETOOLONG));
+					return -ENAMETOOLONG;
+				}
+
+				file = fsdevperf_file_get(fsname, namebuf, job->filesize);
+				if (file == NULL) {
+					fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+					return -ENOMEM;
+				}
 			}
 
-			file = fsdevperf_file_get(fsname, namebuf, job->filesize);
-			if (file == NULL) {
-				fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+			task = fsdevperf_task_alloc(job, file, thread);
+			if (task == NULL) {
 				return -ENOMEM;
 			}
-		}
 
-		task = fsdevperf_task_alloc(job, file, thread);
-		if (task == NULL) {
-			return -ENOMEM;
+			TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
+			TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
 		}
-
-		TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
-		TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
 	}
 
 	return 0;
@@ -663,9 +670,9 @@ fsdevperf_dump_stats(void)
 		job_mbps = 0;
 		num_tasks = 0;
 
-		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu):\n",
+		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu, nrfiles=%zu):\n",
 		       job->name, fsdevperf_job_get_io_pattern_name(job), job->io_size,
-		       job->io_depth);
+		       job->io_depth, job->num_files);
 		printf("  %30s %4s %10s %10s %10s\n", "filename", "core", "runtime", "IOPS", "MiB/s");
 		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 			fs = task->fs;
@@ -1603,6 +1610,11 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 		fsdevperf_errmsg("%s: missing argument: pattern\n", job->name);
 		return -EINVAL;
 	}
+	if (job->num_files > 1 && fsdevperf_get_filename(job->path) != NULL) {
+		fsdevperf_errmsg("%s: nrfiles argument can only be used with path set to fsdev's"
+				 "root\n", job->name);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -1631,6 +1643,8 @@ static struct option g_options[] = {
 	{ "filesize", required_argument, NULL, FSDEVPERF_OPT_FILESIZE },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
+#define FSDEVPERF_OPT_NRFILES 0x1001
+	{ "nrfiles", required_argument, NULL, FSDEVPERF_OPT_NRFILES },
 	{},
 };
 
@@ -1765,6 +1779,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_SIZE:
 	case FSDEVPERF_OPT_RUNTIME:
 	case FSDEVPERF_OPT_FILESIZE:
+	case FSDEVPERF_OPT_NRFILES:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
 			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
 					 job->name, fsdevperf_get_option_name(ch), arg);
@@ -1788,6 +1803,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			break;
 		case FSDEVPERF_OPT_FILESIZE:
 			job->filesize = (uint64_t)u64;
+			break;
+		case FSDEVPERF_OPT_NRFILES:
+			job->num_files = (size_t)u64;
 			break;
 		}
 		break;
@@ -1819,6 +1837,7 @@ fsdevperf_usage(void)
 	printf(" -z, --wait-for-start                 don't start the test immediately, wait for the perform_tests\n");
 	printf("                                      RPC (see examples/fsdev/fsdevperf/fsdevperf.py)\n");
 	printf(" -f, --filesize=<filesize>            maximum size of each file\n");
+	printf("     --nrfiles=<nrfiles>              number of files to send I/O to on each core\n");
 }
 
 int
