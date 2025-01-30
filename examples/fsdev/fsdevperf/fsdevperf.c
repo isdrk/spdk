@@ -115,6 +115,7 @@ struct fsdevperf_app {
 	struct fsdevperf_stats			stats;
 	struct spdk_poller			*poller;
 	uint64_t				tsc_start;
+	mode_t					umask;
 	TAILQ_HEAD(, fsdevperf_job)		jobs;
 	TAILQ_HEAD(, fsdevperf_thread)		threads;
 	TAILQ_HEAD(, fsdevperf_file)		files;
@@ -455,7 +456,7 @@ fsdevperf_file_free(struct fsdevperf_file *file)
 }
 
 static struct fsdevperf_file *
-fsdevperf_file_alloc(const char *fsname, const char *filename)
+fsdevperf_file_alloc(const char *fsname, const char *filename, size_t size)
 {
 	struct fsdevperf_file *file;
 	struct fsdevperf_filesystem *fs;
@@ -478,6 +479,7 @@ fsdevperf_file_alloc(const char *fsname, const char *filename)
 	}
 
 	file->fs = fs;
+	file->size = size;
 	file->name = strdup(filename);
 	if (file->name == NULL) {
 		fsdevperf_file_free(file);
@@ -488,17 +490,19 @@ fsdevperf_file_alloc(const char *fsname, const char *filename)
 }
 
 static struct fsdevperf_file *
-fsdevperf_file_get(const char *fsname, const char *filename)
+fsdevperf_file_get(const char *fsname, const char *filename, size_t size)
 {
 	struct fsdevperf_file *file;
 
 	TAILQ_FOREACH(file, &g_app.files, tailq) {
 		if (strcmp(filename, file->name) == 0) {
+			/* Make sure the file is large enough for all jobs */
+			file->size = spdk_max(file->size, size);
 			return file;
 		}
 	}
 
-	file = fsdevperf_file_alloc(fsname, filename);
+	file = fsdevperf_file_alloc(fsname, filename, size);
 	if (file == NULL) {
 		return NULL;
 	}
@@ -571,7 +575,7 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 		return rc;
 	}
 
-	file = fsdevperf_file_get(fsname, fsdevperf_get_filename(job->path));
+	file = fsdevperf_file_get(fsname, fsdevperf_get_filename(job->path), job->filesize);
 	if (file == NULL) {
 		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 		return -ENOMEM;
@@ -1121,6 +1125,22 @@ fsdevperf_task_run(struct fsdevperf_task *task)
 }
 
 static void
+fsdevperf_task_setup_file(struct fsdevperf_task *task)
+{
+	struct fsdevperf_file *file = task->file;
+
+	/* If the file is already large enough we're done, otherwise we'll need to extend it */
+	if (file->size >= task->size) {
+		fsdevperf_task_done(task, 0);
+		return;
+	}
+
+	task->io_size = spdk_min(task->io_size, task->size);
+	file->size = task->size;
+	fsdevperf_task_run(task);
+}
+
+static void
 fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 		       struct spdk_fsdev_file_handle *fh)
 {
@@ -1137,7 +1157,31 @@ fsdevperf_task_open_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	}
 
 	file->fh = task->fh = fh;
-	fsdevperf_task_done(task, 0);
+	fsdevperf_task_setup_file(task);
+}
+
+static void
+fsdevperf_task_create_cb(void *ctx, struct spdk_io_channel *ioch, int status,
+			 struct spdk_fsdev_file_object *fobj,
+			 const struct spdk_fsdev_file_attr *attr,
+			 struct spdk_fsdev_file_handle *fh)
+{
+	struct fsdevperf_task *task = ctx;
+	struct fsdevperf_filesystem *fs = task->fs;
+	struct fsdevperf_file *file = task->file;
+
+	if (status != 0) {
+		fsdevperf_errmsg("create /%s/%s failed: %s\n",
+				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
+				 file->name, spdk_strerror(-status));
+		fsdevperf_task_done(task, status);
+		return;
+	}
+
+	file->size = attr->size;
+	file->fobj = task->fobj = fobj;
+	file->fh = task->fh = fh;
+	fsdevperf_task_setup_file(task);
 }
 
 static void
@@ -1148,12 +1192,33 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_file *file = task->file;
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(fs->fsdev_desc);
 	int rc;
 
 	if (status != 0) {
+		if (status == -ENOENT) {
+			/* We're only going to create the file if the user specified its size */
+			if (task->size == 0) {
+				fsdevperf_errmsg("%s: /%s/%s doesn't exist and filesize wasn't "
+						 "specified\n", task->job->name,
+						 spdk_fsdev_get_name(fsdev), file->name);
+				fsdevperf_task_done(task, -EINVAL);
+				return;
+			}
+			rc = spdk_fsdev_create(fs->fsdev_desc, task->ioch, 0, fs->root,
+					       file->name, 0644, O_RDWR, g_app.umask, geteuid(),
+					       getegid(), fsdevperf_task_create_cb, task);
+			if (rc != 0) {
+				fsdevperf_errmsg("failed to create /%s/%s: %s\n",
+						 spdk_fsdev_get_name(fsdev), file->name,
+						 spdk_strerror(-rc));
+				fsdevperf_task_done(task, rc);
+			}
+
+			return;
+		}
 		fsdevperf_errmsg("lookup /%s/%s failed: %s\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 file->name, spdk_strerror(-status));
+				 spdk_fsdev_get_name(fsdev), file->name, spdk_strerror(-status));
 		fsdevperf_task_done(task, status);
 		return;
 	}
@@ -1164,8 +1229,7 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 			      fsdevperf_task_open_cb, task);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to open /%s/%s: %s\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 file->name, spdk_strerror(-rc));
+				 spdk_fsdev_get_name(fsdev), file->name, spdk_strerror(-rc));
 		fsdevperf_task_done(task, rc);
 	}
 }
@@ -1273,6 +1337,9 @@ fsdevperf_setup_files(void)
 		goto error;
 	}
 
+	job->io_pattern = SPDK_FSDEV_IO_WRITE;
+	job->io_depth = 1;
+	job->io_size = 1024 * 1024;
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
 
 	thread = TAILQ_FIRST(&g_app.threads);
@@ -1284,6 +1351,7 @@ fsdevperf_setup_files(void)
 			goto error;
 		}
 
+		task->size = task->filesize = file->size;
 		TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
 		TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
 		thread = TAILQ_NEXT(thread, tailq) ? TAILQ_NEXT(thread, tailq) :
@@ -1717,6 +1785,8 @@ main(int argc, char **argv)
 
 	srand(getpid());
 	g_app.name = argv[0];
+	g_app.umask = umask(0);
+	umask(g_app.umask);
 
 	/* For now, we only support one "main" job */
 	g_app.main_job = fsdevperf_job_alloc("main", &g_default_job_ops);
