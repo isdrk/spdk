@@ -89,6 +89,8 @@ struct fsdevperf_job_ops {
 	void (*job_done)(struct fsdevperf_job *job, int status);
 };
 
+#define FSDEVPERF_JOB_RANDOM (1 << 0)
+
 struct fsdevperf_job {
 	int				io_pattern;
 	int				status;
@@ -97,7 +99,7 @@ struct fsdevperf_job {
 	size_t				filesize;
 	size_t				size;
 	uint32_t			runtime;
-	bool				random;
+	uint32_t			flags;
 	char				*name;
 	char				*path;
 	size_t				num_active;
@@ -189,6 +191,12 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 	return 0;
 }
 
+static bool
+fsdevperf_job_is_random(struct fsdevperf_job *job)
+{
+	return job->flags & FSDEVPERF_JOB_RANDOM;
+}
+
 static const char *
 fsdevperf_get_filename(const char *path)
 {
@@ -231,7 +239,7 @@ fsdevperf_job_get_io_pattern_name(struct fsdevperf_job *job)
 
 	for (i = 0; i < SPDK_COUNTOF(g_aux_io_types); i++) {
 		if (g_aux_io_types[i].value == job->io_pattern &&
-		    g_aux_io_types[i].random == job->random) {
+		    g_aux_io_types[i].random == fsdevperf_job_is_random(job)) {
 			return g_aux_io_types[i].name;
 		}
 	}
@@ -1023,7 +1031,7 @@ fsdevperf_task_get_offset(struct fsdevperf_task *task)
 	struct fsdevperf_job *job = task->job;
 	uint64_t offset;
 
-	if (job->random) {
+	if (fsdevperf_job_is_random(job)) {
 		offset = (((uint64_t)rand_r(&task->seed) * RAND_MAX + rand_r(&task->seed)) %
 			  (task->filesize / task->io_size)) * task->io_size;
 	} else {
@@ -1721,7 +1729,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			return -EINVAL;
 		}
 		job->io_pattern = ival;
-		job->random = random;
+		job->flags |= FSDEVPERF_JOB_RANDOM;
 		break;
 	case FSDEVPERF_OPT_JOBS:
 		if (fsdevperf_load_jobs(arg)) {
