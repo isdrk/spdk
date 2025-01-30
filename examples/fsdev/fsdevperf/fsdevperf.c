@@ -89,7 +89,8 @@ struct fsdevperf_job_ops {
 	void (*job_done)(struct fsdevperf_job *job, int status);
 };
 
-#define FSDEVPERF_JOB_RANDOM (1 << 0)
+#define FSDEVPERF_JOB_RANDOM		(1 << 0)
+#define FSDEVPERF_JOB_SINGLE_BUFFER	(1 << 1)
 
 struct fsdevperf_job {
 	int				io_pattern;
@@ -103,6 +104,7 @@ struct fsdevperf_job {
 	char				*name;
 	char				*path;
 	size_t				num_active;
+	void				*buf;
 	struct fsdevperf_job_ops	ops;
 	TAILQ_HEAD(, fsdevperf_task)	tasks;
 	TAILQ_ENTRY(fsdevperf_job)	tailq;
@@ -399,7 +401,11 @@ fsdevperf_init_threads(void)
 static void
 fsdevperf_task_free(struct fsdevperf_task *task)
 {
-	spdk_free(task->buf);
+	struct fsdevperf_job *job = task->job;
+
+	if (!(job->flags & FSDEVPERF_JOB_SINGLE_BUFFER)) {
+		spdk_free(task->buf);
+	}
 	free(task->requests);
 	free(task);
 }
@@ -429,10 +435,14 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 		goto error;
 	}
 
-	task->buf = spdk_zmalloc(task->io_depth * task->io_size, 4096, NULL,
-				 SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
-	if (task->buf == NULL) {
-		goto error;
+	if (job->flags & FSDEVPERF_JOB_SINGLE_BUFFER) {
+		task->buf = job->buf;
+	} else {
+		task->buf = spdk_zmalloc(task->io_depth * task->io_size, 4096, NULL,
+					 SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+		if (task->buf == NULL) {
+			goto error;
+		}
 	}
 
 	for (i = 0; i < task->io_depth; i++) {
@@ -516,13 +526,14 @@ fsdevperf_file_get(const char *fsname, const char *filename, size_t size)
 static void
 fsdevperf_job_free(struct fsdevperf_job *job)
 {
+	spdk_free(job->buf);
 	free(job->name);
 	free(job->path);
 	free(job);
 }
 
 static struct fsdevperf_job *
-fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops)
+fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops, uint32_t flags)
 {
 	struct fsdevperf_job *job;
 
@@ -540,6 +551,7 @@ fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops)
 	job->io_size = 4096;
 	job->io_depth = 1;
 	job->io_pattern = -1;
+	job->flags = flags;
 	job->ops = *ops;
 
 	TAILQ_INIT(&job->tasks);
@@ -930,7 +942,7 @@ fsdevperf_cleanup_files(void)
 
 	assert(g_app.cleanup_job == NULL);
 	if (do_cleanup) {
-		job = fsdevperf_job_alloc("cleanup", &ops);
+		job = fsdevperf_job_alloc("cleanup", &ops, FSDEVPERF_JOB_SINGLE_BUFFER);
 		if (job == NULL) {
 			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 			goto out;
@@ -1351,7 +1363,7 @@ fsdevperf_setup_files(void)
 	struct fsdevperf_file *file;
 	int rc;
 
-	job = fsdevperf_job_alloc("setup", &ops);
+	job = fsdevperf_job_alloc("setup", &ops, FSDEVPERF_JOB_SINGLE_BUFFER);
 	if (job == NULL) {
 		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 		rc = -ENOMEM;
@@ -1362,6 +1374,14 @@ fsdevperf_setup_files(void)
 	job->io_depth = 1;
 	job->io_size = 1024 * 1024;
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+
+	job->buf = spdk_zmalloc(job->io_depth * job->io_size, 4096, NULL,
+				SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
+	if (job->buf == NULL) {
+		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
+		rc = -ENOMEM;
+		goto error;
+	}
 
 	thread = TAILQ_FIRST(&g_app.threads);
 	TAILQ_FOREACH(file, &g_app.files, tailq) {
@@ -1659,7 +1679,8 @@ fsdevperf_load_jobs(const char *filename)
 
 	for (section = spdk_conf_first_section(conf); section != NULL;
 	     section = spdk_conf_next_section(section)) {
-		job = fsdevperf_job_alloc(spdk_conf_section_get_name(section), &g_default_job_ops);
+		job = fsdevperf_job_alloc(spdk_conf_section_get_name(section),
+					  &g_default_job_ops, 0);
 		if (job == NULL) {
 			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 			goto error;
@@ -1812,7 +1833,7 @@ main(int argc, char **argv)
 	umask(g_app.umask);
 
 	/* For now, we only support one "main" job */
-	g_app.main_job = fsdevperf_job_alloc("main", &g_default_job_ops);
+	g_app.main_job = fsdevperf_job_alloc("main", &g_default_job_ops, 0);
 	if (g_app.main_job == NULL) {
 		return EXIT_FAILURE;
 	}
