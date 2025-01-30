@@ -28,7 +28,6 @@
 /* See https://libfuse.github.io/doxygen/structfuse__conn__info.html */
 #define MAX_BACKGROUND (100)
 #define TIME_GRAN (1)
-#define MAX_AIOS 256
 #define DEFAULT_WRITEBACK_CACHE true
 #define DEFAULT_MAX_XFER_SIZE 0x00020000
 #define DEFAULT_MAX_READAHEAD 0x00020000
@@ -246,6 +245,9 @@ struct aio_io_channel {
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
 			g_aio_fsdev_head);
+static struct fsdev_aio_module_opts g_opts = {
+	.max_io_depth = 256,
+};
 
 static inline struct aio_fsdev *
 fsdev_to_aio_fsdev(struct spdk_fsdev *fsdev)
@@ -4029,7 +4031,7 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 	struct aio_io_channel *ch = ctx_buf;
 	struct spdk_thread *thread = spdk_get_thread();
 
-	ch->mgr = spdk_aio_mgr_create(MAX_AIOS);
+	ch->mgr = spdk_aio_mgr_create(g_opts.max_io_depth);
 	if (!ch->mgr) {
 		SPDK_ERRLOG("aoi manager init for failed (thread=%s)\n", spdk_thread_get_name(thread));
 		return -ENOMEM;
@@ -4062,6 +4064,21 @@ aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 }
 
 static int
+fsdev_aio_config_json(struct spdk_json_write_ctx *w)
+{
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "method", "fsdev_aio_set_options");
+
+	spdk_json_write_named_object_begin(w, "params");
+	spdk_json_write_named_uint32(w, "max_io_depth", g_opts.max_io_depth);
+	spdk_json_write_object_end(w);
+
+	spdk_json_write_object_end(w);
+
+	return 0;
+}
+
+static int
 fsdev_aio_initialize(void)
 {
 	/*
@@ -4089,6 +4106,7 @@ fsdev_aio_get_ctx_size(void)
 
 static struct spdk_fsdev_module aio_fsdev_module = {
 	.name = "aio",
+	.config_json = fsdev_aio_config_json,
 	.module_init = fsdev_aio_initialize,
 	.module_fini = fsdev_aio_finish,
 	.get_ctx_size	= fsdev_aio_get_ctx_size,
@@ -4721,4 +4739,20 @@ spdk_fsdev_aio_delete(const char *name,
 	SPDK_DEBUGLOG(fsdev_aio, "Deleted aio filesystem %s\n", name);
 }
 
+void
+fsdev_aio_get_opts(struct fsdev_aio_module_opts *opts)
+{
+	*opts = g_opts;
+}
+
+int
+fsdev_aio_set_opts(const struct fsdev_aio_module_opts *opts)
+{
+	if (opts->max_io_depth == 0) {
+		return -EINVAL;
+	}
+
+	g_opts = *opts;
+	return 0;
+}
 SPDK_LOG_REGISTER_COMPONENT(fsdev_aio)

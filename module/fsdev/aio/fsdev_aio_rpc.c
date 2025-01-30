@@ -112,3 +112,31 @@ rpc_aio_delete(struct spdk_jsonrpc_request *request, const struct spdk_json_val 
 	free(req.name);
 }
 SPDK_RPC_REGISTER("fsdev_aio_delete", rpc_aio_delete, SPDK_RPC_RUNTIME)
+
+static const struct spdk_json_object_decoder rpc_aio_set_options_decoders[] = {
+	{"max_io_depth", offsetof(struct fsdev_aio_module_opts, max_io_depth), spdk_json_decode_uint32, true}
+};
+
+static void
+rpc_aio_set_options(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
+{
+	struct fsdev_aio_module_opts opts = {};
+	int rc;
+
+	fsdev_aio_get_opts(&opts);
+	if (spdk_json_decode_object(params, rpc_aio_set_options_decoders,
+				    SPDK_COUNTOF(rpc_aio_set_options_decoders), &opts)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 spdk_strerror(EINVAL));
+		return;
+	}
+
+	rc = fsdev_aio_set_opts(&opts);
+	if (rc != 0) {
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		return;
+	}
+
+	spdk_jsonrpc_send_bool_response(request, true);
+}
+SPDK_RPC_REGISTER("fsdev_aio_set_options", rpc_aio_set_options, SPDK_RPC_STARTUP)

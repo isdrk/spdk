@@ -14523,6 +14523,40 @@ Example response:
 }
 ~~~
 
+### fsdev_aio_set_options {#fsdev_aio_set_options}
+
+Set options global to all AIO fsdevs.
+
+#### Parameters
+
+Name                    | Optional | Type        | Description
+----------------------- | -------- | ----------- | -----------
+max_io_depth            | Optional | number      | Maximum I/O depth per channel
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fsdev_aio_set_options",
+  "id": 1,
+  "params": {
+    "max_io_depth": 1024
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### rmem_enable {#rmem_enable}
 
 Enable/disable the Recovery Memory functionality.

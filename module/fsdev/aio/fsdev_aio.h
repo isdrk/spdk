@@ -12,6 +12,10 @@
 #include "spdk/stdinc.h"
 #include "spdk/fsdev_module.h"
 
+struct fsdev_aio_module_opts {
+	uint32_t max_io_depth;
+};
+
 struct spdk_fsdev_aio_opts {
 	bool xattr_enabled;
 	bool writeback_cache_enabled;
@@ -29,5 +33,7 @@ void spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts);
 int spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *root_path,
 			  const struct spdk_fsdev_aio_opts *opts);
 void spdk_fsdev_aio_delete(const char *name, spdk_delete_aio_fsdev_complete cb_fn, void *cb_arg);
+void fsdev_aio_get_opts(struct fsdev_aio_module_opts *opts);
+int fsdev_aio_set_opts(const struct fsdev_aio_module_opts *opts);
 
 #endif /* SPDK_FSDEV_AIO_H */
