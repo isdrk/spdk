@@ -36,9 +36,11 @@ endif
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
 DEPDIRS-rdma_utils := dma log util
-DEPDIRS-rdma_provider := log util rdma_utils
+DEPDIRS-rdma_provider := log util
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-rdma_provider += dma mlx5
+DEPDIRS-rdma_provider += dma mlx5 $(JSON_LIBS)
+else ifeq ($(CONFIG_RDMA_PROV),verbs)
+DEPDIRS-rdma_provider += rdma_utils
 endif
 DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
@@ -132,7 +134,7 @@ DEPDIRS-env_dpdk_rpc := $(JSON_LIBS)
 # module/sock
 DEPDIRS-sock_posix := log sock util trace
 DEPDIRS-sock_uring := log sock util trace
-DEPDIRS-sock_xlio := log sock util xlio
+DEPDIRS-sock_xlio := log sock trace util xlio
 
 # module/scheduler
 DEPDIRS-scheduler_dynamic := event log thread util json
@@ -160,7 +162,7 @@ DEPDIRS-bdev_iscsi := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_malloc := $(BDEV_DEPS_THREAD) accel dma
 DEPDIRS-bdev_null := $(BDEV_DEPS_THREAD)
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-bdev_null += rdma_utils
+DEPDIRS-bdev_null += dma rdma_utils
 endif
 DEPDIRS-bdev_nvme = $(BDEV_DEPS_THREAD) accel keyring nvme trace
 DEPDIRS-bdev_ocf := $(BDEV_DEPS_THREAD)
@@ -212,13 +214,16 @@ DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
 DEPDIRS-event_fsdev := init fsdev
 DEPDIRS-event_rmem := init rmem
+ifeq ($(CONFIG_RDMA),y)
+DEPDIRS-event_rdma_provider := init rdma_provider
+endif
 
 # module/vfu_device
 
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-vfu_device := $(BDEV_DEPS_THREAD) scsi vfu_tgt
 ifeq ($(CONFIG_FSDEV),y)
-DEPDIRS-vfu_device += fuse_dispatcher
+DEPDIRS-vfu_device += fsdev fuse_dispatcher
 endif
 endif
 
