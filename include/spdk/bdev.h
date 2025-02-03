@@ -712,6 +712,14 @@ bool spdk_bdev_desc_is_dif_check_enabled(struct spdk_bdev_desc *desc,
 		enum spdk_dif_check_type check_type);
 
 /**
+ * Query if metadata is hidden from the bdev descriptor.
+ *
+ * \param desc Open block device descriptor.
+ * \return true if metadata is hidden, or false otherwise.
+ */
+bool spdk_bdev_desc_hide_metadata(struct spdk_bdev_desc *desc);
+
+/**
  * Set a time limit for the timeout IO of the bdev and timeout callback.
  * We can use this function to enable/disable the timeout handler. If
  * the timeout_in_sec > 0 then it means to enable the timeout IO handling

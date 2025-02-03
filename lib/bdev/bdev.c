@@ -5767,6 +5767,12 @@ spdk_bdev_desc_is_dif_head_of_md(struct spdk_bdev_desc *desc)
 }
 
 bool
+spdk_bdev_desc_hide_metadata(struct spdk_bdev_desc *desc)
+{
+	return desc->opts.hide_metadata;
+}
+
+bool
 spdk_bdev_desc_is_dif_check_enabled(struct spdk_bdev_desc *desc,
 				    enum spdk_dif_check_type check_type)
 {
