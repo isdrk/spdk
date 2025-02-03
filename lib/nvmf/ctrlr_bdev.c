@@ -278,7 +278,8 @@ nvmf_bdev_ctrlr_get_rw_params(const struct spdk_nvme_cmd *cmd, uint64_t *start_l
 
 static void
 nvmf_bdev_ctrlr_get_rw_ext_params(const struct spdk_nvme_cmd *cmd,
-				  struct spdk_bdev_ext_io_opts *opts)
+				  struct spdk_bdev_ext_io_opts *opts,
+				  struct spdk_bdev_desc *desc)
 {
 	/* Get CDW12 values */
 	opts->nvme_cdw12.raw = from_le32(&cmd->cdw12);
@@ -289,8 +290,16 @@ nvmf_bdev_ctrlr_get_rw_ext_params(const struct spdk_nvme_cmd *cmd,
 	/* Bdev layer checks PRACT in CDW12 because it is NVMe specific, but
 	 * it does not check DIF check flags in CDW because DIF is not NVMe
 	 * specific. Hence, copy DIF check flags from CDW12 to dif_check_flags_exclude_mask.
+	 *
+	 * But if metadata is hidden from the bdev open descriptor, we should not set
+	 * dif_check_flags_exclude_mask.
 	 */
-	opts->dif_check_flags_exclude_mask = (~opts->nvme_cdw12.raw) & SPDK_NVME_IO_FLAGS_PRCHK_MASK;
+	if (!spdk_bdev_desc_hide_metadata(desc)) {
+		opts->dif_check_flags_exclude_mask = (~opts->nvme_cdw12.raw) &
+						     SPDK_NVME_IO_FLAGS_PRCHK_MASK;
+	} else {
+		opts->dif_check_flags_exclude_mask = 0;
+	}
 }
 
 static bool
@@ -371,7 +380,7 @@ nvmf_bdev_ctrlr_read_cmd(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 	int rc;
 
 	nvmf_bdev_ctrlr_get_rw_params(cmd, &start_lba, &num_blocks);
-	nvmf_bdev_ctrlr_get_rw_ext_params(cmd, &opts);
+	nvmf_bdev_ctrlr_get_rw_ext_params(cmd, &opts, desc);
 
 	if (spdk_unlikely(!nvmf_bdev_ctrlr_lba_in_range(bdev_num_blocks, start_lba, num_blocks))) {
 		SPDK_ERRLOG("end of media\n");
@@ -424,7 +433,7 @@ nvmf_bdev_ctrlr_write_cmd(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc,
 	int rc;
 
 	nvmf_bdev_ctrlr_get_rw_params(cmd, &start_lba, &num_blocks);
-	nvmf_bdev_ctrlr_get_rw_ext_params(cmd, &opts);
+	nvmf_bdev_ctrlr_get_rw_ext_params(cmd, &opts, desc);
 
 	if (spdk_unlikely(!nvmf_bdev_ctrlr_lba_in_range(bdev_num_blocks, start_lba, num_blocks))) {
 		SPDK_ERRLOG("end of media\n");

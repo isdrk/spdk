@@ -191,6 +191,8 @@ DEFINE_STUB_V(spdk_bdev_io_get_nvme_fused_status, (const struct spdk_bdev_io *bd
 DEFINE_STUB(spdk_bdev_desc_is_dif_check_enabled, bool,
 	    (struct spdk_bdev_desc *desc, enum spdk_dif_check_type check_type), false);
 
+DEFINE_STUB(spdk_bdev_desc_hide_metadata, bool, (struct spdk_bdev_desc *desc), false);
+
 DEFINE_STUB(spdk_bdev_get_io_channel, struct spdk_io_channel *,
 	    (struct spdk_bdev_desc *desc), NULL);
 
@@ -360,11 +362,12 @@ test_get_rw_ext_params(void)
 {
 	struct spdk_nvme_cmd cmd = {0};
 	struct spdk_bdev_ext_io_opts opts = {0};
+	struct spdk_bdev_desc desc = {0};
 
 	to_le32(&cmd.cdw12, 0x9875 | SPDK_NVME_IO_FLAGS_DATA_PLACEMENT_DIRECTIVE |
 		SPDK_NVME_IO_FLAGS_PRCHK_GUARD);
 	to_le32(&cmd.cdw13, 0x2 << 16);
-	nvmf_bdev_ctrlr_get_rw_ext_params(&cmd, &opts);
+	nvmf_bdev_ctrlr_get_rw_ext_params(&cmd, &opts, &desc);
 	CU_ASSERT(opts.nvme_cdw12.raw == 0x10209875);
 	CU_ASSERT(opts.nvme_cdw13.raw == 0x20000);
 	CU_ASSERT((opts.dif_check_flags_exclude_mask ^ SPDK_NVME_IO_FLAGS_PRCHK_MASK)
