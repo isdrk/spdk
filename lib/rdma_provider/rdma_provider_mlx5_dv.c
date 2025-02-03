@@ -681,4 +681,13 @@ spdk_rdma_provider_memory_key_put_ref(void *mkey)
 	spdk_mlx5_mkey_pool_obj_put_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
 }
 
+uint32_t
+spdk_rdma_provider_memory_key_get_key(void *_mkey)
+{
+
+	struct spdk_mlx5_mkey_pool_obj *mkey = _mkey;
+
+	return mkey->mkey;
+}
+
 SPDK_LOG_REGISTER_COMPONENT(rdma_mlx5_dv)

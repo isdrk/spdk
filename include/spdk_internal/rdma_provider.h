@@ -286,6 +286,15 @@ void spdk_rdma_provider_memory_key_get_ref(void *mkey);
 void spdk_rdma_provider_memory_key_put_ref(void *mkey);
 
 /**
+ * Get key of the specified memory key.
+ *
+ * \param mkey Memory key
+ *
+ * return key for this memory key.
+ */
+uint32_t spdk_rdma_provider_memory_key_get_key(void *mkey);
+
+/**
  * Set the options for the rdma_provide library.
  *
  * \param opts options to set
