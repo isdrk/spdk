@@ -66,6 +66,7 @@
     spdk_mlx5_mkey_pool_obj_get_ref;
     spdk_mlx5_mkey_pool_obj_put_ref;
     spdk_mlx5_mkey_pool_find_mkey_by_id;
+    spdk_mlx5_mkey_pool_obj_set_psv;
 
     spdk_mlx5_psv_pool_create;
     spdk_mlx5_psv_pool_destroy;

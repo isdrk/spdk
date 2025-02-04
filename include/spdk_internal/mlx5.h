@@ -136,10 +136,13 @@ struct spdk_mlx5_mkey_pool_param {
 	uint32_t flags;
 };
 
+struct spdk_mlx5_psv_pool_obj;
+
 struct spdk_mlx5_mkey_pool_obj {
 	uint32_t mkey;
 	uint32_t ref_count;
 	struct spdk_mlx5_mkey_pool *pool;
+	struct spdk_mlx5_psv_pool_obj *psv;
 	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
 	struct {
 		uint32_t sigerr_count;
@@ -841,6 +844,32 @@ void spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
  * \return Pointer to mkey object or NULL
  */
 struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_find_mkey_by_id(void *ch, uint32_t mkey_id);
+
+/**
+ * Associate PSV with an mkey to defer the PSV's release until the corresponding mkey is released.
+ *
+ * This function will also write NULL to the PSV pointer pointer to by ppsv,
+ * to avoid double free.
+ *
+ * \param mkey the mkey pool object
+ * \param ppsv the PSV pool object
+ */
+static inline void
+spdk_mlx5_mkey_pool_obj_set_psv(struct spdk_mlx5_mkey_pool_obj *mkey,
+				struct spdk_mlx5_psv_pool_obj **ppsv)
+{
+	struct spdk_mlx5_psv_pool_obj *psv = *ppsv;
+
+	if (psv == NULL) {
+		return;
+	}
+
+	*ppsv = NULL;
+
+	assert(mkey->psv == NULL);
+
+	mkey->psv = psv;
+}
 
 /**
  * Create a pool of PSVs for a given PD.

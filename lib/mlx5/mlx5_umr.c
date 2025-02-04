@@ -539,6 +539,7 @@ spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool, struct spdk_mlx5_mkey_
 	assert(mkey->ref_count > 0);
 
 	if (--mkey->ref_count == 0) {
+		spdk_mlx5_psv_pool_put(&mkey->psv);
 		spdk_mempool_put(pool->mpool, mkey);
 	}
 }
