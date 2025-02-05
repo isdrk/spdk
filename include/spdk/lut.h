@@ -67,6 +67,17 @@ struct spdk_lut *spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint6
 uint64_t spdk_lut_insert(struct spdk_lut *lut, void *value);
 
 /**
+ * Insert 'value' into the look up table and associate it with the key.
+ *
+ * \param lut LUT object.
+ * \param value Value to insert.
+ * \param key Key to insert the element at.
+ *
+ * \return 0 on success, a negative error code otherwise (an invalid key etc.).
+ */
+int spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key);
+
+/**
  * Get the value associated with key.
  *
  * \param lut LUT object.

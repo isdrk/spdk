@@ -6,6 +6,7 @@
 #include "spdk/stdinc.h"
 #include "spdk/log.h"
 #include "spdk/assert.h"
+#include "spdk/util.h"
 #include "spdk/lut.h"
 
 /* SPDK_LUT_MAX_KEY_BITS must be < 64 to share the same uint64_t with the 'valid' field */
@@ -148,6 +149,33 @@ spdk_lut_insert(struct spdk_lut *lut, void *value)
 
 	return key;
 }
+
+int
+spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
+{
+	struct spdk_lut_node *node;
+
+	assert(key < lut->max_size);
+
+	if (key > lut->num_nodes) {
+		if (!lut_extend_unsafe(lut, spdk_divide_round_up(key, lut->growth_step) - lut->num_nodes)) {
+			return -ENOMEM;
+		}
+	}
+
+	node = lut_get_node(lut, key);
+	if (node->valid) {
+		return -EALREADY;
+	}
+
+	STAILQ_REMOVE(&lut->free_nodes, node, spdk_lut_node, u.link);
+
+	node->valid = 1;
+	node->u.ptr = value;
+
+	return 0;
+}
+
 
 void *
 spdk_lut_get(struct spdk_lut *lut, uint64_t key)
