@@ -353,6 +353,21 @@ vfsdev_passthru_getlk_cpl_cb(void *cb_arg, struct spdk_io_channel *ch, int statu
 	spdk_fsdev_io_complete(cb_arg, status);
 }
 
+static int
+vfsdev_passthru_readdir_entry_cb(void *cb_arg, struct spdk_io_channel *ch, const char *name,
+				 struct spdk_fsdev_file_object *fobject,
+				 const struct spdk_fsdev_file_attr *attr,
+				 off_t offset, bool *forget)
+{
+	struct spdk_fsdev_io *fsdev_io = cb_arg;
+
+	fsdev_io->u_out.readdir.fobject = fobject;
+	fsdev_io->u_out.readdir.name = name;
+	fsdev_io->u_out.readdir.offset = offset;
+	fsdev_io->u_out.readdir.attr = *attr;
+	return fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.cb_arg, forget);
+}
+
 /* Called when someone above submits IO to this pt vfsdev. We're simply passing it on here
  * via SPDK IO calls which in turn allocate another fsdev IO and call our cpl callback provided
  * below along with the original fsdev_io so that we can complete it once this IO completes.
@@ -567,7 +582,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					fsdev_io->u_in.readdir.fobject,
 					fsdev_io->u_in.readdir.fhandle,
 					fsdev_io->u_in.readdir.offset,
-					fsdev_io->u_in.readdir.usr_entry_cb_fn,
+					vfsdev_passthru_readdir_entry_cb,
 					vfsdev_passthru_status_cpl_cb, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_RELEASEDIR:
