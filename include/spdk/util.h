@@ -278,6 +278,22 @@ void spdk_copy_buf_to_iovs(struct iovec *iovs, int iovcnt, void *buf,
 			   size_t buf_len);
 
 /**
+ * Return the total length of buffers described by iovs.
+ */
+static inline size_t
+spdk_iov_length(struct iovec *iovs, int iovcnt)
+{
+	size_t len = 0;
+	int i;
+
+	for (i = 0; i < iovcnt; i++) {
+		len += iovs[i].iov_len;
+	}
+
+	return len;
+}
+
+/**
  * Scan build is really pessimistic and assumes that mempool functions can
  * dequeue NULL buffers even if they return success. This is obviously a false
  * positive, but the mempool dequeue can be done in a DPDK inline function that
