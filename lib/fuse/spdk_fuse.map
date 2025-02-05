@@ -1,0 +1,14 @@
+{
+	global:
+	spdk_fuse_mount;
+	spdk_fuse_umount;
+	spdk_fuse_get_default_mount_opts;
+	spdk_fuse_poll_group_create;
+	spdk_fuse_poll_group_destroy;
+	spdk_fuse_poll_group_poll;
+	spdk_fuse_init;
+	spdk_fuse_cleanup;
+	spdk_fuse_get_opts;
+
+	local: *;
+};
