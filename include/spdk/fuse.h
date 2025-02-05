@@ -14,7 +14,8 @@ extern "C" {
 struct spdk_fuse_mount_opts {
 	/** Size of this structure */
 	size_t		size;
-	/* Temporarily empty */
+	/** Maximum IO depth on each thread */
+	size_t		max_io_depth;
 };
 
 /**
@@ -89,8 +90,9 @@ int spdk_fuse_poll_group_poll(struct spdk_fuse_poll_group *group,
 
 struct spdk_fuse_opts {
 	/** Size of this structure */
-	size_t size;
-	/* Temporarily empty */
+	size_t		size;
+	/** Maximum IO depth on each thread */
+	size_t		max_io_depth;
 };
 
 /**
