@@ -3737,6 +3737,7 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 	}
 
 	fuse_io->hdr.opcode = fsdev_io_d2h_u32(fuse_io->disp, hdr->opcode);
+	fuse_io->hdr.unique = fsdev_io_d2h_u64(fuse_io->disp, hdr->unique);
 
 	if (spdk_unlikely(!fuse_io->ch)) {
 		/* The fsdev is not currently active. Complete this request. */
@@ -3769,7 +3770,6 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 	}
 
 	fuse_io->hdr.len = fsdev_io_d2h_u32(fuse_io->disp, hdr->len);
-	fuse_io->hdr.unique = fsdev_io_d2h_u64(fuse_io->disp, hdr->unique);
 	fuse_io->hdr.nodeid = fsdev_io_d2h_u64(fuse_io->disp, hdr->nodeid);
 	fuse_io->hdr.uid = fsdev_io_d2h_u32(fuse_io->disp, hdr->uid);
 	fuse_io->hdr.gid = fsdev_io_d2h_u32(fuse_io->disp, hdr->gid);
