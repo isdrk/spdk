@@ -18,6 +18,8 @@ struct spdk_fuse_mount_opts {
 	size_t		max_io_depth;
 	/** Maximum transfer size */
 	size_t		max_xfer_size;
+	/** Clone FUSE device fd */
+	bool		clone_fd;
 };
 
 /**
@@ -97,6 +99,8 @@ struct spdk_fuse_opts {
 	size_t		max_io_depth;
 	/** Maximum transfer size */
 	size_t		max_xfer_size;
+	/** Clone FUSE device fd */
+	bool		clone_fd;
 };
 
 /**

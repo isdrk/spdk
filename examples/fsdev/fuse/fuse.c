@@ -264,6 +264,8 @@ static struct option g_options[] = {
 	{ "max-iodepth", required_argument, NULL, FSDEV_FUSE_OPT_MAX_IODEPTH },
 #define FSDEV_FUSE_OPT_MAX_XFER 0x1001
 	{ "max-xfer", required_argument, NULL, FSDEV_FUSE_OPT_MAX_XFER },
+#define FSDEV_FUSE_OPT_NO_CLONE 0x1002
+	{ "no-clone", no_argument, NULL, FSDEV_FUSE_OPT_NO_CLONE },
 	{},
 };
 
@@ -309,6 +311,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 			break;
 		}
 		break;
+	case FSDEV_FUSE_OPT_NO_CLONE:
+		g_app.mount_opts.clone_fd = false;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -337,6 +342,7 @@ fsdev_fuse_usage(void)
 	printf(" -M, --mountpoint=<mountpoint>        where to mount the fsdev\n");
 	printf("     --max-iodepth=<iodepth>          maximum I/O depth on each core\n");
 	printf("     --max-xfer=<size>                maximum transfer size\n");
+	printf("     --no-clone                       use the same /dev/fuse fd on all cores\n");
 }
 
 int

@@ -18,6 +18,7 @@ struct spdk_fuse_mount {
 	struct spdk_fuse_dispatcher	*dispatcher;
 	int				fd;
 	bool				mounted;
+	bool				clone_fd;
 	char				*name;
 	char				*mountpoint;
 	size_t				max_io_depth;
@@ -55,6 +56,7 @@ struct fsdev_fuse_channel {
 		fsdev_fuse_channel_drained_cb	cb_fn;
 		void				*cb_ctx;
 	} drain;
+	int					clone_fd;
 	void					*request_pool;
 	struct spdk_fuse_poll_group		*poll_group;
 };
@@ -72,6 +74,7 @@ struct {
 	.opts = {
 		.max_io_depth = 8,
 		.max_xfer_size = 128 * 1024,
+		.clone_fd = true,
 	},
 };
 
@@ -313,11 +316,37 @@ fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 	if (ch->ioch != NULL) {
 		spdk_put_io_channel(ch->ioch);
 	}
+	if (ch->clone_fd > 0) {
+		close(ch->clone_fd);
+	}
 	if (ch->poll_group != NULL) {
 		spdk_put_io_channel(spdk_io_channel_from_ctx(ch->poll_group));
 	}
 	free(ch->request_pool);
 	free(ch);
+}
+
+static int
+fsdev_fuse_clone_fuse_fd(struct spdk_fuse_mount *mount)
+{
+	int rc, fd, mainfd = mount->fd;
+
+	fd = open("/dev/fuse", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+	if (fd < 0) {
+		SPDK_WARNLOG("%s: failed to open /dev/fuse: %s\n", mount->name,
+			     spdk_strerror(errno));
+		return -1;
+	}
+
+	rc = ioctl(fd, FUSE_DEV_IOC_CLONE, &mainfd);
+	if (rc != 0) {
+		SPDK_WARNLOG("%s: failed to clone /dev/fuse: %s\n", mount->name,
+			     spdk_strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	return fd;
 }
 
 static struct fsdev_fuse_channel *
@@ -332,6 +361,11 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 		return NULL;
 	}
 
+	ch->clone_fd = -1;
+	if (mount->clone_fd) {
+		ch->clone_fd = fsdev_fuse_clone_fuse_fd(mount);
+	}
+
 	ch->ioch = spdk_fsdev_get_io_channel(mount->fsdev_desc);
 	if (ch->ioch == NULL) {
 		goto error;
@@ -343,7 +377,8 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	/* Bump poll group's refcount to make sure it doesn't disappear */
 	ch->poll_group = spdk_io_channel_get_ctx(spdk_get_io_channel(&g_fuse));
 	ch->mount = mount;
-	ch->fd = mount->fd;
+	/* If we can't manage to clone the fd, just fall back to using the main fd */
+	ch->fd = ch->clone_fd >= 0 ? ch->clone_fd : mount->fd;
 	ch->dispatcher = mount->dispatcher;
 
 	reqsize = sizeof(*req) + spdk_fuse_dispatcher_get_io_ctx_size();
@@ -519,6 +554,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	}
 
 	mnt->fd = -1;
+	mnt->clone_fd = SPDK_GET_FIELD(opts, clone_fd, g_fuse.opts.clone_fd);
 	mnt->max_io_depth = SPDK_GET_FIELD(opts, max_io_depth, g_fuse.opts.max_io_depth);
 	if (mnt->max_io_depth == 0) {
 		SPDK_ERRLOG("max_io_depth must be greater than zero\n");
@@ -823,6 +859,7 @@ spdk_fuse_get_default_mount_opts(struct spdk_fuse_mount_opts *opts, size_t size)
 	local.size = spdk_min(sizeof(local), size);
 	local.max_io_depth = g_fuse.opts.max_io_depth;
 	local.max_xfer_size = g_fuse.opts.max_xfer_size;
+	local.clone_fd = g_fuse.opts.clone_fd;
 
 	memcpy(opts, &local, local.size);
 }
