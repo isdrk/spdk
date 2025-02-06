@@ -140,6 +140,15 @@ int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
  */
 uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp);
 
+/**
+ * Return the name of a FUSE operation.
+ *
+ * \param opcode opcode of the operation.
+ *
+ * \return name of the operation or NULL in case of an error.
+ */
+const char *spdk_fuse_dispatcher_get_operation_name(uint32_t opcode);
+
 #ifdef __cplusplus
 }
 #endif

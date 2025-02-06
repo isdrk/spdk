@@ -3720,6 +3720,16 @@ static const struct {
 	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
 };
 
+const char *
+spdk_fuse_dispatcher_get_operation_name(uint32_t opcode)
+{
+	if (opcode >= SPDK_COUNTOF(fuse_ll_ops)) {
+		return NULL;
+	}
+
+	return fuse_ll_ops[opcode].name;
+}
+
 static int
 spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {

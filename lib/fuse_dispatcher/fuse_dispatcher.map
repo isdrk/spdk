@@ -9,6 +9,7 @@
 	spdk_fuse_dispatcher_delete;
 	spdk_fuse_dispatcher_encode_notify;
 	spdk_fuse_dispatcher_get_notify_buf_size;
+	spdk_fuse_dispatcher_get_operation_name;
 
 	# Everything else
 	local: *;
