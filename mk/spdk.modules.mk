@@ -135,7 +135,7 @@ endif
 
 EVENT_BDEV_SUBSYSTEM = event_bdev event_accel event_vmd event_sock event_iobuf
 
-FSDEV_MODULES_LIST = fsdev
+FSDEV_MODULES_LIST = event_fuse fsdev
 FSDEV_MODULES_PRIVATE_LIBS = $(shell pkg-config --libs glib-2.0)
 
 ifeq ($(CONFIG_AIO_FSDEV), y)

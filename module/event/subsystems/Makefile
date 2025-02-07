@@ -7,7 +7,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring rmem
+DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring rmem fuse
 
 ifeq ($(OS),Linux)
 DIRS-y += nbd
