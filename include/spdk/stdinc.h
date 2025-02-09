@@ -70,6 +70,7 @@ extern "C" {
 #include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/file.h>
+#include <sys/sysmacros.h>
 
 /* GNU extension */
 #include <getopt.h>
