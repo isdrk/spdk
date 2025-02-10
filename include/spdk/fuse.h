@@ -16,6 +16,8 @@ struct spdk_fuse_mount_opts {
 	size_t		size;
 	/** Maximum IO depth on each thread */
 	size_t		max_io_depth;
+	/** Maximum transfer size */
+	size_t		max_xfer_size;
 };
 
 /**
@@ -93,6 +95,8 @@ struct spdk_fuse_opts {
 	size_t		size;
 	/** Maximum IO depth on each thread */
 	size_t		max_io_depth;
+	/** Maximum transfer size */
+	size_t		max_xfer_size;
 };
 
 /**

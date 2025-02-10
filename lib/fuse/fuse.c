@@ -21,6 +21,7 @@ struct spdk_fuse_mount {
 	char				*name;
 	char				*mountpoint;
 	size_t				max_io_depth;
+	size_t				max_xfer_size;
 	TAILQ_ENTRY(spdk_fuse_mount)	tailq;
 };
 
@@ -70,8 +71,11 @@ struct {
 	.mounts = TAILQ_HEAD_INITIALIZER(g_fuse.mounts),
 	.opts = {
 		.max_io_depth = 8,
+		.max_xfer_size = 128 * 1024,
 	},
 };
+
+#define FSDEV_FUSE_MIN_MAX_XFER_SIZE 4096
 
 static const char *
 fsdev_fuse_request_get_name(struct fsdev_fuse_request *req)
@@ -108,10 +112,29 @@ fsdev_fuse_request_complete(struct fsdev_fuse_request *req)
 	struct spdk_fuse_mount *mount = ch->mount;
 	struct fuse_in_header *in = fsdev_fuse_request_get_inhdr(req);
 	struct fuse_out_header *out = fsdev_fuse_request_get_outhdr(req);
+	struct fuse_init_out *init_out;
+	bool do_reply = true;
 	int rc, errsv;
 
-	if (in->opcode != FUSE_FORGET && in->opcode != FUSE_BATCH_FORGET &&
-	    in->opcode != FUSE_NOTIFY_REPLY) {
+	switch (in->opcode) {
+	case FUSE_INIT:
+		init_out = (void *)(out + 1);
+		if (init_out->max_write > mount->max_xfer_size) {
+			SPDK_INFOLOG(fuse, "%s: limiting max_write %u -> %zu\n", mount->name,
+				     init_out->max_write, mount->max_xfer_size);
+			init_out->max_write = mount->max_xfer_size;
+		}
+		break;
+	case FUSE_FORGET:
+	case FUSE_BATCH_FORGET:
+	case FUSE_NOTIFY_REPLY:
+		do_reply = false;
+		break;
+	default:
+		break;
+	}
+
+	if (do_reply) {
 		assert(out->len <= spdk_iov_length(req->out_iovs, req->out_iovcnt));
 		rc = write(ch->fd, out, out->len);
 		if (rc < 0) {
@@ -197,6 +220,12 @@ fsdev_fuse_request_prep_read(struct fsdev_fuse_request *req, size_t inlen)
 		SPDK_ERRLOG("%s: unexpected READ request length: %zu < %zu\n",
 			    mount->name, inlen, sizeof(*in) + sizeof(*hdr));
 		return -EBADMSG;
+	}
+
+	if (hdr->size > mount->max_xfer_size) {
+		SPDK_ERRLOG("%s: unexpected READ size: %u > %zu\n",
+			    mount->name, hdr->size, mount->max_xfer_size);
+		return -EINVAL;
 	}
 
 	buf = fsdev_fuse_set_iov(&req->in_iovs[0], &req->in_iovcnt, buf,
@@ -325,9 +354,8 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 
 	for (i = 0; i < mount->max_io_depth; i++) {
 		req = (void *)((uintptr_t)ch->request_pool + i * reqsize);
-		/* Hard-code the size to 132k for now, as that's max_xfer_size (128k) of fsdev_aio
-		 * plus one extra page to store fuse headers */
-		req->len = 132 * 1024;
+		/* Reserve an extra page for the headers */
+		req->len = mount->max_xfer_size + 4096;
 		req->ch = ch;
 		req->buf = spdk_zmalloc(req->len, 4096, NULL, SPDK_ENV_NUMA_ID_ANY,
 					SPDK_MALLOC_DMA);
@@ -498,6 +526,14 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
+	mnt->max_xfer_size = SPDK_GET_FIELD(opts, max_xfer_size, g_fuse.opts.max_xfer_size);
+	if (mnt->max_xfer_size < FSDEV_FUSE_MIN_MAX_XFER_SIZE) {
+		SPDK_ERRLOG("max_xfer_size must be greater than %u\n",
+			    FSDEV_FUSE_MIN_MAX_XFER_SIZE);
+		rc = -EINVAL;
+		goto error;
+	}
+
 	mnt->name = strdup(name);
 	if (mnt->name == NULL) {
 		rc = -ENOMEM;
@@ -537,8 +573,8 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u",
-		      mnt->fd, st.st_mode, getuid(), getgid());
+	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu",
+		      mnt->fd, st.st_mode, getuid(), getgid(), mnt->max_xfer_size);
 	if (rc < 0 || rc >= (int)sizeof(mopts)) {
 		rc = -EINVAL;
 		goto error;
@@ -786,6 +822,7 @@ spdk_fuse_get_default_mount_opts(struct spdk_fuse_mount_opts *opts, size_t size)
 
 	local.size = spdk_min(sizeof(local), size);
 	local.max_io_depth = g_fuse.opts.max_io_depth;
+	local.max_xfer_size = g_fuse.opts.max_xfer_size;
 
 	memcpy(opts, &local, local.size);
 }
