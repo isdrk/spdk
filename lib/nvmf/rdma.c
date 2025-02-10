@@ -56,6 +56,9 @@ enum spdk_nvmf_rdma_request_state {
 	/* The request is queued until a data buffer is available. */
 	RDMA_REQUEST_STATE_NEED_BUFFER,
 
+	/* The request is queued until accel task is available. */
+	RDMA_REQUEST_STATE_NEED_ACCEL_TASK,
+
 	/* The request is waiting on RDMA queue depth availability
 	 * to transfer data from the host to the controller.
 	 */
@@ -129,6 +132,9 @@ nvmf_trace(void)
 	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER", TRACE_RDMA_REQUEST_STATE_NEED_BUFFER,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
+	spdk_trace_register_description("RDMA_REQ_NEED_ACCEL", TRACE_RDMA_REQUEST_STATE_NEED_ACCEL_TASK,
+					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
 					TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
@@ -153,7 +159,7 @@ nvmf_trace(void)
 					TRACE_RDMA_REQUEST_STATE_EXECUTED,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
-	spdk_trace_register_description("RDMA_REQ_RDY_TO_COMPL_PEND",
+	spdk_trace_register_description("RDMA_REQ_RDY2COMPL_PEND",
 					TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING,
 					OWNER_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
@@ -233,6 +239,7 @@ struct spdk_nvmf_rdma_request {
 
 	bool					fused_failed;
 	bool					data_transferred;
+	bool					use_accel_seq;
 
 	struct spdk_nvmf_rdma_wr		data_wr;
 	struct spdk_nvmf_rdma_wr		rsp_wr;
@@ -260,6 +267,7 @@ struct spdk_nvmf_rdma_request {
 	struct ibv_send_wr			*remaining_tranfer_in_wrs;
 	struct ibv_send_wr			*transfer_wr;
 	struct spdk_nvmf_rdma_request_data	data;
+	void					*data_transfer_mkey;
 	spdk_memory_domain_data_cpl_cb		transfer_cpl_cb;
 	void					*transfer_cpl_cb_arg;
 };
@@ -366,6 +374,7 @@ struct spdk_nvmf_rdma_qpair {
 
 	bool					ibv_in_error_state;
 	bool					start_accel_sequence;
+	bool					in_destroy;
 
 	RB_ENTRY(spdk_nvmf_rdma_qpair)		node;
 
@@ -439,12 +448,15 @@ struct spdk_nvmf_rdma_poller {
 
 struct spdk_nvmf_rdma_poll_group_stat {
 	uint64_t				pending_data_buffer;
+	uint64_t				pending_accel_task;
 };
 
 struct spdk_nvmf_rdma_poll_group {
 	struct spdk_nvmf_transport_poll_group		group;
 	struct spdk_nvmf_rdma_poll_group_stat		stat;
 	struct spdk_io_channel				*accel_ch;
+	/* Requests that are waiting for accel task */
+	STAILQ_HEAD(, spdk_nvmf_rdma_request)		pending_accel_queue;
 	TAILQ_HEAD(, spdk_nvmf_rdma_poller)		pollers;
 	TAILQ_ENTRY(spdk_nvmf_rdma_poll_group)		link;
 };
@@ -1714,6 +1726,10 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport,
 					   length);
+	rdma_req->iovpos = 0;
+	if (rdma_req->use_accel_seq) {
+		goto out;
+	}
 	if (spdk_unlikely(rc != 0)) {
 		return rc;
 	}
@@ -1730,8 +1746,6 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 			SPDK_INFOLOG(rdma, "Get stripped buffers fail %d, fallback to req.iov.\n", rc);
 		}
 	}
-
-	rdma_req->iovpos = 0;
 
 	if (spdk_unlikely(req->dif_enabled)) {
 		num_wrs = nvmf_rdma_calc_num_wrs(length, rtransport->transport.opts.io_unit_size,
@@ -1758,6 +1772,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 	}
 
+out:
 	/* set the number of outstanding data WRs for this request. */
 	rdma_req->num_outstanding_data_wr = num_wrs;
 
@@ -1821,6 +1836,11 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, total_length);
+	if (rdma_req->use_accel_seq) {
+		rdma_req->iovpos = 0;
+		req->length = total_length;
+		goto out;
+	}
 	if (spdk_unlikely(rc != 0)) {
 		nvmf_rdma_request_free_data(rdma_req, rtransport);
 		return rc;
@@ -1881,9 +1901,10 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	}
 #endif
 
+out:
 	rdma_req->num_outstanding_data_wr = num_sgl_descriptors;
 
-	return 0;
+	return rc;
 
 err_exit:
 	spdk_nvmf_request_free_buffers(req, &rgroup->group, &rtransport->transport);
@@ -1949,6 +1970,7 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 		uint64_t offset = sgl->address;
 		uint32_t max_len = rtransport->transport.opts.in_capsule_data_size;
 
+		assert(!rdma_req->use_accel_seq);
 		SPDK_DEBUGLOG(nvmf, "In-capsule data: offset 0x%" PRIx64 ", length 0x%x\n",
 			      offset, sgl->unkeyed.length);
 
@@ -2020,6 +2042,10 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 						   &rqpair->poller->group->group,
 						   &rtransport->transport);
 	}
+	if (rdma_req->data_transfer_mkey) {
+		spdk_rdma_provider_memory_key_put_ref(rdma_req->data_transfer_mkey);
+		rdma_req->data_transfer_mkey = NULL;
+	}
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	rdma_req->req.length = 0;
 	rdma_req->req.iovcnt = 0;
@@ -2027,6 +2053,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->req.dif_enabled = false;
 	rdma_req->fused_failed = false;
 	rdma_req->data_transferred = false;
+	rdma_req->use_accel_seq = false;
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
 		/* This req was part of a valid fused pair, but failed before it got to
@@ -2143,6 +2170,8 @@ nvmf_rdma_update_sges_with_accel_key(struct spdk_nvmf_rdma_request *rdma_req, ui
 			wr->sg_list[0].lkey = lkey;
 			wr->sg_list[0].addr = offset;
 			wr->sg_list[0].length = desc_len;
+			wr->wr.rdma.remote_addr = desc->address;
+			wr->wr.rdma.rkey = desc->keyed.key;
 			wr->send_flags |= send_flags;
 			offset += desc_len;
 
@@ -2170,6 +2199,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
+	assert(rdma_req->use_accel_seq);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
 	if (spdk_unlikely(!src_domain ||
 			  spdk_memory_domain_get_dma_device_type(src_domain) != SPDK_DMA_DEVICE_TYPE_RDMA)) {
@@ -2201,17 +2231,29 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_read_queue, rdma_req, state_link);
 		rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING;
 	} else {
-		struct ibv_send_wr *last = nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey,
-					   IBV_SEND_SIGNALED);
-
 		/* Read IO: The callback is called when data from the bdev is in local buffers. UMR
-		 * is registered on these buffers. We need to write data buffers to the host, but
-		 * without sending a response. The response will be sent when bdev finishes IO request -
-		 * when RDMA_WRITE completes and we call the cpl_cb */
-		last->next = NULL;
-		SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, translation->rdma.lkey);
-		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
-		rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
+		 * is registered on these buffers. */
+		if (translation->size >= offsetof(struct spdk_memory_domain_translation_result,
+						  rdma.memory_key) + sizeof(translation->rdma.memory_key) &&
+		    translation->rdma.memory_key != NULL) {
+			nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey, 0);
+			/* Mkey object is available. We can increment the reference counter and handle IO as usual */
+			rdma_req->data_transfer_mkey = translation->rdma.memory_key;
+			spdk_rdma_provider_memory_key_get_ref(rdma_req->data_transfer_mkey);
+			nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
+
+			return 0;
+		} else {
+			struct ibv_send_wr *last = nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey,
+						   IBV_SEND_SIGNALED);
+			/* We need to write data buffers to the host, but
+			 * without sending a response. The response will be sent when bdev finishes IO request -
+			 * when RDMA_WRITE completes and we call the cpl_cb */
+			last->next = NULL;
+			SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, translation->rdma.lkey);
+			STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
+			rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
+		}
 	}
 	nvmf_rdma_request_process(rtransport, rdma_req);
 
@@ -2249,6 +2291,55 @@ nvmf_rdma_request_need_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 	return ns->accel_sequence;
 }
 
+static inline int
+nvmf_rdma_request_append_copy_task(struct spdk_nvmf_rdma_qpair *rqpair,
+				   struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct spdk_nvmf_rdma_poll_group *rgroup;
+	int rc;
+
+	rgroup = rqpair->poller->group;
+	SPDK_DEBUGLOG(rdma, "req %p, offset %"PRIu64" opc %d append copy, buf %p len %zu, count %u\n",
+		      rdma_req,
+		      from_le64(&rdma_req->req.cmd->nvme_cmd.cdw10),
+		      rdma_req->req.cmd->nvme_cmd.opc, rdma_req->req.iov[0].iov_base, rdma_req->req.iov[0].iov_len,
+		      rdma_req->req.iovcnt);
+
+	/* Append a copy task and wait for the accel module to call transfer_cb
+	 * In the callback we expect to get a UMR and:
+	 * Read IO: unprocessed data from bdev is in the iovs, start transfer to the host using UMR,
+	 * data will be processed by HW during RDMA_WRITE operation
+	 * Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
+	 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
+	 * the media */
+	assert(rdma_req->req.accel_sequence == NULL);
+	rc = spdk_accel_append_copy(&rdma_req->req.accel_sequence, rgroup->accel_ch,
+				    rdma_req->req.iov, rdma_req->req.iovcnt,
+				    rqpair->rdma_qp->domain, rdma_req,
+				    rdma_req->req.iov, rdma_req->req.iovcnt,
+				    rqpair->rdma_qp->domain, rdma_req,
+				    NULL, NULL);
+	if (spdk_unlikely(rc)) {
+		struct spdk_nvme_cpl *rsp;
+
+		if (rc == -ENOMEM) {
+			rgroup->stat.pending_accel_task++;
+			return rc;
+		}
+
+		rsp = &rdma_req->req.rsp->nvme_cpl;
+		rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+		rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_send_queue, rdma_req, state_link);
+		rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
+		SPDK_DEBUGLOG(rdma, "req %p, accel task failed, rc %d\n", rdma_req, rc);
+		return rc;
+	}
+	rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+
+	return 0;
+}
+
 bool
 nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			  struct spdk_nvmf_rdma_request *rdma_req)
@@ -2277,6 +2368,9 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 		switch (rdma_req->state) {
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
 			STAILQ_REMOVE(&rgroup->group.pending_buf_queue, &rdma_req->req, spdk_nvmf_request, buf_link);
+			break;
+		case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+			STAILQ_REMOVE(&rgroup->pending_accel_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 			STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
@@ -2374,6 +2468,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				/* This request needs to wait in line to obtain a buffer */
 				break;
 			}
+			rdma_req->use_accel_seq = nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req);
 
 			/* Try to get a data buffer */
 			rc = nvmf_rdma_request_parse_sgl(rtransport, device, rdma_req);
@@ -2392,26 +2487,9 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
-			if (nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req)) {
-				/* Append a copy task and wait for the accel module to call transfer_cb
-				 * In the callback we expect to get a UMR and:
-				 * Read IO: unprocessed data from bdev is in the iovs, start transfer to the host using UMR,
-				 * data will be processed by HW during RDMA_WRITE operation
-				 * Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
-				 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
-				 * the media */
-				SPDK_DEBUGLOG(rdma, "req %p, offset %"PRIu64" opc %d append copy, buf %p len %zu, count %u\n",
-					      rdma_req,
-					      from_le64(&rdma_req->req.cmd->nvme_cmd.cdw10),
-					      rdma_req->req.cmd->nvme_cmd.opc, rdma_req->req.iov[0].iov_base, rdma_req->req.iov[0].iov_len,
-					      rdma_req->req.iovcnt);
-				rc = spdk_accel_append_copy(&rdma_req->req.accel_sequence, rgroup->accel_ch,
-							    rdma_req->req.iov, rdma_req->req.iovcnt,
-							    rqpair->rdma_qp->domain, rdma_req,
-							    rdma_req->req.iov, rdma_req->req.iovcnt,
-							    rqpair->rdma_qp->domain, rdma_req,
-							    NULL, NULL);
-				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+			if (rdma_req->use_accel_seq) {
+				STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
+				rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
 				break;
 			}
 
@@ -2426,6 +2504,19 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
+			break;
+		case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_NEED_ACCEL_TASK, 0, 0,
+					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
+
+			if (rdma_req != STAILQ_FIRST(&rgroup->pending_accel_queue)) {
+				/* This request needs to wait in line to obtain a buffer */
+				break;
+			}
+			if (spdk_unlikely(nvmf_rdma_request_append_copy_task(rqpair, rdma_req))) {
+				break;
+			}
+			STAILQ_REMOVE_HEAD(&rgroup->pending_accel_queue, state_link);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING, 0, 0,
@@ -3637,6 +3728,13 @@ nvmf_rdma_qpair_process_pending(struct spdk_nvmf_rdma_transport *rtransport,
 		}
 	}
 
+	/* Then we handle request waiting on accel tasks. */
+	STAILQ_FOREACH_SAFE(rdma_req, &rqpair->poller->group->pending_accel_queue, state_link, req_tmp) {
+		if (nvmf_rdma_request_process(rtransport, rdma_req) == false && drain == false) {
+			break;
+		}
+	}
+
 	resources = rqpair->resources;
 	while (!STAILQ_EMPTY(&resources->free_queue) && !STAILQ_EMPTY(&resources->incoming_queue)) {
 		rdma_req = STAILQ_FIRST(&resources->free_queue);
@@ -3691,11 +3789,16 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 	struct spdk_nvmf_rdma_transport *rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
+	if (rqpair->in_destroy) {
+		return;
+	}
+	rqpair->in_destroy = true;
+
 	nvmf_rdma_qpair_process_pending(rtransport, rqpair, true);
 
 	/* nvmf_rdma_close_qpair is not called */
 	if (!rqpair->to_close) {
-		return;
+		goto again;
 	}
 
 	/* device is already destroyed and we should force destroy this qpair. */
@@ -3706,21 +3809,25 @@ nvmf_rdma_destroy_drained_qpair(struct spdk_nvmf_rdma_qpair *rqpair)
 
 	/* In non SRQ path, we will reach rqpair->max_queue_depth. In SRQ path, we will get the last_wqe event. */
 	if (rqpair->current_send_depth != 0) {
-		return;
+		goto again;
 	}
 
 	if (rqpair->srq == NULL && rqpair->current_recv_depth != rqpair->max_queue_depth) {
-		return;
+		goto again;
 	}
 
 	if (rqpair->srq != NULL && rqpair->last_wqe_reached == false &&
 	    !nvmf_rdma_can_ignore_last_wqe_reached(rqpair->device)) {
-		return;
+		goto again;
 	}
 
 	assert(rqpair->qpair.state == SPDK_NVMF_QPAIR_ERROR);
 
 	nvmf_rdma_qpair_destroy(rqpair);
+
+	return;
+again:
+	rqpair->in_destroy = false;
 }
 
 static int
@@ -4364,6 +4471,7 @@ nvmf_rdma_poll_group_create(struct spdk_nvmf_transport *transport,
 	}
 
 	TAILQ_INIT(&rgroup->pollers);
+	STAILQ_INIT(&rgroup->pending_accel_queue);
 
 	TAILQ_FOREACH(device, &rtransport->devices, link) {
 		rc = nvmf_rdma_poller_create(rtransport, rgroup, device, &poller);
@@ -4909,7 +5017,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	int reaped, i;
 	int count = 0;
 	int rc;
-	bool error = false;
+	bool error = false, fail_data_transfer = false;
 	uint64_t poll_tsc = spdk_get_ticks();
 
 	if (spdk_unlikely(rpoller->need_destroy)) {
@@ -4939,6 +5047,10 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	for (i = 0; i < reaped; i++) {
 
 		rdma_wr = (struct spdk_nvmf_rdma_wr *)wc[i].wr_id;
+		if (spdk_unlikely(!rdma_wr)) {
+			assert(wc[i].status != IBV_WC_SUCCESS);
+			continue;
+		}
 
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_SEND:
@@ -5021,7 +5133,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 							nvmf_rdma_request_process(rtransport, rdma_req);
 							break;
 						}
-						SPDK_DEBUGLOG(rdma, "req %p, transfer_tcp_cb %p\n", rdma_req, rdma_req->transfer_cpl_cb);
+						SPDK_DEBUGLOG(rdma, "req %p, transfer_cpl_cb %p\n", rdma_req, rdma_req->transfer_cpl_cb);
 						if (rdma_req->transfer_cpl_cb) {
 							/* We need to wait for bdev layer to call req_complete */
 							rdma_req->state = RDMA_REQUEST_STATE_EXECUTING;
@@ -5060,13 +5172,17 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 							STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, rdma_req, spdk_nvmf_rdma_request, state_link);
 						}
 						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-						nvmf_rdma_request_process(rtransport, rdma_req);
+						if (rdma_req->transfer_cpl_cb) {
+							/* Request will be completed by ctrlr */
+							fail_data_transfer = true;
+						} else {
+							nvmf_rdma_request_process(rtransport, rdma_req);
+						}
 					}
 				} else if (rdma_req->data.wr.opcode == IBV_WR_RDMA_WRITE) {
 					/* We can receive completion for WRITE as part of accel sequence handling */
 					if (rdma_req->num_outstanding_data_wr == 0 && rdma_req->transfer_cpl_cb) {
-						rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
-						nvmf_rdma_request_process(rtransport, rdma_req);
+						fail_data_transfer = true;
 					}
 				}
 			}
@@ -5086,6 +5202,14 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 			if (spdk_nvmf_qpair_is_active(&rqpair->qpair)) {
 				/* Disconnect the connection. */
 				spdk_nvmf_qpair_disconnect(&rqpair->qpair, NULL, NULL);
+			}
+			if (fail_data_transfer) {
+				fail_data_transfer = false;
+				/* Completion of the data transfer triggers IO completion in the controller.
+				 * As result, if qpair is in the process of disconnect and that was the last outstanding IO,
+				 * the qpair can be destroyed via qpair_fini callback. We must not reference qpair after
+				 * completing data transfer in error path to avoid heap-use after free or double free */
+				nvmf_rdma_req_finish_data_transfer(rdma_req, -EIO);
 			} else {
 				nvmf_rdma_destroy_drained_qpair(rqpair);
 			}
@@ -5324,6 +5448,13 @@ _nvmf_rdma_qpair_abort_request(void *ctx)
 		nvmf_rdma_request_set_abort_status(req, rdma_req_to_abort, rqpair);
 		break;
 
+	case RDMA_REQUEST_STATE_NEED_ACCEL_TASK:
+		STAILQ_REMOVE(&rqpair->poller->group->pending_accel_queue,
+			      rdma_req_to_abort, spdk_nvmf_rdma_request, state_link);
+
+		nvmf_rdma_request_set_abort_status(req, rdma_req_to_abort, rqpair);
+		break;
+
 	case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
 		STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, rdma_req_to_abort,
 			      spdk_nvmf_rdma_request, state_link);
@@ -5416,6 +5547,7 @@ nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 	rgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_rdma_poll_group, group);
 
 	spdk_json_write_named_uint64(w, "pending_data_buffer", rgroup->stat.pending_data_buffer);
+	spdk_json_write_named_uint64(w, "pending_accel_task", rgroup->stat.pending_accel_task);
 
 	spdk_json_write_named_array_begin(w, "devices");
 

@@ -60,7 +60,8 @@ if __name__ == "__main__":
                                 pipes and can be used as a faster way to send RPC commands. If enabled, rpc.py \
                                 must be executed without any other parameters.")
     parser.set_defaults(is_server=False)
-    parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+    parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                        help='Module name of plugin with additional RPC commands. May be specified multiple times.')
     subparsers = parser.add_subparsers(help='RPC methods', dest='called_rpc_name', metavar='')
 
     def framework_start_init(args):
@@ -93,13 +94,14 @@ if __name__ == "__main__":
 
     def save_config(args):
         rpc.save_config(args.client,
-                        sys.stdout,
+                        args.output,
                         indent=args.indent)
 
     p = subparsers.add_parser('save_config', help="""Write current (live) configuration of SPDK subsystems and targets to stdout.
     """)
     p.add_argument('-i', '--indent', help="""Indent level. Value less than 0 mean compact mode. Default indent level is 2.
     """, type=int, default=2)
+    p.add_argument('-o', '--output', help="""Output file. By default, output to stdout.""", default=sys.stdout)
     p.set_defaults(func=save_config)
 
     def load_config(args):
@@ -3526,7 +3528,9 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
                                          max_xfer_size=args.max_xfer_size, skip_rw=args.skip_rw,
-                                         max_readahead=args.max_readahead))
+                                         max_readahead=args.max_readahead,
+                                         enable_notifications=args.enable_notifications,
+                                         attr_valid_ms=args.attr_valid_ms))
 
     p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
     p.add_argument('name', help='Filesystem name. Example: aio0.')
@@ -3545,6 +3549,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-r', '--max-readahead', help='Max readahead size in bytes', type=int)
     p.add_argument('--skip-rw', dest='skip_rw', help="Do not process read or write commands. This is used for testing.",
                    action='store_true', default=None)
+    p.add_argument('--enable-notifications', help="Enable notifications.", action='store_true', default=None)
+    p.add_argument('-a', '--attr-valid-ms', help='File attributes validity time in miliseconds. Used for entry cache.', type=int)
 
     p.set_defaults(func=fsdev_aio_create)
 
@@ -3892,6 +3898,22 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('-d', '--backend-dir', help="Directory where rmem_pool stores backend files", required=False)
     p.set_defaults(func=rmem_enable)
 
+    def rdma_provider_get_opts(args):
+        print_dict(rpc.rdma_provider.rdma_provider_get_opts(args.client))
+
+    p = subparsers.add_parser('rdma_provider_get_opts', help='Get RDMA provider options')
+    p.set_defaults(func=rdma_provider_get_opts)
+
+    def rdma_provider_set_opts(args):
+        rpc.rdma_provider.rdma_provider_set_opts(args.client, support_offload_on_qp=args.support_offload_on_qp)
+
+    p = subparsers.add_parser('rdma_provider_set_opts', help='Set RDMA provider options.')
+    p.add_argument('--enable-offload-on-qp', dest='support_offload_on_qp', action='store_true', default=None,
+                   help="Enable HW offloads on network QP")
+    p.add_argument('--disable-offload-on-qp', dest='support_offload_on_qp', action='store_false', default=None,
+                   help="Enable HW offloads on network QP")
+    p.set_defaults(func=rdma_provider_set_opts)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))
@@ -3926,19 +3948,27 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     def load_plugin(args):
         # Create temporary parser, pull out the plugin parameter, load the module, and then run the real argument parser
         plugin_parser = argparse.ArgumentParser(add_help=False)
-        plugin_parser.add_argument('--plugin', dest='rpc_plugin', help='Module name of plugin with additional RPC commands')
+        plugin_parser.add_argument('--plugin', dest='rpc_plugin', action='append',
+                                   help='Module name of plugin with additional RPC commands. May be specified multiple times.')
 
-        rpc_module = plugin_parser.parse_known_args()[0].rpc_plugin
+        rpc_modules = []
+        tmp_rpc_modules = plugin_parser.parse_known_args()[0].rpc_plugin
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend(tmp_rpc_modules)
+
         if args is not None:
-            rpc_module = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            tmp_rpc_modules = plugin_parser.parse_known_args(args)[0].rpc_plugin
+            if tmp_rpc_modules is not None:
+                rpc_modules.extend(tmp_rpc_modules)
 
-        if rpc_module in plugins:
-            return
+        tmp_rpc_modules = os.environ.get('SPDK_RPC_PLUGIN')
+        if tmp_rpc_modules is not None:
+            rpc_modules.extend([s for s in tmp_rpc_modules.split(':') if s])
 
-        if rpc_module is None:
-            rpc_module = os.environ.get('SPDK_RPC_PLUGIN')
+        for rpc_module in rpc_modules:
+            if rpc_module in plugins:
+                return
 
-        if rpc_module is not None:
             try:
                 rpc_plugin = importlib.import_module(rpc_module)
                 try:

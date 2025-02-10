@@ -37,7 +37,8 @@ DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq
 DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
 		int num_entries,
 		struct ibv_wc *wc), 0);
-
+DEFINE_STUB(spdk_rdma_provider_get_opts, int, (struct spdk_rdma_provider_opts *opts,
+		size_t opts_size), 0);
 DEFINE_STUB(spdk_memory_domain_get_context, struct spdk_memory_domain_ctx *,
 	    (struct spdk_memory_domain *device), NULL);
 DEFINE_STUB(spdk_memory_domain_pull_data, int, (struct spdk_memory_domain *src_domain,

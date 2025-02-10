@@ -26,6 +26,7 @@
 	spdk_fsdev_is_recovered;
 	spdk_fsdev_init;
 	spdk_fsdev_cleanup;
+	spdk_fsdev_get_notify_max_data_size;
 	spdk_fsdev_mount;
 	spdk_fsdev_umount;
 	spdk_fsdev_lookup;
@@ -71,6 +72,8 @@
 	spdk_fsdev_get_device_stat;
 	spdk_fsdev_reset_device_stat;
 	spdk_fsdev_io_type_get_name;
+	spdk_fsdev_enable_notifications;
+	spdk_fsdev_disable_notifications;
 
 	# Public functions in fsdev_module.h
 	spdk_fsdev_register;
@@ -83,6 +86,8 @@
 	spdk_fsdev_io_get_io_channel;
 	spdk_fsdev_module_list_add;
 	spdk_fsdev_module_list_find;
+	spdk_fsdev_notify_inval_data;
+	spdk_fsdev_notify_inval_entry;
 
 	# Everything else
 	local: *;

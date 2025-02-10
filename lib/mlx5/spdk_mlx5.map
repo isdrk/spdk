@@ -45,6 +45,10 @@
     spdk_mlx5_mkey_pool_put_ref;
     spdk_mlx5_mkey_pool_get_bulk;
     spdk_mlx5_mkey_pool_put_bulk;
+    spdk_mlx5_mkey_pool_get;
+    spdk_mlx5_mkey_pool_put;
+    spdk_mlx5_mkey_pool_obj_get_ref;
+    spdk_mlx5_mkey_pool_obj_put_ref;
     spdk_mlx5_mkey_pool_find_mkey_by_id;
 
     spdk_mlx5_srq_create;

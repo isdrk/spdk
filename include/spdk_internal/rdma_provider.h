@@ -11,7 +11,7 @@
 #include <rdma/rdma_verbs.h>
 #include "spdk/dma.h"
 
-#include "spdk/dma.h"
+#include "spdk/json.h"
 
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
 #define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_OLD 0
@@ -90,6 +90,18 @@ struct spdk_rdma_provider_memory_translation_ctx {
 	size_t length;
 	uint32_t lkey;
 	uint32_t rkey;
+};
+
+struct spdk_rdma_provider_opts {
+	/**
+	 * Size of this structure in bytes
+	 */
+	size_t opts_size;
+	/**
+	 * Support HW offloads on network QP. If set, memory domain created for qpair contains a pointer to the qpair,
+	 * Qpair and CQ might be created with extended size
+	 */
+	bool support_offload_on_qp;
 };
 
 /**
@@ -257,5 +269,45 @@ int spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_en
  * return true if accel sequence is supported
  */
 bool spdk_rdma_provider_accel_sequence_supported(void);
+
+/**
+ * Get a reference of the memory key
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_get_ref(void *mkey);
+
+/**
+ * Put a reference of the memory key
+ *
+ * The memory key is released once the count reaches 0.
+ *
+ * \param mkey Memory key
+ */
+void spdk_rdma_provider_memory_key_put_ref(void *mkey);
+
+/**
+ * Set the options for the rdma_provide library.
+ *
+ * \param opts options to set
+ * \return 0 on success.
+ * \return -EINVAL if the options are invalid.
+ */
+int spdk_rdma_provider_set_opts(const struct spdk_rdma_provider_opts *opts);
+
+/**
+ * Get the options for the rdma_provide library.
+ *
+ * \param opts Output parameter for options.
+ * \param opts_size sizeof(*opts)
+ */
+int spdk_rdma_provider_get_opts(struct spdk_rdma_provider_opts *opts, size_t opts_size);
+
+/**
+ * Get RDMA provider configuration
+ *
+ * \param w pointer to a JSON write context where the configuration will be written.
+ */
+void spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w);
 
 #endif /* SPDK_RDMA_H */

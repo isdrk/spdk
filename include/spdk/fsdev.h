@@ -193,12 +193,26 @@ enum spdk_fsdev_io_type {
 	__SPDK_FSDEV_IO_LAST
 };
 
+/** Notification type */
+enum spdk_fsdev_notify_type {
+	SPDK_FSDEV_NOTIFY_INVAL_DATA,
+	SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
+	SPDK_FSDEV_NOTIFY_NUM_TYPES
+};
+
 /**
  * fsdev IO statistics
  */
 struct spdk_fsdev_io_stat {
-	/** Number of handled IOs by IO type */
-	uint64_t num_ios[__SPDK_FSDEV_IO_LAST];
+	/** Stats by IO type */
+	struct {
+		/* Number of handled IOs */
+		uint64_t count;
+		/* Max latency */
+		uint64_t max_latency_ticks;
+		/* Min latency */
+		uint64_t min_latency_ticks;
+	} io[__SPDK_FSDEV_IO_LAST];
 	/** Number of bytes read */
 	uint64_t bytes_read;
 	/** Number of bytes written */
@@ -206,7 +220,9 @@ struct spdk_fsdev_io_stat {
 	/** Number of IOs which couldn't be handled due to lack of the IO objects */
 	uint64_t num_out_of_io;
 	/** Number of IOs completed with an error */
-	uint64_t num_errors;
+	uint64_t num_io_errors;
+	/** Number of emitted notifications by type */
+	uint64_t num_notifies[SPDK_FSDEV_NOTIFY_NUM_TYPES];
 };
 
 /**
@@ -471,6 +487,100 @@ typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, boo
  * negated errno on failure, in which case the callback will not be called.
  */
 int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
+
+struct spdk_fsdev_notify_data {
+	/** Notification type */
+	enum spdk_fsdev_notify_type type;
+	union {
+		/** Data for SPDK_FSDEV_NOTIFY_INVAL_DATA notification type */
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			uint64_t offset;
+			size_t size;
+		} inval_data;
+
+		/** Data for SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification type */
+		struct {
+			struct spdk_fsdev_file_object *parent_fobject;
+			const char *name;
+		} inval_entry;
+	};
+};
+
+struct spdk_fsdev_notify_reply_data {
+	/** Notification handling status */
+	int status;
+};
+
+/**
+ * Filesystem device notification reply callback.
+ *
+ * \param notify_reply_data Reply data for the filesystem device notification.
+ * Data is only valid in the context of this callback.
+ * \param reply_ctx Context for the filesystem device notification.
+ */
+typedef void (*spdk_fsdev_notify_reply_cb_t)(
+	const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+	void *reply_ctx);
+
+/**
+ * Filesystem device notification callback.
+ *
+ * \param fsdev Filesystem device that triggered event.
+ * \param ctx Context that was passed in spdk_fsdev_enable_notifications().
+ * \param notify_data Data for the filesystem device notification.
+ * Data is only valid in the context of this callback.
+ * \param reply_cb Optional notification reply callback. If NULL, fsdev doesn't need a reply for this notification.
+ * Fsdev should be ready to get the reply callback in the context of notify callback.
+ * \param reply_ctx Context for the filesystem device notification. Should be passed in reply_cb.
+ */
+typedef void (*spdk_fsdev_notify_cb_t)(struct spdk_fsdev *fsdev,
+				       void *ctx,
+				       const struct spdk_fsdev_notify_data *notify_data,
+				       spdk_fsdev_notify_reply_cb_t reply_cb,
+				       void *reply_ctx);
+
+/**
+ * Enable notifications for fsdev.
+ * Notifications can be enabled only once for filesystem device.
+ * Notifications can be delivered on any thread.
+ * It must be called before spdk_fsdev_mount().
+ *
+ * \param desc Filesystem device descriptor.
+ * \param notify_cb Callback to be invoked on notification.
+ * \param ctx Context that will be passed to notify_cb.
+ *
+ * \return 0 on success.
+ * \return -EALREADY if notifications were already enabled on this filesystem device.
+ * \return negated errno on other errors.
+ */
+int spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_cb_t notify_cb,
+				    void *ctx);
+
+/**
+ * Disable notifications for fsdev.
+ * It must be called after spdk_fsdev_umount().
+ *
+ * \param desc Filesystem device descriptor.
+ *
+ * \return 0 on success.
+ * \return -EALREADY if notifications were already disabled on this filesystem device.
+ * \return negated errno on other errors.
+ */
+int spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc);
+
+/**
+ * Get filesystem device maximum notification data size.
+ * It indicates the maximum size of varibale sized data in the notification
+ * and does not include fixed size fields in spdk_fsdev_notify_data structure.
+ * Example of variable sized data is 'name' in SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification.
+ *
+ * \param fsdev Filesystem device to query.
+ *
+ * \return Maximum size of variable sized notification data for this fsdev in bytes.
+ * Zero means that fsdev does not support notifications.
+ */
+uint32_t spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev);
 
 /**
  * Check whether the Filesystem device supports reset.

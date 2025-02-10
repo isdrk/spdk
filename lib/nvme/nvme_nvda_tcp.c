@@ -949,6 +949,11 @@ xlio_socket_comp_cb(xlio_socket_t sock, uintptr_t userdata_sq, uintptr_t userdat
 	SPDK_DEBUGLOG(nvme_xlio, "Completed zcopy buffer userdata_sq=%lx userdata_op=%lx.\n",
 		      userdata_sq, userdata_op);
 
+	if (spdk_unlikely(tqpair->flags.stop_receiving)) {
+		SPDK_DEBUGLOG(nvme_xlio, "tqpair %p is stop_receiving: tcp_req %p\n",
+			      tqpair, SPDK_CONTAINEROF(pdu, struct nvme_tcp_req, pdu));
+		return;
+	}
 	_pdu_write_done(tqpair, pdu, 0);
 }
 
@@ -1421,6 +1426,8 @@ nvme_tcp_req_put(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 		spdk_iobuf_put(group->group->accel_fn_table.get_iobuf_channel(group->group->ctx),
 			       tcp_req->iobuf_iov.iov_base,
 			       tcp_req->iobuf_iov.iov_len);
+
+		tcp_req->iobuf_iov.iov_base = NULL;
 	}
 
 	if (tqpair->flags.use_poll_group_req_pool) {

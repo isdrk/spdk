@@ -407,7 +407,7 @@ vfu_virtio_fs_add_fsdev(const char *name, const char *fsdev_name, const char *ta
 		return ret;
 	}
 
-	fs_endpoint->fuse_disp = spdk_fuse_dispatcher_create(fs_endpoint->fsdev_desc, false);
+	fs_endpoint->fuse_disp = spdk_fuse_dispatcher_create(fs_endpoint->fsdev_desc, false, NULL, NULL);
 	if (!fs_endpoint->fuse_disp) {
 		SPDK_ERRLOG("%s: failed to create FUSE dispatcher for %s\n", spdk_vfu_get_endpoint_id(endpoint),
 			    fsdev_name);

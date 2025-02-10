@@ -117,9 +117,8 @@ struct spdk_mlx5_mkey_pool_param {
 
 struct spdk_mlx5_mkey_pool_obj {
 	uint32_t mkey;
-	/* TODO: pool_flags will be removed */
-	/* Determines which pool the mkey belongs to. See \ref spdk_mlx5_mkey_pool_flags */
-	uint8_t pool_flag;
+	uint32_t ref_count;
+	struct spdk_mlx5_mkey_pool *pool;
 	RB_ENTRY(spdk_mlx5_mkey_pool_obj) node;
 	struct {
 		uint32_t sigerr_count;
@@ -704,6 +703,43 @@ int spdk_mlx5_mkey_pool_get_bulk(struct spdk_mlx5_mkey_pool *pool,
  */
 void spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 				  struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count);
+
+/**
+ * Get an mkey from the pool.
+ *
+ * \param pool mkey pool
+ * \return Pointer to an mkey on success, NULL if the pool is empty
+ */
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_pool *pool);
+
+/**
+ * Return the mkey to the pool
+ *
+ * \param pool mkey pool
+ * \param mkey mkey to return to the pool
+ */
+void spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool,
+			     struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Increment reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_get_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
+
+/**
+ * Decrement the reference count of the mkey.
+ *
+ * The mkey is not returned to the pool until its reference counter reaches 0.
+ * If the reference count is 0, the mkey object is returned to the pool. This function is an alternative to
+ * \ref spdk_mlx5_mkey_pool_put
+ *
+ * \param mkey the mkey pool object
+ */
+void spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey);
 
 /**
  * Find mkey object by mkey ID

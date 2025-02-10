@@ -24,6 +24,7 @@
 #define UT_AVALUE "xattr1.val"
 #define UT_NUM_LOOKUPS 11
 #define UT_DATA_SIZE 22
+#define UT_NOTIFY_MAX_DATA_SIZE 4096
 
 #define UT_SUBMIT_IO_NUM_COMMON_PARAMS 4
 
@@ -509,6 +510,16 @@ ut_fsdev_reset(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	return ut_reset_desired_err;
 }
 
+static int
+ut_fsdev_set_notifications(void *ctx, bool enabled)
+{
+	ut_call_record_begin(ut_fsdev_set_notifications);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(enabled);
+	ut_call_record_end();
+	return 0;
+}
+
 static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.destruct		= ut_fsdev_destruct,
 	.submit_request		= ut_fsdev_submit_request,
@@ -516,6 +527,7 @@ static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.write_config_json	= ut_fsdev_write_config_json,
 	.get_memory_domains	= ut_fsdev_get_memory_domains,
 	.reset			= ut_fsdev_reset,
+	.set_notifications	= ut_fsdev_set_notifications,
 };
 
 static void
@@ -575,6 +587,7 @@ ut_fsdev_create(const char *name)
 	ufsdev->fsdev.ctxt = ufsdev;
 	ufsdev->fsdev.fn_table = &ut_fdev_fn_table;
 	ufsdev->fsdev.module = &ut_fsdev_module;
+	ufsdev->fsdev.notify_max_data_size = UT_NOTIFY_MAX_DATA_SIZE;
 
 	rc = spdk_fsdev_register(&ufsdev->fsdev);
 	if (rc) {
@@ -988,6 +1001,150 @@ ut_fsdev_test_reset_module_reset_fails(void)
 {
 	/* Test with a module that fails to reset */
 	ut_fsdev_do_test_reset(true, false);
+}
+
+static void
+ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
+		   void *ctx,
+		   const struct spdk_fsdev_notify_data *notify_data,
+		   spdk_fsdev_notify_reply_cb_t reply_cb,
+		   void *reply_ctx)
+{
+	ut_call_record_begin(ut_fsdev_notify_cb);
+	ut_call_record_param_ptr(fsdev);
+	ut_call_record_param_ptr(ctx);
+	ut_call_record_param_int(notify_data->type);
+	switch (notify_data->type) {
+	case SPDK_FSDEV_NOTIFY_INVAL_DATA:
+		ut_call_record_param_hash(&notify_data->inval_data, sizeof(notify_data->inval_data));
+		break;
+	case SPDK_FSDEV_NOTIFY_INVAL_ENTRY:
+		ut_call_record_param_hash(&notify_data->inval_entry, sizeof(notify_data->inval_entry));
+		break;
+	default:
+		CU_ASSERT(false);
+		break;
+	}
+	ut_call_record_param_ptr(reply_cb);
+	ut_call_record_param_ptr(reply_ctx);
+	ut_call_record_end();
+}
+
+static void
+ut_fsdev_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+			 void *reply_ctx)
+{
+}
+
+static void
+ut_fsdev_device_stat_cb(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat, void *cb_arg,
+			int rc)
+{
+}
+
+static void
+ut_fsdev_test_notifications(void)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_fsdev_desc *fsdev_desc;
+	struct spdk_fsdev *fsdev;
+	int notify_ctx;
+	int reply_ctx;
+	int file_object;
+	int parent_file_object;
+	const char *filename = "test_file.txt";
+	struct spdk_fsdev_notify_data notify_data;
+	struct spdk_fsdev_io_stat stat;
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	SPDK_CU_ASSERT_FATAL(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+	SPDK_CU_ASSERT_FATAL(fsdev_desc != NULL);
+	fsdev = spdk_fsdev_desc_get_fsdev(fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(fsdev != NULL);
+
+	CU_ASSERT(spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(fsdev_desc)) ==
+		  UT_NOTIFY_MAX_DATA_SIZE);
+
+	/* No subscriber */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
+					  4096, 8192, NULL, NULL);
+	CU_ASSERT(rc == -ENODEV);
+
+	/* Enable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == true);
+
+	/* Enable notifications twice should fail */
+	rc = spdk_fsdev_enable_notifications(fsdev_desc, ut_fsdev_notify_cb, &notify_ctx);
+	CU_ASSERT(rc == -EALREADY);
+
+	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_DATA */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
+					  4096, 8192, ut_fsdev_notify_reply_cb, &reply_ctx);
+	CU_ASSERT(rc == 0);
+
+	memset(&notify_data, 0, sizeof(notify_data));
+	notify_data.inval_data.fobject = (struct spdk_fsdev_file_object *)&file_object;
+	notify_data.inval_data.offset = 4096;
+	notify_data.inval_data.size = 8192;
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_DATA);
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_data,
+			sizeof(notify_data.inval_data)));
+	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+
+	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_ENTRY */
+	ut_calls_reset();
+	rc = spdk_fsdev_notify_inval_entry(&utfsdev->fsdev,
+					   (struct spdk_fsdev_file_object *)&parent_file_object,
+					   filename, ut_fsdev_notify_reply_cb, &reply_ctx);
+	CU_ASSERT(rc == 0);
+
+	memset(&notify_data, 0, sizeof(notify_data));
+	notify_data.inval_entry.parent_fobject = (struct spdk_fsdev_file_object *)&parent_file_object;
+	notify_data.inval_entry.name = filename;
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_ENTRY);
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_entry,
+			sizeof(notify_data.inval_entry)));
+	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+
+	memset(&stat, 0, sizeof(stat));
+	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
+	poll_threads();
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_DATA] == 1);
+	CU_ASSERT(stat.num_notifies[SPDK_FSDEV_NOTIFY_INVAL_ENTRY] == 1);
+
+	/* Disable notifications */
+	ut_calls_reset();
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_set_notifications);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == utfsdev);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == false);
+
+	/* Disable notifications twice should fail */
+	rc = spdk_fsdev_disable_notifications(fsdev_desc);
+	CU_ASSERT(rc == -EALREADY);
+
+	spdk_fsdev_close(fsdev_desc);
+	ut_fsdev_destroy(utfsdev);
 }
 
 typedef int (*execute_clb)(struct ut_fsdev *utfsdev, struct spdk_io_channel *ch,
@@ -2485,6 +2642,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_succeeds);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_leaks_io);
 	CU_ADD_TEST(suite, ut_fsdev_test_reset_module_reset_fails);
+	CU_ADD_TEST(suite, ut_fsdev_test_notifications);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_ok);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_err);
 	CU_ADD_TEST(suite, ut_fsdev_test_umount);

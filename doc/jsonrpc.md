@@ -13351,6 +13351,8 @@ per_channel             | Optional | bool        | Display per channel data.
 
 The response is an array of objects containing I/O statistics of the requested fsdevs.
 
+NOTE: Only the statistics for the I/Os with non-zero `count` are reported.
+
 #### Example
 
 Example request:
@@ -13376,54 +13378,57 @@ Example response:
   "result": {
     "fsdevs": [
       {
-        "name": "aio0",
-        "num_ios": {
-          "mount": 1,
-          "umount": 0,
-          "lookup": 20,
-          "forget": 11,
-          "getattr": 46,
-          "setattr": 0,
-          "readlink": 0,
-          "symlink": 0,
-          "mknod": 0,
-          "mkdir": 0,
-          "unlink": 0,
-          "rmdir": 0,
-          "rename": 0,
-          "link": 0,
-          "open": 9,
-          "read": 526466,
-          "write": 527031,
-          "statfs": 0,
-          "release": 0,
-          "fsync": 0,
-          "setxattr": 0,
-          "getxattr": 0,
-          "listxattr": 0,
-          "removexattr": 0,
-          "flush": 0,
-          "opendir": 0,
-          "readdir": 0,
-          "releasedir": 0,
-          "fsyncdir": 0,
-          "flock": 0,
-          "create": 0,
-          "abort": 0,
-          "fallocate": 0,
-          "copy_file_range": 0,
-          "syncfs": 0,
-          "access": 0,
-          "lseek": 0,
-          "poll": 0,
-          "ioctl": 0,
-          "getlk": 0,
-          "setlk": 0
+        "name": "fsdev0",
+        "io": {
+          "mount": {
+            "count": 1,
+            "max_latency_ticks": 145384,
+            "min_latency_ticks": 145384
+          },
+          "lookup": {
+            "count": 18,
+            "max_latency_ticks": 13828182,
+            "min_latency_ticks": 41132
+          },
+          "forget": {
+            "count": 11,
+            "max_latency_ticks": 71684,
+            "min_latency_ticks": 31922
+          },
+          "getattr": {
+            "count": 43,
+            "max_latency_ticks": 13864914,
+            "min_latency_ticks": 23098
+          },
+          "open": {
+            "count": 7,
+            "max_latency_ticks": 2309832,
+            "min_latency_ticks": 54062
+          },
+          "read": {
+            "count": 1733507,
+            "max_latency_ticks": 45798992,
+            "min_latency_ticks": 447254
+          },
+          "write": {
+            "count": 1734244,
+            "max_latency_ticks": 45676558,
+            "min_latency_ticks": 456126
+          },
+          "getxattr": {
+            "count": 33,
+            "max_latency_ticks": 1722712,
+            "min_latency_ticks": 24690
+          }
         },
-        "bytes_read": 2156335104,
-        "bytes_written": 2158678016,
+        "bytes_read": 7100444672,
+        "bytes_written": 7103463424,
         "num_out_of_io": 0,
-        "num_errors": 0
+        "num_io_errors": 33
+        "num_notifies": {
+          "inval_data": 0,
+          "inval_entry": 1
+        }
       }
     ]
   }
@@ -13483,6 +13488,8 @@ enable_writeback_cache  | Optional | bool        | true to enable the writeback 
 max_xfer_size           | Optional | int         | The maximum size allowed for data transfers, in bytes
 max_readahead           | Optional | int         | The maximum size allowed for readahead, in bytes
 skip_rw                 | Optional | bool        | Skip processing read and write requests and complete them successfully immediately. This is useful for benchmarking.
+enable_notifications    | Optional | bool        | Enable notifications
+attr_valid_ms           | Optional | int         | File attributes validity time in milliseconds. Used for entry cache
 
 #### Example
 
@@ -13499,7 +13506,9 @@ Example request:
     "enable_writeback_cache": true,
     "max_xfer_size": 65535,
     "max_readahead": 65535,
-    "skip_rw": true
+    "skip_rw": true,
+    "enable_notifications": true,
+    "attr_valid_ms": 30000
   }
 }
 ~~~
@@ -13612,5 +13621,70 @@ Example response:
   "params": {
     "backend_dir": "/tmp/rmem"
   }
+}
+~~~
+
+### rdma_provider_get_opts {#rdma_provider_get_opts}
+
+Get rdma_provider options.
+
+#### Parameters
+
+None
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_get_opts",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "support_offload_on_qp": true
+  }
+}
+~~~
+
+### rdma_provider_set_opts {#rdma_provider_set_opts}
+
+Set rdma_provider options.
+
+#### Parameters
+
+Name                    | Optional | Type | Description
+----------------------- |----------|------| -----------
+support_offload_on_qp   | Optional | bool | Enable or disable support of HW offloads on network QP.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_set_opts",
+  "id": 1,
+  "params": {
+    "support_offload_on_qp": true
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
 }
 ~~~

@@ -36,17 +36,32 @@ enum spdk_fuse_arch {
 typedef void (*spdk_fuse_dispatcher_submit_cpl_cb)(void *cb_arg, int error);
 
 /**
+ * FUSE fsdev dispatcher notify reply callback.
+ *
+ * \param cb_arg Callback argument specified upon submit operation.
+ * \param notify_reply_data Decoded notification data for fsdev.
+ * \param unique_id Unique ID value.
+ */
+typedef void (*spdk_fuse_dispatcher_notify_reply_cb)(void *cb_arg,
+		const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+		uint64_t unique_id);
+
+/**
  * Create a FUSE fsdev dispatcher
  *
  * \param desc fsdev descriptor to work with
  * \param recovery_mode true if the dispatcher's state should be recovered, false otherwise.
+ * \param notify_reply_cb Callback to invoke on FUSE_NOTIFY_REPLY requests
+ * \param notify_reply_cb_arg Argument that will be passed to notify_reply_cb
  *
  * NOTE: \p recovery_mode is ignored if rmem pool functionality is disabled
  *
  * \return FUSE fsdev dispatcher object on success, NULL otherwise.
  */
 struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
-		bool recovery_mode);
+		bool recovery_mode,
+		spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
+		void *notify_reply_cb_arg);
 
 /**
  * Set a FUSE request source's HW architecture.
@@ -97,6 +112,33 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
  * \param disp FUSE fsdev dispatcher object.
  */
 void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
+
+/**
+ * Encode FUSE notification
+ *
+ * \param disp FUSE fsdev dispatcher object.
+ * \param iov Output IO vectors array.
+ * \param iovcnt Size of the output IO vectors array.
+ * \param notify_data Notification data received from fsdev.
+ * Pass NULL to encode "empty" notification that is used to indicate device reset.
+ * \param unique_id Unique ID of the notification.
+ *
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
+				       struct iovec *iov, int iovcnt,
+				       const struct spdk_fsdev_notify_data *notify_data,
+				       uint64_t unique_id,
+				       bool *has_reply);
+
+/**
+ * Get minimum buffer size required to fit FUSE notification.
+ *
+ * \param disp FUSE fsdev dispatcher object.
+ *
+ * \return notify buffer size in bytes. Zero means that notifications are not supported.
+ */
+uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp);
 
 #ifdef __cplusplus
 }

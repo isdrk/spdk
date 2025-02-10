@@ -269,7 +269,7 @@ mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsign
 	assert(obj_idx < pool->num_mkeys);
 	assert(pool->mkeys[obj_idx] != NULL);
 	mkey->mkey = pool->mkeys[obj_idx]->mkey;
-	mkey->pool_flag = pool->flags & 0xf;
+	mkey->pool = pool;
 	mkey->sig.sigerr_count = 1;
 	mkey->sig.sigerr = false;
 
@@ -490,8 +490,53 @@ spdk_mlx5_mkey_pool_put_bulk(struct spdk_mlx5_mkey_pool *pool,
 			     struct spdk_mlx5_mkey_pool_obj **mkeys, uint32_t mkeys_count)
 {
 	assert(pool->mpool);
+	assert(mkeys);
+	assert(mkeys_count);
+	assert(mkeys[0]->ref_count == 0);
 
 	spdk_mempool_put_bulk(pool->mpool, (void **)mkeys, mkeys_count);
+}
+
+struct spdk_mlx5_mkey_pool_obj *spdk_mlx5_mkey_pool_get(struct spdk_mlx5_mkey_pool *pool)
+{
+	struct spdk_mlx5_mkey_pool_obj *result;
+
+	result = spdk_mempool_get(pool->mpool);
+	if (spdk_likely(result)) {
+		assert(result->ref_count < UINT32_MAX && "too many references");
+		result->ref_count++;
+	}
+
+	return result;
+}
+
+void
+spdk_mlx5_mkey_pool_put(struct spdk_mlx5_mkey_pool *pool, struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	assert(pool);
+	assert(mkey);
+	assert(mkey->pool == pool);
+	assert(mkey->ref_count > 0);
+
+	if (--mkey->ref_count == 0) {
+		spdk_mempool_put(pool->mpool, mkey);
+	}
+}
+
+void
+spdk_mlx5_mkey_pool_obj_get_ref(struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	assert(mkey);
+	assert(mkey->pool);
+	assert(mkey->ref_count > 0);
+
+	mkey->ref_count++;
+}
+
+void
+spdk_mlx5_mkey_pool_obj_put_ref(struct spdk_mlx5_mkey_pool_obj *mkey)
+{
+	spdk_mlx5_mkey_pool_put(mkey->pool, mkey);
 }
 
 struct spdk_mlx5_mkey_pool_obj *
@@ -836,6 +881,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1008,6 +1054,7 @@ spdk_mlx5_umr_configure_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1165,6 +1212,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
@@ -1361,6 +1409,7 @@ spdk_mlx5_umr_configure_sig_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr
 	if (!spdk_unlikely(umr_attr->sge_count)) {
 		return -EINVAL;
 	}
+	qp->extra_flags = qp->cached_extra_flags;
 
 	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
 	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;

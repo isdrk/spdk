@@ -45,4 +45,6 @@ struct spdk_fsdev_channel {
 	struct spdk_fsdev_io_stat *stat;
 };
 
+const char *fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type);
+
 #endif /* SPDK_FSDEV_INT_H */

@@ -9,6 +9,8 @@
 #include "spdk/string.h"
 #include "spdk/fsdev.h"
 #include "spdk/thread.h"
+#include "spdk/fsdev_module.h"
+#include "fsdev_internal.h"
 
 static void
 rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
@@ -219,12 +221,6 @@ static const struct spdk_json_object_decoder rpc_fsdev_get_iostat_decoders[] = {
 };
 
 static void
-fsdev_stab_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev, void *event_ctx)
-{
-	SPDK_NOTICELOG("Unsupported fsdev event: type %d\n", type);
-}
-
-static void
 fsdev_free_get_iostat_ctx(struct rpc_fsdev_get_iostat_ctx *ctx)
 {
 	free(ctx->name);
@@ -249,20 +245,40 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "name", name);
-	spdk_json_write_named_object_begin(w, "num_ios");
-	for (i = 0; i < SPDK_COUNTOF(stat->num_ios); i++) {
-		const char *name = spdk_fsdev_io_type_get_name(i);
+	spdk_json_write_named_object_begin(w, "io");
+	for (i = 0; i < SPDK_COUNTOF(stat->io); i++) {
+		const char *name;
+
+		/* we omit the io_type completely if count is 0 */
+		if (!stat->io[i].count) {
+			continue;
+		}
+
+		name = spdk_fsdev_io_type_get_name(i);
 		if (!name) {
 			SPDK_ERRLOG("Cannot get name for IO %zu\n", i);
 			continue;
 		}
-		spdk_json_write_named_uint64(w, name, stat->num_ios[i]);
+
+		spdk_json_write_named_object_begin(w, name);
+		spdk_json_write_named_uint64(w, "count", stat->io[i].count);
+		spdk_json_write_named_uint64(w, "max_latency_ticks", stat->io[i].max_latency_ticks);
+		spdk_json_write_named_uint64(w, "min_latency_ticks",
+					     (stat->io[i].min_latency_ticks == UINT64_MAX) ? 0 : stat->io[i].min_latency_ticks);
+		spdk_json_write_object_end(w);
 	}
 	spdk_json_write_object_end(w);
 	spdk_json_write_named_uint64(w, "bytes_read", stat->bytes_read);
 	spdk_json_write_named_uint64(w, "bytes_written", stat->bytes_written);
 	spdk_json_write_named_uint64(w, "num_out_of_io", stat->num_out_of_io);
-	spdk_json_write_named_uint64(w, "num_errors", stat->num_errors);
+	spdk_json_write_named_uint64(w, "num_io_errors", stat->num_io_errors);
+	spdk_json_write_named_object_begin(w, "num_notifies");
+	for (i = 0; i < SPDK_COUNTOF(stat->num_notifies); i++) {
+		const char *name = fsdev_notify_type_get_name(i);
+		assert(name);
+		spdk_json_write_named_uint64(w, name, stat->num_notifies[i]);
+	}
+	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 }
 
@@ -311,6 +327,8 @@ rpc_fsdev_get_ch_iostat_done(struct spdk_fsdev *fsdev, void *_ctx, int status)
 	struct rpc_fsdev_get_iostat_node *node = _ctx;
 	struct rpc_fsdev_get_iostat_ctx *ctx = node->ctx;
 
+	spdk_fsdev_close(node->fsdev_desc);
+
 	spdk_json_write_array_end(ctx->w);
 	spdk_json_write_object_end(ctx->w);
 
@@ -337,7 +355,7 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
-	rc = spdk_fsdev_open(node->fsdev_name, fsdev_stab_event_cb, NULL, &node->fsdev_desc);
+	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);
@@ -504,7 +522,7 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
-	rc = spdk_fsdev_open(node->fsdev_name, fsdev_stab_event_cb, NULL, &node->fsdev_desc);
+	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);

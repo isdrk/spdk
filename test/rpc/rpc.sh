@@ -34,6 +34,14 @@ function rpc_plugins() {
 	$rpc --plugin rpc_plugin delete_malloc $malloc
 	bdevs=$($rpc bdev_get_bdevs)
 	[ "$(jq length <<< "$bdevs")" == "0" ]
+
+	# Multiple --plugin options
+	$rootdir/scripts/rpc.py --plugin rpc_plugin --plugin scheduler_plugin create_malloc --help
+	$rootdir/scripts/rpc.py --plugin rpc_plugin --plugin scheduler_plugin scheduler_thread_create --help
+
+	# Multiple plugins in SPDK_RPC_PLUGIN environment variable
+	SPDK_RPC_PLUGIN="rpc_plugin:scheduler_plugin" $rootdir/scripts/rpc.py create_malloc --help
+	SPDK_RPC_PLUGIN="rpc_plugin:scheduler_plugin" $rootdir/scripts/rpc.py scheduler_thread_create --help
 }
 
 function rpc_trace_cmd_test() {

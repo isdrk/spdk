@@ -153,7 +153,7 @@ rpc_framework_enable_subsystem(struct spdk_jsonrpc_request *request,
 			sub_dep = subsystem_find(deps->depends_on);
 			if (!sub_dep) {
 				spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-								     "Subsystem Dependency '%s' not found", sub_dep->name);
+								     "Subsystem Dependency '%s' not found", deps->depends_on);
 				return;
 			}
 

@@ -11247,7 +11247,7 @@ spdk_bdev_group_add_bdev(struct spdk_bdev_group *group, const char *bdev_name,
 			 void *cb_arg)
 {
 	int rc;
-	struct spdk_bdev_desc *desc;
+	struct spdk_bdev_desc *desc = NULL;
 	struct spdk_bdev *bdev;
 	struct bdev_group_add_cb_ctx *ctx;
 	bool qos_mod_in_progress;
@@ -11258,6 +11258,7 @@ spdk_bdev_group_add_bdev(struct spdk_bdev_group *group, const char *bdev_name,
 		cb_fn(cb_arg, rc);
 		return;
 	}
+	assert(desc);
 
 	bdev = spdk_bdev_desc_get_bdev(desc);
 	if (bdev->internal.group) {

@@ -36,6 +36,11 @@ struct mlx5_dv_srq {
 	int recv_err;
 };
 
+static struct spdk_rdma_provider_opts g_mlx5_dv_opts = {
+	.opts_size = sizeof(struct spdk_rdma_provider_opts),
+	.support_offload_on_qp = false,
+};
+
 struct spdk_rdma_provider_qp *
 spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 			     struct spdk_rdma_provider_qp_init_attr *qp_attr)
@@ -55,6 +60,10 @@ spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 	int rc;
 
 	assert(pd);
+
+	if (g_mlx5_dv_opts.support_offload_on_qp) {
+		mlx5_qp_attr.cap.max_send_wr *= 2;
+	}
 
 	dv_qp = calloc(1, sizeof(*dv_qp));
 	if (!dv_qp) {
@@ -93,6 +102,10 @@ spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
 
 	dv_qp->domain_ctx.size = sizeof(dv_qp->domain_ctx);
 	dv_qp->domain_ctx.ibv_pd = qp_attr->pd;
+	if (g_mlx5_dv_opts.support_offload_on_qp) {
+		dv_qp->domain_ctx.qp = dv_qp->mlx5_qp;
+	}
+
 	ctx.size = sizeof(ctx);
 	ctx.user_ctx = &dv_qp->domain_ctx;
 	ctx.user_ctx_size = dv_qp->domain_ctx.size;
@@ -197,7 +210,7 @@ spdk_rdma_provider_qp_disconnect(struct spdk_rdma_provider_qp *spdk_rdma_qp)
 
 		rc = spdk_mlx5_qp_modify(dv_qp->mlx5_qp, &qp_attr, IBV_QP_STATE);
 		if (rc) {
-			SPDK_ERRLOG("Failed to modify qp %p state to ERR, rc %d\n", dv_qp->mlx5_qp, rc);
+			SPDK_WARNLOG("Failed to modify qp %p state to ERR, rc %d\n", dv_qp->mlx5_qp, rc);
 			return rc;
 		}
 	}
@@ -584,6 +597,88 @@ spdk_rdma_provider_cq_poll(struct spdk_rdma_provider_cq *rdma_cq, int num_entrie
 	struct mlx5_dv_cq *dv_cq = SPDK_CONTAINEROF(rdma_cq, struct mlx5_dv_cq, rdma_cq);
 
 	return spdk_mlx5_cq_poll_wc(dv_cq->mlx5_cq, num_entries, wc);
+}
+
+int
+spdk_rdma_provider_set_opts(const struct spdk_rdma_provider_opts *opts)
+{
+	if (!opts) {
+		SPDK_ERRLOG("opts cannot be NULL\n");
+		return -EINVAL;
+	}
+
+	if (!opts->opts_size) {
+		SPDK_ERRLOG("opts_size inside opts cannot be zero value\n");
+		return -EINVAL;
+	}
+
+#define SET_FIELD(field) \
+        if (offsetof(struct spdk_rdma_provider_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
+                g_mlx5_dv_opts.field = opts->field; \
+        } \
+
+	SET_FIELD(support_offload_on_qp);
+
+	g_mlx5_dv_opts.opts_size = opts->opts_size;
+
+#undef SET_FIELD
+
+	return 0;
+}
+
+int
+spdk_rdma_provider_get_opts(struct spdk_rdma_provider_opts *opts, size_t opts_size)
+{
+	if (!opts) {
+		SPDK_ERRLOG("opts should not be NULL\n");
+		return -EINVAL;
+	}
+
+	if (!opts_size) {
+		SPDK_ERRLOG("opts_size should not be zero value\n");
+		return -EINVAL;
+	}
+
+	opts->opts_size = opts_size;
+
+#define SET_FIELD(field) \
+	if (offsetof(struct spdk_rdma_provider_opts, field) + sizeof(opts->field) <= opts_size) { \
+		opts->field = g_mlx5_dv_opts.field; \
+	}
+
+	SET_FIELD(support_offload_on_qp);
+
+	/* Do not remove this statement, you should always update this statement when you adding a new field,
+	 * and do not forget to add the SET_FIELD statement for your added field. */
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_rdma_provider_opts) == 16, "Incorrect size");
+
+#undef SET_FIELD
+	return 0;
+}
+
+void
+spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
+{
+	assert(w != NULL);
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "method", "rdma_provider_set_opts");
+	spdk_json_write_named_object_begin(w, "params");
+	spdk_json_write_named_bool(w, "support_offload_on_qp", g_mlx5_dv_opts.support_offload_on_qp);
+	spdk_json_write_object_end(w); /* params */
+	spdk_json_write_object_end(w);
+}
+
+void
+spdk_rdma_provider_memory_key_get_ref(void *mkey)
+{
+	spdk_mlx5_mkey_pool_obj_get_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
+}
+
+void
+spdk_rdma_provider_memory_key_put_ref(void *mkey)
+{
+	spdk_mlx5_mkey_pool_obj_put_ref((struct spdk_mlx5_mkey_pool_obj *)mkey);
 }
 
 SPDK_LOG_REGISTER_COMPONENT(rdma_mlx5_dv)

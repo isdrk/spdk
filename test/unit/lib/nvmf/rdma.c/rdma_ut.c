@@ -58,6 +58,8 @@ DEFINE_STUB(spdk_rdma_provider_cq_resize, int, (struct spdk_rdma_provider_cq *cq
 DEFINE_STUB(spdk_rdma_provider_cq_poll, int, (struct spdk_rdma_provider_cq *rdma_cq,
 		int num_entries,
 		struct ibv_wc *wc), 0);
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_get_ref, (void *mkey));
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_put_ref, (void *mkey));
 DEFINE_STUB(spdk_mempool_lookup, struct spdk_mempool *, (const char *name), NULL);
 
 static void *g_accel_p = (void *)0xdeadbeaf;

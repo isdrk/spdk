@@ -1,5 +1,6 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2015 Intel Corporation.
+#  Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 
@@ -20,6 +21,7 @@ DIRS-$(CONFIG_XLIO) += xlio
 DIRS-$(CONFIG_VHOST) += vhost_blk vhost_scsi
 DIRS-$(CONFIG_VFIO_USER) += vfu_tgt
 DIRS-$(CONFIG_FSDEV) += fsdev
+DIRS-$(CONFIG_RDMA) += rdma_provider
 
 # These dependencies are not based specifically on symbols, but rather
 # the subsystem dependency tree defined within the event subsystem C files

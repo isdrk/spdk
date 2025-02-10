@@ -77,6 +77,8 @@ DEFINE_STUB_V(spdk_rdma_provider_cq_destroy, (struct spdk_rdma_provider_cq *cq))
 DEFINE_STUB(spdk_rdma_provider_cq_create, struct spdk_rdma_provider_cq *,
 	    (struct spdk_rdma_provider_cq_init_attr *cq_attr),
 	    NULL);
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_get_ref, (void *mkey));
+DEFINE_STUB_V(spdk_rdma_provider_memory_key_put_ref, (void *mkey));
 DEFINE_STUB(ibv_wc_status_str, const char *, (enum ibv_wc_status status), NULL);
 DEFINE_STUB(rdma_get_dst_port, __be16, (struct rdma_cm_id *id), 0);
 DEFINE_STUB(rdma_get_src_port, __be16, (struct rdma_cm_id *id), 0);

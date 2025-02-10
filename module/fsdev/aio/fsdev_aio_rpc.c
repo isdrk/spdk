@@ -30,6 +30,8 @@ static const struct spdk_json_object_decoder rpc_aio_create_decoders[] = {
 	{"max_xfer_size", offsetof(struct rpc_aio_create, opts.max_xfer_size), spdk_json_decode_uint32, true},
 	{"max_readahead", offsetof(struct rpc_aio_create, opts.max_readahead), spdk_json_decode_uint32, true},
 	{"skip_rw", offsetof(struct rpc_aio_create, opts.skip_rw), spdk_json_decode_bool, true},
+	{"enable_notifications", offsetof(struct rpc_aio_create, opts.enable_notifications), spdk_json_decode_bool, true},
+	{"attr_valid_ms", offsetof(struct rpc_aio_create, opts.attr_valid_ms), spdk_json_decode_uint32, true},
 };
 
 static void

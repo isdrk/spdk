@@ -49,7 +49,7 @@ build-job:
     - cd ../fio-fio-3.35
     - ./configure --prefix=/usr/local
     - cd $CI_PROJECT_DIR
-    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --enable-debug --enable-werror
+    - ./configure --with-fio=../fio-fio-3.35/ --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --enable-debug --enable-werror
     - make -j4
     - find test -type f -perm 0755 |egrep -v '\.sh|\.py|\.pl|\/match' |tar cf .test.tar -T /dev/stdin
   artifacts:
@@ -68,7 +68,7 @@ build-shared-debug-job:
   image: "$FEDORA_IMAGE"
   script:
     - cd $CI_PROJECT_DIR
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-debug --enable-werror
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --with-shared --enable-debug --enable-werror
     - make -j4
 
 build-shared-release-job:
@@ -77,7 +77,7 @@ build-shared-release-job:
   image: "$FEDORA_IMAGE"
   script:
     - cd $CI_PROJECT_DIR
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-shared --enable-werror
+    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-aio-fsdev --with-vfio-user --with-xlio --with-shared --enable-werror
     - make -j4
 
 .test-job-vm-template:
@@ -96,11 +96,16 @@ build-shared-release-job:
       when: manual
       allow_failure: true
     - when: on_success
+  hooks:
+    pre_get_sources_script:
+    - sudo rm -rf python/spdk/rpc/__pycache__
 
 .test-job-k8s-template:
   extends: .test-job-vm-template
   tags: [k8s, mtr-rdma, x86_64]
   image: "$FEDORA_IMAGE"
+  hooks:
+    pre_get_sources_script: []
 
 test-nvmf-k8s-job:
   extends: .test-job-k8s-template
@@ -140,6 +145,7 @@ test-crypto-k8s-job:
     - tar xf .test.tar
     - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh ${CI_DUT_RDMA}
     - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA}
+    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh ${CI_DUT_RDMA} --transport=rdma
 
 coverity-job:
   extends: .do_build
@@ -206,12 +212,13 @@ test-virtio-fs-app:
   script:
     - |
       if [ x"$VIRTIO_FS_CI_WEBREPO_URL" != x"" ]; then
-        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$CI_COMMIT_REF_NAME.json || true
-        if [ -f ci-$CI_COMMIT_REF_NAME.json ]; then
-          VIRTIO_FS_TARGET_REF=$(cat ci-$CI_COMMIT_REF_NAME.json | jq .spdk.app_ref)
-          echo ci-$CI_COMMIT_REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+        REF_NAME=$(echo "$CI_COMMIT_REF_NAME" | tr '/' '_')
+        wget $VIRTIO_FS_CI_WEBREPO_URL/ci-$REF_NAME.json || true
+        if [ -f ci-$REF_NAME.json ]; then
+          VIRTIO_FS_TARGET_REF=$(cat ci-$REF_NAME.json | jq .spdk.app_ref)
+          echo ci-$REF_NAME.json found! Redefined VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
         else
-          echo ci-$CI_COMMIT_REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
+          echo ci-$REF_NAME.json not found! Using VIRTIO_FS_TARGET_REF=$VIRTIO_FS_TARGET_REF
         fi
       fi
     - >

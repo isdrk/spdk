@@ -29,7 +29,7 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	struct spdk_fsdev_io *fsdev_io;
 	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
 
-	channel->stat->num_ios[type]++;
+	channel->stat->io[type].count++;
 
 	fsdev_io = fsdev_channel_get_io(channel);
 	if (!fsdev_io) {
@@ -48,6 +48,7 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->internal.cb_fn = cb_fn;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
+	fsdev_io->internal.submit_tsc = spdk_get_ticks();
 
 	return fsdev_io;
 }
@@ -55,9 +56,22 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 static inline void
 fsdev_io_free(struct spdk_fsdev_io *fsdev_io)
 {
+	enum spdk_fsdev_io_type type = fsdev_io->internal.type;
+	struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
+	uint64_t tsc_diff;
+
+	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
+
+	if (tsc_diff < channel->stat->io[type].min_latency_ticks) {
+		channel->stat->io[type].min_latency_ticks = tsc_diff;
+	}
+
+	if (tsc_diff > channel->stat->io[type].max_latency_ticks) {
+		channel->stat->io[type].max_latency_ticks = tsc_diff;
+	}
+
 	if (fsdev_io->internal.status) {
-		struct spdk_fsdev_channel *channel = fsdev_io->internal.ch;
-		channel->stat->num_errors++;
+		channel->stat->num_io_errors++;
 	}
 
 	spdk_fsdev_free_io(fsdev_io);

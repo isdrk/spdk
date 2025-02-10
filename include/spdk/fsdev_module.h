@@ -134,6 +134,11 @@ struct spdk_fsdev_fn_table {
 	 * (most likely another nested object).
 	 */
 	int (*dump_info_json)(void *ctx, struct spdk_json_write_ctx *w);
+
+	/**
+	 * Enable or disable notifications.
+	 */
+	int (*set_notifications)(void *ctx, bool enabled);
 };
 
 /**
@@ -172,6 +177,9 @@ struct spdk_fsdev {
 	/** function table for all ops */
 	const struct spdk_fsdev_fn_table *fn_table;
 
+	/** Maximum size of variable sized notification data in bytes. */
+	uint32_t notify_max_data_size;
+
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.
 	 */
@@ -190,6 +198,12 @@ struct spdk_fsdev {
 
 		/** List of open descriptors for this filesystem device. */
 		TAILQ_HEAD(, spdk_fsdev_desc) open_descs;
+
+		/** Notifications callback. */
+		spdk_fsdev_notify_cb_t notify_cb;
+
+		/** Notifications callback context. */
+		void *notify_ctx;
 
 		TAILQ_ENTRY(spdk_fsdev) link;
 
@@ -589,6 +603,9 @@ struct spdk_fsdev_io {
 
 		/** Entry to the list io_submitted of struct spdk_fsdev_channel */
 		TAILQ_ENTRY(spdk_fsdev_io) ch_link;
+
+		/* Timestamp */
+		uint64_t submit_tsc;
 	} internal;
 
 	/**
@@ -746,6 +763,45 @@ spdk_fsdev_io_from_ctx(void *ctx)
 {
 	return SPDK_CONTAINEROF(ctx, struct spdk_fsdev_io, driver_ctx);
 }
+
+/**
+ * Send a SPDK_FSDEV_NOTIFY_INVAL_DATA notification to the user.
+ *
+ * \param fsdev Filesystem device.
+ * \param fobject File object to invalidate.
+ * \param offset Offset of data region to invalidate.
+ * \param size Size of data region to invalidate.
+ * \param reply_cb Callback to deliver notification handling status
+ * Fsdev should be ready to get the reply callback in the context of this call.
+ * \param reply_ctx Reply context
+ *
+ * \return 0 on success.
+ * \return -ENODEV if notifications are not enabled.
+ */
+int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
+				 struct spdk_fsdev_file_object *fobject,
+				 uint64_t offset, size_t size,
+				 spdk_fsdev_notify_reply_cb_t reply_cb,
+				 void *reply_ctx);
+
+/**
+ * Send a SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification to the user.
+ *
+ * \param fsdev Filesystem device.
+ * \param parent_fobject Parent file object to invalidate.
+ * \param name Name of entry in the parent_fobject to invalidate.
+ * \param reply_cb Callback to deliver notification handling status
+ * Fsdev should be ready to get the reply callback in the context of this call.
+ * \param reply_ctx Reply context
+ *
+ * \return 0 on success.
+ * \return -ENODEV if notifications are not enabled.
+ */
+int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
+				  struct spdk_fsdev_file_object *parent_fobject,
+				  const char *name,
+				  spdk_fsdev_notify_reply_cb_t reply_cb,
+				  void *reply_ctx);
 
 /*
  *  Macro used to register module for later initialization.

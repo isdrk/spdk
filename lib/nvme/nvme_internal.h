@@ -184,13 +184,8 @@ extern struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts;
 						sizeof(struct spdk_nvme_cmd), \
 						sizeof(struct spdk_nvme_cpl)))
 
-/* Default timeout for fabrics connect commands. */
-#ifdef DEBUG
-#define NVME_FABRIC_CONNECT_COMMAND_TIMEOUT 0
-#else
-/* 500 millisecond timeout. */
+/* Default timeout for fabrics connect commands, 500 millisecond */
 #define NVME_FABRIC_CONNECT_COMMAND_TIMEOUT 500000
-#endif
 
 /* This value indicates that a read from a PCIe register is invalid. This can happen when a device is no longer present */
 #define SPDK_NVME_INVALID_REGISTER_VALUE 0xFFFFFFFFu

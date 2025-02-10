@@ -34,7 +34,10 @@
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define DEFAULT_XATTR_ENABLED false
 #define DEFAULT_SKIP_RW false
-#define DEFAULT_TIMEOUT_MS 0 /* to prevent the attribute caching */
+#define DEFAULT_ATTR_VALID_MS 0 /* to prevent the attribute caching */
+#define DEFAULT_NOTIFY_MAX_DATA_SIZE 4096
+#define DEFAULT_ENABLE_NOTIFICATIONS false
+#define FANOTIFY_POLLER_PERIOD_US 1000
 
 #ifdef SPDK_CONFIG_HAVE_STRUCT_STAT_ST_ATIM
 /* Linux */
@@ -60,6 +63,8 @@
 #define ST_CTIM_NSEC_SET(stbuf, val) do { } while (0)
 #define ST_MTIM_NSEC_SET(stbuf, val) do { } while (0)
 #endif
+
+#define FANOTIFY_MASK (FAN_ATTRIB | FAN_ONDIR | FAN_EVENT_ON_CHILD)
 
 /*
  * Example of "unrestricted" variant of the data that can be get or
@@ -171,6 +176,20 @@ struct aio_fsdev_file_handle {
 
 struct aio_fsdev;
 
+struct aio_fsdev_linux_fh {
+	const struct file_handle *fh;
+	RB_ENTRY(aio_fsdev_linux_fh) node;
+};
+
+static int
+aio_fsdev_linux_fh_cmp(struct aio_fsdev_linux_fh *fh1, struct aio_fsdev_linux_fh *fh2)
+{
+	return memcmp(fh1->fh, fh2->fh, sizeof(*fh1->fh) + fh1->fh->handle_bytes);
+}
+
+RB_HEAD(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh);
+RB_GENERATE_STATIC(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh, node, aio_fsdev_linux_fh_cmp);
+
 #define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 " ino=%" PRIu64 " dev=%" PRIu64 ")"
 #define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
 struct aio_fsdev_file_object {
@@ -181,6 +200,11 @@ struct aio_fsdev_file_object {
 	int fd;
 	char *fd_str;
 	struct lo_key key;
+	union {
+		struct file_handle linux_fh;
+		char fh_buf[sizeof(struct file_handle) + MAX_HANDLE_SZ];
+	};
+	struct aio_fsdev_linux_fh linux_fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
 	TAILQ_ENTRY(aio_fsdev_file_object) link;
 	TAILQ_HEAD(, aio_fsdev_file_object) leafs;
@@ -198,6 +222,12 @@ struct aio_fsdev {
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
 	struct spdk_spinlock lock;
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	int fanotify_fd;
+	struct spdk_poller *fanotify_poller;
+	pid_t pid;
+	struct aio_fsdev_linux_fh_tree linux_fhs;
+#endif
 };
 
 struct aio_fsdev_io {
@@ -270,6 +300,8 @@ fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_
 static inline struct spdk_fsdev_file_object *
 fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
+	assert(fobject);
+
 	return (struct spdk_fsdev_file_object *)(uintptr_t)(fobject->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
 
@@ -344,10 +376,83 @@ lo_find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 	return NULL;
 }
 
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+static int
+fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
+{
+	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	int mount_id;
+	int rc;
+
+	fobject->linux_fh.handle_bytes = MAX_HANDLE_SZ;
+	rc = name_to_handle_at(parent_fd, name, &fobject->linux_fh, &mount_id, 0);
+	if (rc) {
+		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
+			    errno, parent_fd, name);
+		return rc;
+	}
+
+	rc = fanotify_mark(vfsdev->fanotify_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, FANOTIFY_MASK,
+			   parent_fd, name);
+	if (rc) {
+		SPDK_ERRLOG("Failed to add fobject to fanotify: errno %d, fd %d, "
+			    "parent fd %d, name %s\n",
+			    errno, fobject->fd, parent_fd, name);
+		return rc;
+	}
+
+	fobject->linux_fh_entry.fh = &fobject->linux_fh;
+	RB_INSERT(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
+
+	SPDK_DEBUGLOG(fsdev_aio, "Added fobject to fanotify: fd %d, name %s\n",
+		      fobject->fd, name);
+
+	return 0;
+}
+
+static void
+fsdev_aio_fanotify_remove(struct aio_fsdev_file_object *fobject)
+{
+	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	const char *name;
+	int fd;
+	int rc;
+
+	if (fobject == vfsdev->root) {
+		fd = AT_FDCWD;
+		name = vfsdev->root_path;
+	} else {
+		fd = fobject->fd;
+		name = ".";
+	}
+
+	rc = fanotify_mark(vfsdev->fanotify_fd, FAN_MARK_REMOVE | FAN_MARK_ONLYDIR, FANOTIFY_MASK,
+			   fd, name);
+	if (rc) {
+		SPDK_ERRLOG("Failed to remove fobject from fanotify: errno %d, fd %d, name %s\n",
+			    errno, fd, name);
+	} else {
+		SPDK_DEBUGLOG(fsdev_aio, "Removed fobject from fanotify: fd %d, name %s\n", fd, name);
+	}
+
+	spdk_spin_lock(&vfsdev->lock);
+	RB_REMOVE(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
+	spdk_spin_unlock(&vfsdev->lock);
+}
+#endif
+
 static void
 file_object_destroy(struct aio_fsdev_file_object *fobject)
 {
 	assert(!fobject->hdr.refcount);
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	/* root is handled on umount */
+	if (fobject->vfsdev->fanotify_fd != -1 && fobject->is_dir && fobject->parent_fobject) {
+		fsdev_aio_fanotify_remove(fobject);
+	}
+#endif
 
 	close(fobject->fd);
 	free(fobject->fd_str);
@@ -392,8 +497,8 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 		spdk_spin_unlock(&vfsdev->lock);
 
 		if (!refcount) {
-			file_object_destroy(fobject);
 			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
+			file_object_destroy(fobject);
 		}
 		return 0;
 	}
@@ -431,10 +536,10 @@ file_object_ref(struct aio_fsdev_file_object *fobject)
 
 static struct aio_fsdev_file_object *
 file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobject,
-			  int fd, ino_t ino, dev_t dev, mode_t mode)
+			  int fd, ino_t ino, dev_t dev, mode_t mode, const char *name)
 {
 	struct aio_fsdev_file_object *fobject;
-	uint64_t lut_key;
+	uint64_t lut_key = SPDK_LUT_INVALID_KEY;
 
 	fobject = calloc(1, sizeof(*fobject));
 	if (!fobject) {
@@ -445,16 +550,13 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->fd_str = spdk_sprintf_alloc("%d", fd);
 	if (!fobject->fd_str) {
 		SPDK_ERRLOG("Cannot alloc fd_str\n");
-		free(fobject);
-		return NULL;
+		goto err;
 	}
 
 	lut_key = spdk_lut_insert(vfsdev->lut, fobject);
 	if (lut_key == SPDK_LUT_INVALID_KEY) {
 		SPDK_ERRLOG("Cannot insert fobject into lookup table\n");
-		free(fobject->fd_str);
-		free(fobject);
-		return NULL;
+		goto err;
 	}
 
 	fobject->hdr.is_fobject = true;
@@ -471,6 +573,16 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	TAILQ_INIT(&fobject->handles);
 	TAILQ_INIT(&fobject->leafs);
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	/* Root is marked on mount */
+	if (vfsdev->fanotify_fd != -1 && fobject->is_dir && parent_fobject) {
+		int rc = fsdev_aio_fanotify_add(fobject, parent_fobject->fd, name);
+		if (rc) {
+			goto err;
+		}
+	}
+#endif
+
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
 		TAILQ_INSERT_TAIL(&parent_fobject->leafs, fobject, link);
@@ -481,6 +593,15 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		      (uint64_t)fobject->hdr.lut_key);
 
 	return fobject;
+
+err:
+	if (lut_key != SPDK_LUT_INVALID_KEY) {
+		spdk_lut_remove(vfsdev->lut, lut_key);
+	}
+
+	free(fobject->fd_str);
+	free(fobject);
+	return NULL;
 }
 
 static struct aio_fsdev_file_handle *
@@ -593,7 +714,7 @@ file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_f
 	attr->gid = stbuf.st_gid;
 	attr->rdev = stbuf.st_rdev;
 	attr->blksize = stbuf.st_blksize;
-	attr->valid_ms = DEFAULT_TIMEOUT_MS;
+	attr->valid_ms = fobject->vfsdev->opts.attr_valid_ms;
 
 	return 0;
 }
@@ -844,6 +965,152 @@ lo_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts *opts)
 	return 0;
 }
 
+static void
+fsdev_aio_fanotify_close(struct aio_fsdev *vfsdev)
+{
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	struct aio_fsdev_linux_fh *entry, *tmp_entry;
+
+	RB_FOREACH_SAFE(entry, aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, tmp_entry) {
+		RB_REMOVE(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, entry);
+	}
+
+	spdk_poller_unregister(&vfsdev->fanotify_poller);
+	if (vfsdev->fanotify_fd != -1) {
+		close(vfsdev->fanotify_fd);
+		vfsdev->fanotify_fd = -1;
+	}
+#endif
+}
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+
+static struct aio_fsdev_file_object *
+fsdev_aio_get_fobject_by_linux_fh(struct aio_fsdev *vfsdev, const struct file_handle *file_handle)
+{
+	struct aio_fsdev_linux_fh find = { .fh = file_handle };
+	struct aio_fsdev_linux_fh *res;
+	struct aio_fsdev_file_object *fobject = NULL;
+
+	spdk_spin_lock(&vfsdev->lock);
+	res = RB_FIND(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &find);
+	if (res) {
+		fobject = SPDK_CONTAINEROF(res, struct aio_fsdev_file_object, linux_fh_entry);
+		file_object_ref(fobject);
+	}
+	spdk_spin_unlock(&vfsdev->lock);
+
+	return fobject;
+}
+
+static void
+fsdev_aio_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
+			  void *reply_ctx)
+{
+	SPDK_INFOLOG(fsdev_aio, "Notify reply: status %d, ctx %p\n",
+		     notify_reply_data->status, reply_ctx);
+}
+
+static void
+fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, struct file_handle *file_handle,
+				       const char *file_name)
+{
+	struct aio_fsdev_file_object *fobject;
+
+	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, file_handle);
+	if (fobject) {
+		SPDK_INFOLOG(fsdev_aio, "Notify inval entry: parent " FOBJECT_FMT
+			     ", parent fd %d, name %s\n",
+			     FOBJECT_ARGS(fobject), fobject->fd, file_name);
+		spdk_fsdev_notify_inval_entry(&vfsdev->fsdev,
+					      fsdev_aio_get_spdk_fobject(vfsdev, fobject),
+					      file_name, fsdev_aio_notify_reply_cb, NULL);
+		file_object_unref(fobject, 1);
+	} else {
+		SPDK_INFOLOG(fsdev_aio, "Fobject not found for parent of %s\n", file_name);
+	}
+}
+
+static void
+fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
+				const struct fanotify_event_metadata *metadata)
+{
+	struct fanotify_event_info_header *hdr;
+	struct file_handle *file_handle = NULL;
+	const char *file_name = NULL;
+	uint32_t md_len;
+
+	SPDK_DEBUGLOG(fsdev_aio, "Got fanotify event: fd %d, pid %d, mask %016llX\n",
+		      metadata->fd, metadata->pid, metadata->mask);
+
+	md_len = metadata->event_len;
+	md_len -= sizeof(*metadata);
+	hdr = (struct fanotify_event_info_header *)(metadata + 1);
+	while (md_len) {
+		if (md_len < sizeof(*hdr)) {
+			break;
+		}
+
+		SPDK_DEBUGLOG(fsdev_aio, "Extra event info of type %u, len %u\n", hdr->info_type, hdr->len);
+		assert(md_len >= hdr->len);
+		if (hdr->info_type == FAN_EVENT_INFO_TYPE_DFID_NAME) {
+			struct fanotify_event_info_fid *dfid_name = (struct fanotify_event_info_fid *)hdr;
+			file_handle = (struct file_handle *)dfid_name->handle;
+			file_name = file_handle->f_handle + file_handle->handle_bytes;
+		}
+
+		md_len -= hdr->len;
+		hdr = (struct fanotify_event_info_header *)((char *)hdr + hdr->len);
+	}
+
+	if ((metadata->mask & FAN_ATTRIB) && file_name && file_handle) {
+		fsdev_aio_fanotify_attrib_event_handle(vfsdev, file_handle, file_name);
+	}
+
+	if (metadata->fd != FAN_NOFD) {
+		close(metadata->fd);
+	}
+}
+
+static int
+fsdev_aio_fanotify_poller(void *ctx)
+{
+	struct aio_fsdev *vfsdev = ctx;
+	const struct fanotify_event_metadata *metadata;
+	struct fanotify_event_metadata buf[256];
+	ssize_t len;
+
+	len = read(vfsdev->fanotify_fd, buf, sizeof(buf));
+	if (len == -1 && errno == EAGAIN) {
+		return SPDK_POLLER_IDLE;
+	} else if (len <= 0) {
+		SPDK_ERRLOG("Read fanotify_fd failed: len %ld, errno %d\n", len, errno);
+		assert(false);
+		fsdev_aio_fanotify_close(vfsdev);
+		return SPDK_POLLER_IDLE;
+	}
+
+	for (metadata = buf; FAN_EVENT_OK(metadata, len); metadata = FAN_EVENT_NEXT(metadata, len)) {
+		if (metadata->vers != FANOTIFY_METADATA_VERSION) {
+			SPDK_ERRLOG("Mismatch of fanotify metadata version: expected %d, got %d\n",
+				    FANOTIFY_METADATA_VERSION, metadata->vers);
+			fsdev_aio_fanotify_close(vfsdev);
+			break;
+		}
+
+		/* Ignore events from our process */
+		if (metadata->pid == vfsdev->pid) {
+			continue;
+		}
+
+		fsdev_aio_fanotify_event_handle(vfsdev, metadata);
+	}
+
+	return SPDK_POLLER_BUSY;
+}
+
+#endif /* SPDK_CONFIG_HAVE_FANOTIFY */
+
 static int
 lo_mount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -852,6 +1119,19 @@ lo_mount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	fsdev_io->u_out.mount.opts = *in_opts;
 	lo_set_mount_opts(vfsdev, &fsdev_io->u_out.mount.opts);
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	if (vfsdev->fanotify_fd != -1) {
+		int rc;
+		spdk_spin_lock(&vfsdev->lock);
+		rc = fsdev_aio_fanotify_add(vfsdev->root, AT_FDCWD, vfsdev->root_path);
+		spdk_spin_unlock(&vfsdev->lock);
+		if (rc) {
+			return rc;
+		}
+	}
+#endif
+
 	file_object_ref(vfsdev->root);
 	fsdev_io->u_out.mount.root_fobject = fsdev_aio_get_spdk_fobject(vfsdev, vfsdev->root);
 
@@ -862,6 +1142,12 @@ static int
 lo_umount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	if (vfsdev->fanotify_fd != -1) {
+		fsdev_aio_fanotify_remove(vfsdev->root);
+	}
+#endif
 
 	fsdev_free_leafs(vfsdev->root, false);
 	file_object_unref(vfsdev->root, 1);
@@ -908,7 +1194,7 @@ lo_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobj
 		file_object_ref(fobject); /* reference by a lo_do_lookup caller */
 	} else {
 		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd, stat.st_ino, stat.st_dev,
-						    stat.st_mode);
+						    stat.st_mode, name);
 	}
 	spdk_spin_unlock(&vfsdev->lock);
 
@@ -1447,7 +1733,7 @@ lo_do_ioctl(struct spdk_fsdev_io *fsdev_io)
 		SPDK_DEBUGLOG(fsdev_aio, "Zero-sized ioctl() has been successfully handled.\n");
 		break;
 	default:
-		SPDK_ERRLOG("Unknown ioctl cmd: %u\n", request);
+		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
 		return -ENOTTY;
 	}
 
@@ -2369,7 +2655,7 @@ lo_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static int
 clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
-	struct spdk_fsdev_file_attr st;
+	struct spdk_fsdev_file_attr st = {};
 	mode_t new_mode;
 	int fd, error;
 
@@ -2642,7 +2928,7 @@ lo_mknod_symlink(struct spdk_fsdev_io *fsdev_io, struct aio_fsdev_file_object *p
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
 		return res;
 	}
-
+	assert(*pfobject != NULL);
 	/*
 	 * Fixup the mode, functions creating files above ignore some bits important
 	 * for POSIX compliance.
@@ -2675,7 +2961,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	dev_t rdev = fsdev_io->u_in.mknod.rdev;
 	uid_t euid = fsdev_io->u_in.mknod.euid;
 	gid_t egid = fsdev_io->u_in.mknod.egid;
-	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_file_object *fobject = NULL;
 	int rc;
 
 	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mknod.parent_fobject);
@@ -2687,6 +2973,7 @@ lo_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	rc = lo_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
 			      umask, &fobject, &fsdev_io->u_out.mknod.attr);
 	if (!rc) {
+		assert(fobject);
 		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
 	}
 
@@ -2887,7 +3174,6 @@ lo_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	res = 0;
 	if (flags) {
 #ifndef SYS_renameat2
 		SPDK_ERRLOG("flags are not supported\n");
@@ -2952,7 +3238,7 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_object *new_parent_fobject;
 	char *name = fsdev_io->u_in.link.name;
-	struct aio_fsdev_file_object *link_fobject;
+	struct aio_fsdev_file_object *link_fobject = NULL;
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s is not a safe component\n", name);
@@ -2987,6 +3273,7 @@ lo_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(link_fobject);
 	fsdev_io->u_out.link.fobject = fsdev_aio_get_spdk_fobject(vfsdev, link_fobject);
 
 	res = 0;
@@ -3147,7 +3434,7 @@ lo_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	/* Clear SGID when system.posix_acl_access is set. */
 	if ((flags & SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
-		struct spdk_fsdev_file_attr st;
+		struct spdk_fsdev_file_attr st = {};
 		mode_t new_mode;
 
 		res = file_object_fill_attr(fobject, &st);
@@ -3570,15 +3857,11 @@ lo_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	ssize_t res;
 	int saverr = 0;
-	struct aio_fsdev_file_object *fobject_in =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_in);
-	struct aio_fsdev_file_handle *fhandle_in =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_in);
+	struct aio_fsdev_file_object *fobject_in;
+	struct aio_fsdev_file_handle *fhandle_in;
 	off_t off_in = fsdev_io->u_in.copy_file_range.off_in;
-	struct aio_fsdev_file_object *fobject_out =
-		fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_out);
-	struct aio_fsdev_file_handle *fhandle_out =
-		fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_out);
+	struct aio_fsdev_file_object *fobject_out;
+	struct aio_fsdev_file_handle *fhandle_out;
 	off_t off_out = fsdev_io->u_in.copy_file_range.off_out;
 	size_t len = fsdev_io->u_in.copy_file_range.len;
 	uint32_t flags = fsdev_io->u_in.copy_file_range.flags;
@@ -3812,6 +4095,8 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 
 	}
 
+	fsdev_aio_fanotify_close(vfsdev);
+
 	if (vfsdev->lut) {
 		spdk_lut_free(vfsdev->lut);
 		spdk_spin_destroy(&vfsdev->lock);
@@ -3926,6 +4211,8 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
+	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
+	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -3942,6 +4229,8 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "max_xfer_size", vfsdev->opts.max_xfer_size);
 	spdk_json_write_named_uint32(w, "max_readahead", vfsdev->opts.max_readahead);
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
+	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
+	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
 
 	return 0;
 }
@@ -4103,6 +4392,75 @@ fsdev_aio_reset(void *_ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	return 0;
 }
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+static int
+fsdev_aio_enable_notifications(struct aio_fsdev *vfsdev)
+{
+	int rc;
+
+	vfsdev->fanotify_fd = fanotify_init(FAN_NONBLOCK | FAN_REPORT_FID | FAN_REPORT_DFID_NAME,
+					    O_RDONLY | O_LARGEFILE);
+	if (vfsdev->fanotify_fd == -1) {
+		SPDK_ERRLOG("Failed to create fanotify, errno %d\n", errno);
+		rc = -errno;
+		goto err;
+	}
+
+	vfsdev->pid = getpid();
+	vfsdev->fanotify_poller = SPDK_POLLER_REGISTER(fsdev_aio_fanotify_poller, vfsdev,
+				  FANOTIFY_POLLER_PERIOD_US);
+	if (!vfsdev->fanotify_poller) {
+		SPDK_ERRLOG("Failed to create fanotify poller\n");
+		rc = -ENOMEM;
+		goto err;
+	}
+
+	SPDK_NOTICELOG("Started fanotify poller: fanotify fd %d\n", vfsdev->fanotify_fd);
+	return 0;
+
+err:
+	fsdev_aio_fanotify_close(vfsdev);
+	return rc;
+}
+
+static int
+fsdev_aio_disable_notifications(struct aio_fsdev *vfsdev)
+{
+	fsdev_aio_fanotify_close(vfsdev);
+	return 0;
+}
+
+static int
+fsdev_aio_set_notifications(void *ctx, bool enabled)
+{
+	struct aio_fsdev *vfsdev = ctx;
+
+	if (enabled && vfsdev->opts.enable_notifications && vfsdev->fanotify_fd == -1) {
+		return fsdev_aio_enable_notifications(vfsdev);
+	} else if (enabled && !vfsdev->opts.enable_notifications) {
+		SPDK_ERRLOG("Notifications are disabled in fsdev_aio\n");
+		return -EOPNOTSUPP;
+	} else if (!enabled && vfsdev->fanotify_fd != -1) {
+		return fsdev_aio_disable_notifications(vfsdev);
+	}
+
+	return 0;
+}
+#else
+static int
+fsdev_aio_set_notifications(void *ctx, bool enabled)
+{
+	struct aio_fsdev *vfsdev = ctx;
+
+	if (enabled && !vfsdev->opts.enable_notifications) {
+		SPDK_ERRLOG("Notifications are disabled in fsdev_aio\n");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+#endif
+
 static const struct spdk_fsdev_fn_table aio_fn_table = {
 	.destruct		= fsdev_aio_destruct,
 	.submit_request		= fsdev_aio_submit_request,
@@ -4110,6 +4468,7 @@ static const struct spdk_fsdev_fn_table aio_fn_table = {
 	.write_config_json	= fsdev_aio_write_config_json,
 	.reset			= fsdev_aio_reset,
 	.dump_info_json		= fsdev_aio_dump_info_json,
+	.set_notifications	= fsdev_aio_set_notifications
 };
 
 static int
@@ -4133,7 +4492,8 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
-	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_ino, stat.st_dev, stat.st_mode);
+	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_ino, stat.st_dev, stat.st_mode,
+			"/");
 	if (!vfsdev->root) {
 		SPDK_ERRLOG("Cannot alloc root\n");
 		close(fd);
@@ -4170,6 +4530,8 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 	opts->max_xfer_size = DEFAULT_MAX_XFER_SIZE;
 	opts->max_readahead = DEFAULT_MAX_READAHEAD;
 	opts->skip_rw = DEFAULT_SKIP_RW;
+	opts->enable_notifications = DEFAULT_ENABLE_NOTIFICATIONS;
+	opts->attr_valid_ms = DEFAULT_ATTR_VALID_MS;
 }
 
 int
@@ -4209,6 +4571,11 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return -ENOMEM;
 	}
 
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
+	vfsdev->fanotify_fd = -1;
+	RB_INIT(&vfsdev->linux_fhs);
+#endif
+
 	spdk_spin_init(&vfsdev->lock);
 
 	rc = setup_root(vfsdev);
@@ -4229,6 +4596,9 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
 	vfsdev->fsdev.module = &aio_fsdev_module;
+	if (vfsdev->opts.enable_notifications) {
+		vfsdev->fsdev.notify_max_data_size = DEFAULT_NOTIFY_MAX_DATA_SIZE;
+	}
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {

@@ -205,6 +205,7 @@ struct nvme_rdma_qpair {
 	/* Append copy task even if no accel sequence is attached to IO.
 	 * Result is UMR configured per IO data buffer */
 	bool					append_copy;
+	bool					ignore_icd_on_data_transfer;
 
 	uint32_t				num_completions;
 	uint32_t				num_outstanding_reqs;
@@ -1620,7 +1621,7 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 {
 	struct nvme_request *req = rdma_req->req;
 	struct spdk_nvmf_cmd *cmd = &rqpair->cmds[rdma_req->id];
-	struct spdk_rdma_provider_memory_translation_ctx ctx;
+	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
 	uint32_t remaining_size;
 	uint32_t sge_length;
 	int rc, max_num_sgl, num_sgl_desc;
@@ -1733,7 +1734,7 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 				   struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct spdk_rdma_provider_memory_translation_ctx ctx;
+	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
 	uint32_t length;
 	int rc;
 
@@ -1979,7 +1980,8 @@ nvme_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	ctx.rkey = translation->rdma.rkey;
 
 	SPDK_DEBUGLOG(nvme, "req %p, addr %p, len %zu, key %u\n", rdma_req, ctx.addr, ctx.length, ctx.rkey);
-	icd_supported = spdk_nvme_opc_get_data_transfer(req->cmd.opc) == SPDK_NVME_DATA_HOST_TO_CONTROLLER
+	icd_supported = !rqpair->ignore_icd_on_data_transfer &&
+			spdk_nvme_opc_get_data_transfer(req->cmd.opc) == SPDK_NVME_DATA_HOST_TO_CONTROLLER
 			&& req->payload_size <= ctrlr->ioccsz_bytes && ctrlr->icdoff == 0;
 
 	/* We expect that result of accel sequence is a Memory Key which describes a virtually contig address space.
@@ -2107,8 +2109,14 @@ nvme_rdma_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 	rqpair->num_entries = qsize - 1;
 	rqpair->delay_cmd_submit = delay_cmd_submit;
 	rqpair->state = NVME_RDMA_QPAIR_STATE_INVALID;
-	rqpair->append_copy = g_spdk_nvme_transport_opts.rdma_umr_per_io &&
-			      spdk_rdma_provider_accel_sequence_supported() && qid != 0;
+	if (spdk_rdma_provider_accel_sequence_supported()) {
+		struct spdk_rdma_provider_opts opts;
+
+		spdk_rdma_provider_get_opts(&opts, sizeof(opts));
+		rqpair->append_copy = g_spdk_nvme_transport_opts.rdma_umr_per_io && qid != 0;
+		rqpair->ignore_icd_on_data_transfer = opts.support_offload_on_qp;
+	}
+
 	SPDK_DEBUGLOG(nvme, "rqpair %p, append_copy %s\n", rqpair,
 		      rqpair->append_copy ? "enabled" : "diabled");
 	qpair = &rqpair->qpair;
@@ -2989,6 +2997,11 @@ nvme_rdma_cq_process_completions(struct spdk_rdma_provider_cq *cq, uint32_t batc
 
 	for (i = 0; i < rc; i++) {
 		rdma_wr = (struct nvme_rdma_wr *)wc[i].wr_id;
+		if (spdk_unlikely(!rdma_wr)) {
+			/* That is possible if rdma_provider is configured to use offloads on network qp */
+			continue;
+		}
+
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_RECV:
 			_rc = nvme_rdma_process_recv_completion(poller, &wc[i], rdma_wr);

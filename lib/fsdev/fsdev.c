@@ -120,6 +120,13 @@ static const char *fsdev_io_type_names[] = {
 };
 SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_io_type_names) == __SPDK_FSDEV_IO_LAST, "Incorrect size");
 
+static const char *fsdev_notify_type_names[] = {
+	"inval_data",
+	"inval_entry"
+};
+SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NUM_TYPES,
+		   "Incorrect size");
+
 struct spdk_fsdev_mgmt_channel {
 	/*
 	 * Each thread keeps a cache of fsdev_io - this allows
@@ -558,6 +565,17 @@ fsdev_desc_free(struct spdk_fsdev_desc *desc)
 	free(desc);
 }
 
+static void
+fsdev_init_io_stat(struct spdk_fsdev_io_stat *stat)
+{
+	size_t i;
+
+	memset(stat, 0, sizeof(*stat));
+
+	for (i = 0; i < SPDK_COUNTOF(stat->io); i++) {
+		stat->io[i].min_latency_ticks = UINT64_MAX;
+	}
+}
 
 static int
 fsdev_channel_create(void *io_device, void *ctx_buf)
@@ -615,6 +633,8 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 	ch->io_outstanding = 0;
 	ch->shared_resource = shared_resource;
 	TAILQ_INIT(&ch->io_submitted);
+	fsdev_init_io_stat(ch->stat);
+
 	return 0;
 }
 
@@ -623,14 +643,25 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 {
 	size_t i;
 
-	for (i = 0; i < SPDK_COUNTOF(from_stat->num_ios); i++) {
-		to_stat->num_ios[i] += from_stat->num_ios[i];
+	for (i = 0; i < SPDK_COUNTOF(from_stat->io); i++) {
+		to_stat->io[i].count += from_stat->io[i].count;
+
+		if (to_stat->io[i].max_latency_ticks < from_stat->io[i].max_latency_ticks) {
+			to_stat->io[i].max_latency_ticks = from_stat->io[i].max_latency_ticks;
+		}
+
+		if (to_stat->io[i].min_latency_ticks > from_stat->io[i].min_latency_ticks) {
+			to_stat->io[i].min_latency_ticks = from_stat->io[i].min_latency_ticks;
+		}
 	}
 
 	to_stat->bytes_read += from_stat->bytes_read;
 	to_stat->bytes_written += from_stat->bytes_written;
 	to_stat->num_out_of_io += from_stat->num_out_of_io;
-	to_stat->num_errors += from_stat->num_errors;
+	to_stat->num_io_errors += from_stat->num_io_errors;
+	for (i = 0; i < SPDK_COUNTOF(from_stat->num_notifies); i++) {
+		to_stat->num_notifies[i] += from_stat->num_notifies[i];
+	}
 }
 
 static void
@@ -1024,6 +1055,114 @@ spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb
 	return 0;
 }
 
+int
+spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_cb_t notify_cb,
+				void *ctx)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
+	int res = 0;
+
+	if (!fsdev->fn_table->set_notifications) {
+		return -EOPNOTSUPP;
+	}
+
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	if (!fsdev->internal.notify_cb) {
+		res = fsdev->fn_table->set_notifications(fsdev->ctxt, true);
+		if (!res) {
+			fsdev->internal.notify_cb = notify_cb;
+			fsdev->internal.notify_ctx = ctx;
+		}
+	} else {
+		res = -EALREADY;
+	}
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+
+	return res;
+}
+
+int
+spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
+	int res = 0;
+
+	if (!fsdev->fn_table->set_notifications) {
+		return -EOPNOTSUPP;
+	}
+
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	if (fsdev->internal.notify_cb) {
+		res = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
+		if (!res) {
+			fsdev->internal.notify_cb = NULL;
+			fsdev->internal.notify_ctx = NULL;
+		}
+	} else {
+		res = -EALREADY;
+	}
+	spdk_spin_unlock(&fsdev->internal.spinlock);
+
+	return res;
+}
+
+uint32_t
+spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev)
+{
+	return fsdev->notify_max_data_size;
+}
+
+static int
+fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,
+	     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
+{
+	int res = -ENODEV;
+
+	if (fsdev->internal.notify_cb) {
+		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
+					  reply_cb, reply_ctx);
+		res = 0;
+		spdk_spin_lock(&fsdev->internal.spinlock);
+		fsdev->internal.hist_stat->num_notifies[notify_data->type]++;
+		spdk_spin_unlock(&fsdev->internal.spinlock);
+	}
+
+	return res;
+}
+
+int
+spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
+			     struct spdk_fsdev_file_object *fobject,
+			     uint64_t offset, size_t size,
+			     spdk_fsdev_notify_reply_cb_t reply_cb,
+			     void *reply_ctx)
+{
+	struct spdk_fsdev_notify_data notify_data = {
+		.type = SPDK_FSDEV_NOTIFY_INVAL_DATA,
+		.inval_data.fobject = fobject,
+		.inval_data.offset = offset,
+		.inval_data.size = size
+	};
+
+	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
+int
+spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
+			      struct spdk_fsdev_file_object *parent_fobject,
+			      const char *name,
+			      spdk_fsdev_notify_reply_cb_t reply_cb,
+			      void *reply_ctx)
+{
+	struct spdk_fsdev_notify_data notify_data = {
+		.type = SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
+		.inval_entry.parent_fobject = parent_fobject,
+		.inval_entry.name = name
+	};
+
+	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
 bool
 spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev)
 {
@@ -1042,7 +1181,7 @@ spdk_fsdev_get_io_stat(struct spdk_fsdev *fsdev, struct spdk_io_channel *_ch,
 {
 	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
 
-	memset(stat, 0, sizeof(*stat));
+	fsdev_init_io_stat(stat);
 
 	fsdev_add_io_stat(stat, ch->stat);
 }
@@ -1092,7 +1231,7 @@ spdk_fsdev_get_device_stat(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *
 		return;
 	}
 
-	memset(stat, 0, sizeof(*stat));
+	fsdev_init_io_stat(stat);
 
 	/* Start with the statistics from previously deleted channels. */
 	spdk_spin_lock(&fsdev->internal.spinlock);
@@ -1119,7 +1258,7 @@ fsdev_reset_channel_stat(struct spdk_fsdev_channel_iter *i, struct spdk_fsdev *f
 {
 	struct spdk_fsdev_channel *ch = __io_ch_to_fsdev_ch(_ch);
 
-	memset(ch->stat, 0, sizeof(*ch->stat));
+	fsdev_init_io_stat(ch->stat);
 
 	spdk_fsdev_for_each_channel_continue(i, 0);
 }
@@ -1152,7 +1291,7 @@ spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev, spdk_fsdev_reset_device_s
 
 	/* Start with the statistics from previously deleted channels. */
 	spdk_spin_lock(&fsdev->internal.spinlock);
-	memset(fsdev->internal.hist_stat, 0, sizeof(*fsdev->internal.hist_stat));
+	fsdev_init_io_stat(fsdev->internal.hist_stat);
 	spdk_spin_unlock(&fsdev->internal.spinlock);
 
 	ctx->cb = cb;
@@ -1261,6 +1400,7 @@ fsdev_register(struct spdk_fsdev *fsdev)
 
 	fsdev->internal.status = SPDK_FSDEV_STATUS_READY;
 	TAILQ_INIT(&fsdev->internal.open_descs);
+	fsdev_init_io_stat(fsdev->internal.hist_stat);
 
 	ret = fsdev_name_add(&fsdev->internal.fsdev_name, fsdev, fsdev->name);
 	if (ret != 0) {
@@ -1673,6 +1813,13 @@ const char *
 spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type)
 {
 	return (type < SPDK_COUNTOF(fsdev_io_type_names)) ? fsdev_io_type_names[type] : NULL;
+}
+
+const char *
+fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type)
+{
+	assert(type < SPDK_FSDEV_NOTIFY_NUM_TYPES);
+	return (type < SPDK_COUNTOF(fsdev_notify_type_names)) ? fsdev_notify_type_names[type] : NULL;
 }
 
 int

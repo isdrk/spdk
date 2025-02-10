@@ -93,6 +93,12 @@ DEFINE_STUB(spdk_mlx5_mkey_pool_get_bulk, int, (struct spdk_mlx5_mkey_pool *pool
 DEFINE_STUB_V(spdk_mlx5_mkey_pool_put_bulk, (struct spdk_mlx5_mkey_pool *pool,
 		struct spdk_mlx5_mkey_pool_obj **mkeys,
 		uint32_t mkeys_count));
+DEFINE_STUB(spdk_mlx5_mkey_pool_get, struct spdk_mlx5_mkey_pool_obj *,
+	    (struct spdk_mlx5_mkey_pool *pool), 0);
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_put, (struct spdk_mlx5_mkey_pool *pool,
+					struct spdk_mlx5_mkey_pool_obj *mkey));
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_obj_get_ref, (struct spdk_mlx5_mkey_pool_obj *mkey));
+DEFINE_STUB_V(spdk_mlx5_mkey_pool_obj_put_ref, (struct spdk_mlx5_mkey_pool_obj *mkey));
 DEFINE_STUB(spdk_mlx5_mkey_pool_find_mkey_by_id, struct spdk_mlx5_mkey_pool_obj *, (void *ch,
 		uint32_t mkey_id), NULL);
 DEFINE_STUB_V(spdk_mlx5_umr_implementer_register, (bool registered));
