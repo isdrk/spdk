@@ -12,6 +12,7 @@
 
 #include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/mlx5.h"
+#include "spdk_internal/rdma_provider_wc.h"
 
 #define MLX5_DMA_Q_TX_CQE_SIZE  64
 
@@ -787,6 +788,31 @@ handle_err_cqe(struct mlx5_err_cqe *cqe, struct ibv_wc *wc)
 	wc->vendor_err	= cqe->vendor_err_synd;
 }
 
+/* Minimal information for the caller to handle signature error is
+ * status, mkey, and err_type. We can use ibv_wc::status to store status
+ * but struct ibv_wc does not have variables for mkey and err_type.
+ *
+ * For now, use vendor_err for mkey and wr_id for err_type.
+ */
+static void
+handle_sigerr_cqe(struct mlx5_sigerr_cqe *cqe, struct ibv_wc *wc)
+{
+	uint16_t syndrome;
+
+	wc->status = (enum ibv_wc_status)SPDK_RDMA_PROVIDER_WC_SIG_ERR;
+
+	wc->wr_id = be32toh(cqe->mkey);
+
+	syndrome = be16toh(cqe->syndrome);
+	if (syndrome & MLX5_SIGERR_CQE_SYNDROME_REFTAG) {
+		wc->vendor_err = SPDK_DIF_REFTAG_ERROR;
+	} else if (syndrome & MLX5_SIGERR_CQE_SYNDROME_GUARD) {
+		wc->vendor_err = SPDK_DIF_GUARD_ERROR;
+	} else if (syndrome & MLX5_SIGERR_CQE_SYNDROME_APPTAG) {
+		wc->vendor_err = SPDK_DIF_CHECK_TYPE_APPTAG;
+	}
+}
+
 static int
 mlx5_copy_to_recv_wqe(struct spdk_mlx5_qp *qp, uint16_t index, void *buf, uint32_t size)
 {
@@ -924,6 +950,9 @@ again:
 		case MLX5_CQE_RESP_ERR:
 			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
 			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
+			break;
+		case MLX5_CQE_SIG_ERR:
+			handle_sigerr_cqe((struct mlx5_sigerr_cqe *)cqe, &wc[n]);
 			break;
 		default:
 			SPDK_ERRLOG("Invalid CQE opcode 0x%x\n", mlx5dv_get_cqe_opcode(cqe));

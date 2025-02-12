@@ -12,6 +12,8 @@
 #include "spdk/dma.h"
 #include "spdk/json.h"
 
+#include "spdk_internal/rdma_provider_wc.h"
+
 /* rxe driver vendor_id has been changed from 0 to 0XFFFFFF in 0184afd15a141d7ce24c32c0d86a1e3ba6bc0eb3 */
 #define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_OLD 0
 #define SPDK_RDMA_PROVIDER_RXE_VENDOR_ID_NEW 0XFFFFFF
@@ -253,6 +255,10 @@ int spdk_rdma_provider_cq_resize(struct spdk_rdma_provider_cq *rdma_cq, int cqe)
 
 /**
  * Poll Completion Queue, save up to \b num_entries into \b wc array
+ *
+ * If returned wc->status is SPDK_RDMA_PROVIDER_IBV_WC_SIG_ERR, mkey which caused
+ * the error is stored in wc->wr_id and err_type is stored in wc->vendor_err.
+ * err_type defined in the SPDK DIF library is used to avoid extra conversion.
  *
  * \param cq Completion Queue
  * \param num_entries Maximum number of completions to be polled
