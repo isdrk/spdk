@@ -919,7 +919,7 @@ _sock_check_zcopy(struct spdk_sock *sock)
 			found = false;
 
 			TAILQ_FOREACH_SAFE(req, &sock->pending_reqs, internal.link, treq) {
-				if (!req->internal.is_zcopy) {
+				if (!req->internal.pending_zcopy) {
 					/* This wasn't a zcopy request. It was just waiting in line to complete */
 					rc = spdk_sock_request_put(sock, req, 0);
 					if (rc < 0) {
@@ -1452,9 +1452,9 @@ _sock_flush_ext(struct spdk_sock *sock)
 	while (req) {
 		offset = req->internal.offset;
 
-		/* req->internal.is_zcopy is true when the whole req or part of it is
+		/* req->internal.pending_zcopy is true when the whole req or part of it is
 		 * sent with zerocopy */
-		req->internal.is_zcopy = is_zcopy;
+		req->internal.pending_zcopy = is_zcopy;
 
 		for (i = 0; i < req->iovcnt; i++) {
 			/* Advance by the offset first */
@@ -1481,7 +1481,7 @@ _sock_flush_ext(struct spdk_sock *sock)
 		spdk_sock_request_pend(sock, req);
 
 		/* Ordering control. */
-		if (!req->internal.is_zcopy && req == TAILQ_FIRST(&sock->pending_reqs)) {
+		if (!req->internal.pending_zcopy && req == TAILQ_FIRST(&sock->pending_reqs)) {
 			/* The sendmsg syscall above isn't currently asynchronous,
 			* so it's already done. */
 			retval = spdk_sock_request_put(sock, req, 0);

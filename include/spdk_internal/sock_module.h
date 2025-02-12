@@ -184,7 +184,8 @@ static inline void
 spdk_sock_req_reset(struct spdk_sock_request *req)
 {
 	req->internal.offset = 0;
-	req->internal.is_zcopy = false;
+	req->internal.zcopy_idx = 0;
+	req->internal.pending_zcopy = false;
 }
 
 static inline int
