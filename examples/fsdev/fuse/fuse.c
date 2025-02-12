@@ -4,6 +4,7 @@
 
 #include "spdk/env.h"
 #include "spdk/event.h"
+#include "spdk/fsdev.h"
 #include "spdk/fuse.h"
 #include "spdk/string.h"
 #include "spdk/thread.h"
@@ -23,6 +24,8 @@ struct {
 	const char			*name;
 	const char			*fsdev_name;
 	const char			*mountpoint;
+	struct spdk_poller		*fsdev_poller;
+	bool				wait;
 	int				status;
 	size_t				num_active;
 	TAILQ_HEAD(, fsdev_fuse_thread)	threads;
@@ -65,6 +68,7 @@ fsdev_fuse_done(int status)
 		g_app.status = status;
 	}
 
+	spdk_poller_unregister(&g_app.fsdev_poller);
 	fsdev_fuse_stop_threads();
 	if (g_app.num_active > 0) {
 		return;
@@ -187,6 +191,38 @@ fsdev_fuse_mount_cb(void *ctx, struct spdk_fuse_mount *mount, int status)
 	g_app.mount = mount;
 }
 
+static int
+fsdev_fuse_for_each_fsdev_cb(void *ctx, struct spdk_fsdev *fsdev)
+{
+	return strcmp(spdk_fsdev_get_name(fsdev), g_app.fsdev_name) == 0;
+}
+
+static int
+fsdev_fuse_wait_fsdev(void *ctx)
+{
+	int rc;
+
+	rc = spdk_for_each_fsdev(NULL, fsdev_fuse_for_each_fsdev_cb);
+	if (rc != 1) {
+		return SPDK_POLLER_BUSY;
+	}
+
+	spdk_poller_unregister(&g_app.fsdev_poller);
+
+	g_app.num_active++;
+	rc = spdk_fuse_mount(g_app.fsdev_name, g_app.mountpoint, &g_app.mount_opts,
+			     fsdev_fuse_mount_cb, NULL);
+	if (rc != 0) {
+		fsdev_fuse_errmsg("failed to mount %s at %s: %s\n", g_app.fsdev_name,
+				  g_app.mountpoint, spdk_strerror(-rc));
+		assert(g_app.num_active > 0);
+		g_app.num_active--;
+		fsdev_fuse_done(rc);
+	}
+
+	return SPDK_POLLER_BUSY;
+}
+
 static void
 fsdev_fuse_sync_threads_done(void *ctx)
 {
@@ -198,10 +234,21 @@ fsdev_fuse_sync_threads_done(void *ctx)
 		return;
 	}
 
-	fsdev_fuse_errmsg("failed to mount %s at %s: %s\n", g_app.fsdev_name, g_app.mountpoint,
-			  spdk_strerror(-rc));
 	assert(g_app.num_active > 0);
 	g_app.num_active--;
+
+	if (rc == -ENODEV && g_app.wait) {
+		g_app.fsdev_poller = SPDK_POLLER_REGISTER(fsdev_fuse_wait_fsdev, NULL, 100 * 1000);
+		if (g_app.fsdev_poller == NULL) {
+			fsdev_fuse_errmsg("%s\n", spdk_strerror(ENOMEM));
+			fsdev_fuse_done(-ENOMEM);
+		}
+
+		return;
+	}
+
+	fsdev_fuse_errmsg("failed to mount %s at %s: %s\n", g_app.fsdev_name, g_app.mountpoint,
+			  spdk_strerror(-rc));
 	fsdev_fuse_done(rc);
 }
 
@@ -260,6 +307,8 @@ static struct option g_options[] = {
 	{ "mountpoint", required_argument, NULL, FSDEV_FUSE_OPT_MOUNTPOINT },
 #define FSDEV_FUSE_OPT_FS 'f'
 	{ "fs", required_argument,  NULL, FSDEV_FUSE_OPT_FS },
+#define FSDEV_FUSE_OPT_WAIT 'w'
+	{ "wait", no_argument,  NULL, FSDEV_FUSE_OPT_WAIT },
 #define FSDEV_FUSE_OPT_MAX_IODEPTH 0x1000
 	{ "max-iodepth", required_argument, NULL, FSDEV_FUSE_OPT_MAX_IODEPTH },
 #define FSDEV_FUSE_OPT_MAX_XFER 0x1001
@@ -294,6 +343,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 		break;
 	case FSDEV_FUSE_OPT_FS:
 		g_app.fsdev_name = arg;
+		break;
+	case FSDEV_FUSE_OPT_WAIT:
+		g_app.wait = true;
 		break;
 	case FSDEV_FUSE_OPT_MAX_IODEPTH:
 	case FSDEV_FUSE_OPT_MAX_XFER:
@@ -343,6 +395,7 @@ fsdev_fuse_usage(void)
 	printf("     --max-iodepth=<iodepth>          maximum I/O depth on each core\n");
 	printf("     --max-xfer=<size>                maximum transfer size\n");
 	printf("     --no-clone                       use the same /dev/fuse fd on all cores\n");
+	printf(" -w, --wait                           wait for the fsdev if it's not available\n");
 }
 
 int
@@ -357,7 +410,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fuse";
 	opts.shutdown_cb = fsdev_fuse_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "f:M:", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "f:M:w", g_options,
 				 fsdev_fuse_parse_arg, fsdev_fuse_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
