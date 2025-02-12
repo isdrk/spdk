@@ -720,6 +720,15 @@ bool spdk_bdev_desc_is_dif_check_enabled(struct spdk_bdev_desc *desc,
 bool spdk_bdev_desc_hide_metadata(struct spdk_bdev_desc *desc);
 
 /**
+ * Query if metadata is hidden from the bdev I/O.
+ *
+ * \param bdev_io The bdev I/O to query.
+ *
+ * \return true if metadata is hidden from the bdev I/O, or false otherwise.
+ */
+bool spdk_bdev_io_hide_metadata(struct spdk_bdev_io *bdev_io);
+
+/**
  * Set a time limit for the timeout IO of the bdev and timeout callback.
  * We can use this function to enable/disable the timeout handler. If
  * the timeout_in_sec > 0 then it means to enable the timeout IO handling
