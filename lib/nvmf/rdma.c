@@ -5051,6 +5051,67 @@ nvmf_rdma_log_wc_status(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_wc *wc)
 	}
 }
 
+static bool
+_nvmf_rdma_handle_sigerr(struct spdk_nvmf_rdma_transport *rtransport,
+			 struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_wc *wc)
+{
+	uint32_t mkey, i, max_req_count;
+	struct spdk_nvmf_rdma_request *rdma_req;
+
+	assert((wc->wr_id >> 32) == 0);
+	mkey = wc->wr_id;
+
+	max_req_count = rqpair->srq == NULL ? rqpair->max_queue_depth : rqpair->poller->max_srq_depth;
+
+	for (i = 0; i < max_req_count; i++) {
+		struct spdk_nvme_cmd *cmd;
+		struct spdk_nvme_cpl *rsp;
+
+		rdma_req = &rqpair->resources->reqs[i];
+
+		if (rdma_req->state == RDMA_REQUEST_STATE_FREE) {
+			continue;
+		}
+
+		if (rdma_req->data_transfer_mkey == NULL) {
+			continue;
+		}
+
+		if (spdk_rdma_provider_memory_key_get_key(rdma_req->data_transfer_mkey) == mkey) {
+			continue;
+		}
+
+		cmd = &rdma_req->req.cmd->nvme_cmd;
+		rsp = &rdma_req->req.rsp->nvme_cpl;
+
+		SPDK_ERRLOG("req %p (lba %" PRIx64", num_blocks %x) got DIF error %d\n",
+			    rdma_req, from_le64(&cmd->cdw10),
+			    (from_le32(&cmd->cdw12) ^ 0xFFFFu) + 1, (int)wc->vendor_err);
+
+		rsp->status.sct = SPDK_NVME_SCT_MEDIA_ERROR;
+		rsp->status.sc = nvmf_rdma_dif_error_to_compl_status(wc->vendor_err);
+
+		return true;
+	}
+
+	return false;
+}
+
+static void
+nvmf_rdma_handle_sigerr(struct spdk_nvmf_rdma_transport *rtransport,
+			struct spdk_nvmf_rdma_poller *rpoller, struct ibv_wc *wc)
+{
+	struct spdk_nvmf_rdma_qpair *rqpair;
+
+	RB_FOREACH(rqpair, qpairs_tree, &rpoller->qpairs) {
+		if (_nvmf_rdma_handle_sigerr(rtransport, rqpair, wc)) {
+			return;
+		}
+	}
+
+	SPDK_ERRLOG("No req was found to signature error (mkey %x)\n", (uint32_t)wc->wr_id);
+}
+
 static int
 nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 		      struct spdk_nvmf_rdma_poller *rpoller)
@@ -5091,6 +5152,11 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 	rpoller->stat.completions += reaped;
 
 	for (i = 0; i < reaped; i++) {
+
+		if (spdk_unlikely((int)wc[i].status == SPDK_RDMA_PROVIDER_WC_SIG_ERR)) {
+			nvmf_rdma_handle_sigerr(rtransport, rpoller, &wc[i]);
+			continue;
+		}
 
 		rdma_wr = (struct spdk_nvmf_rdma_wr *)wc[i].wr_id;
 		if (spdk_unlikely(!rdma_wr)) {
