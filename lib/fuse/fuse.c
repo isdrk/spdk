@@ -68,6 +68,7 @@ struct spdk_fuse_poll_group {
 
 struct {
 	TAILQ_HEAD(, spdk_fuse_mount)	mounts;
+	char				*fstype;
 	struct spdk_fuse_opts		opts;
 } g_fuse = {
 	.mounts = TAILQ_HEAD_INITIALIZER(g_fuse.mounts),
@@ -75,6 +76,7 @@ struct {
 		.max_io_depth = 8,
 		.max_xfer_size = 128 * 1024,
 		.clone_fd = true,
+		.fstype = "fuse.spdk",
 	},
 };
 
@@ -616,7 +618,8 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	rc = mount(mnt->name, mnt->mountpoint, "fuse.spdk", 0, mopts);
+	rc = mount(mnt->name, mnt->mountpoint,
+		   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype), 0, mopts);
 	if (rc != 0) {
 		rc = -errno;
 		SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);
@@ -860,6 +863,7 @@ spdk_fuse_get_default_mount_opts(struct spdk_fuse_mount_opts *opts, size_t size)
 	local.max_io_depth = g_fuse.opts.max_io_depth;
 	local.max_xfer_size = g_fuse.opts.max_xfer_size;
 	local.clone_fd = g_fuse.opts.clone_fd;
+	local.fstype = g_fuse.opts.fstype;
 
 	memcpy(opts, &local, local.size);
 }
@@ -935,8 +939,18 @@ spdk_fuse_init(struct spdk_fuse_opts *opts)
 			SPDK_ERRLOG("max_io_depth must be greater than zero\n");
 			return -EINVAL;
 		}
+		if (SPDK_GET_FIELD(opts, fstype, NULL) != NULL) {
+			char *fstype = strdup(opts->fstype);
+			if (fstype == NULL) {
+				return -ENOMEM;
+			}
+
+			free(g_fuse.fstype);
+			g_fuse.fstype = fstype;
+		}
 
 		memcpy(&g_fuse.opts, opts, spdk_min(opts->size, sizeof(g_fuse.opts)));
+		g_fuse.opts.fstype = g_fuse.fstype;
 	}
 
 	spdk_io_device_register(&g_fuse, fsdev_fuse_poll_group_create_cb,
@@ -948,6 +962,9 @@ spdk_fuse_init(struct spdk_fuse_opts *opts)
 void
 spdk_fuse_cleanup(void)
 {
+	free(g_fuse.fstype);
+	g_fuse.fstype = NULL;
+
 	spdk_io_device_unregister(&g_fuse, NULL);
 }
 

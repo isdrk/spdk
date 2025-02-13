@@ -20,6 +20,8 @@ struct spdk_fuse_mount_opts {
 	size_t		max_xfer_size;
 	/** Clone FUSE device fd */
 	bool		clone_fd;
+	/** Overrides filesystem type passed to mount(2) */
+	const char	*fstype;
 };
 
 /**
@@ -101,6 +103,8 @@ struct spdk_fuse_opts {
 	size_t		max_xfer_size;
 	/** Clone FUSE device fd */
 	bool		clone_fd;
+	/** Overrides filesystem type passed to mount(2) */
+	const char	*fstype;
 };
 
 /**

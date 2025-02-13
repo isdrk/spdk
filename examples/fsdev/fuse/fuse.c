@@ -315,6 +315,8 @@ static struct option g_options[] = {
 	{ "max-xfer", required_argument, NULL, FSDEV_FUSE_OPT_MAX_XFER },
 #define FSDEV_FUSE_OPT_NO_CLONE 0x1002
 	{ "no-clone", no_argument, NULL, FSDEV_FUSE_OPT_NO_CLONE },
+#define FSDEV_FUSE_OPT_FSTYPE 0x1003
+	{ "fstype", required_argument, NULL, FSDEV_FUSE_OPT_FSTYPE },
 	{},
 };
 
@@ -366,6 +368,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 	case FSDEV_FUSE_OPT_NO_CLONE:
 		g_app.mount_opts.clone_fd = false;
 		break;
+	case FSDEV_FUSE_OPT_FSTYPE:
+		g_app.mount_opts.fstype = arg;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -396,6 +401,7 @@ fsdev_fuse_usage(void)
 	printf("     --max-xfer=<size>                maximum transfer size\n");
 	printf("     --no-clone                       use the same /dev/fuse fd on all cores\n");
 	printf(" -w, --wait                           wait for the fsdev if it's not available\n");
+	printf("     --fstype=<fstype>                use fstype as filesystem type when mounting\n");
 }
 
 int
