@@ -505,7 +505,12 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 	TAILQ_INIT(&pool->active_entries);
 	TAILQ_INIT(&pool->free_entries);
 
-	if (!rmem_pool_extend(pool, 0, num_entries + core_count, entry_size, restore)) {
+	if (!restore) {
+		/* Reserve mirror entries */
+		num_entries += core_count;
+	}
+
+	if (!rmem_pool_extend(pool, 0, num_entries, entry_size, restore)) {
 		SPDK_ERRLOG("%s: pool_extend failed\n", name);
 		goto pool_extend_failed;
 	}
