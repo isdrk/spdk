@@ -11,16 +11,19 @@
 #include "spdk/bdev.h"
 #include "spdk/bdev_module.h"
 
+struct passthru_bdev_opts {
+	char *base_bdev_name;
+	char *name;
+	struct spdk_uuid uuid;
+};
+
 /**
  * Create new pass through bdev.
  *
- * \param bdev_name Bdev on which pass through vbdev will be created.
- * \param vbdev_name Name of the pass through bdev.
- * \param uuid Optional UUID to assign to the pass through bdev.
+ * \param opts Options to create new pass through bdev.
  * \return 0 on success, other on failure.
  */
-int bdev_passthru_create_disk(const char *bdev_name, const char *vbdev_name,
-			      const struct spdk_uuid *uuid);
+int bdev_passthru_create_disk(const struct passthru_bdev_opts *opts);
 
 /**
  * Delete passthru bdev.

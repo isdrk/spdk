@@ -10,16 +10,9 @@
 #include "spdk/string.h"
 #include "spdk/log.h"
 
-/* Structure to hold the parameters for this RPC method. */
-struct rpc_bdev_passthru_create {
-	char *base_bdev_name;
-	char *name;
-	struct spdk_uuid uuid;
-};
-
 /* Free the allocated memory resource after the RPC handling. */
 static void
-free_rpc_bdev_passthru_create(struct rpc_bdev_passthru_create *r)
+free_rpc_bdev_passthru_create(struct passthru_bdev_opts *r)
 {
 	free(r->base_bdev_name);
 	free(r->name);
@@ -27,9 +20,9 @@ free_rpc_bdev_passthru_create(struct rpc_bdev_passthru_create *r)
 
 /* Structure to decode the input parameters for this RPC method. */
 static const struct spdk_json_object_decoder rpc_bdev_passthru_create_decoders[] = {
-	{"base_bdev_name", offsetof(struct rpc_bdev_passthru_create, base_bdev_name), spdk_json_decode_string},
-	{"name", offsetof(struct rpc_bdev_passthru_create, name), spdk_json_decode_string},
-	{"uuid", offsetof(struct rpc_bdev_passthru_create, uuid), spdk_json_decode_uuid, true},
+	{"base_bdev_name", offsetof(struct passthru_bdev_opts, base_bdev_name), spdk_json_decode_string},
+	{"name", offsetof(struct passthru_bdev_opts, name), spdk_json_decode_string},
+	{"uuid", offsetof(struct passthru_bdev_opts, uuid), spdk_json_decode_uuid, true},
 };
 
 /* Decode the parameters for this RPC method and properly construct the passthru
@@ -39,7 +32,7 @@ static void
 rpc_bdev_passthru_create(struct spdk_jsonrpc_request *request,
 			 const struct spdk_json_val *params)
 {
-	struct rpc_bdev_passthru_create req = {NULL};
+	struct passthru_bdev_opts req = {NULL};
 	struct spdk_json_write_ctx *w;
 	int rc;
 
@@ -52,7 +45,7 @@ rpc_bdev_passthru_create(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	rc = bdev_passthru_create_disk(req.base_bdev_name, req.name, &req.uuid);
+	rc = bdev_passthru_create_disk(&req);
 	if (rc != 0) {
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
 		goto cleanup;

@@ -464,14 +464,13 @@ bdev_name_free(struct bdev_names *name)
 /* Create the passthru association from the bdev and vbdev name and insert
  * on the global list. */
 static int
-vbdev_passthru_insert_name(const char *bdev_name, const char *vbdev_name,
-			   const struct spdk_uuid *uuid)
+vbdev_passthru_insert_name(const struct passthru_bdev_opts *opts)
 {
 	struct bdev_names *name;
 
 	TAILQ_FOREACH(name, &g_bdev_names, link) {
-		if (strcmp(vbdev_name, name->vbdev_name) == 0) {
-			SPDK_ERRLOG("passthru bdev %s already exists\n", vbdev_name);
+		if (strcmp(opts->name, name->vbdev_name) == 0) {
+			SPDK_ERRLOG("passthru bdev %s already exists\n", opts->name);
 			return -EEXIST;
 		}
 	}
@@ -482,21 +481,21 @@ vbdev_passthru_insert_name(const char *bdev_name, const char *vbdev_name,
 		return -ENOMEM;
 	}
 
-	name->bdev_name = strdup(bdev_name);
+	name->bdev_name = strdup(opts->base_bdev_name);
 	if (!name->bdev_name) {
 		SPDK_ERRLOG("could not allocate name->bdev_name\n");
 		bdev_name_free(name);
 		return -ENOMEM;
 	}
 
-	name->vbdev_name = strdup(vbdev_name);
+	name->vbdev_name = strdup(opts->name);
 	if (!name->vbdev_name) {
 		SPDK_ERRLOG("could not allocate name->vbdev_name\n");
 		bdev_name_free(name);
 		return -ENOMEM;
 	}
 
-	spdk_uuid_copy(&name->uuid, uuid);
+	spdk_uuid_copy(&name->uuid, &opts->uuid);
 	TAILQ_INSERT_TAIL(&g_bdev_names, name, link);
 
 	return 0;
@@ -737,20 +736,19 @@ vbdev_passthru_register(const char *bdev_name)
 
 /* Create the passthru disk from the given bdev and vbdev name. */
 int
-bdev_passthru_create_disk(const char *bdev_name, const char *vbdev_name,
-			  const struct spdk_uuid *uuid)
+bdev_passthru_create_disk(const struct passthru_bdev_opts *opts)
 {
 	int rc;
 
 	/* Insert the bdev name into our global name list even if it doesn't exist yet,
 	 * it may show up soon...
 	 */
-	rc = vbdev_passthru_insert_name(bdev_name, vbdev_name, uuid);
+	rc = vbdev_passthru_insert_name(opts);
 	if (rc) {
 		return rc;
 	}
 
-	rc = vbdev_passthru_register(bdev_name);
+	rc = vbdev_passthru_register(opts->base_bdev_name);
 	if (rc == -ENODEV) {
 		/* This is not an error, we tracked the name above and it still
 		 * may show up later.
