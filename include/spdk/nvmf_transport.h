@@ -90,7 +90,8 @@ struct spdk_nvmf_request {
 			uint8_t data_from_pool		: 1;
 			uint8_t dif_enabled		: 1;
 			uint8_t first_fused		: 1;
-			uint8_t rsvd			: 5;
+			uint8_t use_accel_seq		: 1;
+			uint8_t rsvd			: 4;
 		};
 	};
 	uint8_t				zcopy_phase; /* type enum spdk_nvmf_zcopy_phase */

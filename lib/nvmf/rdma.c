@@ -240,7 +240,6 @@ struct spdk_nvmf_rdma_request {
 
 	bool					fused_failed;
 	bool					data_transferred;
-	bool					use_accel_seq;
 
 	struct spdk_nvmf_rdma_wr		data_wr;
 	struct spdk_nvmf_rdma_wr		rsp_wr;
@@ -1728,7 +1727,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport,
 					   length);
 	rdma_req->iovpos = 0;
-	if (rdma_req->use_accel_seq) {
+	if (req->use_accel_seq) {
 		goto out;
 	}
 	if (spdk_unlikely(rc != 0)) {
@@ -1837,7 +1836,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, total_length);
-	if (rdma_req->use_accel_seq) {
+	if (req->use_accel_seq) {
 		rdma_req->iovpos = 0;
 		req->length = total_length;
 		goto out;
@@ -1971,7 +1970,7 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 		uint64_t offset = sgl->address;
 		uint32_t max_len = rtransport->transport.opts.in_capsule_data_size;
 
-		assert(!rdma_req->use_accel_seq);
+		assert(!req->use_accel_seq);
 		SPDK_DEBUGLOG(nvmf, "In-capsule data: offset 0x%" PRIx64 ", length 0x%x\n",
 			      offset, sgl->unkeyed.length);
 
@@ -2054,7 +2053,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->req.dif_enabled = false;
 	rdma_req->fused_failed = false;
 	rdma_req->data_transferred = false;
-	rdma_req->use_accel_seq = false;
+	rdma_req->req.use_accel_seq = false;
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
 		/* This req was part of a valid fused pair, but failed before it got to
@@ -2238,7 +2237,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
 
-	assert(rdma_req->use_accel_seq);
+	assert(rdma_req->req.use_accel_seq);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
 	if (spdk_unlikely(!src_domain ||
 			  spdk_memory_domain_get_dma_device_type(src_domain) != SPDK_DMA_DEVICE_TYPE_RDMA)) {
@@ -2507,7 +2506,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				/* This request needs to wait in line to obtain a buffer */
 				break;
 			}
-			rdma_req->use_accel_seq = nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req);
+			rdma_req->req.use_accel_seq = nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req);
 
 			/* Try to get a data buffer */
 			rc = nvmf_rdma_request_parse_sgl(rtransport, device, rdma_req);
@@ -2526,7 +2525,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
-			if (rdma_req->use_accel_seq) {
+			if (rdma_req->req.use_accel_seq) {
 				STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
 				rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
 				break;
