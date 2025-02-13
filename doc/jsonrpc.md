@@ -6936,6 +6936,7 @@ Name                    | Optional | Type        | Description
 name                    | Required | string      | Bdev name
 base_bdev_name          | Required | string      | Base bdev name
 uuid                    | Optional | string      | UUID of new bdev
+hide_metadata           | Optional | boolean     | Enable hide_metadata option to the base bdev
 
 #### Result
 

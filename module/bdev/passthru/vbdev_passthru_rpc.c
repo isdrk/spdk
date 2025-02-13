@@ -23,6 +23,7 @@ static const struct spdk_json_object_decoder rpc_bdev_passthru_create_decoders[]
 	{"base_bdev_name", offsetof(struct passthru_bdev_opts, base_bdev_name), spdk_json_decode_string},
 	{"name", offsetof(struct passthru_bdev_opts, name), spdk_json_decode_string},
 	{"uuid", offsetof(struct passthru_bdev_opts, uuid), spdk_json_decode_uuid, true},
+	{"hide_metadata", offsetof(struct passthru_bdev_opts, hide_metadata), spdk_json_decode_bool, true},
 };
 
 /* Decode the parameters for this RPC method and properly construct the passthru

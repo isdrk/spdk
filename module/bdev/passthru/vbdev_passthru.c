@@ -49,6 +49,7 @@ struct bdev_names {
 	char			*vbdev_name;
 	char			*bdev_name;
 	struct spdk_uuid	uuid;
+	bool			hide_metadata;
 	TAILQ_ENTRY(bdev_names)	link;
 };
 static TAILQ_HEAD(, bdev_names) g_bdev_names = TAILQ_HEAD_INITIALIZER(g_bdev_names);
@@ -217,14 +218,17 @@ vbdev_passthru_queue_io(struct spdk_bdev_io *bdev_io)
 }
 
 static void
-pt_init_ext_io_opts(struct spdk_bdev_io *bdev_io, struct spdk_bdev_ext_io_opts *opts)
+pt_init_ext_io_opts(struct spdk_bdev_io *bdev_io, struct spdk_bdev_desc *base_desc,
+		    struct spdk_bdev_ext_io_opts *opts)
 {
 	memset(opts, 0, sizeof(*opts));
 	opts->size = sizeof(*opts);
 	opts->memory_domain = bdev_io->u.bdev.memory_domain;
 	opts->memory_domain_ctx = bdev_io->u.bdev.memory_domain_ctx;
 	opts->metadata = bdev_io->u.bdev.md_buf;
-	opts->dif_check_flags_exclude_mask = ~bdev_io->u.bdev.dif_check_flags;
+	if (!spdk_bdev_desc_hide_metadata(base_desc)) {
+		opts->dif_check_flags_exclude_mask = ~bdev_io->u.bdev.dif_check_flags;
+	}
 }
 
 /* Callback for getting a buf from the bdev pool in the event that the caller passed
@@ -247,7 +251,7 @@ pt_read_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io, boo
 		return;
 	}
 
-	pt_init_ext_io_opts(bdev_io, &io_opts);
+	pt_init_ext_io_opts(bdev_io, pt_node->base_desc, &io_opts);
 	rc = spdk_bdev_readv_blocks_ext(pt_node->base_desc, pt_ch->base_ch, bdev_io->u.bdev.iovs,
 					bdev_io->u.bdev.iovcnt, bdev_io->u.bdev.offset_blocks,
 					bdev_io->u.bdev.num_blocks, _pt_complete_io,
@@ -289,7 +293,7 @@ vbdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *b
 				     bdev_io->u.bdev.num_blocks * bdev_io->bdev->blocklen);
 		break;
 	case SPDK_BDEV_IO_TYPE_WRITE:
-		pt_init_ext_io_opts(bdev_io, &io_opts);
+		pt_init_ext_io_opts(bdev_io, pt_node->base_desc, &io_opts);
 		rc = spdk_bdev_writev_blocks_ext(pt_node->base_desc, pt_ch->base_ch, bdev_io->u.bdev.iovs,
 						 bdev_io->u.bdev.iovcnt, bdev_io->u.bdev.offset_blocks,
 						 bdev_io->u.bdev.num_blocks, _pt_complete_io,
@@ -496,6 +500,7 @@ vbdev_passthru_insert_name(const struct passthru_bdev_opts *opts)
 	}
 
 	spdk_uuid_copy(&name->uuid, &opts->uuid);
+	name->hide_metadata = opts->hide_metadata;
 	TAILQ_INSERT_TAIL(&g_bdev_names, name, link);
 
 	return 0;
@@ -613,6 +618,7 @@ vbdev_passthru_register(const char *bdev_name)
 	struct vbdev_passthru *pt_node;
 	struct spdk_bdev *bdev;
 	struct spdk_uuid ns_uuid;
+	struct spdk_bdev_open_opts opts = {};
 	int rc = 0;
 
 	spdk_uuid_parse(&ns_uuid, BDEV_PASSTHRU_NAMESPACE_UUID);
@@ -642,9 +648,12 @@ vbdev_passthru_register(const char *bdev_name)
 		}
 		pt_node->pt_bdev.product_name = "passthru";
 
+		spdk_bdev_open_opts_init(&opts, sizeof(opts));
+		opts.hide_metadata = name->hide_metadata;
+
 		/* The base bdev that we're attaching to. */
-		rc = spdk_bdev_open_ext(bdev_name, true, vbdev_passthru_base_bdev_event_cb,
-					NULL, &pt_node->base_desc);
+		rc = spdk_bdev_open_ext_v2(bdev_name, true, vbdev_passthru_base_bdev_event_cb,
+					   NULL, &opts, &pt_node->base_desc);
 		if (rc) {
 			if (rc != -ENODEV) {
 				SPDK_ERRLOG("could not open bdev %s\n", bdev_name);
@@ -678,15 +687,23 @@ vbdev_passthru_register(const char *bdev_name)
 		pt_node->pt_bdev.write_cache = bdev->write_cache;
 		pt_node->pt_bdev.required_alignment = bdev->required_alignment;
 		pt_node->pt_bdev.optimal_io_boundary = bdev->optimal_io_boundary;
-		pt_node->pt_bdev.blocklen = bdev->blocklen;
+		pt_node->pt_bdev.blocklen = spdk_bdev_desc_get_block_size(pt_node->base_desc);
 		pt_node->pt_bdev.blockcnt = bdev->blockcnt;
 
-		pt_node->pt_bdev.md_interleave = bdev->md_interleave;
-		pt_node->pt_bdev.md_len = bdev->md_len;
-		pt_node->pt_bdev.dif_type = bdev->dif_type;
-		pt_node->pt_bdev.dif_is_head_of_md = bdev->dif_is_head_of_md;
-		pt_node->pt_bdev.dif_check_flags = bdev->dif_check_flags;
-		pt_node->pt_bdev.dif_pi_format = bdev->dif_pi_format;
+		pt_node->pt_bdev.md_interleave = spdk_bdev_desc_is_md_interleaved(pt_node->base_desc);
+		pt_node->pt_bdev.md_len = spdk_bdev_desc_get_md_size(pt_node->base_desc);
+		pt_node->pt_bdev.dif_type = spdk_bdev_desc_get_dif_type(pt_node->base_desc);
+		pt_node->pt_bdev.dif_is_head_of_md = spdk_bdev_desc_is_dif_head_of_md(pt_node->base_desc);
+		if (spdk_bdev_desc_is_dif_check_enabled(pt_node->base_desc, SPDK_DIF_CHECK_TYPE_REFTAG)) {
+			pt_node->pt_bdev.dif_check_flags |= SPDK_DIF_FLAGS_REFTAG_CHECK;
+		}
+		if (spdk_bdev_desc_is_dif_check_enabled(pt_node->base_desc, SPDK_DIF_CHECK_TYPE_GUARD)) {
+			pt_node->pt_bdev.dif_check_flags |= SPDK_DIF_FLAGS_GUARD_CHECK;
+		}
+		if (spdk_bdev_desc_is_dif_check_enabled(pt_node->base_desc, SPDK_DIF_CHECK_TYPE_APPTAG)) {
+			pt_node->pt_bdev.dif_check_flags |= SPDK_DIF_FLAGS_APPTAG_CHECK;
+		}
+		pt_node->pt_bdev.dif_pi_format = spdk_bdev_desc_get_dif_pi_format(pt_node->base_desc);
 
 		/* This is the context that is passed to us when the bdev
 		 * layer calls in so we'll save our pt_bdev node here.

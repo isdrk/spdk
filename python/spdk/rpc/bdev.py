@@ -1321,12 +1321,13 @@ def bdev_iscsi_delete(client, name):
     return client.call('bdev_iscsi_delete', params)
 
 
-def bdev_passthru_create(client, base_bdev_name, name, uuid=None):
+def bdev_passthru_create(client, base_bdev_name, name, uuid=None, hide_metadata=None):
     """Construct a pass-through block device.
     Args:
         base_bdev_name: name of the existing bdev
         name: name of block device
         uuid: UUID of block device (optional)
+        hide_metadata: Enable hide_metadata option to the base bdev (optional)
     Returns:
         Name of created block device.
     """
@@ -1335,6 +1336,8 @@ def bdev_passthru_create(client, base_bdev_name, name, uuid=None):
     params['name'] = name
     if uuid is not None:
         params['uuid'] = uuid
+    if hide_metadata is not None:
+        params['hide_metadata'] = hide_metadata
     return client.call('bdev_passthru_create', params)
 
 

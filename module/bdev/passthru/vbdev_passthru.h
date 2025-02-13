@@ -15,6 +15,7 @@ struct passthru_bdev_opts {
 	char *base_bdev_name;
 	char *name;
 	struct spdk_uuid uuid;
+	bool hide_metadata;
 };
 
 /**
