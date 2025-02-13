@@ -453,6 +453,14 @@ pt_bdev_ch_destroy_cb(void *io_device, void *ctx_buf)
 	spdk_put_io_channel(pt_ch->base_ch);
 }
 
+static void
+bdev_name_free(struct bdev_names *name)
+{
+	free(name->vbdev_name);
+	free(name->bdev_name);
+	free(name);
+}
+
 /* Create the passthru association from the bdev and vbdev name and insert
  * on the global list. */
 static int
@@ -477,15 +485,14 @@ vbdev_passthru_insert_name(const char *bdev_name, const char *vbdev_name,
 	name->bdev_name = strdup(bdev_name);
 	if (!name->bdev_name) {
 		SPDK_ERRLOG("could not allocate name->bdev_name\n");
-		free(name);
+		bdev_name_free(name);
 		return -ENOMEM;
 	}
 
 	name->vbdev_name = strdup(vbdev_name);
 	if (!name->vbdev_name) {
 		SPDK_ERRLOG("could not allocate name->vbdev_name\n");
-		free(name->bdev_name);
-		free(name);
+		bdev_name_free(name);
 		return -ENOMEM;
 	}
 
@@ -510,9 +517,7 @@ vbdev_passthru_finish(void)
 
 	while ((name = TAILQ_FIRST(&g_bdev_names))) {
 		TAILQ_REMOVE(&g_bdev_names, name, link);
-		free(name->bdev_name);
-		free(name->vbdev_name);
-		free(name);
+		bdev_name_free(name);
 	}
 }
 
@@ -773,9 +778,7 @@ bdev_passthru_delete_disk(const char *bdev_name, spdk_bdev_unregister_cb cb_fn, 
 		TAILQ_FOREACH(name, &g_bdev_names, link) {
 			if (strcmp(name->vbdev_name, bdev_name) == 0) {
 				TAILQ_REMOVE(&g_bdev_names, name, link);
-				free(name->bdev_name);
-				free(name->vbdev_name);
-				free(name);
+				bdev_name_free(name);
 				break;
 			}
 		}
