@@ -116,6 +116,13 @@ struct spdk_fuse_opts {
 void spdk_fuse_get_opts(struct spdk_fuse_opts *opts, size_t size);
 
 /**
+ * Set FUSE options global to all mounts.
+ *
+ * \param opts options.
+ */
+int spdk_fuse_set_opts(struct spdk_fuse_opts *opts);
+
+/**
  * Initialize the FUSE library.
  *
  * \return 0 on success, negative errno otherwise.

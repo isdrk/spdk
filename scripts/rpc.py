@@ -4197,6 +4197,18 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    help="Enable HW offloads on network QP")
     p.set_defaults(func=rdma_provider_set_opts)
 
+    def fuse_set_options(args):
+        rpc.fuse.fuse_set_options(args.client, max_xfer_size=args.max_xfer_size,
+                                  max_io_depth=args.max_io_depth, clone_fd=args.clone_fd,
+                                  fstype=args.fstype)
+    p = subparsers.add_parser('fuse_set_options', help='Set FUSE library options')
+    p.add_argument('--max-io-depth', type=int, help='Maximum I/O depth on each core per mount')
+    p.add_argument('--max-xfer-size', type=int, help='Maximum transfer size')
+    p.add_argument('--no-clone', help='Use the same /dev/fuse fd on all cores',
+                   dest='clone_fd', action='store_false')
+    p.add_argument('--fstype', help='Override filesystem type passed to mount(2)')
+    p.set_defaults(func=fuse_set_options)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))

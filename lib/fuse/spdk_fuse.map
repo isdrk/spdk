@@ -9,6 +9,7 @@
 	spdk_fuse_init;
 	spdk_fuse_cleanup;
 	spdk_fuse_get_opts;
+	spdk_fuse_set_opts;
 
 	local: *;
 };

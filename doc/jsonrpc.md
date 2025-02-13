@@ -14688,3 +14688,41 @@ Example response:
   "result": true
 }
 ~~~
+
+### fuse_set_options {#fuse_set_options}
+
+Set FUSE library options.
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+max_io_depth            | Optional | number  | Maximum I/O depth on each core per mount
+max_xfer_size           | Optional | number  | Maximum transfer size
+clone_fd                | Optional | boolean | Clone the /dev/fuse fd on each core
+fstype                  | Optional | string  | Override filesystem type passed to mount(2)
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fuse_set_options",
+  "id": 1,
+  "params": {
+      "max_io_depth": 32,
+      "clone_fd": true
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~

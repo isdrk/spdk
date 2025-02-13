@@ -16,6 +16,7 @@ from . import compressdev
 from . import fsdev
 from . import env_dpdk
 from . import dsa
+from . import fuse
 from . import iaa
 from . import ioat
 from . import iscsi

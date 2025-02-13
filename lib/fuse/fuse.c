@@ -934,23 +934,13 @@ fsdev_fuse_poll_group_destroy_cb(void *io_device, void *ctx)
 int
 spdk_fuse_init(struct spdk_fuse_opts *opts)
 {
+	int rc;
+
 	if (opts != NULL) {
-		if (SPDK_GET_FIELD(opts, max_io_depth, g_fuse.opts.max_io_depth) == 0) {
-			SPDK_ERRLOG("max_io_depth must be greater than zero\n");
-			return -EINVAL;
+		rc = spdk_fuse_set_opts(opts);
+		if (rc != 0) {
+			return rc;
 		}
-		if (SPDK_GET_FIELD(opts, fstype, NULL) != NULL) {
-			char *fstype = strdup(opts->fstype);
-			if (fstype == NULL) {
-				return -ENOMEM;
-			}
-
-			free(g_fuse.fstype);
-			g_fuse.fstype = fstype;
-		}
-
-		memcpy(&g_fuse.opts, opts, spdk_min(opts->size, sizeof(g_fuse.opts)));
-		g_fuse.opts.fstype = g_fuse.fstype;
 	}
 
 	spdk_io_device_register(&g_fuse, fsdev_fuse_poll_group_create_cb,
@@ -974,6 +964,29 @@ spdk_fuse_get_opts(struct spdk_fuse_opts *opts, size_t size)
 	size = spdk_min(size, sizeof(g_fuse.opts));
 	memcpy(opts, &g_fuse.opts, size);
 	opts->size = size;
+}
+
+int
+spdk_fuse_set_opts(struct spdk_fuse_opts *opts)
+{
+	if (SPDK_GET_FIELD(opts, max_io_depth, g_fuse.opts.max_io_depth) == 0) {
+		SPDK_ERRLOG("max_io_depth must be greater than zero\n");
+		return -EINVAL;
+	}
+	if (SPDK_GET_FIELD(opts, fstype, NULL) != NULL) {
+		char *fstype = strdup(opts->fstype);
+		if (fstype == NULL) {
+			return -ENOMEM;
+		}
+
+		free(g_fuse.fstype);
+		g_fuse.fstype = fstype;
+	}
+
+	memcpy(&g_fuse.opts, opts, spdk_min(opts->size, sizeof(g_fuse.opts)));
+	g_fuse.opts.fstype = g_fuse.fstype;
+
+	return 0;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fuse);
