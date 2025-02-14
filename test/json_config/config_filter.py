@@ -52,6 +52,7 @@ def filter_methods(do_remove_global_rpcs):
         'iobuf_set_options',
         'bdev_raid_set_options',
         'fsdev_set_opts',
+        'fsdev_aio_set_options',
     ]
 
     data = json.loads(sys.stdin.read())
