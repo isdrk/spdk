@@ -969,6 +969,36 @@ fsdev_fuse_poll_group_destroy_cb(void *io_device, void *ctx)
 }
 
 int
+spdk_fuse_for_each_mount(spdk_fuse_for_each_mount_cb cb_fn, void *ctx)
+{
+	struct spdk_fuse_mount *mount;
+	int rc = 0;
+
+	pthread_mutex_lock(&g_fuse.mutex);
+	TAILQ_FOREACH(mount, &g_fuse.mounts, tailq) {
+		rc = cb_fn(mount, ctx);
+		if (rc != 0) {
+			break;
+		}
+	}
+	pthread_mutex_unlock(&g_fuse.mutex);
+
+	return rc;
+}
+
+struct spdk_fsdev *
+spdk_fuse_mount_get_fsdev(struct spdk_fuse_mount *mount)
+{
+	return spdk_fsdev_desc_get_fsdev(mount->fsdev_desc);
+}
+
+const char *
+spdk_fuse_mount_get_mountpoint(struct spdk_fuse_mount *mount)
+{
+	return mount->mountpoint;
+}
+
+int
 spdk_fuse_init(struct spdk_fuse_opts *opts)
 {
 	int rc;

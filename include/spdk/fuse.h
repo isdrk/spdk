@@ -5,6 +5,7 @@
 #ifndef SPDK_FUSE_H
 #define SPDK_FUSE_H
 
+#include "spdk/fsdev.h"
 #include "spdk/stdinc.h"
 
 #ifdef __cplusplus
@@ -63,6 +64,36 @@ typedef void (*spdk_fuse_umount_cb)(void *ctx);
  * \return 0 on success, negated errno otherwise.
  */
 int spdk_fuse_umount(struct spdk_fuse_mount *mount, spdk_fuse_umount_cb cb_fn, void *cb_ctx);
+
+typedef int (*spdk_fuse_for_each_mount_cb)(struct spdk_fuse_mount *mount, void *ctx);
+
+/**
+ * Call a function on each fsdev mount.
+ *
+ * \param cb_fn Function to call.
+ * \param cb_ctx Argument passed to `cb_fn`.
+ *
+ * \return 0 on success, negated errno otherwise.
+ */
+int spdk_fuse_for_each_mount(spdk_fuse_for_each_mount_cb cb_fn, void *ctx);
+
+/**
+ * Return fsdev associated with a mount.
+ *
+ * \param mount FUSE mount.
+ *
+ * \return fsdev associated with the mount.
+ */
+struct spdk_fsdev *spdk_fuse_mount_get_fsdev(struct spdk_fuse_mount *mount);
+
+/**
+ * Return the path where the fsdev is mounted.
+ *
+ * \param mount FUSE mount.
+ *
+ * \return path where the fsdev is mounted.
+ */
+const char *spdk_fuse_mount_get_mountpoint(struct spdk_fuse_mount *mount);
 
 struct spdk_fuse_poll_group;
 

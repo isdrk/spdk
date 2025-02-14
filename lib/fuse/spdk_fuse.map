@@ -10,6 +10,9 @@
 	spdk_fuse_cleanup;
 	spdk_fuse_get_opts;
 	spdk_fuse_set_opts;
+	spdk_fuse_for_each_mount;
+	spdk_fuse_mount_get_fsdev;
+	spdk_fuse_mount_get_mountpoint;
 
 	local: *;
 };
