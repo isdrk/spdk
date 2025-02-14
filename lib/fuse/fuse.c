@@ -789,7 +789,9 @@ fsdev_fuse_umount_exec_user_cb(void *_ctx)
 {
 	struct fsdev_fuse_umount_ctx *ctx = _ctx;
 
-	ctx->cb_fn(ctx->cb_ctx);
+	if (ctx->cb_fn != NULL) {
+		ctx->cb_fn(ctx->cb_ctx);
+	}
 	free(ctx);
 }
 

@@ -26,6 +26,7 @@ struct {
 	const char			*mountpoint;
 	struct spdk_poller		*fsdev_poller;
 	bool				wait;
+	bool				daemon;
 	int				status;
 	size_t				num_active;
 	TAILQ_HEAD(, fsdev_fuse_thread)	threads;
@@ -116,6 +117,12 @@ fsdev_fuse_thread_stop(struct fsdev_fuse_thread *thread, int status)
 static void
 fsdev_fuse_poll_error_cb(void *ctx, struct spdk_fuse_mount *mount, int error)
 {
+	/* If we're running as a daemon, remove the mount but keep running */
+	if (g_app.daemon) {
+		spdk_fuse_umount(mount, NULL, NULL);
+		return;
+	}
+
 	fsdev_fuse_thread_stop(ctx, error);
 }
 
@@ -228,6 +235,12 @@ fsdev_fuse_sync_threads_done(void *ctx)
 {
 	int rc;
 
+	if (g_app.daemon) {
+		assert(g_app.num_active > 0);
+		g_app.num_active--;
+		return;
+	}
+
 	rc = spdk_fuse_mount(g_app.fsdev_name, g_app.mountpoint, &g_app.mount_opts,
 			     fsdev_fuse_mount_cb, NULL);
 	if (rc == 0) {
@@ -309,6 +322,8 @@ static struct option g_options[] = {
 	{ "fs", required_argument,  NULL, FSDEV_FUSE_OPT_FS },
 #define FSDEV_FUSE_OPT_WAIT 'w'
 	{ "wait", no_argument,  NULL, FSDEV_FUSE_OPT_WAIT },
+#define FSDEV_FUSE_OPT_DAEMON 'D'
+	{ "daemon", no_argument,  NULL, FSDEV_FUSE_OPT_DAEMON },
 #define FSDEV_FUSE_OPT_MAX_IODEPTH 0x1000
 	{ "max-iodepth", required_argument, NULL, FSDEV_FUSE_OPT_MAX_IODEPTH },
 #define FSDEV_FUSE_OPT_MAX_XFER 0x1001
@@ -349,6 +364,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 	case FSDEV_FUSE_OPT_WAIT:
 		g_app.wait = true;
 		break;
+	case FSDEV_FUSE_OPT_DAEMON:
+		g_app.daemon = true;
+		break;
 	case FSDEV_FUSE_OPT_MAX_IODEPTH:
 	case FSDEV_FUSE_OPT_MAX_XFER:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
@@ -381,14 +399,27 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 static bool
 fsdev_fuse_check_params(void)
 {
-	if (g_app.fsdev_name == NULL) {
-		fsdev_fuse_errmsg("missing argument: -f, --fs\n");
-		return false;
+	if (!g_app.daemon) {
+		if (g_app.fsdev_name == NULL) {
+			fsdev_fuse_errmsg("missing argument: -f, --fs\n");
+			return false;
+		}
+		if (g_app.mountpoint == NULL) {
+			fsdev_fuse_errmsg("missing argument: -M, --mountpoint\n");
+			return false;
+		}
+	} else {
+		if (g_app.fsdev_name != NULL) {
+			fsdev_fuse_errmsg("argument -f, --fs cannot be used with -D, --daemon\n");
+			return false;
+		}
+		if (g_app.mountpoint != NULL) {
+			fsdev_fuse_errmsg("argument -M, --mountpoint cannot be used with "
+					  "-D, --daemon\n");
+			return false;
+		}
 	}
-	if (g_app.mountpoint == NULL) {
-		fsdev_fuse_errmsg("missing argument: -M, --mountpoint\n");
-		return false;
-	}
+
 	return true;
 }
 
@@ -402,6 +433,7 @@ fsdev_fuse_usage(void)
 	printf("     --no-clone                       use the same /dev/fuse fd on all cores\n");
 	printf(" -w, --wait                           wait for the fsdev if it's not available\n");
 	printf("     --fstype=<fstype>                use fstype as filesystem type when mounting\n");
+	printf(" -D, --daemon                         run as daemon\n");
 }
 
 int
@@ -416,7 +448,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fuse";
 	opts.shutdown_cb = fsdev_fuse_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "f:M:w", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "Df:M:w", g_options,
 				 fsdev_fuse_parse_arg, fsdev_fuse_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
