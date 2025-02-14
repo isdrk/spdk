@@ -68,6 +68,7 @@ struct fsdevperf_task {
 	size_t					io_size;
 	size_t					io_depth;
 	int					io_pattern;
+	bool					unique_data;
 	bool					stop;
 	struct fsdevperf_stats			stats;
 	uint64_t				tsc_finish;
@@ -91,6 +92,7 @@ struct fsdevperf_job_ops {
 
 #define FSDEVPERF_JOB_RANDOM		(1 << 0)
 #define FSDEVPERF_JOB_SINGLE_BUFFER	(1 << 1)
+#define FSDEVPERF_JOB_UNIQUE_DATA	(1 << 2)
 
 struct fsdevperf_job {
 	int				io_pattern;
@@ -431,6 +433,7 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 	task->io_size = job->io_size;
 	task->io_depth = job->io_depth;
 	task->io_pattern = job->io_pattern;
+	task->unique_data = (job->flags & FSDEVPERF_JOB_UNIQUE_DATA) != 0;
 	task->requests = calloc(task->io_depth, sizeof(*task->requests));
 	if (task->requests == NULL) {
 		goto error;
@@ -1097,6 +1100,22 @@ fsdevperf_request_complete_cb(void *ctx, struct spdk_io_channel *ioch, int statu
 }
 
 static void
+fsdevperf_request_generate_data(struct fsdevperf_request *request)
+{
+	struct fsdevperf_task *task = request->task;
+	uint64_t *p = request->iov.iov_base;
+	size_t i;
+
+	if (!task->unique_data) {
+		return;
+	}
+
+	for (i = 0; i < task->io_size / sizeof(uint64_t); i++) {
+		*(p++) = (task->stats.num_ios << 16) | request->id;
+	}
+}
+
+static void
 fsdevperf_request_submit(struct fsdevperf_request *request)
 {
 	struct fsdevperf_task *task = request->task;
@@ -1113,6 +1132,7 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 				     fsdevperf_request_complete_cb, request);
 		break;
 	case SPDK_FSDEV_IO_WRITE:
+		fsdevperf_request_generate_data(request);
 		rc = spdk_fsdev_write(fs->fsdev_desc, task->ioch, request->id, task->fobj,
 				      task->fh, task->io_size, offset, 0, &request->iov, 1, NULL,
 				      fsdevperf_request_complete_cb, request);
@@ -1641,6 +1661,8 @@ static struct option g_options[] = {
 	{ "wait-for-start", no_argument, NULL, FSDEVPERF_OPT_WAIT_FOR_START },
 #define FSDEVPERF_OPT_FILESIZE 'f'
 	{ "filesize", required_argument, NULL, FSDEVPERF_OPT_FILESIZE },
+#define FSDEVPERF_OPT_UNIQUE 'U'
+	{ "unique", no_argument, NULL, FSDEVPERF_OPT_UNIQUE },
 #define FSDEVPERF_OPT_SIZE 0x1000
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 #define FSDEVPERF_OPT_NRFILES 0x1001
@@ -1774,6 +1796,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_WAIT_FOR_START:
 		g_app.rpc.enabled = true;
 		break;
+	case FSDEVPERF_OPT_UNIQUE:
+		job->flags |= FSDEVPERF_JOB_UNIQUE_DATA;
+		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
 	case FSDEVPERF_OPT_SIZE:
@@ -1838,6 +1863,7 @@ fsdevperf_usage(void)
 	printf("                                      RPC (see examples/fsdev/fsdevperf/fsdevperf.py)\n");
 	printf(" -f, --filesize=<filesize>            maximum size of each file\n");
 	printf("     --nrfiles=<nrfiles>              number of files to send I/O to on each core\n");
+	printf(" -U, --unique                         generate unique data for each I/O\n");
 }
 
 int
@@ -1860,7 +1886,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fsdevperf";
 	opts.shutdown_cb = fsdevperf_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "f:j:o:P:t:q:w:z", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "f:j:o:P:t:q:Uw:z", g_options,
 				 fsdevperf_parse_arg, fsdevperf_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
