@@ -14726,3 +14726,86 @@ Example response:
   "result": true
 }
 ~~~
+
+### fuse_mount {#fuse_mount}
+
+Mount an fsdev via FUSE.
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+name                    | Required | string  | Name of the fsdev to mount
+mountpoint              | Required | string  | Directory where to mount fsdev
+options                 | Optional | object  | @ref rpc_fuse_mount_options object
+
+#### Mount options {#rpc_fuse_mount_options}
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+max_io_depth            | Optional | number  | Maximum I/O depth on each core per mount
+max_xfer_size           | Optional | number  | Maximum transfer size
+clone_fd                | Optional | boolean | Clone the /dev/fuse fd on each core
+fstype                  | Optional | string  | Override filesystem type passed to mount(2)
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fuse_mount",
+  "id": 1,
+  "params": {
+      "name": "fsdev0",
+      "mountpoint": "/mnt/foo",
+      "options": {
+          "max_io_depth": 16
+      }
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### fuse_umount {#fuse_umount}
+
+Unmount an fsdev.
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+mount                   | Required | string  | Name of fsdev or mountpoint to unmount
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fuse_umount",
+  "id": 1,
+  "params": {
+      "mount": "fsdev0"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~

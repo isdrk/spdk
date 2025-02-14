@@ -3,3 +3,13 @@
 
 def fuse_set_options(client, **kwargs):
     return client.call('fuse_set_options', {k: v for k, v in kwargs.items() if v is not None})
+
+
+def fuse_mount(client, fsdev, mountpoint, **kwargs):
+    return client.call('fuse_mount',
+                       {'fsdev': fsdev, 'mountpoint': mountpoint,
+                        'options': {k: v for k, v in kwargs.items() if v is not None}})
+
+
+def fuse_umount(client, mount):
+    return client.call('fuse_umount', {'mount': mount})
