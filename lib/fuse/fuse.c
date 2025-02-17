@@ -73,6 +73,10 @@ struct {
 	pthread_mutex_t			mutex;
 	char				*fstype;
 	struct spdk_fuse_opts		opts;
+	struct {
+		spdk_fuse_cleanup_cb	cb_fn;
+		void			*cb_ctx;
+	} cleanup;
 } g_fuse = {
 	.mounts = TAILQ_HEAD_INITIALIZER(g_fuse.mounts),
 	.mutex = PTHREAD_MUTEX_INITIALIZER,
@@ -1018,13 +1022,52 @@ spdk_fuse_init(struct spdk_fuse_opts *opts)
 	return 0;
 }
 
-void
-spdk_fuse_cleanup(void)
+static void
+fsdev_fuse_unregister_done(void *io_device)
 {
 	free(g_fuse.fstype);
 	g_fuse.fstype = NULL;
 
-	spdk_io_device_unregister(&g_fuse, NULL);
+	if (g_fuse.cleanup.cb_fn != NULL) {
+		g_fuse.cleanup.cb_fn(g_fuse.cleanup.cb_ctx);
+	}
+
+	g_fuse.cleanup.cb_fn = NULL;
+	g_fuse.cleanup.cb_ctx = NULL;
+}
+
+static void
+fsdev_fuse_cleanup(void *unused)
+{
+	struct spdk_fuse_mount *mount;
+	int rc;
+
+	pthread_mutex_lock(&g_fuse.mutex);
+	TAILQ_FOREACH(mount, &g_fuse.mounts, tailq) {
+		rc = spdk_fuse_umount(mount, fsdev_fuse_cleanup, NULL);
+		if (rc == 0) {
+			pthread_mutex_unlock(&g_fuse.mutex);
+			return;
+		} else if (rc == -EINPROGRESS) {
+			pthread_mutex_unlock(&g_fuse.mutex);
+			spdk_thread_send_msg(spdk_get_thread(), fsdev_fuse_cleanup, NULL);
+			return;
+		}
+
+		SPDK_WARNLOG("%s: failed to umount %s: %s\n", mount->name, mount->mountpoint,
+			     spdk_strerror(-rc));
+	}
+	pthread_mutex_unlock(&g_fuse.mutex);
+
+	spdk_io_device_unregister(&g_fuse, fsdev_fuse_unregister_done);
+}
+
+void
+spdk_fuse_cleanup(spdk_fuse_cleanup_cb cb_fn, void *cb_ctx)
+{
+	g_fuse.cleanup.cb_fn = cb_fn;
+	g_fuse.cleanup.cb_ctx = cb_ctx;
+	fsdev_fuse_cleanup(NULL);
 }
 
 void

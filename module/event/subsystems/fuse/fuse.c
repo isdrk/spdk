@@ -17,10 +17,15 @@ fuse_subsystem_init(void)
 }
 
 static void
+fuse_subsystem_cleanup_done(void *ctx)
+{
+	spdk_subsystem_fini_next();
+}
+
+static void
 fuse_subsystem_fini(void)
 {
-	spdk_fuse_cleanup();
-	spdk_subsystem_fini_next();
+	spdk_fuse_cleanup(fuse_subsystem_cleanup_done, NULL);
 }
 
 static void
@@ -52,3 +57,4 @@ static struct spdk_subsystem g_fuse_subsystem = {
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_fuse_subsystem);
+SPDK_SUBSYSTEM_DEPEND(fuse, fsdev)

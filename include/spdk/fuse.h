@@ -160,10 +160,15 @@ int spdk_fuse_set_opts(struct spdk_fuse_opts *opts);
  */
 int spdk_fuse_init(struct spdk_fuse_opts *opts);
 
+typedef void (*spdk_fuse_cleanup_cb)(void *ctx);
+
 /**
  * Release any resources allocated by the FUSE library.
+ *
+ * \param cb_fn Callback to be executed once clean up is completed.
+ * \param cb_ctx Argument passed to `cb_fn`.
  */
-void spdk_fuse_cleanup(void);
+void spdk_fuse_cleanup(spdk_fuse_cleanup_cb cb_fn, void *cb_ctx);
 
 #ifdef __cplusplus
 }
