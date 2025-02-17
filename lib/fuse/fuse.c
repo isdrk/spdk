@@ -141,6 +141,7 @@ fsdev_fuse_request_complete(struct fsdev_fuse_request *req)
 	case FUSE_FORGET:
 	case FUSE_BATCH_FORGET:
 	case FUSE_NOTIFY_REPLY:
+	case FUSE_INTERRUPT:
 		do_reply = false;
 		break;
 	default:

@@ -487,6 +487,7 @@ _fuse_op_requires_reply(uint32_t opcode)
 	case FUSE_FORGET:
 	case FUSE_BATCH_FORGET:
 	case FUSE_NOTIFY_REPLY:
+	case FUSE_INTERRUPT:
 		return false;
 	default:
 		return true;
@@ -2913,7 +2914,8 @@ do_abort_cpl_clb(void *cb_arg, struct spdk_io_channel *ch, int status)
 {
 	struct fuse_io *fuse_io = cb_arg;
 
-	fuse_dispatcher_io_complete_err(fuse_io, status);
+	/* FUSE_INTERRUPT should complete the *original* request, no need for a reply */
+	fuse_dispatcher_io_complete_none(fuse_io, status);
 }
 
 static void
