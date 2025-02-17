@@ -7,28 +7,7 @@ set -e
 
 rootdir=$(readlink -f $(dirname $(readlink -f "$0"))/..)
 
-waitformount() {
-	local i pid fs mountpoint mnt
+[[ -e "$rootdir/.mountenv" ]] && source "$rootdir/.mountenv"
 
-	pid=$1 fs=$2 mountpoint=$3
-	for ((i = 0; i < 60; i++)); do
-		kill -0 $pid || return 1
-		if mnt=$(findmnt -rnc -S "$fs" -o SOURCE,TARGET) \
-			&& [[ "$mnt" == "$fs $mountpoint" ]]; then
-			return 0
-		fi
-		sleep 1s
-	done
-	return 1
-}
-
-[[ ! -e "$rootdir/.mountenv" ]] && echo "$rootdir/.mountenv is missing" >&2 && exit 1
-. "$rootdir/.mountenv"
-
-trap 'kill $fusepid' EXIT
-"$rootdir/build/examples/fuse" -f "$1" -M "$2" \
-	$FSDEV_FUSE_OPTIONS &>> "${FSDEV_FUSE_LOG:-/dev/null}" &
-fusepid=$!
-
-waitformount $fusepid "$1" "$2"
-trap - EXIT
+"$rootdir/scripts/rpc.py" $FSDEV_FUSE_RPC_OPTIONS fuse_mount "$1" "$2" \
+	$FSDEV_FUSE_MOUNT_OPTIONS &>> "${FSDEV_FUSE_LOG:-/dev/null}"

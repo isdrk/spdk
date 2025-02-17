@@ -10,10 +10,17 @@ rootdir=$(readlink -f "$testdir/../..")
 
 mountprog="mount.fuse.spdk"
 declare -A config
+fusepid=
 
 errmsg() { echo "$0: $*" >&2; }
 
+fuse_running() { "$rootdir/scripts/rpc.py" rpc_get_methods &> /dev/null; }
+
 cleanup() {
+	if [[ -n "$fusepid" ]]; then
+		kill "$fusepid" || :
+		wait "$fusepid" || :
+	fi
 	if [[ "$(readlink -f "/sbin/$mountprog")" == "$rootdir/scripts/$mountprog" ]]; then
 		rm -f "/sbin/$mountprog"
 	fi
@@ -22,7 +29,6 @@ cleanup() {
 
 install_mountprog() {
 	local prog="$rootdir/scripts/$mountprog" link="/sbin/$mountprog"
-
 	if [[ -e "$link" ]]; then
 		if [[ "$(readlink -f "$link")" != "$prog" ]]; then
 			errmsg "$prog already exists, aborting"
@@ -32,10 +38,26 @@ install_mountprog() {
 		ln -s "$prog" "$link"
 	fi
 	cat - > "$rootdir/.mountenv" <<- ENV
-		FSDEV_FUSE_OPTIONS+=' -c $(readlink -f "${config[config]}")'
-		FSDEV_FUSE_OPTIONS+=' -m ${config[mask]:-0x1} --fstype fuse'
+		FSDEV_FUSE_MOUNT_OPTIONS+=' --fstype=fuse'
 		FSDEV_FUSE_LOG=${config[log]:-/dev/null}
 	ENV
+}
+
+start_fuse() {
+	local i
+
+	[[ "${config[external]}" == true ]] && return 0
+
+	"$rootdir/build/examples/fuse" -m "${config[mask]:-0x1}" -c "${config[config]}" -D \
+		&> ${config[log]:-/dev/null} &
+	fusepid=$!
+
+	for ((i = 0; i < 10; i++)); do
+		kill -0 $fusepid || return 1
+		fuse_running && return 0
+		sleep 1s
+	done
+	return 1
 }
 
 run() {
@@ -79,6 +101,7 @@ usage() {
 		 -m, --mask=CPUMASK              CPU mask to use
 		 -h, --help                      show this help
 		 -l, --log=FILE                  dump logs to FILE
+		 -e, --external                  assume that the fuse application is already running
 	USAGE
 }
 
@@ -110,6 +133,9 @@ while (($# > 0)); do
 			config[mountpoint]=$(parse_device mountpoint "$2")
 			shift
 			;;
+		-e | --external)
+			config[external]=true
+			;;
 		--) shift && break ;;
 		-h | --help) usage && exit 0 ;;
 		*) usage && exit 1 ;;
@@ -117,7 +143,13 @@ while (($# > 0)); do
 	shift
 done
 
+if [[ "${config[external]}" == true ]] && ! fuse_running; then
+	errmsg "$rootdir/examples/fuse is not running, aborting"
+	exit 1
+fi
+
 trap cleanup EXIT
 check_options
 install_mountprog
+start_fuse
 run "$@"
