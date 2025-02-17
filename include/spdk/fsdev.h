@@ -1686,7 +1686,7 @@ int spdk_fsdev_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel 
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwise.
  *  Following parameters should be ignored if status != 0.
- * \param fhandle File handle
+ * \param fhandle Non-NULL file handle
  */
 typedef void (spdk_fsdev_fopen_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 				       struct spdk_fsdev_file_handle *fhandle);
@@ -1718,9 +1718,10 @@ int spdk_fsdev_fopen(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
  * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwise.
+ *  Following parameters should be ignored if status != 0.
  * \param fobject File object.
  * \param attr File attributes.
- * \param fhandle File handle.
+ * \param fhandle Non-NULL file handle.
  */
 typedef void (spdk_fsdev_create_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 					struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
@@ -1998,7 +1999,7 @@ int spdk_fsdev_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
  * \param ch I/O channel.
  * \param status operation result. 0 if the operation succeeded, an error code otherwise.
  *  Following parameters should be ignored if status != 0.
- * \param fhandle File handle
+ * \param fhandle Non-NULL file handle
  */
 typedef void (spdk_fsdev_opendir_cpl_cb)(void *cb_arg, struct spdk_io_channel *ch, int status,
 		struct spdk_fsdev_file_handle *fhandle);
