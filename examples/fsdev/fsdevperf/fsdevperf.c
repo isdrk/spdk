@@ -1138,8 +1138,8 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 				      fsdevperf_request_complete_cb, request);
 		break;
 	default:
-		rc = -EINVAL;
 		assert(0);
+		rc = -EINVAL;
 		break;
 	}
 
