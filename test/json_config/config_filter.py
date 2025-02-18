@@ -53,6 +53,7 @@ def filter_methods(do_remove_global_rpcs):
         'bdev_raid_set_options',
         'fsdev_set_opts',
         'fsdev_aio_set_options',
+        'rmem_set_config',
     ]
 
     data = json.loads(sys.stdin.read())
