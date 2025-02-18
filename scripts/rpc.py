@@ -4229,6 +4229,11 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.add_argument('mount', metavar='MOUNT', help='Mountpoint/fsdev to unmount')
     p.set_defaults(func=fuse_umount)
 
+    def fuse_get_mounts(args):
+        print_dict(rpc.fuse.fuse_get_mounts(args.client))
+    p = subparsers.add_parser('fuse_get_mounts', help='List existings fsdev mounts')
+    p.set_defaults(func=fuse_get_mounts)
+
     class dry_run_client:
         def call(self, method, params=None):
             print("Request:\n" + json.dumps({"method": method, "params": params}, indent=2))

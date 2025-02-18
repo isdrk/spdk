@@ -166,6 +166,33 @@ error:
 }
 SPDK_RPC_REGISTER("fuse_umount", rpc_fuse_umount, SPDK_RPC_RUNTIME)
 
+static int
+rpc_fuse_get_mounts_for_each_mount_cb(struct spdk_fuse_mount *mount, void *ctx)
+{
+	struct spdk_json_write_ctx *w = ctx;
+	struct spdk_fsdev *fsdev = spdk_fuse_mount_get_fsdev(mount);
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "fsdev", spdk_fsdev_get_name(fsdev));
+	spdk_json_write_named_string(w, "mountpoint", spdk_fuse_mount_get_mountpoint(mount));
+	spdk_json_write_object_end(w);
+
+	return 0;
+}
+
+static void
+rpc_fuse_get_mounts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
+{
+	struct spdk_json_write_ctx *w;
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+	spdk_fuse_for_each_mount(rpc_fuse_get_mounts_for_each_mount_cb, w);
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+}
+SPDK_RPC_REGISTER("fuse_get_mounts", rpc_fuse_get_mounts, SPDK_RPC_RUNTIME)
+
 struct rpc_fuse_set_options {
 	struct spdk_fuse_opts opts;
 	char *fstype;

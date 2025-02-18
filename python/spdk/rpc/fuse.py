@@ -13,3 +13,7 @@ def fuse_mount(client, fsdev, mountpoint, **kwargs):
 
 def fuse_umount(client, mount):
     return client.call('fuse_umount', {'mount': mount})
+
+
+def fuse_get_mounts(client):
+    return client.call('fuse_get_mounts')

@@ -14809,3 +14809,41 @@ Example response:
   "result": true
 }
 ~~~
+
+### fuse_get_mounts {#fuse_get_mounts}
+
+List existings fsdev mounts.
+
+#### Parameters
+
+None.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "fuse_get_mounts",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "fsdev": "fsdev0",
+      "mountpoint": "/mnt/foo"
+    },
+    {
+      "fsdev": "fsdev1",
+      "mountpoint": "/mnt/bar"
+    }
+  ]
+}
+~~~
