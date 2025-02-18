@@ -462,10 +462,9 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 			if (rc < 0) {
 				if (errno == EAGAIN) {
 					rc = 0;
-					break;
+				} else if (errno != ENODEV) {
+					SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(errno));
 				}
-
-				SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(errno));
 				break;
 			}
 
@@ -530,8 +529,8 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	if (mount->mounted) {
 		rc = umount2(mount->mountpoint, MNT_DETACH);
 		if (rc != 0) {
-			SPDK_ERRLOG("%s: failed to umount %s: %s\n", mount->name,
-				    mount->mountpoint, spdk_strerror(errno));
+			SPDK_INFOLOG(fuse, "%s: failed to umount %s: %s\n", mount->name,
+				     mount->mountpoint, spdk_strerror(errno));
 		}
 	}
 	if (mount->dispatcher != NULL) {
