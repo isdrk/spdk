@@ -262,9 +262,12 @@ _scanbuild_make() {
 
 	grep -E "CC|CXX" $out/build_output.txt | sed 's/\s\s\(CC\|CXX\)\s//g' | sed 's/\.o//g' > $out/built_c_files.txt
 	cat $rootdir/test/common/skipped_build_files.txt >> $out/built_c_files.txt
+	if [[ -e "$SPDK_SKIPPED_BUILD_FILES" ]]; then
+		cat "$SPDK_SKIPPED_BUILD_FILES" >> "$out/built_c_files.txt"
+	fi
 
-	sort -o $out/all_c_files.txt $out/all_c_files.txt
-	sort -o $out/built_c_files.txt $out/built_c_files.txt
+	sort -u -o $out/all_c_files.txt $out/all_c_files.txt
+	sort -u -o $out/built_c_files.txt $out/built_c_files.txt
 	# from comm manual:
 	#   -2 suppress column 2 (lines unique to FILE2)
 	#   -3 suppress column 3 (lines that appear in both files)
