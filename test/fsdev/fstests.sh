@@ -64,6 +64,8 @@ run() {
 	cat - > "$testdir/fstests.config" <<- CONFIG
 		export TEST_DEV="${config[fsdev]}"
 		export TEST_DIR="${config[mountpoint]}"
+		export SCRATCH_DEV="${config[scratch_fsdev]}"
+		export SCRATCH_MNT="${config[scratch_mountpoint]}"
 		export FSTYPE=fuse
 		export FUSE_SUBTYP=.spdk
 	CONFIG
@@ -98,6 +100,7 @@ usage() {
 		 -x, --xfsdir=PATH               path to xfstests repo
 		 -c, --config=CONFIG             config to the fuse application
 		 -d, --device=FSDEV:MOUNTPOINT   use FSDEV and mount it at MOUNTPOINT
+		 -s, --scratch=FSDEV:MOUNTPOINT  use FSDEV and mount it at MOUNTPOINT as scratch device
 		 -m, --mask=CPUMASK              CPU mask to use
 		 -h, --help                      show this help
 		 -l, --log=FILE                  dump logs to FILE
@@ -131,6 +134,12 @@ while (($# > 0)); do
 		-d | --device)
 			config[fsdev]=$(parse_device fsdev "$2")
 			config[mountpoint]=$(parse_device mountpoint "$2")
+			shift
+			;;
+		--scratch=*) set -- "${1%%=*}" "${1##*=}" "${@:2}" ;&
+		-s | --scratch)
+			config[scratch_fsdev]=$(parse_device fsdev "$2")
+			config[scratch_mountpoint]=$(parse_device mountpoint "$2")
 			shift
 			;;
 		-e | --external)
