@@ -19,10 +19,12 @@ struct spdk_fuse_mount {
 	int				fd;
 	bool				mounted;
 	bool				clone_fd;
+	bool				removing;
 	char				*name;
 	char				*mountpoint;
 	size_t				max_io_depth;
 	size_t				max_xfer_size;
+	struct spdk_thread		*thread;
 	TAILQ_ENTRY(spdk_fuse_mount)	tailq;
 };
 
@@ -68,10 +70,12 @@ struct spdk_fuse_poll_group {
 
 struct {
 	TAILQ_HEAD(, spdk_fuse_mount)	mounts;
+	pthread_mutex_t			mutex;
 	char				*fstype;
 	struct spdk_fuse_opts		opts;
 } g_fuse = {
 	.mounts = TAILQ_HEAD_INITIALIZER(g_fuse.mounts),
+	.mutex = PTHREAD_MUTEX_INITIALIZER,
 	.opts = {
 		.max_io_depth = 8,
 		.max_xfer_size = 128 * 1024,
@@ -506,12 +510,14 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	struct spdk_fuse_mount *tmp;
 	int rc;
 
+	pthread_mutex_lock(&g_fuse.mutex);
 	TAILQ_FOREACH(tmp, &g_fuse.mounts, tailq) {
 		if (tmp == mount) {
 			TAILQ_REMOVE(&g_fuse.mounts, tmp, tailq);
 			break;
 		}
 	}
+	pthread_mutex_unlock(&g_fuse.mutex);
 
 	if (mount->fd >= 0) {
 		close(mount->fd);
@@ -555,6 +561,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		return -ENOMEM;
 	}
 
+	mnt->thread = spdk_get_thread();
 	mnt->fd = -1;
 	mnt->clone_fd = SPDK_GET_FIELD(opts, clone_fd, g_fuse.opts.clone_fd);
 	mnt->max_io_depth = SPDK_GET_FIELD(opts, max_io_depth, g_fuse.opts.max_io_depth);
@@ -627,7 +634,9 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	}
 
 	SPDK_INFOLOG(fuse, "%s: mounted fsdev at %s\n", mnt->name, mnt->mountpoint);
+	pthread_mutex_lock(&g_fuse.mutex);
 	TAILQ_INSERT_TAIL(&g_fuse.mounts, mnt, tailq);
+	pthread_mutex_unlock(&g_fuse.mutex);
 	mnt->mounted = true;
 	*_mnt = mnt;
 
@@ -770,18 +779,36 @@ error:
 struct fsdev_fuse_umount_ctx {
 	struct spdk_fuse_mount		*mount;
 	struct spdk_io_channel_iter	*iter;
+	struct spdk_thread		*thread;
 	spdk_fuse_umount_cb		cb_fn;
 	void				*cb_ctx;
 };
+
+static void
+fsdev_fuse_umount_exec_user_cb(void *_ctx)
+{
+	struct fsdev_fuse_umount_ctx *ctx = _ctx;
+
+	ctx->cb_fn(ctx->cb_ctx);
+	free(ctx);
+}
+
+static void
+fsdev_fuse_umount_cleanup(void *_ctx)
+{
+	struct fsdev_fuse_umount_ctx *ctx = _ctx;
+
+	fsdev_fuse_mount_cleanup(ctx->mount);
+	spdk_thread_exec_msg(ctx->thread, fsdev_fuse_umount_exec_user_cb, ctx);
+}
 
 static void
 fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 {
 	struct fsdev_fuse_umount_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
 
-	fsdev_fuse_mount_cleanup(ctx->mount);
-	ctx->cb_fn(ctx->cb_ctx);
-	free(ctx);
+	/* The cleanup needs to be done on the same thread as the initial mount */
+	spdk_thread_exec_msg(ctx->mount->thread, fsdev_fuse_umount_cleanup, ctx);
 }
 
 static void
@@ -838,16 +865,26 @@ fsdev_fuse_destroy_channels(struct spdk_io_channel_iter *i)
 int
 spdk_fuse_umount(struct spdk_fuse_mount *mount, spdk_fuse_umount_cb cb_fn, void *cb_ctx)
 {
-	struct fsdev_fuse_umount_ctx *ctx = NULL;
+	struct fsdev_fuse_umount_ctx *ctx;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		return -ENOMEM;
 	}
 
+	pthread_mutex_lock(&g_fuse.mutex);
+	if (mount->removing) {
+		pthread_mutex_unlock(&g_fuse.mutex);
+		free(ctx);
+		return -EINPROGRESS;
+	}
+	mount->removing = true;
+	pthread_mutex_unlock(&g_fuse.mutex);
+
 	ctx->mount = mount;
 	ctx->cb_fn = cb_fn;
 	ctx->cb_ctx = cb_ctx;
+	ctx->thread = spdk_get_thread();
 
 	spdk_for_each_channel(&g_fuse, fsdev_fuse_destroy_channels, ctx,
 			      fsdev_fuse_destroy_channels_done);
