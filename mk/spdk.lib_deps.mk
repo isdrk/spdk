@@ -218,7 +218,7 @@ DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-event_rdma_provider := init rdma_provider
 endif
-DEPDIRS-event_fuse := fuse init
+DEPDIRS-event_fuse := event_rmem fuse init
 
 # module/vfu_device
 

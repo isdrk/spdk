@@ -3805,7 +3805,7 @@ fuse_dispatcher_create_rmem(struct spdk_fuse_dispatcher *disp, char *rmem_pool_n
 	disp->rmem_pool = spdk_rmem_pool_create(rmem_pool_name, sizeof(struct fuse_disp_recovery_data),
 						1, 1);
 	if (!disp->rmem_pool) {
-		SPDK_ERRLOG("%s: failed to create rmem pool", rmem_pool_name);
+		SPDK_ERRLOG("%s: failed to create rmem pool\n", rmem_pool_name);
 		return false;
 	}
 
