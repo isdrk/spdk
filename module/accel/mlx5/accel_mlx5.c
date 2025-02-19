@@ -5758,6 +5758,10 @@ accel_mlx5_task_merge_copy_dif_verify_copy(struct spdk_accel_task *dif_base,
 	/* Update DIF verify copy task memory domain, complete copy task */
 	SPDK_DEBUGLOG(accel_mlx5, "Merge copy task (%p) and dif verify copy task\n", copy_base);
 
+	if (!md_in_umr) {
+		dif_base->src_domain = dif_base->dst_domain;
+		dif_base->src_domain_ctx = dif_base->dst_domain_ctx;
+	}
 	dif_base->dst_domain = domain_override;
 	dif_base->dst_domain_ctx = domain_ctx_override;
 	accel_mlx5_task_reset(dif);
@@ -5925,9 +5929,15 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY &&
 			   first_base->dst_domain && spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
 			   SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			return accel_mlx5_task_merge_copy_dif_verify_copy(next_base, first_base,
+			rc = accel_mlx5_task_merge_copy_dif_verify_copy(next_base, first_base,
 					accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
 					false);
+			if (spdk_unlikely(rc)) {
+				return rc;
+			}
+			next_base->s.iovs = next_base->d.iovs;
+			next_base->s.iovcnt = next_base->d.iovcnt;
+			return 0;
 		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_COPY &&
 			   TAILQ_NEXT(next_base, seq_link) == NULL) {
 			if (first_base->src_domain &&
