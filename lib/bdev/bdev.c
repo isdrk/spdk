@@ -1055,22 +1055,6 @@ bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
 	}
 }
 
-uint32_t
-bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
-{
-	struct spdk_bdev *bdev = bdev_io->bdev;
-
-	if (bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT) {
-		if (bdev->md_len == spdk_dif_pi_format_get_size(bdev->dif_pi_format)) {
-			return bdev->blocklen - bdev->md_len;
-		} else {
-			return bdev->blocklen;
-		}
-	}
-
-	return bdev_desc_get_block_size(bdev_io->internal.desc);
-}
-
 static inline void
 bdev_queue_nomem_io_head(struct spdk_bdev_shared_resource *shared_resource,
 			 struct spdk_bdev_io *bdev_io, enum bdev_io_retry_state state)
@@ -1161,6 +1145,22 @@ bdev_desc_needs_metadata(struct spdk_bdev_desc *desc)
 {
 	return (desc->opts.hide_metadata && desc->bdev->md_len != 0) ||
 	       (desc->bdev->dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT);
+}
+
+uint32_t
+bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
+{
+	struct spdk_bdev *bdev = bdev_io->bdev;
+
+	if (bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT) {
+		if (bdev->md_len == spdk_dif_pi_format_get_size(bdev->dif_pi_format)) {
+			return bdev->blocklen - bdev->md_len;
+		} else {
+			return bdev->blocklen;
+		}
+	}
+
+	return bdev_desc_get_block_size(bdev_io->internal.desc);
 }
 
 static inline bool
