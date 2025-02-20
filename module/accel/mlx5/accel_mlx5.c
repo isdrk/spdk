@@ -3642,7 +3642,7 @@ static struct accel_mlx5_task_operations g_accel_mlx5_tasks_ops[] = {
 		.init = accel_mlx5_dif_mkey_task_init,
 		.process = accel_mlx5_dif_mkey_task_process,
 		.cont = accel_mlx5_dif_mkey_task_continue,
-		.complete = accel_mlx5_dif_task_complete,
+		.complete = accel_mlx5_dif_mkey_task_complete,
 	},
 	[ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY] = {
 		.init = accel_mlx5_dif_mkey_task_init,
