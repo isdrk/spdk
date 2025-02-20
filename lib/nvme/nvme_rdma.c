@@ -2610,7 +2610,8 @@ nvme_rdma_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 	assert(rdma_req->req == NULL);
 	rdma_req->req = req;
 	req->cmd.cid = rdma_req->id;
-	if (req->accel_sequence || rqpair->append_copy) {
+	if (req->accel_sequence ||
+	    (rqpair->append_copy && req->payload_size != 0)) {
 		assert(spdk_rdma_provider_accel_sequence_supported());
 		assert(rqpair->qpair.poll_group->group);
 		assert(rqpair->qpair.poll_group->group->accel_fn_table.append_copy);
