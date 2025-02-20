@@ -5060,7 +5060,7 @@ _bdev_qos_destroy(void *arg)
 
 	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
 
-	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list)) {
+	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list) && g_bdev_mgr.qos_poller) {
 		spdk_poller_pause(g_bdev_mgr.qos_poller);
 	}
 
