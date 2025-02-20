@@ -139,13 +139,6 @@ if [ $SPDK_TEST_UNITTEST -eq 1 ]; then
 fi
 
 if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
-	if [[ $SPDK_TEST_CRYPTO -eq 1 || $SPDK_TEST_VBDEV_COMPRESS -eq 1 ]]; then
-		if [[ $SPDK_TEST_USE_IGB_UIO -eq 1 ]]; then
-			$rootdir/scripts/qat_setup.sh igb_uio
-		else
-			$rootdir/scripts/qat_setup.sh
-		fi
-	fi
 	timing_enter lib
 
 	if [[ $SPDK_TEST_URING -eq 1 ]]; then
@@ -359,9 +352,7 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 	fi
 
 	if [ $SPDK_TEST_CRYPTO -eq 1 ]; then
-		run_test "blockdev_crypto_aesni" $rootdir/test/bdev/blockdev.sh "crypto_aesni"
 		run_test "blockdev_crypto_sw" $rootdir/test/bdev/blockdev.sh "crypto_sw"
-		run_test "blockdev_crypto_qat" $rootdir/test/bdev/blockdev.sh "crypto_qat"
 		run_test "chaining" $rootdir/test/bdev/chaining.sh
 	fi
 
