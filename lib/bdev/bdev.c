@@ -1143,8 +1143,7 @@ _are_iovs_aligned(struct iovec *iovs, int iovcnt, uint32_t alignment)
 static inline bool
 bdev_desc_needs_metadata(struct spdk_bdev_desc *desc)
 {
-	return (desc->opts.hide_metadata && desc->bdev->md_len != 0) ||
-	       (desc->bdev->dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT);
+	return desc->opts.hide_metadata && desc->bdev->md_len != 0;
 }
 
 uint32_t
