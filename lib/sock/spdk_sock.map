@@ -25,6 +25,7 @@
 	spdk_sock_is_ipv4;
 	spdk_sock_is_connected;
 	spdk_sock_group_create;
+	spdk_sock_group_create_ext;
 	spdk_sock_group_get_ctx;
 	spdk_sock_group_add_sock;
 	spdk_sock_group_remove_sock;

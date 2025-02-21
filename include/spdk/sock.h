@@ -590,6 +590,24 @@ bool spdk_sock_is_connected(struct spdk_sock *sock);
  */
 typedef void (*spdk_sock_cb)(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock);
 
+struct spdk_sock_group_opts {
+	/** Size of this structure */
+	size_t		size;
+	/** User context */
+	void		*ctx;
+	/** Enable interrupt support */
+	bool		interrupt;
+};
+
+/**
+ * Create a new socket group.
+ *
+ * \param opts Socket group options.
+ *
+ * \return a pointer to the created group on success, or NULL on failure.
+ */
+struct spdk_sock_group *spdk_sock_group_create_ext(struct spdk_sock_group_opts *opts);
+
 /**
  * Create a new socket group with user provided pointer
  *
@@ -733,8 +751,8 @@ void spdk_sock_write_config_json(struct spdk_json_write_ctx *w);
 
 /**
  * Obtain an fd that becomes ready when one of the sockets in this group is ready. This fd
- * is suitable for use in APIs such as spdk_interrupt_register_for_events().
- *
+ * is suitable for use in APIs such as spdk_interrupt_register_for_events().  This fd is only
+ * available if the group was created with interrupt support enabled.
  *
  * \param group Socket group.
  *

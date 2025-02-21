@@ -632,16 +632,52 @@ spdk_sock_is_connected(struct spdk_sock *sock)
 	return sock->net_impl->is_connected(sock);
 }
 
+static int sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
+				      struct spdk_sock_group *group, int max_events);
+
+static int
+sock_group_interrupt_cb(void *ctx)
+{
+	struct spdk_sock_group_impl *group_impl = ctx;
+
+	return sock_group_impl_poll_count(group_impl, group_impl->group, MAX_EVENTS_PER_POLL);
+}
+
+static int
+sock_group_impl_register_interrupt(struct spdk_fd_group *fgrp,
+				   struct spdk_sock_group_impl *group_impl)
+{
+	struct spdk_net_impl *impl = group_impl->net_impl;
+	int fd;
+
+	fd = impl->group_impl_get_interruptfd(group_impl);
+	if (fd < 0) {
+		return 0;
+	}
+
+	return spdk_fd_group_add_for_events(fgrp, fd, EPOLLIN | EPOLLOUT,
+					    sock_group_interrupt_cb, group_impl, impl->name);
+}
+
 struct spdk_sock_group *
-spdk_sock_group_create(void *ctx)
+spdk_sock_group_create_ext(struct spdk_sock_group_opts *opts)
 {
 	struct spdk_net_impl *impl = NULL;
 	struct spdk_sock_group *group;
 	struct spdk_sock_group_impl *group_impl;
+	int rc;
 
 	group = calloc(1, sizeof(*group));
 	if (group == NULL) {
 		return NULL;
+	}
+
+	if (SPDK_GET_FIELD(opts, interrupt, false)) {
+		rc = spdk_fd_group_create(&group->fgrp);
+		if (rc != 0) {
+			free(group);
+			return NULL;
+		}
 	}
 
 	STAILQ_INIT(&group->group_impls);
@@ -655,11 +691,32 @@ spdk_sock_group_create(void *ctx)
 			group_impl->net_impl = impl;
 			group_impl->group = group;
 		}
+
+		if (group->fgrp != NULL) {
+			rc = sock_group_impl_register_interrupt(group->fgrp, group_impl);
+			if (rc != 0) {
+				goto error;
+			}
+		}
 	}
 
-	group->ctx = ctx;
+	group->ctx = SPDK_GET_FIELD(opts, ctx, NULL);
 
 	return group;
+error:
+	spdk_sock_group_close(&group);
+	return NULL;
+}
+
+struct spdk_sock_group *
+spdk_sock_group_create(void *ctx)
+{
+	struct spdk_sock_group_opts opts = {};
+
+	opts.size = SPDK_SIZEOF(&opts, ctx);
+	opts.ctx = ctx;
+
+	return spdk_sock_group_create_ext(&opts);
 }
 
 void *
@@ -836,13 +893,15 @@ int
 spdk_sock_group_close(struct spdk_sock_group **group)
 {
 	struct spdk_sock_group_impl *group_impl = NULL, *tmp;
-	int rc;
+	struct spdk_fd_group *fgrp;
+	int rc, fd;
 
 	if (*group == NULL) {
 		errno = EBADF;
 		return -1;
 	}
 
+	fgrp = (*group)->fgrp;
 	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
 		if (!TAILQ_EMPTY(&group_impl->socks)) {
 			errno = EBUSY;
@@ -851,12 +910,21 @@ spdk_sock_group_close(struct spdk_sock_group **group)
 	}
 
 	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
+		if (fgrp != NULL) {
+			fd = group_impl->net_impl->group_impl_get_interruptfd(group_impl);
+			if (fd >= 0) {
+				spdk_fd_group_remove(fgrp, fd);
+			}
+		}
 		rc = group_impl->net_impl->group_impl_close(group_impl);
 		if (rc != 0) {
 			SPDK_ERRLOG("group_impl_close for net failed\n");
 		}
 	}
 
+	if (fgrp != NULL) {
+		spdk_fd_group_destroy(fgrp);
+	}
 	free(*group);
 	*group = NULL;
 
@@ -1036,19 +1104,13 @@ spdk_sock_get_default_impl(void)
 int
 spdk_sock_group_get_interruptfd(struct spdk_sock_group *group)
 {
-	struct spdk_sock_group_impl *group_impl = NULL;
-	int rc;
-
 	assert(group != NULL);
-
-	STAILQ_FOREACH_FROM(group_impl, &group->group_impls, link) {
-		rc = group_impl->net_impl->group_impl_get_interruptfd(group_impl);
-		if (rc != 0) {
-			return rc;
-		}
+	if (group->fgrp == NULL) {
+		errno = -EINVAL;
+		return -1;
 	}
 
-	return -1;
+	return spdk_fd_group_get_fd(group->fgrp);
 }
 
 int

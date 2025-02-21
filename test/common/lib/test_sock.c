@@ -33,6 +33,8 @@ DEFINE_STUB(spdk_sock_is_ipv6, bool, (struct spdk_sock *sock), false);
 DEFINE_STUB(spdk_sock_is_ipv4, bool, (struct spdk_sock *sock), true);
 DEFINE_STUB(spdk_sock_is_connected, bool, (struct spdk_sock *sock), true);
 DEFINE_STUB(spdk_sock_group_create, struct spdk_sock_group *, (void *ctx), NULL);
+DEFINE_STUB(spdk_sock_group_create_ext, struct spdk_sock_group *,
+	    (struct spdk_sock_group_opts *opts), NULL);
 DEFINE_STUB(spdk_sock_group_add_sock, int, (struct spdk_sock_group *group, struct spdk_sock *sock,
 		spdk_sock_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_sock_group_remove_sock, int, (struct spdk_sock_group *group,

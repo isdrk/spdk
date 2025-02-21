@@ -17,6 +17,7 @@
 #include "spdk/likely.h"
 #include "spdk/log.h"
 #include "spdk/trace.h"
+#include "spdk/fd_group.h"
 #include "spdk_internal/trace_defs.h"
 
 #ifdef __cplusplus
@@ -61,6 +62,7 @@ struct spdk_sock_group_provided_buf {
 struct spdk_sock_group {
 	STAILQ_HEAD(, spdk_sock_group_impl)	group_impls;
 	STAILQ_HEAD(, spdk_sock_group_provided_buf) pool;
+	struct spdk_fd_group			*fgrp;
 	void					*ctx;
 };
 
