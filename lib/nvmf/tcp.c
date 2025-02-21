@@ -866,10 +866,9 @@ nvmf_tcp_create(struct spdk_nvmf_transport_opts *opts)
 	}
 
 	if (spdk_interrupt_mode_is_enabled()) {
-		ttransport->intr = SPDK_INTERRUPT_REGISTER_FOR_EVENTS(spdk_sock_group_get_interruptfd(
-					   ttransport->listen_sock_group),
-				   SPDK_INTERRUPT_EVENT_IN | SPDK_INTERRUPT_EVENT_OUT, nvmf_tcp_accept,
-				   &ttransport->transport);
+		ttransport->intr = spdk_interrupt_register_fd_group(
+					   spdk_sock_group_get_fd_group(ttransport->listen_sock_group),
+					   "nvmf_tcp_listen_interrupt");
 		if (ttransport->intr == NULL) {
 			SPDK_ERRLOG("Failed to register interrupt for listen socker sock group\n");
 			spdk_sock_group_close(&ttransport->listen_sock_group);
@@ -1641,19 +1640,6 @@ nvmf_tcp_control_msg_list_free(struct spdk_nvmf_tcp_control_msg_list *list)
 	free(list);
 }
 
-static int nvmf_tcp_poll_group_poll(struct spdk_nvmf_transport_poll_group *group);
-
-static int
-nvmf_tcp_poll_group_intr(void *ctx)
-{
-	struct spdk_nvmf_transport_poll_group *group = ctx;
-	int ret = 0;
-
-	ret = nvmf_tcp_poll_group_poll(group);
-
-	return ret != 0 ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
-}
-
 static struct spdk_nvmf_transport_poll_group *
 nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 			   struct spdk_nvmf_poll_group *group)
@@ -1701,10 +1687,9 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 	}
 
 	if (spdk_interrupt_mode_is_enabled()) {
-		tgroup->intr = SPDK_INTERRUPT_REGISTER_FOR_EVENTS(spdk_sock_group_get_interruptfd(
-					tgroup->sock_group),
-				SPDK_INTERRUPT_EVENT_IN | SPDK_INTERRUPT_EVENT_OUT,
-				nvmf_tcp_poll_group_intr, &tgroup->group);
+		tgroup->intr = spdk_interrupt_register_fd_group(
+				       spdk_sock_group_get_fd_group(tgroup->sock_group),
+				       "nvmf_tcp_poll_group_interrupt");
 		if (tgroup->intr == NULL) {
 			SPDK_ERRLOG("Failed to register interrupt for sock group\n");
 			goto cleanup;
