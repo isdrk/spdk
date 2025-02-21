@@ -16,6 +16,7 @@
 #include "spdk/queue.h"
 #include "spdk/json.h"
 #include "spdk/assert.h"
+#include "spdk/fd_group.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -759,6 +760,17 @@ void spdk_sock_write_config_json(struct spdk_json_write_ctx *w);
  * \return fd (>0) on success or negative errno on failure.
  */
 int spdk_sock_group_get_interruptfd(struct spdk_sock_group *group);
+
+/**
+ * Obtain an fd_group that becomes ready when one of the sockets in this group is ready. This
+ * fd_group is suitable for use in APIs such as spdk_interrupt_register_fd_group().  fd_group is
+ * available only if the group was created with interrupt support enabled.
+ *
+ * \param group Socket group.
+ *
+ * \return fd_group on success or NULL if it's not available.
+ */
+struct spdk_fd_group *spdk_sock_group_get_fd_group(struct spdk_sock_group *group);
 
 /**
  * Get socket capabilities

@@ -1113,6 +1113,12 @@ spdk_sock_group_get_interruptfd(struct spdk_sock_group *group)
 	return spdk_fd_group_get_fd(group->fgrp);
 }
 
+struct spdk_fd_group *
+spdk_sock_group_get_fd_group(struct spdk_sock_group *group)
+{
+	return group->fgrp;
+}
+
 int
 spdk_sock_get_caps(struct spdk_sock *sock, struct spdk_sock_caps *caps)
 {
