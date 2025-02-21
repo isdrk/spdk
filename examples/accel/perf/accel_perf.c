@@ -46,6 +46,7 @@ static struct worker_thread *g_workers = NULL;
 static int g_num_workers = 0;
 static char *g_cd_file_in_name = NULL;
 static pthread_mutex_t g_workers_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool g_shutdown_started;
 static struct spdk_app_opts g_opts = {};
 
 struct ap_compress_seg {
@@ -1504,6 +1505,10 @@ shutdown_cb(void)
 	struct worker_thread *worker;
 
 	pthread_mutex_lock(&g_workers_lock);
+	if (g_shutdown_started) {
+		goto unlock;
+	}
+	g_shutdown_started = true;
 	if (!g_workers) {
 		spdk_app_stop(1);
 		goto unlock;
