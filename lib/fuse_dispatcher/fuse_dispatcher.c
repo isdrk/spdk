@@ -2163,6 +2163,7 @@ fuse_dispatcher_mount_rollback_msg(void *ctx)
 }
 
 #define FUSE_DOT_PATH_LOOKUP FUSE_EXPORT_SUPPORT
+#define FUSE_O_TRUNC FUSE_ATOMIC_O_TRUNC
 
 #define MNT_FLAGS_MAP \
 	MNT_FLAG(DOT_PATH_LOOKUP)      \
@@ -2171,7 +2172,8 @@ fuse_dispatcher_mount_rollback_msg(void *ctx)
 	MNT_FLAG(WRITEBACK_CACHE)      \
 	MNT_FLAG(POSIX_ACL)            \
 	MNT_FLAG(POSIX_LOCKS)          \
-	MNT_FLAG(FLOCK_LOCKS)
+	MNT_FLAG(FLOCK_LOCKS)          \
+	MNT_FLAG(O_TRUNC)
 
 static uint32_t
 fuse_mount_flags_to_fsdev(uint32_t flags)
@@ -2242,7 +2244,6 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 
 	/* Always supported if requested by the FUSE. */
 	SET_MOUNT_FLAG(true, supported, ASYNC_READ);
-	SET_MOUNT_FLAG(true, supported, ATOMIC_O_TRUNC);
 	SET_MOUNT_FLAG(true, supported, BIG_WRITES);
 	SET_MOUNT_FLAG(true, supported, DONT_MASK);
 	SET_MOUNT_FLAG(true, supported, DO_READDIRPLUS);
@@ -2439,6 +2440,7 @@ do_init(struct fuse_io *fuse_io)
 	SET_MOUNT_FLAG(true, flags, POSIX_ACL);
 	SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
 	SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
+	SET_MOUNT_FLAG(true, flags, O_TRUNC);
 
 	memset(&fuse_io->u.init.opts, 0, sizeof(fuse_io->u.init.opts));
 	fuse_io->u.init.opts.opts_size = sizeof(fuse_io->u.init.opts);

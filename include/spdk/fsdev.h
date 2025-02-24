@@ -124,6 +124,8 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size")
  * SPDK_FSDEV_MOUNT_POSIX_LOCKS: remote locking for POSIX file locks supported.
  *
  * SPDK_FSDEV_MOUNT_FLOCK_LOCKS: remote locking for BSD style file locks supported.
+ *
+ * SPDK_FSDEV_MOUNT_O_TRUNC: O_TRUNC open flag supported.
  */
 #define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
 #define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
@@ -132,6 +134,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size")
 #define SPDK_FSDEV_MOUNT_POSIX_ACL            (1 << 4)
 #define SPDK_FSDEV_MOUNT_POSIX_LOCKS          (1 << 5)
 #define SPDK_FSDEV_MOUNT_FLOCK_LOCKS          (1 << 6)
+#define SPDK_FSDEV_MOUNT_O_TRUNC              (1 << 7)
 
 /**
  * Structure with optional fsdev IO parameters
