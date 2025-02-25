@@ -1043,18 +1043,6 @@ bdev_io_use_accel_sequence(struct spdk_bdev_io *bdev_io)
 	return bdev_io->internal.f.has_accel_sequence;
 }
 
-static inline uint32_t
-bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
-{
-	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
-
-	if (spdk_unlikely(desc->opts.hide_metadata)) {
-		return bdev->blocklen - bdev->md_len;
-	} else {
-		return bdev->blocklen;
-	}
-}
-
 static inline void
 bdev_queue_nomem_io_head(struct spdk_bdev_shared_resource *shared_resource,
 			 struct spdk_bdev_io *bdev_io, enum bdev_io_retry_state state)
@@ -1143,11 +1131,15 @@ _are_iovs_aligned(struct iovec *iovs, int iovcnt, uint32_t alignment)
 static inline bool
 bdev_io_needs_metadata(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io)
 {
-	if (desc->bdev->md_len == 0) {
+	struct spdk_bdev *bdev = desc->bdev;
+
+	if (bdev->md_len == 0) {
 		return false;
 	}
 
-	if (!desc->opts.hide_metadata) {
+	if (!desc->opts.hide_metadata &&
+	    !(bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT &&
+	      bdev->md_len == spdk_dif_pi_format_get_size(bdev->dif_pi_format))) {
 		return false;
 	}
 
@@ -1164,15 +1156,17 @@ bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev *bdev = bdev_io->bdev;
 
-	if (bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT) {
-		if (bdev->md_len == spdk_dif_pi_format_get_size(bdev->dif_pi_format)) {
-			return bdev->blocklen - bdev->md_len;
-		} else {
-			return bdev->blocklen;
-		}
+	if (bdev->md_len == 0) {
+		return bdev->blocklen;
 	}
 
-	return bdev_desc_get_block_size(bdev_io->internal.desc);
+	if (bdev_io->internal.desc->opts.hide_metadata ||
+	    (bdev_io->u.bdev.dif_check_flags & SPDK_DIF_FLAGS_NVME_PRACT &&
+	     bdev->md_len == spdk_dif_pi_format_get_size(bdev->dif_pi_format))) {
+		return bdev->blocklen - bdev->md_len;
+	} else {
+		return bdev->blocklen;
+	}
 }
 
 static inline bool
@@ -5728,7 +5722,9 @@ spdk_bdev_get_nvme_nsid(struct spdk_bdev *bdev)
 uint32_t
 spdk_bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
 {
-	return bdev_desc_get_block_size(desc);
+	struct spdk_bdev *bdev = desc->bdev;
+
+	return desc->opts.hide_metadata ? bdev->blocklen - bdev->md_len : bdev->blocklen;
 }
 
 uint32_t
@@ -6110,7 +6106,7 @@ static uint64_t
 bdev_bytes_to_blocks(struct spdk_bdev_desc *desc, uint64_t offset_bytes,
 		     uint64_t *offset_blocks, uint64_t num_bytes, uint64_t *num_blocks)
 {
-	uint32_t block_size = bdev_desc_get_block_size(desc);
+	uint32_t block_size = spdk_bdev_desc_get_block_size(desc);
 	uint8_t shift_cnt;
 
 	/* Avoid expensive div operations if possible. These spdk_u32 functions are very cheap. */
@@ -6245,7 +6241,7 @@ bdev_read_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch
 	bdev_io->type = SPDK_BDEV_IO_TYPE_READ;
 	bdev_io->u.bdev.iovs = &bdev_io->iov;
 	bdev_io->u.bdev.iovs[0].iov_base = buf;
-	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * bdev_desc_get_block_size(desc);
+	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * spdk_bdev_desc_get_block_size(desc);
 	bdev_io->u.bdev.iovcnt = 1;
 	bdev_io->u.bdev.md_buf = md_buf;
 	bdev_io->u.bdev.num_blocks = num_blocks;
@@ -6498,7 +6494,7 @@ bdev_write_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *c
 	bdev_io->type = SPDK_BDEV_IO_TYPE_WRITE;
 	bdev_io->u.bdev.iovs = &bdev_io->iov;
 	bdev_io->u.bdev.iovs[0].iov_base = buf;
-	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * bdev_desc_get_block_size(desc);
+	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * spdk_bdev_desc_get_block_size(desc);
 	bdev_io->u.bdev.iovcnt = 1;
 	bdev_io->u.bdev.md_buf = md_buf;
 	bdev_io->u.bdev.num_blocks = num_blocks;
@@ -6875,7 +6871,7 @@ bdev_compare_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel 
 	bdev_io->type = SPDK_BDEV_IO_TYPE_COMPARE;
 	bdev_io->u.bdev.iovs = &bdev_io->iov;
 	bdev_io->u.bdev.iovs[0].iov_base = buf;
-	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * bdev_desc_get_block_size(desc);
+	bdev_io->u.bdev.iovs[0].iov_len = num_blocks * spdk_bdev_desc_get_block_size(desc);
 	bdev_io->u.bdev.iovcnt = 1;
 	bdev_io->u.bdev.md_buf = md_buf;
 	bdev_io->u.bdev.num_blocks = num_blocks;
