@@ -1151,6 +1151,11 @@ bdev_io_needs_metadata(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io
 		return false;
 	}
 
+	if (!(bdev_io->type == SPDK_BDEV_IO_TYPE_READ ||
+	      bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE)) {
+		return false;
+	}
+
 	return true;
 }
 
