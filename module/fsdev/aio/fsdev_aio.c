@@ -3983,16 +3983,17 @@ aio_io_poll(void *arg)
 {
 	struct aio_fsdev_io *vfsdev_io, *tmp;
 	struct aio_io_channel *ch = arg;
+	TAILQ_HEAD(, aio_fsdev_io) ios = TAILQ_HEAD_INITIALIZER(ios);
 	int res = SPDK_POLLER_IDLE;
 
 	if (spdk_aio_mgr_poll(ch->mgr)) {
 		res = SPDK_POLLER_BUSY;
 	}
 
-	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_to_complete, link, tmp) {
+	TAILQ_SWAP(&ch->ios_to_complete, &ios, aio_fsdev_io, link);
+	while ((vfsdev_io = TAILQ_FIRST(&ios))) {
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-
-		TAILQ_REMOVE(&ch->ios_to_complete, vfsdev_io, link);
+		TAILQ_REMOVE(&ios, vfsdev_io, link);
 		spdk_fsdev_io_complete(fsdev_io, vfsdev_io->status);
 		res = SPDK_POLLER_BUSY;
 	}
