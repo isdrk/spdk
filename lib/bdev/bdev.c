@@ -1141,15 +1141,13 @@ _are_iovs_aligned(struct iovec *iovs, int iovcnt, uint32_t alignment)
 }
 
 static inline bool
-bdev_desc_needs_metadata(struct spdk_bdev_desc *desc)
-{
-	return desc->opts.hide_metadata && desc->bdev->md_len != 0;
-}
-
-static inline bool
 bdev_io_needs_metadata(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io)
 {
-	if (!bdev_desc_needs_metadata(desc)) {
+	if (desc->bdev->md_len == 0) {
+		return false;
+	}
+
+	if (!desc->opts.hide_metadata) {
 		return false;
 	}
 
@@ -11659,7 +11657,7 @@ spdk_bdev_desc_accel_sequence_supported(struct spdk_bdev_desc *desc,
 {
 	struct spdk_bdev *bdev = desc->bdev;
 
-	if (bdev_desc_needs_metadata(desc)) {
+	if (bdev->md_len != 0 && desc->opts.hide_metadata) {
 		switch (io_type) {
 		case SPDK_BDEV_IO_TYPE_READ:
 		case SPDK_BDEV_IO_TYPE_WRITE:
