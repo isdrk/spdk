@@ -622,8 +622,8 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu",
-		      mnt->fd, st.st_mode, getuid(), getgid(), mnt->max_xfer_size);
+	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu,"
+		      "allow_other", mnt->fd, st.st_mode, getuid(), getgid(), mnt->max_xfer_size);
 	if (rc < 0 || rc >= (int)sizeof(mopts)) {
 		rc = -EINVAL;
 		goto error;
