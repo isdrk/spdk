@@ -599,7 +599,10 @@ fuse_dispatcher_fill_out_hdr(struct fuse_io *fuse_io, size_t out_len, int error)
 		return NULL;
 	}
 
-	len = sizeof(*hdr) + out_len;
+	len = sizeof(*hdr);
+	if (error == 0) {
+		len += out_len;
+	}
 
 	hdr = out->iov_base;
 	memset(hdr, 0, sizeof(*hdr));
