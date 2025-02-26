@@ -4,6 +4,7 @@
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/barrier.h"
 #include "spdk/log.h"
 #include "spdk/assert.h"
 #include "spdk/util.h"
@@ -13,6 +14,8 @@
 SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
 
 #define SPDK_LUT_MAX_SIZE ((((uint64_t)1) << SPDK_LUT_MAX_KEY_BITS) - 1)
+
+#define SPDK_LUT_SET_SIZE 1024
 
 struct spdk_lut_node {
 	uint64_t valid : 1;
@@ -34,10 +37,14 @@ struct spdk_lut_node {
 /* The sizeof(struct spdk_lut_node) must be a multiple of 8 to ensure proper alignment  */
 SPDK_STATIC_ASSERT(sizeof(struct spdk_lut_node) == 16, "Incorrect size");
 
+struct spdk_lut_node_set {
+	struct spdk_lut_node nodes[SPDK_LUT_SET_SIZE];
+	struct spdk_lut_node_set *next;
+};
+
 struct spdk_lut {
-	struct spdk_lut_node *nodes;
+	struct spdk_lut_node_set node_set;
 	uint64_t num_nodes;
-	uint64_t growth_step;
 	uint64_t max_size;
 	STAILQ_HEAD(, spdk_lut_node) free_nodes;
 };
@@ -51,40 +58,55 @@ lut_node_size(struct spdk_lut *lut)
 static inline struct spdk_lut_node *
 lut_get_node(struct spdk_lut *lut, uint64_t key)
 {
-	return &lut->nodes[key];
+	struct spdk_lut_node_set *set;
+	uint64_t remainder = key;
+
+	set = &lut->node_set;
+	while (remainder >= SPDK_LUT_SET_SIZE) {
+		set = set->next;
+		if (set == NULL) {
+			return NULL;
+		}
+		remainder -= SPDK_LUT_SET_SIZE;
+	}
+
+	return &set->nodes[remainder];
 }
 
 static bool
-lut_extend_unsafe(struct spdk_lut *lut, uint64_t delta)
+lut_extend_unsafe(struct spdk_lut *lut)
 {
-	void *new_nodes;
+	struct spdk_lut_node_set *set, *new_set;
 	struct spdk_lut_node *node;
-	uint64_t num_nodes = lut->num_nodes + delta;
 	uint64_t i;
 
-	if (num_nodes > lut->max_size) {
+	if (lut->num_nodes + SPDK_LUT_SET_SIZE > lut->max_size) {
 		SPDK_ERRLOG("The map size will exceed the max: %" PRIu64 " > %" PRIu64 "nodes\n",
-			    num_nodes, lut->max_size);
+			    lut->num_nodes + SPDK_LUT_SET_SIZE, lut->max_size);
 		return false;
 	}
 
-	new_nodes = realloc(lut->nodes, num_nodes * lut_node_size(lut));
-	if (!new_nodes) {
-		SPDK_ERRLOG("Cannot alloc array of %" PRIu64 "nodes\n", num_nodes);
+	set = &lut->node_set;
+	while (set->next != NULL) {
+		set = set->next;
+	}
+
+	new_set = calloc(1, sizeof(*new_set));
+	if (!new_set) {
+		SPDK_ERRLOG("Cannot alloc new node set\n");
 		return false;
 	}
 
-	i = lut->num_nodes;
-
-	lut->nodes = new_nodes;
-	lut->num_nodes = num_nodes;
-
-	for (; i < num_nodes; i++) {
-		node = lut_get_node(lut, i);
+	for (i = 0; i < SPDK_LUT_SET_SIZE; i++) {
+		node = &new_set->nodes[i];
 		node->valid = 0;
-		node->key = i;
+		node->key = lut->num_nodes + i;
 		STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
 	}
+
+	lut->num_nodes += SPDK_LUT_SET_SIZE;
+
+	set->next = new_set;
 
 	return true;
 }
@@ -94,7 +116,7 @@ lut_insert_unsafe(struct spdk_lut *lut, void *value)
 {
 	struct spdk_lut_node *node;
 
-	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend_unsafe(lut, lut->growth_step)) {
+	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend_unsafe(lut)) {
 		return NULL;
 	}
 
@@ -110,6 +132,9 @@ struct spdk_lut *
 spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint64_t max_size)
 {
 	struct spdk_lut *lut;
+	struct spdk_lut_node_set *set;
+	struct spdk_lut_node *node;
+	uint64_t i;
 
 	if (max_size < init_size || max_size > SPDK_LUT_MAX_SIZE) {
 		SPDK_ERRLOG("Invalid sizes: init=%" PRIu64 " max=%" PRIu64 "\n", init_size, max_size);
@@ -125,13 +150,15 @@ spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint64_t max_size)
 	STAILQ_INIT(&lut->free_nodes);
 	lut->max_size = max_size;
 
-	if (!lut_extend_unsafe(lut, init_size)) {
-		SPDK_ERRLOG("Cannot create array of %" PRIu64 "objects\n", init_size);
-		free(lut);
-		return NULL;
+	set = &lut->node_set;
+	for (i = 0; i < SPDK_LUT_SET_SIZE; i++) {
+		node = &set->nodes[i];
+		node->valid = 0;
+		node->key = i;
+		STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
 	}
 
-	lut->growth_step = growth_step;
+	lut->num_nodes = SPDK_LUT_SET_SIZE;
 
 	return lut;
 }
@@ -158,7 +185,7 @@ spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
 	assert(key < lut->max_size);
 
 	if (key > lut->num_nodes) {
-		if (!lut_extend_unsafe(lut, spdk_divide_round_up(key, lut->growth_step) - lut->num_nodes)) {
+		if (!lut_extend_unsafe(lut)) {
 			return -ENOMEM;
 		}
 	}
@@ -237,6 +264,16 @@ spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 void
 spdk_lut_free(struct spdk_lut *lut)
 {
-	free(lut->nodes);
+	struct spdk_lut_node_set *set, *next;
+
+	set = &lut->node_set;
+
+	set = set->next;
+	while (set) {
+		next = set->next;
+		free(set);
+		set = next;
+	}
+
 	free(lut);
 }
