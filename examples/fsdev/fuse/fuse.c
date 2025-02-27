@@ -24,6 +24,7 @@ struct {
 	const char			*name;
 	const char			*fsdev_name;
 	const char			*mountpoint;
+	const char			*extra_libs;
 	struct spdk_poller		*fsdev_poller;
 	bool				wait;
 	bool				daemon;
@@ -332,6 +333,8 @@ static struct option g_options[] = {
 	{ "no-clone", no_argument, NULL, FSDEV_FUSE_OPT_NO_CLONE },
 #define FSDEV_FUSE_OPT_FSTYPE 0x1003
 	{ "fstype", required_argument, NULL, FSDEV_FUSE_OPT_FSTYPE },
+#define FSDEV_FUSE_OPT_EXTERN_LIBS 0x1004
+	{ "ext-libs", required_argument, NULL, FSDEV_FUSE_OPT_EXTERN_LIBS },
 	{},
 };
 
@@ -389,6 +392,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 	case FSDEV_FUSE_OPT_FSTYPE:
 		g_app.mount_opts.fstype = arg;
 		break;
+	case FSDEV_FUSE_OPT_EXTERN_LIBS:
+		g_app.extra_libs = arg;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -423,6 +429,35 @@ fsdev_fuse_check_params(void)
 	return true;
 }
 
+static bool
+fsdev_fuse_load_extra_libs(void)
+{
+	char **libs;
+	int i = 0;
+
+	if (!g_app.extra_libs) {
+		return true;
+	}
+
+	libs = spdk_strarray_from_string(g_app.extra_libs, ",");
+	if (!libs) {
+		fsdev_fuse_errmsg("Bad --ext-libs: %s\n", g_app.extra_libs);
+		return false;
+	}
+
+	for (i = 0; libs[i]; i++) {
+		void *lib_handle = dlopen(libs[i], RTLD_NOW | RTLD_GLOBAL | RTLD_NODELETE);
+		if (!lib_handle) {
+			fsdev_fuse_errmsg("Failed to load extra lib: %s (%s)\n", libs[i], dlerror());
+			spdk_strarray_free(libs);
+			return false;
+		}
+	}
+
+	spdk_strarray_free(libs);
+	return true;
+}
+
 static void
 fsdev_fuse_usage(void)
 {
@@ -434,6 +469,7 @@ fsdev_fuse_usage(void)
 	printf(" -w, --wait                           wait for the fsdev if it's not available\n");
 	printf("     --fstype=<fstype>                use fstype as filesystem type when mounting\n");
 	printf(" -D, --daemon                         run as daemon\n");
+	printf("     --ext-libs=<name1[,name2[]]>     comma-separated list of external libs to be loaded\n");
 }
 
 int
@@ -456,6 +492,10 @@ main(int argc, char **argv)
 
 	if (!fsdev_fuse_check_params()) {
 		fsdev_fuse_usage();
+		return EXIT_FAILURE;
+	}
+
+	if (!fsdev_fuse_load_extra_libs()) {
 		return EXIT_FAILURE;
 	}
 
