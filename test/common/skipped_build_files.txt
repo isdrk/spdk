@@ -67,6 +67,7 @@ lib/mlx5/mlx5_crypto
 lib/mlx5/mlx5_qp
 lib/mlx5/mlx5_dma
 lib/mlx5/mlx5_umr
+test/unit/lib/accel/accel_mlx5.c/accel_mlx5_ut
 
 # Not configured to build hello_gorpc example
 examples/go/hello_gorpc/hello_gorpc.go
