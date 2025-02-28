@@ -47,6 +47,8 @@ test/external_code/passthru/vbdev_passthru
 test/external_code/passthru/vbdev_passthru_rpc
 test/external_code/nvme/nvme
 test/external_code/nvme/identify
+test/external_code/fsdev_passthru/vfsdev_passthru
+test/external_code/fsdev_passthru/vfsdev_passthru_rpc
 
 # This file requires some additional work in CI and test scripts before it can
 # be part of autotest.
