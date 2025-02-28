@@ -179,6 +179,8 @@ export SPDK_JSONRPC_GO_CLIENT
 export SPDK_TEST_SETUP
 : ${SPDK_TEST_NVME_INTERRUPT=0}
 export SPDK_TEST_NVME_INTERRUPT
+: ${SPDK_TEST_XLIO=0}
+export SPDK_TEST_XLIO
 
 # always test with SPDK shared objects.
 export SPDK_LIB_DIR="$rootdir/build/lib"
@@ -530,6 +532,10 @@ function get_config_params() {
 
 	if [[ $SPDK_JSONRPC_GO_CLIENT -eq 1 ]]; then
 		config_params+=' --with-golang'
+	fi
+
+	if [[ $SPDK_TEST_XLIO -eq 1 ]]; then
+		config_params+=' --with-xlio'
 	fi
 
 	echo "$config_params"
