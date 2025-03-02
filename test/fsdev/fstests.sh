@@ -86,9 +86,11 @@ parse_device() {
 
 check_options() {
 	[[ -z "${config[xfsdir]}" ]] && errmsg "missing required option -x, --xfsdir" && return 1
-	[[ -z "${config[config]}" ]] && errmsg "missing required option -c, --config" && return 1
 	[[ -z "${config[fsdev]}" ]] && errmsg "missing required option -d, --device" && return 1
-	[[ -z "${config[mountpoint]}" ]] && errmsg "missing required option -d, --device" && return 1
+	[[ -z "${config[mountpoint]}" ]] \
+		&& errmsg "missing required option -d, --device" && return 1
+	[[ -z "${config[config]}" ]] && [[ "${config[external]}" != true ]] \
+		&& errmsg "missing required option -c, --config" && return 1
 
 	return 0
 }
