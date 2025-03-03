@@ -54,6 +54,7 @@ def filter_methods(do_remove_global_rpcs):
         'fsdev_set_opts',
         'fsdev_aio_set_options',
         'rmem_set_config',
+        'fuse_set_options'
     ]
 
     data = json.loads(sys.stdin.read())
