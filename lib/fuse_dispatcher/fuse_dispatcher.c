@@ -3714,19 +3714,19 @@ static const struct {
 	[FUSE_CREATE]	   = { do_create,      "CREATE"	     },
 	[FUSE_INTERRUPT]   = { do_interrupt,   "INTERRUPT"   },
 	[FUSE_BMAP]	   = { do_bmap,	       "BMAP"	     },
+	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
 	[FUSE_IOCTL]	   = { do_ioctl,       "IOCTL"	     },
 	[FUSE_POLL]	   = { do_poll,        "POLL"	     },
-	[FUSE_FALLOCATE]   = { do_fallocate,   "FALLOCATE"   },
-	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
 	[FUSE_NOTIFY_REPLY] = { do_notify_reply, "NOTIFY_REPLY" },
 	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
+	[FUSE_FALLOCATE]   = { do_fallocate,   "FALLOCATE"   },
 	[FUSE_READDIRPLUS] = { do_readdirplus,	"READDIRPLUS"},
 	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
+	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
 	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
 	[FUSE_SETUPMAPPING]  = { do_setupmapping, "SETUPMAPPING" },
 	[FUSE_REMOVEMAPPING] = { do_removemapping, "REMOVEMAPPING" },
 	[FUSE_SYNCFS] = { do_syncfs, "SYNCFS" },
-	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
 };
 
 const char *
