@@ -4708,9 +4708,30 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->fsdev.ctxt = vfsdev;
 	vfsdev->fsdev.fn_table = &aio_fn_table;
 	vfsdev->fsdev.module = &aio_fsdev_module;
+#ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	if (vfsdev->opts.enable_notifications) {
+		struct statvfs stat = {};
+
+		/* Check if filesystem supports fanotify. According to fanotify_mark(2)
+		 * it doesn't work for filesystems that report fsid 0.
+		 */
+		rc = fstatvfs(vfsdev->root->fd, &stat);
+		if (rc) {
+			rc = -errno;
+			SPDK_ERRLOG("Failed to get filesystem statistics, fsdev %s, root_fd %d, errno %d\n",
+				    vfsdev->fsdev.name, vfsdev->root->fd, errno);
+			fsdev_aio_free(vfsdev);
+			return rc;
+		}
+
+		if (stat.f_fsid == 0) {
+			SPDK_ERRLOG("Fsdev %s does not support fanotify\n", vfsdev->fsdev.name);
+			fsdev_aio_free(vfsdev);
+			return -EINVAL;
+		}
 		vfsdev->fsdev.notify_max_data_size = DEFAULT_NOTIFY_MAX_DATA_SIZE;
 	}
+#endif
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
