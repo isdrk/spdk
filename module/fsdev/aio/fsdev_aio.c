@@ -167,7 +167,8 @@ struct aio_fsdev_file_handle {
 		struct dirent *entry;
 		off_t offset;
 	} dir;
-	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev *vfsdev;
+	uint64_t fobject_lut_key;
 	TAILQ_ENTRY(aio_fsdev_file_handle) link;
 };
 
@@ -622,7 +623,8 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 	}
 
 	fhandle->hdr.refcount = 1; /* reference by caller */
-	fhandle->fobject = fobject;
+	fhandle->fobject_lut_key = fobject->hdr.lut_key;
+	fhandle->vfsdev = fobject->vfsdev;
 	fhandle->fd = fd;
 
 	spdk_spin_lock(&vfsdev->lock);
@@ -644,8 +646,8 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 static uint64_t
 file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 {
-	struct aio_fsdev_file_object *fobject = fhandle->fobject;
-	struct aio_fsdev *vfsdev = fobject->vfsdev;
+	struct aio_fsdev_file_object *fobject = NULL;
+	struct aio_fsdev *vfsdev = fhandle->vfsdev;
 	uint64_t refcount;
 
 	assert(fhandle->hdr.refcount > 0);
@@ -659,18 +661,43 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 	}
 
 	spdk_spin_lock(&vfsdev->lock);
+	fobject = spdk_lut_get(vfsdev->lut, fhandle->fobject_lut_key);
+	if (fobject == SPDK_LUT_INVALID_VALUE) {
+		/* This handle refers to an invalid file object. This should not happen. */
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject\n", fhandle->fobject_lut_key);
+		fobject = NULL;
+	}
+
+	if (spdk_likely(fobject->hdr.is_fobject)) {
+		file_object_ref(fobject);
+	} else {
+		/* Error: the key rather belongs to a fhandle */
+		SPDK_WARNLOG("0x%" PRIx64 " is not a fobject\n", fhandle->fobject_lut_key);
+		fobject = NULL;
+	}
+
+	assert(fobject); /* There shouldn't be NULL fobject in the LUT and neither of the error conditions above should ever hit */
+
 	refcount = force_removal ? 0 : __atomic_load_n(&fhandle->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
 		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
-		TAILQ_REMOVE(&fobject->handles, fhandle, link);
+		if (fobject) {
+			TAILQ_REMOVE(&fobject->handles, fhandle, link);
+		}
 	}
 	spdk_spin_unlock(&vfsdev->lock);
+
+	if (fobject) {
+		file_object_unref(fobject, 1); /* unref the ref we took above */
+	}
 
 	if (refcount) {
 		return refcount;
 	}
 
-	file_object_unref(fobject, 1); /* unref by fhandle */
+	if (fobject) {
+		file_object_unref(fobject, 1); /* unref for the fhandle */
+	}
 
 	if (fhandle->dir.dp) {
 		closedir(fhandle->dir.dp);
