@@ -31,6 +31,10 @@ extern "C" {
  * \brief SPDK LUT object.
  *
  * This is a LUT object.
+ *
+ * SPDK Look Up Tables are not, in general, thread safe. For multi-threaded access, take a lock around each operation.
+ * However, it is thread safe to call spdk_lut_get() and spdk_lut_for_each() concurrently with all other operations without
+ * holding a lock.
  */
 struct spdk_lut;
 

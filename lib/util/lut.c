@@ -106,6 +106,10 @@ lut_extend_unsafe(struct spdk_lut *lut)
 
 	lut->num_nodes += SPDK_LUT_SET_SIZE;
 
+	/* Barrier here so that next isn't shown as non-NULL before
+	 * all of the above stuff has completed. */
+	spdk_wmb();
+
 	set->next = new_set;
 
 	return true;
@@ -122,8 +126,13 @@ lut_insert_unsafe(struct spdk_lut *lut, void *value)
 
 	node = STAILQ_FIRST(&lut->free_nodes);
 	STAILQ_REMOVE_HEAD(&lut->free_nodes, u.link);
-	node->valid = 1;
 	node->u.ptr = value;
+
+	/* Barrier here so that 'valid' isn't shown as 1 before
+	 * all of the above stuff has completed. */
+	spdk_wmb();
+
+	node->valid = 1;
 
 	return node;
 }
@@ -196,9 +205,13 @@ spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
 	}
 
 	STAILQ_REMOVE(&lut->free_nodes, node, spdk_lut_node, u.link);
+	node->u.ptr = value;
+
+	/* Barrier here so that 'valid' isn't shown as 1 before
+	 * all of the above stuff has completed. */
+	spdk_wmb();
 
 	node->valid = 1;
-	node->u.ptr = value;
 
 	return 0;
 }
@@ -213,6 +226,14 @@ spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 	if (key < lut->num_nodes) {
 		node = lut_get_node(lut, key);
 		if (node->valid) {
+
+			/* Barrier here so that our read of 'ptr' never reorders with our
+			 * read of 'valid'. This probably is not necessary because
+			 * most architectures strictly order reads and the writes
+			 * have been ordered by other barriers, but it'll just be
+			 * a no-op in that case. */
+			spdk_rmb();
+
 			value = node->u.ptr;
 		}
 	}
@@ -233,6 +254,13 @@ spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 		if (!node->valid) {
 			continue;
 		}
+
+		/* Barrier here so that our read of 'ptr' never reorders with our
+		 * read of 'valid'. This probably is not necessary because
+		 * most architectures strictly order reads and the writes
+		 * have been ordered by other barriers, but it'll just be
+		 * a no-op in that case. */
+		spdk_rmb();
 
 		rc = cb_fn(cb_arg, key, node->u.ptr);
 		if (rc) {
