@@ -320,10 +320,8 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 		return NULL;
 	}
 
-	spdk_spin_lock(&vfsdev->lock);
 	fhandle = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
 	if (fhandle == SPDK_LUT_INVALID_VALUE) {
-		spdk_spin_unlock(&vfsdev->lock);
 		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle\n", n);
 		return NULL;
 	}
@@ -338,7 +336,6 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
 		fhandle = NULL;
 	}
-	spdk_spin_unlock(&vfsdev->lock);
 
 	return fhandle;
 }
@@ -667,6 +664,10 @@ file_handle_invalidate(struct aio_fsdev_file_handle *fhandle)
 	assert(fhandle->hdr.refcount == 1);
 	/* A valid entry in the spdk_lut with a refcount of 0 indicates that it is invalid (but hasn't been destroyed) */
 	fhandle->hdr.refcount = 0;
+
+	/* We now immediately remove the handle from the table so future lookups do not find it. */
+	spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
+
 	spdk_spin_unlock(&vfsdev->lock);
 }
 
@@ -697,7 +698,6 @@ file_handle_destroy(struct aio_fsdev_file_handle *fhandle)
 
 	assert(fobject); /* There shouldn't be NULL fobject in the LUT and neither of the error conditions above should ever hit */
 
-	spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
 	if (fobject) {
 		TAILQ_REMOVE(&fobject->handles, fhandle, link);
 	}
@@ -904,8 +904,22 @@ do_return:
 	return error;
 }
 
+static void
+fsdev_aio_thread_barrier(void *ctx)
+{
+	/* Do nothing. */
+}
+
+static void
+fsdev_aio_destroy_fhandle_cpl(void *ctx)
+{
+	struct aio_fsdev_file_handle *fhandle = (struct aio_fsdev_file_handle *)ctx;
+
+	file_handle_destroy(fhandle);
+}
+
 static int
-fsdev_aio_op_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_releasedir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_handle *fhandle;
@@ -917,10 +931,7 @@ fsdev_aio_op_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_
 	}
 
 	file_handle_invalidate(fhandle);
-
-	SPDK_DEBUGLOG(fsdev_aio, "RELEASEDIR succeeded for fh=%p\n", fhandle);
-
-	file_handle_destroy(fhandle);
+	spdk_for_each_thread(fsdev_aio_thread_barrier, fhandle, fsdev_aio_destroy_fhandle_cpl);
 
 	return 0;
 }
@@ -2567,7 +2578,7 @@ fop_failed:
 }
 
 static int
-fsdev_aio_op_release(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_handle *fhandle;
@@ -2579,10 +2590,7 @@ fsdev_aio_op_release(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	file_handle_invalidate(fhandle);
-
-	SPDK_DEBUGLOG(fsdev_aio, "RELEASE succeeded for fh=%p)\n", fhandle);
-
-	file_handle_destroy(fhandle);
+	spdk_for_each_thread(fsdev_aio_thread_barrier, fhandle, fsdev_aio_destroy_fhandle_cpl);
 
 	return 0;
 }
