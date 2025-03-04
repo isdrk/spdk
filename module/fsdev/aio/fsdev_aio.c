@@ -329,7 +329,7 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 	assert(fhandle); /* There shouldn't be NULL fhandle in the LUT */
 
 	if (!fhandle->hdr.is_fobject) {
-		__atomic_add_fetch(&fhandle->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by caller */
+		fhandle->hdr.refcount++;
 	} else {
 		/* Error: the key rather belongs to a fobject */
 		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
@@ -652,15 +652,15 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 
 	assert(fhandle->hdr.refcount > 0);
 
-	/* The IMPORTANT NOTE from the file_object_unref() applies here as well */
+	spdk_spin_lock(&vfsdev->lock);
 	if (!force_removal) {
-		refcount = __atomic_sub_fetch(&fhandle->hdr.refcount, 1, __ATOMIC_RELAXED);
+		refcount = --fhandle->hdr.refcount;
 		if (refcount) {
+			spdk_spin_unlock(&vfsdev->lock);
 			return refcount;
 		}
 	}
 
-	spdk_spin_lock(&vfsdev->lock);
 	fobject = spdk_lut_get(vfsdev->lut, fhandle->fobject_lut_key);
 	if (fobject == SPDK_LUT_INVALID_VALUE) {
 		/* This handle refers to an invalid file object. This should not happen. */
@@ -678,7 +678,7 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 
 	assert(fobject); /* There shouldn't be NULL fobject in the LUT and neither of the error conditions above should ever hit */
 
-	refcount = force_removal ? 0 : __atomic_load_n(&fhandle->hdr.refcount, __ATOMIC_RELAXED);
+	refcount = force_removal ? 0 : fhandle->hdr.refcount;
 	if (!refcount) {
 		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
 		if (fobject) {
