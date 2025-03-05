@@ -388,7 +388,12 @@ fsdevperf_init_threads(void)
 
 		TAILQ_INIT(&thread->tasks);
 		thread->core = core;
-		thread->thread = spdk_thread_create(name, &cpuset);
+		if (core == spdk_env_get_main_core()) {
+			thread->thread = spdk_thread_get_app_thread();
+			assert(spdk_get_thread() == spdk_thread_get_app_thread());
+		} else {
+			thread->thread = spdk_thread_create(name, &cpuset);
+		}
 		if (thread->thread == NULL) {
 			fsdevperf_errmsg("%s", spdk_strerror(ENOMEM));
 			free(thread);
