@@ -48,3 +48,4 @@ static struct spdk_subsystem g_spdk_subsystem_fsdev = {
 };
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_fsdev);
+SPDK_SUBSYSTEM_DEPEND(fsdev, rmem)

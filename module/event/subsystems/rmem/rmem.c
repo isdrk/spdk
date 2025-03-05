@@ -32,7 +32,7 @@ rmem_subsystem_config_json(struct spdk_json_write_ctx *w)
 }
 
 static struct spdk_subsystem g_spdk_subsystem_rmem = {
-	.name = "rmem_pool",
+	.name = "rmem",
 	.init = rmem_subsystem_init,
 	.fini = rmem_subsystem_fini,
 	.write_config_json = rmem_subsystem_config_json,
