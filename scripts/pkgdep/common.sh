@@ -84,6 +84,7 @@ install_shfmt() {
 
 	case "$arch" in
 		x86_64) arch="amd64" ;;
+		aarch) arch="arm" ;;
 		aarch64) arch="arm64" ;;
 		amd64) ;; # FreeBSD
 		*)
