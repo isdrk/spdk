@@ -26,6 +26,7 @@ struct spdk_fuse_mount {
 	size_t				max_xfer_size;
 	struct spdk_thread		*thread;
 	TAILQ_ENTRY(spdk_fuse_mount)	tailq;
+	pthread_mutex_t			mutex;
 };
 
 struct fsdev_fuse_channel;
@@ -540,6 +541,7 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 		spdk_fsdev_close(mount->fsdev_desc);
 	}
 
+	pthread_mutex_destroy(&mount->mutex);
 	free(mount->name);
 	free(mount->mountpoint);
 	free(mount);
@@ -563,6 +565,12 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	mnt = calloc(1, sizeof(*mnt));
 	if (mnt == NULL) {
 		return -ENOMEM;
+	}
+
+	rc = pthread_mutex_init(&mnt->mutex, NULL);
+	if (rc != 0) {
+		free(mnt);
+		return -rc;
 	}
 
 	mnt->thread = spdk_get_thread();
@@ -878,14 +886,14 @@ spdk_fuse_umount(struct spdk_fuse_mount *mount, spdk_fuse_umount_cb cb_fn, void 
 		return -ENOMEM;
 	}
 
-	pthread_mutex_lock(&g_fuse.mutex);
+	pthread_mutex_lock(&mount->mutex);
 	if (mount->removing) {
-		pthread_mutex_unlock(&g_fuse.mutex);
+		pthread_mutex_unlock(&mount->mutex);
 		free(ctx);
 		return -EINPROGRESS;
 	}
 	mount->removing = true;
-	pthread_mutex_unlock(&g_fuse.mutex);
+	pthread_mutex_unlock(&mount->mutex);
 
 	ctx->mount = mount;
 	ctx->cb_fn = cb_fn;
