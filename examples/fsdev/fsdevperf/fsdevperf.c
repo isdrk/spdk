@@ -818,7 +818,9 @@ fsdevperf_done(void)
 	}
 
 	TAILQ_FOREACH(thread, &g_app.threads, tailq) {
-		spdk_thread_send_msg(thread->thread, fsdevperf_thread_exit, NULL);
+		if (thread->thread != spdk_thread_get_app_thread()) {
+			spdk_thread_send_msg(thread->thread, fsdevperf_thread_exit, NULL);
+		}
 	}
 
 	spdk_poller_unregister(&g_app.poller);
