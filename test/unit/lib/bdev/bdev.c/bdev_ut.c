@@ -33,39 +33,6 @@ DEFINE_STUB_V(bdev_qos_limits_cache_init, (struct bdev_qos_limits_cache *caches,
 		struct bdev_qos_limits *limits));
 DEFINE_STUB_V(bdev_qos_limits_cache_reset, (struct bdev_qos_limits_cache *caches));
 
-DEFINE_STUB_V(spdk_accel_sequence_finish,
-	      (struct spdk_accel_sequence *seq, spdk_accel_completion_cb cb_fn, void *cb_arg));
-DEFINE_STUB_V(spdk_accel_sequence_abort, (struct spdk_accel_sequence *seq));
-DEFINE_STUB_V(spdk_accel_sequence_reverse, (struct spdk_accel_sequence *seq));
-DEFINE_STUB(spdk_accel_append_copy, int,
-	    (struct spdk_accel_sequence **seq, struct spdk_io_channel *ch, struct iovec *dst_iovs,
-	     uint32_t dst_iovcnt, struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
-	     struct iovec *src_iovs, uint32_t src_iovcnt, struct spdk_memory_domain *src_domain,
-	     void *src_domain_ctx, spdk_accel_step_cb cb_fn, void *cb_arg), 0);
-DEFINE_STUB(spdk_accel_append_dif_verify_copy, int,
-	    (struct spdk_accel_sequence **seq, struct spdk_io_channel *ch,
-	     struct iovec *dst_iovs, size_t dst_iovcnt,
-	     struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
-	     struct iovec *src_iovs, size_t src_iovcnt,
-	     struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-	     uint32_t num_blocks,
-	     const struct spdk_dif_ctx *ctx, struct spdk_dif_error *err,
-	     spdk_accel_step_cb cb_fn, void *cb_arg), 0);
-DEFINE_STUB(spdk_accel_append_dif_generate_copy, int,
-	    (struct spdk_accel_sequence **seq,
-	     struct spdk_io_channel *ch,
-	     struct iovec *dst_iovs, size_t dst_iovcnt,
-	     struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
-	     struct iovec *src_iovs, size_t src_iovcnt,
-	     struct spdk_memory_domain *src_domain, void *src_domain_ctx,
-	     uint32_t num_blocks, const struct spdk_dif_ctx *ctx,
-	     spdk_accel_step_cb cb_fn, void *cb_arg), 0);
-DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), NULL);
-DEFINE_STUB(spdk_accel_get_buf, int, (struct spdk_io_channel *ch, uint64_t len, void **buf,
-				      struct spdk_memory_domain **domain, void **domain_ctx), 0);
-DEFINE_STUB_V(spdk_accel_put_buf, (struct spdk_io_channel *ch, void *buf,
-				   struct spdk_memory_domain *domain, void *domain_ctx));
-
 static bool g_memory_domain_pull_data_called;
 static bool g_memory_domain_push_data_called;
 static int g_accel_io_device;
@@ -94,10 +61,151 @@ spdk_memory_domain_push_data(struct spdk_memory_domain *dst_domain, void *dst_do
 	return 0;
 }
 
+struct spdk_accel_sequence {
+	uint8_t op_code;
+};
+
 struct spdk_io_channel *
 spdk_accel_get_io_channel(void)
 {
 	return spdk_get_io_channel(&g_accel_io_device);
+}
+
+void
+spdk_accel_sequence_finish(struct spdk_accel_sequence *seq,
+			   spdk_accel_completion_cb cb_fn, void *cb_arg)
+{
+	SPDK_CU_ASSERT_FATAL(seq != NULL);
+	CU_ASSERT(seq->op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY ||
+		  seq->op_code == SPDK_ACCEL_OPC_DIF_GENERATE_COPY);
+
+	free(seq);
+
+	if (cb_fn != NULL) {
+		cb_fn(cb_arg, 0);
+	}
+}
+
+void
+spdk_accel_sequence_abort(struct spdk_accel_sequence *seq)
+{
+	SPDK_CU_ASSERT_FATAL(seq != NULL);
+	CU_ASSERT(seq->op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY ||
+		  seq->op_code == SPDK_ACCEL_OPC_DIF_GENERATE_COPY);
+
+	free(seq);
+}
+
+void
+spdk_accel_sequence_reverse(struct spdk_accel_sequence *seq)
+{
+	SPDK_CU_ASSERT_FATAL(seq != NULL);
+	CU_ASSERT(seq->op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY ||
+		  seq->op_code == SPDK_ACCEL_OPC_DIF_GENERATE_COPY);
+}
+
+int
+spdk_accel_append_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
+		       struct iovec *dst_iovs, uint32_t dst_iovcnt,
+		       struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+		       struct iovec *src_iovs, uint32_t src_iovcnt,
+		       struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+		       spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct spdk_accel_sequence *seq = *pseq;
+
+	CU_ASSERT(cb_fn == NULL);
+
+	SPDK_CU_ASSERT_FATAL(seq == NULL);
+	seq = calloc(1, sizeof(*seq));
+	SPDK_CU_ASSERT_FATAL(seq != NULL);
+
+	seq->op_code = SPDK_ACCEL_OPC_COPY;
+
+	*pseq = seq;
+
+	return 0;
+}
+
+int
+spdk_accel_append_dif_verify_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
+				  struct iovec *dst_iovs, size_t dst_iovcnt,
+				  struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				  struct iovec *src_iovs, size_t src_iovcnt,
+				  struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				  uint32_t num_blocks,
+				  const struct spdk_dif_ctx *ctx, struct spdk_dif_error *err,
+				  spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct spdk_accel_sequence *seq = *pseq;
+
+	CU_ASSERT(cb_fn == NULL);
+
+	if (seq == NULL) {
+		seq = calloc(1, sizeof(*seq));
+		SPDK_CU_ASSERT_FATAL(seq != NULL);
+	} else {
+		CU_ASSERT(seq->op_code == SPDK_ACCEL_OPC_COPY);
+	}
+
+	seq->op_code = SPDK_ACCEL_OPC_DIF_VERIFY_COPY;
+
+	*pseq = seq;
+
+	return 0;
+}
+
+int
+spdk_accel_append_dif_generate_copy(struct spdk_accel_sequence **pseq, struct spdk_io_channel *ch,
+				    struct iovec *dst_iovs, size_t dst_iovcnt,
+				    struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+				    struct iovec *src_iovs, size_t src_iovcnt,
+				    struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				    uint32_t num_blocks, const struct spdk_dif_ctx *ctx,
+				    spdk_accel_step_cb cb_fn, void *cb_arg)
+{
+	struct spdk_accel_sequence *seq = *pseq;
+
+	CU_ASSERT(cb_fn == NULL);
+
+	if (seq == NULL) {
+		seq = calloc(1, sizeof(*seq));
+		SPDK_CU_ASSERT_FATAL(seq != NULL);
+	} else {
+		CU_ASSERT(seq->op_code == SPDK_ACCEL_OPC_COPY);
+	}
+
+	seq->op_code = SPDK_ACCEL_OPC_DIF_VERIFY_COPY;
+
+	*pseq = seq;
+
+	return 0;
+}
+
+struct spdk_memory_domain *
+spdk_accel_get_memory_domain(void)
+{
+	return (struct spdk_memory_domain *)0xACCEL;
+}
+
+int
+spdk_accel_get_buf(struct spdk_io_channel *ch, uint64_t len, void **buf,
+		   struct spdk_memory_domain **domain, void **domain_ctx)
+{
+	*buf = (void *)0xBAADF00D;
+	*domain = (struct spdk_memory_domain *)0xACCEL;
+	*domain_ctx = (void *)0xCAFEF00D;
+
+	return 0;
+}
+
+void
+spdk_accel_put_buf(struct spdk_io_channel *ch, void *buf,
+		   struct spdk_memory_domain *domain, void *domain_ctx)
+{
+	CU_ASSERT(buf == (void *)0xBAADF00D);
+	CU_ASSERT(domain == (struct spdk_memory_domain *)0xACCEL);
+	CU_ASSERT(domain_ctx == (void *)0xCAFEF00D);
 }
 
 int g_status;
@@ -235,6 +343,7 @@ static void
 stub_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_io)
 {
 	struct bdev_ut_channel *ch = spdk_io_channel_get_ctx(_ch);
+	struct spdk_bdev_desc *desc = bdev_io->internal.desc;
 	struct ut_expected_io *expected_io;
 	struct iovec *iov, *expected_iov;
 	struct spdk_bdev_io *bio_to_abort;
@@ -337,6 +446,25 @@ stub_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_io)
 		bdev_io->u.bdev.seek.offset = g_seek_hole_offset;
 	}
 
+	if (bdev_io->internal.f.has_metadata) {
+		if (bdev_io->internal.f.has_bounce_buf == true) {
+			if (!desc->accel_sequence_supported[bdev_io->type] || bdev_io->internal.f.split) {
+				CU_ASSERT(bdev_io->u.bdev.accel_sequence == NULL);
+				CU_ASSERT(bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE ||
+					  bdev_io->type == SPDK_BDEV_IO_TYPE_READ);
+				if (bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE) {
+					CU_ASSERT(bdev_io->internal.f.has_accel_sequence == false);
+				} else {
+					CU_ASSERT(bdev_io->internal.f.has_accel_sequence == true);
+				}
+			} else {
+				CU_ASSERT(bdev_io->u.bdev.accel_sequence != NULL);
+				/* We don't care the execution result of accel sequence for now. */
+				spdk_accel_sequence_abort(bdev_io->u.bdev.accel_sequence);
+			}
+		}
+	}
+
 	TAILQ_INSERT_TAIL(&ch->outstanding_io, (struct bdev_ut_io *)bdev_io->driver_ctx, link);
 	ch->outstanding_io_count++;
 
@@ -426,6 +554,19 @@ stub_complete_io(uint32_t num_to_complete)
 	}
 
 	return num_completed;
+}
+
+static bool
+stub_accel_sequence_supported(void *ctx, enum spdk_bdev_io_type type)
+{
+	return true;
+}
+
+static int
+stub_get_memory_domains(void *ctx, struct spdk_memory_domain **domains,
+			int array_size)
+{
+	return 1;
 }
 
 static struct spdk_io_channel *
@@ -7805,6 +7946,239 @@ bdev_io_init_dif_ctx_test(void)
 	free_bdev(bdev);
 }
 
+static void
+bdev_io_ext_metadata(void)
+{
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *desc = NULL;
+	struct spdk_io_channel *io_ch;
+	struct spdk_bdev_open_opts open_opts = {};
+	struct spdk_bdev_ext_io_opts ext_io_opts = { .size = sizeof(ext_io_opts), };
+	struct iovec iovs[32];
+	struct spdk_accel_sequence *seq = NULL;
+	struct ut_expected_io *expected_io;
+	uint64_t i;
+	int rc;
+
+	ut_init_bdev(NULL);
+	bdev = allocate_bdev("bdev");
+
+	bdev->md_len = 8;
+	bdev->blocklen = 512 + 8;
+	bdev->md_interleave = true;
+	bdev->dif_type = SPDK_DIF_TYPE1;
+	bdev->dif_pi_format = SPDK_DIF_PI_FORMAT_16;
+	bdev->dif_check_flags = SPDK_DIF_FLAGS_REFTAG_CHECK | SPDK_DIF_FLAGS_GUARD_CHECK;
+
+	spdk_bdev_open_opts_init(&open_opts, sizeof(open_opts));
+	open_opts.hide_metadata = true;
+
+	rc = spdk_bdev_open_ext_v2("bdev", true, bdev_ut_event_cb, NULL, &open_opts, &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	CU_ASSERT(bdev == spdk_bdev_desc_get_bdev(desc));
+
+	io_ch = spdk_bdev_get_io_channel(desc);
+	SPDK_CU_ASSERT_FATAL(io_ch != NULL);
+
+	for (i = 0; i < 32; i++) {
+		iovs[i].iov_base = (void *)(0xC0FFEE + i * 512 * 8);
+		iovs[i].iov_len = 512 * 8;
+	}
+
+	/* We don't check iov for now because we allocate bounce buffer and we
+	 * don't trap its address now.
+	 *
+	 * We have 16 combinations for memory domain and accel sequence of upper
+	 * layer or underlying bdev. We test only major cases for now.
+	 */
+
+	/* Case 1: I/O does not have memory domain but accel sequence. The underlying
+	 * bdev does not support memory domain or accel sequence.
+	 */
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 32, 8, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	rc = spdk_accel_append_copy(&seq, NULL, NULL, 0, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+	CU_ASSERT(rc == 0);
+
+	ext_io_opts.accel_sequence = seq;
+
+	rc = spdk_bdev_readv_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 8, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	seq = NULL;
+
+	rc = spdk_accel_append_copy(&seq, NULL, NULL, 0, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+	CU_ASSERT(rc == 0);
+
+	ext_io_opts.accel_sequence = seq;
+
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* Cause I/O splitting. I/O has accel sequence. DIF insert/strip should be
+	 * added to the sequence and finish it before I/O splitting.
+	 */
+
+	bdev->max_rw_size = 7;
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 32, 7, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 39, 1, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	seq = NULL;
+
+	rc = spdk_accel_append_copy(&seq, NULL, NULL, 0, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+	CU_ASSERT(rc == 0);
+
+	ext_io_opts.accel_sequence = seq;
+
+	rc = spdk_bdev_readv_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 7, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 39, 1, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	seq = NULL;
+
+	rc = spdk_accel_append_copy(&seq, NULL, NULL, 0, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL);
+	CU_ASSERT(rc == 0);
+
+	ext_io_opts.accel_sequence = seq;
+
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	ext_io_opts.accel_sequence = NULL;
+	bdev->max_rw_size = 0;
+
+	spdk_put_io_channel(io_ch);
+	spdk_bdev_close(desc);
+
+	/* Caller has memory domain. The underlying bdev supports memory domain and
+	 * accel sequence.
+	 */
+	ext_io_opts.memory_domain = (struct spdk_memory_domain *)0xBADDCAFE;
+
+	fn_table.accel_sequence_supported = stub_accel_sequence_supported;
+	fn_table.get_memory_domains = stub_get_memory_domains;
+
+	rc = spdk_bdev_open_ext_v2("bdev", true, bdev_ut_event_cb, NULL, &open_opts, &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	CU_ASSERT(bdev == spdk_bdev_desc_get_bdev(desc));
+
+	io_ch = spdk_bdev_get_io_channel(desc);
+	SPDK_CU_ASSERT_FATAL(io_ch != NULL);
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 32, 8, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	rc = spdk_bdev_readv_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 8, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, iovs, 1, 32, 8, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* Cause I/O splitting. I/O does not have accel sequence. DIF insert/strip should
+	 * be appended to each child I/O.
+	 */
+	bdev->max_num_segments = 16;
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 32, 128, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 160, 128, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	rc = spdk_bdev_readv_blocks_ext(desc, io_ch, iovs, 32, 32, 256, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	g_io_done = false;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 128, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 160, 128, 0);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, iovs, 32, 32, 256, io_done, NULL, &ext_io_opts);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == false);
+	CU_ASSERT(g_bdev_ut_channel->outstanding_io_count == 1);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	spdk_put_io_channel(io_ch);
+	spdk_bdev_close(desc);
+
+	free_bdev(bdev);
+	ut_fini_bdev();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -7879,6 +8253,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, get_device_stat_with_reset);
 	CU_ADD_TEST(suite, open_ext_v2_test);
 	CU_ADD_TEST(suite, bdev_io_init_dif_ctx_test);
+	CU_ADD_TEST(suite, bdev_io_ext_metadata);
 
 	allocate_cores(1);
 	allocate_threads(1);
