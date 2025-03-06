@@ -3670,6 +3670,8 @@ accel_mlx5_memory_domain_transfer(struct accel_mlx5_task *task)
 	       task->mlx5_opcode == ACCEL_MLX5_OPC_DIF_GENERATE_COPY_MKEY ||
 	       task->mlx5_opcode == ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY);
 
+	spdk_mlx5_mkey_pool_obj_set_psv(task->mkeys[0], &task->psv);
+
 	/* UMR is an offset in the addess space, so the start address is 0 */
 	translation.iov.iov_base = NULL;
 	translation.iov.iov_len = base->nbytes;
