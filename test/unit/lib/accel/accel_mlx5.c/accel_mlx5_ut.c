@@ -39,10 +39,6 @@ DEFINE_STUB(spdk_mlx5_crypto_devs_get, struct ibv_context **, (int *dev_num), NU
 DEFINE_STUB(spdk_mlx5_device_query_caps, int, (struct ibv_context *context,
 		struct spdk_mlx5_device_caps *caps), 0);
 DEFINE_STUB_V(spdk_mlx5_crypto_devs_release, (struct ibv_context **rdma_devs));
-DEFINE_STUB(spdk_memory_domain_translate_data, int, (struct spdk_memory_domain *src_domain,
-		void *src_domain_ctx,
-		struct spdk_memory_domain *dst_domain, struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
-		void *addr, size_t len, struct spdk_memory_domain_translation_result *result), 0);
 DEFINE_STUB(spdk_memory_domain_transfer_data, int, (struct spdk_memory_domain *dst_domain,
 		void *dst_domain_ctx,
 		struct iovec *dst_iov, uint32_t dst_iovcnt,
@@ -50,9 +46,6 @@ DEFINE_STUB(spdk_memory_domain_transfer_data, int, (struct spdk_memory_domain *d
 		struct iovec *src_iov, uint32_t src_iovcnt,
 		struct spdk_memory_domain_translation_result *src_translation,
 		spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
-DEFINE_STUB(spdk_rdma_utils_get_translation, int, (struct spdk_rdma_utils_mem_map *map,
-		void *address,
-		size_t length, struct spdk_rdma_utils_memory_translation *translation), 0);
 DEFINE_STUB(spdk_mlx5_crypto_get_dek_data, int, (struct spdk_mlx5_crypto_keytag *keytag,
 		struct ibv_pd *pd, struct spdk_mlx5_crypto_dek_data *data), 0);
 DEFINE_STUB(spdk_mlx5_umr_configure_crypto, int, (struct spdk_mlx5_qp *qp,
@@ -71,13 +64,8 @@ DEFINE_STUB(spdk_mlx5_umr_configure_trans_sig_crypto, int, (struct spdk_mlx5_qp 
 		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
 		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
 		uint64_t wr_id, uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_qp_set_psv, int, (struct spdk_mlx5_qp *dv_qp, uint32_t psv_index,
-					uint64_t transient_signature, uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_umr_configure_trans_sig, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		uint64_t wr_id, uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_umr_configure_block_sig, int, (struct spdk_mlx5_qp *qp,
-		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_block_sig_attr *sig_attr,
 		uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_mkey_pool_init, int, (struct spdk_mlx5_mkey_pool_param *params,
 		struct ibv_pd *pd), 0);
@@ -127,6 +115,10 @@ struct spdk_memory_domain {
 	void *user_ctx;
 };
 
+struct spdk_rdma_utils_mem_map {
+	struct ibv_mr mr;
+};
+
 void *
 spdk_memory_domain_get_user_context(struct spdk_memory_domain *domain, size_t *ctx_size)
 {
@@ -138,6 +130,88 @@ spdk_memory_domain_get_user_context(struct spdk_memory_domain *domain, size_t *c
 
 	*ctx_size = domain->user_ctx_size;
 	return domain->user_ctx;
+}
+
+int
+spdk_memory_domain_translate_data(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+				  struct spdk_memory_domain *dst_domain,
+				  struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+				  void *addr, size_t len,
+				  struct spdk_memory_domain_translation_result *result)
+{
+	result->iov_count = 1;
+	result->iov.iov_base = (void *)((uint64_t)addr + 0xFEED0000);
+	result->iov.iov_len = len + 1;
+	result->rdma.lkey = 0x123456;
+
+	return 0;
+}
+
+int
+spdk_rdma_utils_get_translation(struct spdk_rdma_utils_mem_map *map,
+				void *address, size_t length,
+				struct spdk_rdma_utils_memory_translation *translation)
+{
+	translation->mr_or_key.mr = &map->mr;
+	translation->translation_type = SPDK_RDMA_UTILS_TRANSLATION_MR;
+
+	return 0;
+}
+
+static struct spdk_mlx5_umr_block_sig_attr ut_sig_attr;
+static struct spdk_mlx5_umr_attr ut_umr_attr;
+
+int
+spdk_mlx5_umr_configure_block_sig(struct spdk_mlx5_qp *qp,
+				  struct spdk_mlx5_umr_attr *umr_attr,
+				  struct spdk_mlx5_umr_block_sig_attr *sig_attr,
+				  uint64_t wr_id, uint32_t flags)
+{
+	struct spdk_mlx5_sig_block_domain *ut_mem = &ut_sig_attr.mem;
+	struct spdk_mlx5_sig_block_domain *ut_wire = &ut_sig_attr.wire;
+	struct spdk_mlx5_sig_block_domain *mem = &sig_attr->mem;
+	struct spdk_mlx5_sig_block_domain *wire = &sig_attr->wire;
+
+	CU_ASSERT(umr_attr->mkey == ut_umr_attr.mkey);
+	CU_ASSERT(umr_attr->umr_len == ut_umr_attr.umr_len);
+
+	CU_ASSERT(sig_attr->sigerr_count == ut_sig_attr.sigerr_count);
+	CU_ASSERT(sig_attr->check_mask == ut_sig_attr.check_mask);
+
+	CU_ASSERT(mem->sig_type == ut_mem->sig_type);
+	CU_ASSERT(mem->psv_index == ut_mem->psv_index);
+	CU_ASSERT(mem->bs_selector == ut_mem->bs_selector);
+	CU_ASSERT(mem->sig.dif.ref_tag == ut_mem->sig.dif.ref_tag);
+	CU_ASSERT(mem->sig.dif.app_tag == ut_mem->sig.dif.app_tag);
+	CU_ASSERT(mem->sig.dif.apptag_mask == ut_mem->sig.dif.apptag_mask);
+	CU_ASSERT(mem->sig.dif.flags == ut_mem->sig.dif.flags);
+
+	CU_ASSERT(wire->sig_type == ut_wire->sig_type);
+	CU_ASSERT(wire->psv_index == ut_wire->psv_index);
+	CU_ASSERT(wire->bs_selector == ut_wire->bs_selector);
+	CU_ASSERT(wire->sig.dif.ref_tag == ut_wire->sig.dif.ref_tag);
+	CU_ASSERT(wire->sig.dif.app_tag == ut_wire->sig.dif.app_tag);
+	CU_ASSERT(wire->sig.dif.apptag_mask == ut_wire->sig.dif.apptag_mask);
+	CU_ASSERT(wire->sig.dif.flags == ut_wire->sig.dif.flags);
+
+	return 0;
+}
+
+static uint64_t ut_set_psv_index;
+static uint64_t ut_set_psv_ts;
+static uint64_t ut_set_psv_wr_id;
+static uint32_t ut_set_psv_flags;
+
+int
+spdk_mlx5_qp_set_psv(struct spdk_mlx5_qp *dv_qp, uint32_t psv_index,
+		     uint64_t transient_signature, uint64_t wr_id, uint32_t flags)
+{
+	CU_ASSERT(psv_index == ut_set_psv_index);
+	CU_ASSERT(transient_signature == ut_set_psv_ts);
+	CU_ASSERT(wr_id == ut_set_psv_wr_id);
+	CU_ASSERT(flags == ut_set_psv_flags);
+
+	return 0;
 }
 
 struct accel_io_channel {
@@ -406,6 +480,196 @@ test_accel_mlx5_driver_examine_sequence(void)
 	g_accel_mlx5.attr.qp_per_domain = g_qp_per_domain;
 }
 
+static void
+test_accel_mlx5_translate_addr(void)
+{
+	struct accel_mlx5_dev_ctx dev_ctx;
+	struct spdk_rdma_utils_mem_map mem_map = { .mr.lkey = 0x654321, };
+	struct accel_mlx5_dev dev = { .dev_ctx = &dev_ctx, .mmap = &mem_map, };
+	struct spdk_memory_domain domain;
+	struct ibv_sge sge;
+	int rc;
+
+	rc = accel_mlx5_translate_addr((void *)0xBEEF, 0x1000, &domain, NULL, &dev, &sge);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(sge.lkey == 0x123456);
+	CU_ASSERT(sge.addr == 0xFEEDBEEF);
+	CU_ASSERT(sge.length == 0x1001);
+
+	rc = accel_mlx5_translate_addr((void *)0xBEEF, 0x1000, NULL, NULL, &dev, &sge);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(sge.lkey == 0x654321);
+	CU_ASSERT(sge.addr == 0xBEEF);
+	CU_ASSERT(sge.length == 0x1000);
+}
+
+static void
+test_accel_mlx5_fill_block_sge(void)
+{
+	struct accel_mlx5_dev_ctx dev_ctx;
+	struct spdk_rdma_utils_mem_map mem_map = { .mr.lkey = 0x654321, };
+	struct accel_mlx5_dev dev = { .dev_ctx = &dev_ctx, .mmap = &mem_map, };
+	struct accel_mlx5_qp qp = { .dev = &dev, };
+	struct spdk_memory_domain domain;
+	struct iovec iovs[2];
+	struct accel_mlx5_iov_sgl sgl;
+	struct ibv_sge sges[ACCEL_MLX5_MAX_SGE];
+	uint32_t remaining = 0;
+	int rc;
+
+	iovs[0].iov_base = (void *)0xFEED;
+	iovs[0].iov_len = 0x1000;
+	iovs[1].iov_base = (void *)0xBEEF;
+	iovs[1].iov_len = 0x4000;
+
+	accel_mlx5_iov_sgl_init(&sgl, iovs, 2);
+
+	rc = accel_mlx5_fill_block_sge(&qp, sges, &sgl, 0, 0x5000, &remaining, &domain, NULL);
+	CU_ASSERT(rc == 2);
+	CU_ASSERT(remaining == 0);
+
+	accel_mlx5_iov_sgl_init(&sgl, iovs, 2);
+
+	rc = accel_mlx5_fill_block_sge(&qp, sges, &sgl, 0, 0x5000, &remaining, NULL, NULL);
+	CU_ASSERT(rc == 2);
+	CU_ASSERT(remaining == 0);
+}
+
+static void
+test_accel_mlx5_dif_mkey_task_process(void)
+{
+	struct accel_mlx5_dev_ctx dev_ctx;
+	struct spdk_rdma_utils_mem_map mem_map = { .mr.lkey = 0x654321, };
+	struct accel_mlx5_dev dev = {
+		.complete_wr_qps = STAILQ_HEAD_INITIALIZER(dev.complete_wr_qps),
+		.wrs_in_cq_max = 128,
+		.dev_ctx = &dev_ctx,
+		.mmap = &mem_map,
+	};
+	struct accel_mlx5_qp qp = {
+		.dev = &dev,
+		.in_hw = STAILQ_HEAD_INITIALIZER(qp.in_hw),
+		.wrs_max = 128,
+	};
+	struct spdk_memory_domain domain;
+	struct spdk_mlx5_psv_pool_obj psv = { .psv_index = 0xABCD, };
+	struct spdk_mlx5_mkey_pool_obj mkey = { .mkey = 0xDCBA, .sig.sigerr_count = 1, };
+	struct iovec siov, diov;
+	struct spdk_dif_ctx dif_ctx;
+	struct accel_mlx5_task mlx5_task = {
+		.qp = &qp,
+		.mkeys[0] = &mkey,
+		.psv = &psv,
+		.base.dif.ctx = &dif_ctx,
+		.base.dif.num_blocks = 8,
+		.base.nbytes = 4160,
+		.num_reqs = 1,
+		.num_ops = 1,
+	};
+	struct spdk_dif_ctx_init_ext_opts dif_opts;
+	uint32_t dif_flags;
+	int rc;
+
+	siov.iov_base = (void *)0xFEED;
+	siov.iov_len = 0x2000;
+	diov.iov_base = (void *)0xBEEF;
+	diov.iov_len = 0x4000;
+
+	accel_mlx5_iov_sgl_init(&mlx5_task.src, &siov, 1);
+	accel_mlx5_iov_sgl_init(&mlx5_task.dst, &diov, 1);
+
+	dif_opts.size = SPDK_SIZEOF(&dif_opts, dif_pi_format);
+	dif_opts.dif_pi_format = SPDK_DIF_PI_FORMAT_16;
+	dif_flags = SPDK_DIF_FLAGS_REFTAG_CHECK | SPDK_DIF_FLAGS_GUARD_CHECK;
+
+	rc = spdk_dif_ctx_init(&dif_ctx, 520, 8, true, false, SPDK_DIF_TYPE1, dif_flags,
+			       0x123, 0xFFFF, 0, 0, 0, &dif_opts);
+	CU_ASSERT(rc == 0);
+
+	ut_umr_attr.mkey = mkey.mkey;
+	ut_umr_attr.sge_count = 1;
+	ut_sig_attr.sigerr_count = mkey.sig.sigerr_count;
+	ut_sig_attr.check_mask = SPDK_MLX5_SIG_MASK_T10DIF_GUARD |
+				 SPDK_MLX5_SIG_MASK_T10DIF_REFTAG;
+	ut_set_psv_index = psv.psv_index;
+	ut_set_psv_ts = (uint64_t)dif_ctx.init_ref_tag;
+	ut_set_psv_wr_id = (uint64_t)&mlx5_task;
+	ut_set_psv_flags = SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE;
+
+	mlx5_task.md_in_umr = true;
+	mlx5_task.base.src_domain = &domain;
+
+	ut_umr_attr.umr_len = 4160;
+
+	ut_sig_attr.mem.sig_type = SPDK_MLX5_SIG_TYPE_T10DIF;
+	ut_sig_attr.mem.psv_index = 0xABCD;
+	ut_sig_attr.mem.bs_selector = SPDK_MLX5_BLOCK_SIZE_SELECTOR_512;
+	ut_sig_attr.mem.sig.dif.ref_tag = 0x123;
+	ut_sig_attr.mem.sig.dif.app_tag = 0x0;
+	ut_sig_attr.mem.sig.dif.apptag_mask = 0xFFFF;
+	ut_sig_attr.mem.sig.dif.flags = SPDK_MLX5_SIG_T10DIF_FLAGS_REF_REMAP |
+					SPDK_MLX5_SIG_T10DIF_FLAGS_APP_ESCAPE;
+
+	ut_sig_attr.wire.sig_type = SPDK_MLX5_SIG_TYPE_NONE;
+
+	rc = accel_mlx5_dif_mkey_task_process(&mlx5_task);
+	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(qp.wrs_submitted == 2);
+	CU_ASSERT(qp.ring_db == true);
+	CU_ASSERT(dev.wrs_in_cq == 1);
+	CU_ASSERT(STAILQ_FIRST(&dev.complete_wr_qps) == &qp);
+	CU_ASSERT(mlx5_task.num_submitted_reqs == 1);
+	CU_ASSERT(STAILQ_FIRST(&qp.in_hw) == &mlx5_task);
+
+	STAILQ_REMOVE_HEAD(&dev.complete_wr_qps, link);
+	STAILQ_REMOVE_HEAD(&qp.in_hw, link);
+	qp.ring_db = false;
+
+	accel_mlx5_iov_sgl_init(&mlx5_task.src, &siov, 1);
+	accel_mlx5_iov_sgl_init(&mlx5_task.dst, &diov, 1);
+
+	memset(&ut_umr_attr, 0, sizeof(ut_umr_attr));
+	memset(&ut_sig_attr, 0, sizeof(ut_sig_attr));
+
+	ut_umr_attr.mkey = mkey.mkey;
+	ut_umr_attr.sge_count = 1;
+	ut_sig_attr.sigerr_count = mkey.sig.sigerr_count;
+	ut_sig_attr.check_mask = SPDK_MLX5_SIG_MASK_T10DIF_GUARD |
+				 SPDK_MLX5_SIG_MASK_T10DIF_REFTAG;
+
+	mlx5_task.md_in_umr = false;
+
+	ut_umr_attr.umr_len = 4096;
+
+	ut_sig_attr.mem.sig_type = SPDK_MLX5_SIG_TYPE_NONE;
+
+	ut_sig_attr.wire.sig_type = SPDK_MLX5_SIG_TYPE_T10DIF;
+	ut_sig_attr.wire.psv_index = 0xABCD;
+	ut_sig_attr.wire.bs_selector = SPDK_MLX5_BLOCK_SIZE_SELECTOR_512;
+	ut_sig_attr.wire.sig.dif.ref_tag = 0x123;
+	ut_sig_attr.wire.sig.dif.app_tag = 0x0;
+	ut_sig_attr.wire.sig.dif.apptag_mask = 0xFFFF;
+	ut_sig_attr.wire.sig.dif.flags = SPDK_MLX5_SIG_T10DIF_FLAGS_REF_REMAP |
+					 SPDK_MLX5_SIG_T10DIF_FLAGS_APP_ESCAPE;
+
+	rc = accel_mlx5_dif_mkey_task_process(&mlx5_task);
+	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(qp.wrs_submitted == 4);
+	CU_ASSERT(qp.ring_db == true);
+	CU_ASSERT(dev.wrs_in_cq == 2);
+	CU_ASSERT(STAILQ_FIRST(&dev.complete_wr_qps) == &qp);
+	CU_ASSERT(mlx5_task.num_submitted_reqs == 2);
+	CU_ASSERT(STAILQ_FIRST(&qp.in_hw) == &mlx5_task);
+
+	STAILQ_REMOVE_HEAD(&dev.complete_wr_qps, link);
+	STAILQ_REMOVE_HEAD(&qp.in_hw, link);
+
+	memset(&ut_umr_attr, 0, sizeof(ut_umr_attr));
+	memset(&ut_sig_attr, 0, sizeof(ut_sig_attr));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -418,6 +682,9 @@ main(int argc, char **argv)
 	suite = CU_add_suite("accel_mlx5", test_setup, test_cleanup);
 	CU_ADD_TEST(suite, test_accel_mlx5_get_copy_task_count);
 	CU_ADD_TEST(suite, test_accel_mlx5_driver_examine_sequence);
+	CU_ADD_TEST(suite, test_accel_mlx5_translate_addr);
+	CU_ADD_TEST(suite, test_accel_mlx5_fill_block_sge);
+	CU_ADD_TEST(suite, test_accel_mlx5_dif_mkey_task_process);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
