@@ -50,8 +50,6 @@ DEFINE_STUB(spdk_memory_domain_transfer_data, int, (struct spdk_memory_domain *d
 		struct iovec *src_iov, uint32_t src_iovcnt,
 		struct spdk_memory_domain_translation_result *src_translation,
 		spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg), 0);
-DEFINE_STUB(spdk_memory_domain_get_user_context, void *, (struct spdk_memory_domain *domain,
-		size_t *ctx_size), NULL);
 DEFINE_STUB(spdk_rdma_utils_get_translation, int, (struct spdk_rdma_utils_mem_map *map,
 		void *address,
 		size_t length, struct spdk_rdma_utils_memory_translation *translation), 0);
@@ -110,14 +108,9 @@ DEFINE_STUB_V(spdk_mlx5_psv_pool_put, (struct spdk_mlx5_psv_pool_obj **ppsv));
 
 DEFINE_STUB_V(spdk_mlx5_umr_implementer_register, (bool registered));
 DEFINE_STUB_V(spdk_accel_module_list_add, (struct spdk_accel_module_if *accel_module));
-DEFINE_STUB_V(spdk_accel_task_complete, (struct spdk_accel_task *accel_task, int status));
-DEFINE_STUB(spdk_accel_sequence_next_task, struct spdk_accel_task *, (struct spdk_accel_task *task),
-	    NULL);
 DEFINE_STUB_V(spdk_accel_sequence_continue, (struct spdk_accel_sequence *seq));
 DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), NULL);
 DEFINE_STUB(spdk_accel_get_opcode_name, const char *, (enum spdk_accel_opcode opcode), "pewpew");
-DEFINE_STUB(spdk_accel_sequence_first_task, struct spdk_accel_task *,
-	    (struct spdk_accel_sequence *seq), NULL);
 DEFINE_STUB_V(spdk_accel_driver_register, (struct spdk_accel_driver *driver));
 DEFINE_STUB(spdk_accel_set_driver, int, (const char *name), 0);
 DEFINE_STUB(spdk_rdma_utils_get_memory_domain, struct spdk_memory_domain *,
@@ -128,6 +121,53 @@ DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (s
 DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **_map));
 DEFINE_STUB(spdk_rdma_utils_get_pd, struct ibv_pd *, (struct ibv_context *context), NULL);
 DEFINE_STUB_V(spdk_rdma_utils_put_pd, (struct ibv_pd *pd));
+
+struct spdk_memory_domain {
+	size_t user_ctx_size;
+	void *user_ctx;
+};
+
+void *
+spdk_memory_domain_get_user_context(struct spdk_memory_domain *domain, size_t *ctx_size)
+{
+	SPDK_CU_ASSERT_FATAL(domain != NULL);
+
+	if (!domain->user_ctx_size) {
+		return NULL;
+	}
+
+	*ctx_size = domain->user_ctx_size;
+	return domain->user_ctx;
+}
+
+struct accel_io_channel {
+	STAILQ_HEAD(, spdk_accel_task)	task_pool;
+};
+
+struct spdk_accel_sequence {
+	TAILQ_HEAD(, spdk_accel_task)	tasks;
+};
+
+struct spdk_accel_task *
+spdk_accel_sequence_first_task(struct spdk_accel_sequence *seq)
+{
+	return TAILQ_FIRST(&seq->tasks);
+}
+
+struct spdk_accel_task *
+spdk_accel_sequence_next_task(struct spdk_accel_task *task)
+{
+	return TAILQ_NEXT(task, seq_link);
+}
+
+void
+spdk_accel_task_complete(struct spdk_accel_task *accel_task, int status)
+{
+	SPDK_CU_ASSERT_FATAL(accel_task->cb_fn != NULL);
+	SPDK_CU_ASSERT_FATAL(accel_task->cb_arg != NULL);
+
+	accel_task->cb_fn(accel_task->cb_arg, status);
+}
 
 static int
 test_setup(void)
@@ -253,6 +293,119 @@ test_accel_mlx5_get_copy_task_count(void)
 	CU_ASSERT(num_ops == 2);
 }
 
+static void
+ut_accel_copy_task_done(void *cb_arg, int status)
+{
+	bool *copy_done = cb_arg;
+
+	CU_ASSERT(status == 0);
+	*copy_done = true;
+}
+
+static void
+test_accel_mlx5_driver_examine_sequence(void)
+{
+	struct ibv_pd pd;
+	struct spdk_memory_domain_rdma_ctx domain_rdma_ctx = {
+		.ibv_pd = &pd,
+		.size = sizeof(struct spdk_memory_domain_rdma_ctx),
+	};
+	struct spdk_memory_domain domain = {
+		.user_ctx = &domain_rdma_ctx,
+		.user_ctx_size = sizeof(struct spdk_memory_domain_rdma_ctx),
+	};
+	struct accel_mlx5_dev_ctx mlx5_dev_ctx = { .pd = &pd, .domain = &domain, };
+	struct accel_mlx5_io_channel mlx5_ch;
+	struct spdk_accel_sequence seq = { .tasks = TAILQ_HEAD_INITIALIZER(seq.tasks), };
+	struct accel_mlx5_task copy_mlx5_task, dif_mlx5_task;
+	struct spdk_accel_task *copy_task = &copy_mlx5_task.base, *dif_task = &dif_mlx5_task.base;
+	bool g_qp_per_domain;
+	bool copy_done;
+	int rc;
+
+	g_qp_per_domain = g_accel_mlx5.attr.qp_per_domain;
+	g_accel_mlx5.attr.qp_per_domain = true;
+
+	mlx5_ch.devs = calloc(1, sizeof(struct accel_mlx5_dev));
+	SPDK_CU_ASSERT_FATAL(mlx5_ch.devs != NULL);
+
+	mlx5_ch.num_devs = 1;
+	mlx5_ch.devs[0].dev_ctx = &mlx5_dev_ctx;
+
+	copy_task->dst_domain = copy_task->src_domain = &domain;
+	copy_task->cb_fn = ut_accel_copy_task_done;
+	copy_task->cb_arg = &copy_done;
+	copy_task->op_code = SPDK_ACCEL_OPC_COPY;
+
+	dif_mlx5_task.mlx5_opcode = ACCEL_MLX5_OPC_DIF_GENERATE_COPY;
+	dif_task->src_domain = (struct spdk_memory_domain *)0xABADBABE;
+	dif_task->dst_domain = (struct spdk_memory_domain *)0xCAFEBABE;
+	dif_task->op_code = SPDK_ACCEL_OPC_DIF_GENERATE_COPY;
+
+	TAILQ_INSERT_TAIL(&seq.tasks, dif_task, seq_link);
+	TAILQ_INSERT_TAIL(&seq.tasks, copy_task, seq_link);
+	copy_done = false;
+
+	rc = accel_mlx5_driver_examine_sequence(&seq, &mlx5_ch);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(dif_mlx5_task.mlx5_opcode == ACCEL_MLX5_OPC_DIF_GENERATE_COPY_MKEY);
+	CU_ASSERT(dif_task->src_domain == (struct spdk_memory_domain *)0xABADBABE);
+	CU_ASSERT(dif_task->dst_domain == &domain);
+	CU_ASSERT(dif_mlx5_task.md_in_umr == false);
+	CU_ASSERT(copy_done == true);
+
+	dif_mlx5_task.mlx5_opcode = ACCEL_MLX5_OPC_DIF_GENERATE_COPY;
+	dif_task->src_domain = (struct spdk_memory_domain *)0xABADBABE;
+	dif_task->dst_domain = (struct spdk_memory_domain *)0xCAFEBABE;
+
+	TAILQ_REMOVE(&seq.tasks, copy_task, seq_link);
+	TAILQ_INSERT_HEAD(&seq.tasks, copy_task, seq_link);
+	copy_done = false;
+
+	rc = accel_mlx5_driver_examine_sequence(&seq, &mlx5_ch);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(dif_mlx5_task.mlx5_opcode == ACCEL_MLX5_OPC_DIF_GENERATE_COPY_MKEY);
+	CU_ASSERT(dif_task->src_domain == (struct spdk_memory_domain *)0xABADBABE);
+	CU_ASSERT(dif_task->dst_domain == &domain);
+	CU_ASSERT(dif_mlx5_task.md_in_umr == true);
+	CU_ASSERT(copy_done == true);
+
+	dif_mlx5_task.mlx5_opcode = ACCEL_MLX5_OPC_DIF_VERIFY_COPY;
+	dif_task->src_domain = (struct spdk_memory_domain *)0xABADBABE;
+	dif_task->dst_domain = (struct spdk_memory_domain *)0xCAFEBABE;
+	dif_task->op_code = SPDK_ACCEL_OPC_DIF_VERIFY_COPY;
+
+	copy_done = false;
+
+	rc = accel_mlx5_driver_examine_sequence(&seq, &mlx5_ch);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(dif_mlx5_task.mlx5_opcode == ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY);
+	CU_ASSERT(dif_task->src_domain == (struct spdk_memory_domain *)0xCAFEBABE);
+	CU_ASSERT(dif_task->dst_domain == &domain);
+	CU_ASSERT(dif_mlx5_task.md_in_umr == false);
+	CU_ASSERT(copy_done == true);
+
+	dif_mlx5_task.mlx5_opcode = ACCEL_MLX5_OPC_DIF_VERIFY_COPY;
+	dif_task->src_domain = (struct spdk_memory_domain *)0xABADBABE;
+	dif_task->dst_domain = (struct spdk_memory_domain *)0xCAFEBABE;
+
+	TAILQ_REMOVE(&seq.tasks, copy_task, seq_link);
+	TAILQ_INSERT_TAIL(&seq.tasks, copy_task, seq_link);
+	copy_done = false;
+
+	rc = accel_mlx5_driver_examine_sequence(&seq, &mlx5_ch);
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(dif_mlx5_task.mlx5_opcode == ACCEL_MLX5_OPC_DIF_VERIFY_COPY_MKEY);
+	CU_ASSERT(dif_task->src_domain == (struct spdk_memory_domain *)0xABADBABE);
+	CU_ASSERT(dif_task->dst_domain == &domain);
+	CU_ASSERT(dif_mlx5_task.md_in_umr == true);
+	CU_ASSERT(copy_done == true);
+
+	free(mlx5_ch.devs);
+
+	g_accel_mlx5.attr.qp_per_domain = g_qp_per_domain;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -264,6 +417,7 @@ main(int argc, char **argv)
 
 	suite = CU_add_suite("accel_mlx5", test_setup, test_cleanup);
 	CU_ADD_TEST(suite, test_accel_mlx5_get_copy_task_count);
+	CU_ADD_TEST(suite, test_accel_mlx5_driver_examine_sequence);
 
 	CU_basic_set_mode(CU_BRM_VERBOSE);
 	CU_basic_run_tests();
