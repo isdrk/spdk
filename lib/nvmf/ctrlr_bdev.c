@@ -99,7 +99,12 @@ nvmf_bdev_ctrlr_complete_cmd(struct spdk_bdev_io *bdev_io, bool success,
 	response->status.sct = sct;
 
 	spdk_nvmf_request_complete(req);
-	spdk_bdev_free_io(bdev_io);
+
+	if (req->use_accel_seq) {
+		req->bdev_io = bdev_io;
+	} else {
+		spdk_bdev_free_io(bdev_io);
+	}
 }
 
 static void

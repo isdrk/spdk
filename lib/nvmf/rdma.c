@@ -2046,6 +2046,10 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 		spdk_rdma_provider_memory_key_put_ref(rdma_req->data_transfer_mkey);
 		rdma_req->data_transfer_mkey = NULL;
 	}
+	if (rdma_req->req.bdev_io) {
+		spdk_bdev_free_io(rdma_req->req.bdev_io);
+		rdma_req->req.bdev_io = NULL;
+	}
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	rdma_req->req.length = 0;
 	rdma_req->req.iovcnt = 0;
@@ -2686,6 +2690,10 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			} else {
 				STAILQ_INSERT_TAIL(&rqpair->pending_rdma_send_queue, rdma_req, state_link);
 				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
+				if (rdma_req->req.bdev_io) {
+					spdk_bdev_free_io(rdma_req->req.bdev_io);
+					rdma_req->req.bdev_io = NULL;
+				}
 			}
 			if (spdk_unlikely(rdma_req->req.dif_enabled)) {
 				/* restore the original length */

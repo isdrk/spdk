@@ -62,6 +62,7 @@ DEFINE_STUB_V(spdk_rdma_provider_memory_key_put_ref, (void *mkey));
 DEFINE_STUB(spdk_mempool_lookup, struct spdk_mempool *, (const char *name), NULL);
 DEFINE_STUB(spdk_rdma_cm_id_get_numa_id, int32_t, (struct rdma_cm_id *cm_id), 0);
 DEFINE_STUB(spdk_rdma_provider_memory_key_get_key, uint32_t, (void *mkey), 0);
+DEFINE_STUB_V(spdk_bdev_free_io, (struct spdk_bdev_io *bdev_io));
 
 static void *g_accel_p = (void *)0xdeadbeaf;
 

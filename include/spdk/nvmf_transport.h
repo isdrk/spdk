@@ -107,6 +107,7 @@ struct spdk_nvmf_request {
 	/* Context to be passed to memory domain operations. */
 	void				*memory_domain_ctx;
 	struct spdk_accel_sequence	*accel_sequence;
+	struct spdk_bdev_io		*bdev_io;
 
 	struct iovec			iov[NVMF_REQ_MAX_BUFFERS];
 
@@ -131,7 +132,7 @@ struct spdk_nvmf_request {
 	uint64_t timeout_tsc;
 	uint32_t			orig_nsid;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_request) == 816, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_request) == 824, "Incorrect size");
 
 enum spdk_nvmf_qpair_state {
 	SPDK_NVMF_QPAIR_UNINITIALIZED = 0,
