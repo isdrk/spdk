@@ -336,10 +336,13 @@ function gather_supported_nvmf_pci_devs() {
 	x722+=(${pci_bus_cache["$intel:0x37d2"]})
 	# BlueField 3
 	mlx+=(${pci_bus_cache["$mellanox:0xa2dc"]})
+	mlx+=(${pci_bus_cache["$mellanox:0xa2dd"]})
 	# ConnectX-7
 	mlx+=(${pci_bus_cache["$mellanox:0x1021"]})
+	mlx+=(${pci_bus_cache["$mellanox:0x1022"]})
 	# BlueField 2
 	mlx+=(${pci_bus_cache["$mellanox:0xa2d6"]})
+	mlx+=(${pci_bus_cache["$mellanox:0xa2d7"]})
 	# ConnectX-6 VPI
 	mlx+=(${pci_bus_cache["$mellanox:0x101b"]})
 	mlx+=(${pci_bus_cache["$mellanox:0x101c"]})
