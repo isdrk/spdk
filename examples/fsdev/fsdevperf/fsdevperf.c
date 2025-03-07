@@ -123,6 +123,7 @@ struct fsdevperf_app {
 	struct spdk_poller			*poller;
 	uint64_t				tsc_start;
 	mode_t					umask;
+	size_t					num_threads_per_core;
 	TAILQ_HEAD(, fsdevperf_job)		jobs;
 	TAILQ_HEAD(, fsdevperf_thread)		threads;
 	TAILQ_HEAD(, fsdevperf_file)		files;
@@ -132,6 +133,7 @@ struct fsdevperf_app {
 		struct spdk_jsonrpc_request	*request;
 	} rpc;
 } g_app = {
+	.num_threads_per_core = 1,
 	.jobs = TAILQ_HEAD_INITIALIZER(g_app.jobs),
 	.threads = TAILQ_HEAD_INITIALIZER(g_app.threads),
 	.files = TAILQ_HEAD_INITIALIZER(g_app.files),
@@ -373,36 +375,39 @@ fsdevperf_init_threads(void)
 	struct fsdevperf_thread *thread;
 	struct spdk_cpuset cpuset;
 	char name[32];
-	uint32_t count = 0, core;
+	uint32_t i, count = 0, core;
 
+	assert(g_app.num_threads_per_core > 0);
 	SPDK_ENV_FOREACH_CORE(core) {
-		thread = calloc(1, sizeof(*thread));
-		if (thread == NULL) {
-			fsdevperf_errmsg("%s", spdk_strerror(ENOMEM));
-			return -ENOMEM;
-		}
+		for (i = 0; i < g_app.num_threads_per_core; i++) {
+			thread = calloc(1, sizeof(*thread));
+			if (thread == NULL) {
+				fsdevperf_errmsg("%s", spdk_strerror(ENOMEM));
+				return -ENOMEM;
+			}
 
-		spdk_cpuset_zero(&cpuset);
-		spdk_cpuset_set_cpu(&cpuset, core, true);
-		snprintf(name, sizeof(name), "fsdevperf%u", core);
+			spdk_cpuset_zero(&cpuset);
+			spdk_cpuset_set_cpu(&cpuset, core, true);
+			snprintf(name, sizeof(name), "fsdevperf%u-%u", core, i);
 
-		TAILQ_INIT(&thread->tasks);
-		thread->core = core;
-		thread->id = 1000000ull * count;
-		if (core == spdk_env_get_main_core()) {
-			thread->thread = spdk_thread_get_app_thread();
-			assert(spdk_get_thread() == spdk_thread_get_app_thread());
-		} else {
-			thread->thread = spdk_thread_create(name, &cpuset);
-		}
-		if (thread->thread == NULL) {
-			fsdevperf_errmsg("%s", spdk_strerror(ENOMEM));
-			free(thread);
-			return -ENOMEM;
-		}
+			TAILQ_INIT(&thread->tasks);
+			thread->core = core;
+			thread->id = 1000000ull * count;
+			if (core == spdk_env_get_main_core() && i == 0) {
+				thread->thread = spdk_thread_get_app_thread();
+				assert(spdk_get_thread() == spdk_thread_get_app_thread());
+			} else {
+				thread->thread = spdk_thread_create(name, &cpuset);
+			}
+			if (thread->thread == NULL) {
+				fsdevperf_errmsg("%s", spdk_strerror(ENOMEM));
+				free(thread);
+				return -ENOMEM;
+			}
 
-		TAILQ_INSERT_TAIL(&g_app.threads, thread, tailq);
-		count++;
+			TAILQ_INSERT_TAIL(&g_app.threads, thread, tailq);
+			count++;
+		}
 	}
 
 	return 0;
@@ -1692,6 +1697,8 @@ static struct option g_options[] = {
 	{ "size", required_argument, NULL, FSDEVPERF_OPT_SIZE },
 #define FSDEVPERF_OPT_NRFILES 0x1001
 	{ "nrfiles", required_argument, NULL, FSDEVPERF_OPT_NRFILES },
+#define FSDEVPERF_OPT_NRTHREADS 0x1002
+	{ "nrthreads", required_argument, NULL, FSDEVPERF_OPT_NRTHREADS },
 	{},
 };
 
@@ -1719,7 +1726,7 @@ fsdevperf_load_jobs(const char *filename)
 	struct fsdevperf_job *job = NULL;
 	TAILQ_HEAD(, fsdevperf_job) jobs = TAILQ_HEAD_INITIALIZER(jobs);
 	int cmdline_options[] = {
-		FSDEVPERF_OPT_JOBS, FSDEVPERF_OPT_WAIT_FOR_START,
+		FSDEVPERF_OPT_JOBS, FSDEVPERF_OPT_WAIT_FOR_START, FSDEVPERF_OPT_NRTHREADS,
 	};
 	size_t i, j;
 	char *str;
@@ -1830,6 +1837,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_RUNTIME:
 	case FSDEVPERF_OPT_FILESIZE:
 	case FSDEVPERF_OPT_NRFILES:
+	case FSDEVPERF_OPT_NRTHREADS:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
 			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
 					 job->name, fsdevperf_get_option_name(ch), arg);
@@ -1856,6 +1864,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			break;
 		case FSDEVPERF_OPT_NRFILES:
 			job->num_files = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_NRTHREADS:
+			g_app.num_threads_per_core = (size_t)u64;
 			break;
 		}
 		break;
@@ -1887,8 +1898,9 @@ fsdevperf_usage(void)
 	printf(" -z, --wait-for-start                 don't start the test immediately, wait for the perform_tests\n");
 	printf("                                      RPC (see examples/fsdev/fsdevperf/fsdevperf.py)\n");
 	printf(" -f, --filesize=<filesize>            maximum size of each file\n");
-	printf("     --nrfiles=<nrfiles>              number of files to send I/O to on each core\n");
+	printf("     --nrfiles=<nrfiles>              number of files to send I/O to on each thread\n");
 	printf(" -U, --unique                         generate unique data for each I/O\n");
+	printf("     --nrthreads=<count>              spawn <count> threads on each core\n");
 }
 
 int
