@@ -2701,34 +2701,18 @@ fsdev_aio_write_cb(void *ctx, uint32_t data_size, int error)
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
 	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
+	uint32_t flags;
 
 	if (vfsdev_io->aio) {
 		TAILQ_REMOVE(&vfsdev_io->ch->ios_in_progress, vfsdev_io, link);
 	}
 
+	flags = fsdev_io->u_in.write.flags;
+
 	fsdev_io->u_out.write.data_size = data_size;
 
-	/**
-	 * POSIX compliance: Clear the SUID/SGID bits on a successful write by a non-owner.
-	 *
-	 * The file owner cannot be correctly checked here, as the file was created with
-	 * the UID/GID of the FUSE connection (0/0 by default). In principle, there is
-	 * a way to set the FUSE mount UID/GID for new files using the mount options
-	 * "user_id" and "group_id". However, since these options are configured once at
-	 * mount time, any runtime changes to the UID/GID for specific file creation
-	 * do not apply to newly created files.
-	 *
-	 * Therefore, we clear the SUID/SGID bits on every successful write. Some
-	 * filesystems implement this behavior, and it doesn't conflict with other POSIX
-	 * requirements.
-	 *
-	 * Errors are ignored. Failure to clear these bits results in POSIX non-compliance,
-	 * but this is not critical in this context.
-	 *
-	 * Since fsdev_aio_op_write() does not use an AIO object, calling fsdev_aio_get_fobject()
-	 * is acceptable as this operation is not performed twice.
-	 */
-	if (!error) {
+	/* If requested, we must kill the SUID and SGID bits */
+	if (!error && (flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
 		struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 		struct aio_fsdev_file_object *fobject;
 

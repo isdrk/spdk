@@ -1305,6 +1305,17 @@ enum spdk_fsdev_poll_event_type {
 #define SPDK_FSDEV_XATTR_REPLACE (1 << 1)
 #define SPDK_FSDEV_SETXATTR_ACL_KILL_SGID (1 << 2)
 
+/**
+ * WRITE flags
+ *
+ * SPDK_FSDEV_WRITE_CACHE: delayed write from page cache, file handle is guessed
+ * SPDK_FSDEV_WRITE_LOCKOWNER: lock_owner field is valid
+ * SPDK_FSDEV_WRITE_KILL_SUIDGID: kill suid and sgid bits
+ */
+#define SPDK_FSDEV_WRITE_CACHE		(1 << 0)
+#define SPDK_FSDEV_WRITE_LOCKOWNER	(1 << 1)
+#define SPDK_FSDEV_WRITE_KILL_SUIDGID	(1 << 2)
+
 #define SPDK_FSDEV_FALLOC_FL_KEEP_SIZE     0x01 /* default is extend size */
 #define SPDK_FSDEV_FALLOC_FL_PUNCH_HOLE    0x02 /* de-allocates range */
 #define SPDK_FSDEV_FALLOC_FL_NO_HIDE_STALE 0x04 /* reserved codepoint */
