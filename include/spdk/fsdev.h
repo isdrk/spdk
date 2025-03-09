@@ -1234,6 +1234,25 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
 struct spdk_fsdev_io *spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch);
 
 /**
+ * Init I/O request structure.
+ *
+ * \param fsdev_io I/O request.
+ * \param unique Unique I/O id.
+ * \param cb_fn Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ * \param type I/O type.
+ */
+static inline void
+spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, uint64_t unique, spdk_fsdev_cpl_cb *cb_fn,
+		   void *cb_arg, enum spdk_fsdev_io_type type)
+{
+	fsdev_io->internal.type = type;
+	fsdev_io->internal.unique = unique;
+	fsdev_io->internal.usr_cb_fn = cb_fn;
+	fsdev_io->internal.usr_cb_arg = cb_arg;
+}
+
+/**
  * Submit I/O request.
  *
  * \param fsdev_io I/O request.
