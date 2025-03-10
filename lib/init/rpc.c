@@ -43,6 +43,15 @@ rpc_subsystem_poll_servers(void *arg)
 			}
 		}
 	}
+
+	if (spdk_interrupt_mode_is_enabled()) {
+		/*
+		 * In interrupt mode this poller fires whenever any listen socket has an event,
+		 * so we do not need to unregister and re-register the poller below.
+		 */
+		goto exit;
+	}
+
 	now = spdk_get_ticks();
 	if (has_active_server) {
 		if (g_busy_period_end == 0) {
@@ -57,7 +66,8 @@ rpc_subsystem_poll_servers(void *arg)
 		g_busy_period_end = 0;
 	}
 
-	return SPDK_POLLER_BUSY;
+exit:
+	return has_active_server ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
 }
 
 static void
