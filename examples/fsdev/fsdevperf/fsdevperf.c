@@ -22,13 +22,13 @@ struct fsdevperf_task;
 struct fsdevperf_thread {
 	struct spdk_thread		*thread;
 	uint32_t			core;
+	uint64_t			id;
 	TAILQ_HEAD(, fsdevperf_task)	tasks;
 	TAILQ_ENTRY(fsdevperf_thread)	tailq;
 };
 
 struct fsdevperf_request {
 	struct fsdevperf_task	*task;
-	uint64_t		id;
 	struct iovec		iov;
 };
 
@@ -373,7 +373,7 @@ fsdevperf_init_threads(void)
 	struct fsdevperf_thread *thread;
 	struct spdk_cpuset cpuset;
 	char name[32];
-	uint32_t core;
+	uint32_t count = 0, core;
 
 	SPDK_ENV_FOREACH_CORE(core) {
 		thread = calloc(1, sizeof(*thread));
@@ -388,6 +388,7 @@ fsdevperf_init_threads(void)
 
 		TAILQ_INIT(&thread->tasks);
 		thread->core = core;
+		thread->id = 1000000ull * count;
 		if (core == spdk_env_get_main_core()) {
 			thread->thread = spdk_thread_get_app_thread();
 			assert(spdk_get_thread() == spdk_thread_get_app_thread());
@@ -401,6 +402,7 @@ fsdevperf_init_threads(void)
 		}
 
 		TAILQ_INSERT_TAIL(&g_app.threads, thread, tailq);
+		count++;
 	}
 
 	return 0;
@@ -459,7 +461,6 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 		request->iov.iov_base = (char *)task->buf + i * task->io_size;
 		request->iov.iov_len = task->io_size;
 		request->task = task;
-		request->id = i;
 	}
 
 	return task;
@@ -827,6 +828,18 @@ fsdevperf_done(void)
 	spdk_app_stop(g_app.status);
 }
 
+static uint64_t
+fsdevperf_thread_next_id(struct fsdevperf_thread *thread)
+{
+	return thread->id++;
+}
+
+static uint64_t
+fsdevperf_task_next_id(struct fsdevperf_task *task)
+{
+	return fsdevperf_thread_next_id(task->thread);
+}
+
 static void
 fsdevperf_filesystem_umount_cb(void *ctx, struct spdk_io_channel *ioch)
 {
@@ -841,7 +854,9 @@ fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
 {
 	int rc;
 
-	rc = spdk_fsdev_umount(fs->fsdev_desc, fs->ioch, 0, fsdevperf_filesystem_umount_cb, fs);
+	rc = spdk_fsdev_umount(fs->fsdev_desc, fs->ioch,
+			       fsdevperf_thread_next_id(fsdevperf_get_thread()),
+			       fsdevperf_filesystem_umount_cb, fs);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to umount %s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
@@ -897,8 +912,8 @@ fsdevperf_task_cleanup(struct fsdevperf_task *task)
 	int rc;
 
 	if (file->fh != NULL) {
-		rc = spdk_fsdev_release(fs->fsdev_desc, task->ioch, 0, file->fobj, file->fh,
-					fsdevperf_task_release_cb, task);
+		rc = spdk_fsdev_release(fs->fsdev_desc, task->ioch, fsdevperf_task_next_id(task),
+					file->fobj, file->fh, fsdevperf_task_release_cb, task);
 		if (rc == 0) {
 			return;
 		}
@@ -910,8 +925,8 @@ fsdevperf_task_cleanup(struct fsdevperf_task *task)
 	}
 
 	if (file->fobj != NULL) {
-		rc = spdk_fsdev_forget(fs->fsdev_desc, task->ioch, 0, file->fobj, 1,
-				       fsdevperf_task_forget_cb, task);
+		rc = spdk_fsdev_forget(fs->fsdev_desc, task->ioch, fsdevperf_task_next_id(task),
+				       file->fobj, 1, fsdevperf_task_forget_cb, task);
 		if (rc == 0) {
 			return;
 		}
@@ -1107,7 +1122,7 @@ fsdevperf_request_complete_cb(void *ctx, struct spdk_io_channel *ioch, int statu
 }
 
 static void
-fsdevperf_request_generate_data(struct fsdevperf_request *request)
+fsdevperf_request_generate_data(struct fsdevperf_request *request, uint64_t id)
 {
 	struct fsdevperf_task *task = request->task;
 	uint64_t *p = request->iov.iov_base;
@@ -1118,7 +1133,7 @@ fsdevperf_request_generate_data(struct fsdevperf_request *request)
 	}
 
 	for (i = 0; i < task->io_size / sizeof(uint64_t); i++) {
-		*(p++) = (task->stats.num_ios << 16) | request->id;
+		*(p++) = id;
 	}
 }
 
@@ -1128,19 +1143,20 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	struct fsdevperf_task *task = request->task;
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_job *job = task->job;
-	uint64_t offset;
+	uint64_t offset, id;
 	int rc;
 
 	offset = fsdevperf_task_get_offset(task);
+	id = fsdevperf_task_next_id(task);
 	switch (task->io_pattern) {
 	case SPDK_FSDEV_IO_READ:
-		rc = spdk_fsdev_read(fs->fsdev_desc, task->ioch, request->id, task->fobj,
+		rc = spdk_fsdev_read(fs->fsdev_desc, task->ioch, id, task->fobj,
 				     task->fh, task->io_size, offset, 0, &request->iov, 1, NULL,
 				     fsdevperf_request_complete_cb, request);
 		break;
 	case SPDK_FSDEV_IO_WRITE:
-		fsdevperf_request_generate_data(request);
-		rc = spdk_fsdev_write(fs->fsdev_desc, task->ioch, request->id, task->fobj,
+		fsdevperf_request_generate_data(request, id);
+		rc = spdk_fsdev_write(fs->fsdev_desc, task->ioch, id, task->fobj,
 				      task->fh, task->io_size, offset, 0, &request->iov, 1, NULL,
 				      fsdevperf_request_complete_cb, request);
 		break;
@@ -1272,7 +1288,8 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 				fsdevperf_task_done(task, -EINVAL);
 				return;
 			}
-			rc = spdk_fsdev_create(fs->fsdev_desc, task->ioch, 0, fs->root,
+			rc = spdk_fsdev_create(fs->fsdev_desc, task->ioch,
+					       fsdevperf_task_next_id(task), fs->root,
 					       file->name, 0644, O_RDWR, g_app.umask, geteuid(),
 					       getegid(), fsdevperf_task_create_cb, task);
 			if (rc != 0) {
@@ -1292,8 +1309,8 @@ fsdevperf_task_lookup_cb(void *ctx, struct spdk_io_channel *ioch, int status,
 
 	file->size = attr->size;
 	file->fobj = task->fobj = fobj;
-	rc = spdk_fsdev_fopen(fs->fsdev_desc, task->ioch, 0, fobj, O_RDWR,
-			      fsdevperf_task_open_cb, task);
+	rc = spdk_fsdev_fopen(fs->fsdev_desc, task->ioch, fsdevperf_task_next_id(task), fobj,
+			      O_RDWR, fsdevperf_task_open_cb, task);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to open /%s/%s: %s\n",
 				 spdk_fsdev_get_name(fsdev), file->name, spdk_strerror(-rc));
@@ -1308,8 +1325,8 @@ fsdevperf_task_lookup(struct fsdevperf_task *task)
 	struct fsdevperf_file *file = task->file;
 	int rc;
 
-	rc = spdk_fsdev_lookup(fs->fsdev_desc, task->ioch, 0, fs->root, file->name,
-			       fsdevperf_task_lookup_cb, task);
+	rc = spdk_fsdev_lookup(fs->fsdev_desc, task->ioch, fsdevperf_task_next_id(task), fs->root,
+			       file->name, fsdevperf_task_lookup_cb, task);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to lookup /%s/%s: %s\n",
 				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
@@ -1474,7 +1491,8 @@ fsdevperf_filesystem_mount(struct fsdevperf_filesystem *fs)
 	int rc;
 
 	opts.opts_size = SPDK_SIZEOF(&opts, opts_size);
-	rc = spdk_fsdev_mount(fs->fsdev_desc, fs->ioch, 0, &opts,
+	rc = spdk_fsdev_mount(fs->fsdev_desc, fs->ioch,
+			      fsdevperf_thread_next_id(fsdevperf_get_thread()), &opts,
 			      fsdevperf_filesystem_mount_cb, fs);
 	if (rc != 0) {
 		fsdevperf_errmsg("failed to mount %s: %s\n",
