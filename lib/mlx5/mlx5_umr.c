@@ -285,9 +285,10 @@ mlx5_set_mkey_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mkey, unsign
 }
 
 static const char *g_mkey_pool_names[] = {
-	[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "crypto",
-	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = "signature",
-	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE | SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "sig_crypto",
+	[0] = "m", /* mkey */
+	[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "c", /* crypto */
+	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = "s", /* signature */
+	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE | SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "sc", /* sig_crypto */
 };
 
 static void
@@ -353,18 +354,22 @@ mlx5_mkey_pool_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd *pd)
 		SPDK_ERRLOG("Failed to get pdn, pd %p\n", pd);
 		goto err;
 	}
-	rc = snprintf(pool_name, 32, "%s_%s_%04u", pd->context->device->name,
+	rc = snprintf(pool_name, 26, "%s_%s_%04u", pd->context->device->name,
 		      g_mkey_pool_names[new_pool->flags], pdn);
 	if (rc < 0) {
 		goto err;
 	}
+
+	SPDK_INFOLOG(mlx5, "Create mempool %s cnt %u\n",
+		     pool_name, params->mkey_count);
 	RB_INIT(&new_pool->tree);
 	new_pool->mpool = spdk_mempool_create_ctor(pool_name, params->mkey_count,
 			  sizeof(struct spdk_mlx5_mkey_pool_obj),
 			  params->cache_per_thread, SPDK_ENV_NUMA_ID_ANY,
 			  mlx5_set_mkey_in_pool, new_pool);
 	if (!new_pool->mpool) {
-		SPDK_ERRLOG("Failed to create mempool\n");
+		SPDK_ERRLOG("Failed to create mempool %s cnt %u\n",
+			    pool_name, params->mkey_count);
 		rc = -ENOMEM;
 		goto err;
 	}
