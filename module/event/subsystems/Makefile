@@ -35,6 +35,8 @@ DEPDIRS-ublk := bdev
 DEPDIRS-nvmf := bdev
 DEPDIRS-scsi := bdev
 DEPDIRS-vhost_scsi := scsi
+DEPDIRS-fsdev := rmem
+DEPDIRS-fuse := fsdev
 ifeq ($(CONFIG_XLIO),y)
 DEPDIRS-sock := xlio
 endif

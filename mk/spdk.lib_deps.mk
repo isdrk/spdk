@@ -213,12 +213,12 @@ endif
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
-DEPDIRS-event_fsdev := init fsdev
+DEPDIRS-event_fsdev := event_rmem init fsdev
 DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-event_rdma_provider := init rdma_provider
 endif
-DEPDIRS-event_fuse := event_rmem fuse init rpc
+DEPDIRS-event_fuse := event_fsdev fuse init rpc
 
 # module/vfu_device
 
