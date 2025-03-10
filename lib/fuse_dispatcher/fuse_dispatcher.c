@@ -169,7 +169,6 @@ struct fuse_io {
 		struct {
 			struct spdk_thread *thread;
 			struct fuse_init_in *in;
-			struct spdk_fsdev_mount_opts opts;
 			size_t out_len;
 			int error;
 		} init;
@@ -1235,49 +1234,59 @@ fuse_io_desc(struct fuse_io *fuse_io)
 	return fuse_io->disp->desc;
 }
 
-static void
-do_lookup(struct fuse_io *fuse_io)
+static inline void
+fuse_init_fsdev_io_ex(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io,
+		      enum spdk_fsdev_io_type type, spdk_fsdev_cpl_cb *cb_fn)
 {
-	int err;
+	spdk_fsdev_io_init(fsdev_io, fuse_io->hdr.unique, cb_fn, fuse_io, type);
+}
+
+static inline void
+fuse_init_fsdev_io(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io,
+		   enum spdk_fsdev_io_type type)
+{
+	fuse_init_fsdev_io_ex(fuse_io, fsdev_io, type, fuse_dispatcher_cpl_cb);
+}
+
+static int
+fuse_dispatcher_fill_lookup(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
+{
 	const char *name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("No name or bad name attached\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_lookup(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), name, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_LOOKUP);
+
+	fsdev_io->u_in.lookup.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.lookup.name = name;
+
+	return 0;
 }
 
-static void
-do_forget(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_forget(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_forget_in *arg;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_forget_in\n");
-		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL); /* FUSE_FORGET requires no response */
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), fsdev_io_d2h_u64(fuse_io->disp, arg->nlookup),
-				fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FORGET);
+
+	fsdev_io->u_in.forget.fobject = file_object(fuse_io);
+	fsdev_io->u_in.forget.nlookup = fsdev_io_d2h_u64(fuse_io->disp, arg->nlookup);
+
+	return 0;
 }
 
-static void
-do_getattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_getattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	uint64_t fh = 0;
 
 	if (fsdev_io_proto_minor(fuse_io) >= 9) {
@@ -1286,8 +1295,7 @@ do_getattr(struct fuse_io *fuse_io)
 		arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 		if (!arg) {
 			SPDK_ERRLOG("Cannot get fuse_getattr_in\n");
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 
 		if (fsdev_io_d2h_u64(fuse_io->disp, arg->getattr_flags) & FUSE_GETATTR_FH) {
@@ -1295,11 +1303,12 @@ do_getattr(struct fuse_io *fuse_io)
 		}
 	}
 
-	err = spdk_fsdev_getattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), file_handle(fh), fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_GETATTR);
+
+	fsdev_io->u_in.getattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.getattr.fhandle = file_handle(fh);
+
+	return 0;
 }
 
 #define FATTR_FLAGS_MAP \
@@ -1330,42 +1339,44 @@ fuse_fattr_flags_to_fsdev(uint32_t flags)
 	return result;
 }
 
-static void
-do_setattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_setattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_setattr_in *arg;
-	uint32_t valid;
 	uint64_t fh = 0;
-	struct spdk_fsdev_file_attr attr;
+	uint32_t valid;
+	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_in.setattr.attr;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_setattr_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	memset(&attr, 0, sizeof(attr));
-	attr.mode      = fsdev_io_d2h_u32(fuse_io->disp, arg->mode);
-	attr.uid       = fsdev_io_d2h_u32(fuse_io->disp, arg->uid);
-	attr.gid       = fsdev_io_d2h_u32(fuse_io->disp, arg->gid);
-	attr.size      = fsdev_io_d2h_u64(fuse_io->disp, arg->size);
-	attr.atime     = fsdev_io_d2h_u64(fuse_io->disp, arg->atime);
-	attr.mtime     = fsdev_io_d2h_u64(fuse_io->disp, arg->mtime);
-	attr.ctime     = fsdev_io_d2h_u64(fuse_io->disp, arg->ctime);
-	attr.atimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->atimensec);
-	attr.mtimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->mtimensec);
-	attr.ctimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->ctimensec);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SETATTR);
+
+	memset(attr, 0, sizeof(*attr));
+	attr->mode      = fsdev_io_d2h_u32(fuse_io->disp, arg->mode);
+	attr->uid       = fsdev_io_d2h_u32(fuse_io->disp, arg->uid);
+	attr->gid       = fsdev_io_d2h_u32(fuse_io->disp, arg->gid);
+	attr->size      = fsdev_io_d2h_u64(fuse_io->disp, arg->size);
+	attr->atime     = fsdev_io_d2h_u64(fuse_io->disp, arg->atime);
+	attr->mtime     = fsdev_io_d2h_u64(fuse_io->disp, arg->mtime);
+	attr->ctime     = fsdev_io_d2h_u64(fuse_io->disp, arg->ctime);
+	attr->atimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->atimensec);
+	attr->mtimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->mtimensec);
+	attr->ctimensec = fsdev_io_d2h_u32(fuse_io->disp, arg->ctimensec);
 
 	valid = fsdev_io_d2h_u64(fuse_io->disp, arg->valid);
 	if (valid & FATTR_FH) {
 		valid &= ~FATTR_FH;
 		fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	}
-	valid = fuse_fattr_flags_to_fsdev(valid);
 
-	valid &=
+	fsdev_io->u_in.setattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.setattr.fhandle = file_handle(fh);
+	fsdev_io->u_in.setattr.to_set = fuse_fattr_flags_to_fsdev(valid);
+	fsdev_io->u_in.setattr.to_set &=
 		SPDK_FSDEV_ATTR_MODE |
 		SPDK_FSDEV_ATTR_UID |
 		SPDK_FSDEV_ATTR_GID |
@@ -1376,58 +1387,50 @@ do_setattr(struct fuse_io *fuse_io)
 		SPDK_FSDEV_ATTR_MTIME_NOW |
 		SPDK_FSDEV_ATTR_CTIME;
 
-	err = spdk_fsdev_setattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), file_handle(fh), &attr, valid,
-				 fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_readlink(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_readlink(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_READLINK);
 
-	err = spdk_fsdev_readlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.readlink.fobject = file_object(fuse_io);
+
+	return 0;
 }
 
-static void
-do_symlink(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_symlink(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	const char *name, *linkname;
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	linkname = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!linkname) {
 		SPDK_ERRLOG("Cannot get linkname\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_symlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), name, linkname, fuse_io->hdr.uid, fuse_io->hdr.gid,
-				 fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SYMLINK);
+
+	fsdev_io->u_in.symlink.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.symlink.target = name;
+	fsdev_io->u_in.symlink.linkpath = linkname;
+	fsdev_io->u_in.symlink.euid = fuse_io->hdr.uid;
+	fsdev_io->u_in.symlink.egid = fuse_io->hdr.gid;
+
+	return 0;
 }
 
-static void
-do_mknod(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_mknod(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 12;
 	struct fuse_mknod_in *arg;
 	const char *name;
@@ -1435,30 +1438,31 @@ do_mknod(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, compat ? FUSE_COMPAT_MKNOD_IN_SIZE : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_mknod_in (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_mknod(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io->disp, arg->mode),
-			       fsdev_io_d2h_u32(fuse_io->disp, arg->rdev), fsdev_io_d2h_u32(fuse_io->disp, arg->umask),
-			       fuse_io->hdr.uid, fuse_io->hdr.gid, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_MKNOD);
+
+	fsdev_io->u_in.mknod.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.mknod.name = name;
+	fsdev_io->u_in.mknod.mode = fsdev_io_d2h_u32(fuse_io->disp, arg->mode);
+	fsdev_io->u_in.mknod.umask = fsdev_io_d2h_u32(fuse_io->disp, arg->umask);
+	fsdev_io->u_in.mknod.rdev = fsdev_io_d2h_u32(fuse_io->disp, arg->rdev);
+	fsdev_io->u_in.mknod.euid = fuse_io->hdr.uid;
+	fsdev_io->u_in.mknod.egid = fuse_io->hdr.gid;
+
+	return 0;
 }
 
-static void
-do_mkdir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_mkdir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 12;
 	struct fuse_mkdir_in *arg;
 	const char *name;
@@ -1466,64 +1470,63 @@ do_mkdir(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, compat ? sizeof(uint32_t) : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_mkdir_in (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_mkdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), name, fsdev_io_d2h_u32(fuse_io->disp, arg->mode),
-			       fsdev_io_d2h_u32(fuse_io->disp, arg->umask), fuse_io->hdr.uid, fuse_io->hdr.gid,
-			       fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_MKDIR);
+
+	fsdev_io->u_in.mkdir.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.mkdir.name = name;
+	fsdev_io->u_in.mkdir.mode = fsdev_io_d2h_u32(fuse_io->disp, arg->mode);
+	fsdev_io->u_in.mkdir.umask = fsdev_io_d2h_u32(fuse_io->disp, arg->umask);
+	fsdev_io->u_in.mkdir.euid = fuse_io->hdr.uid;
+	fsdev_io->u_in.mkdir.egid = fuse_io->hdr.gid;
+
+	return 0;
 }
 
-static void
-do_unlink(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_unlink(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	const char *name;
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_unlink(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), name, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_UNLINK);
+
+	fsdev_io->u_in.unlink.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.unlink.name = name;
+
+	return 0;
 }
 
-static void
-do_rmdir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_rmdir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	const char *name;
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_rmdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), name, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_RMDIR);
+
+	fsdev_io->u_in.rmdir.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.rmdir.name = name;
+
+	return 0;
 }
 
 #define RENAME2_FLAGS_MAP \
@@ -1548,10 +1551,10 @@ fuse_rename2_flags_to_fsdev(uint32_t flags)
 	return result;
 }
 
-static void
-do_rename_common(struct fuse_io *fuse_io, bool version2)
+static int
+fuse_dispatcher_fill_rename_common(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io,
+				   bool version2)
 {
-	int err;
 	uint64_t newdir;
 	const char *oldname;
 	const char *newname;
@@ -1562,8 +1565,7 @@ do_rename_common(struct fuse_io *fuse_io, bool version2)
 		arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 		if (!arg) {
 			SPDK_ERRLOG("Cannot get fuse_rename_in\n");
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 		newdir = fsdev_io_d2h_u64(fuse_io->disp, arg->newdir);
 	} else {
@@ -1571,8 +1573,7 @@ do_rename_common(struct fuse_io *fuse_io, bool version2)
 		arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 		if (!arg) {
 			SPDK_ERRLOG("Cannot get fuse_rename2_in\n");
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 		newdir = fsdev_io_d2h_u64(fuse_io->disp, arg->newdir);
 		flags = fsdev_io_d2h_u64(fuse_io->disp, arg->flags);
@@ -1582,41 +1583,41 @@ do_rename_common(struct fuse_io *fuse_io, bool version2)
 	oldname = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!oldname) {
 		SPDK_ERRLOG("Cannot get oldname\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	newname = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!newname) {
 		SPDK_ERRLOG("Cannot get newname\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_rename(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), oldname, ino_to_object(fuse_io, newdir),
-				newname, flags, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_RENAME);
+
+	fsdev_io->u_in.rename.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.rename.name = oldname;
+	fsdev_io->u_in.rename.new_parent_fobject = ino_to_object(fuse_io, newdir);
+	fsdev_io->u_in.rename.new_name = newname;
+	fsdev_io->u_in.rename.flags = flags;
+
+	return 0;
 }
 
-static void
-do_rename(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_rename(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	do_rename_common(fuse_io, false);
+	return fuse_dispatcher_fill_rename_common(fuse_io, fsdev_io, false);
 }
 
-static void
-do_rename2(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_rename2(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	do_rename_common(fuse_io, true);
+	return fuse_dispatcher_fill_rename_common(fuse_io, fsdev_io, true);
 }
 
-static void
-do_link(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_link(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_link_in *arg;
 	const char *name;
 	uint64_t oldnodeid;
@@ -1624,60 +1625,55 @@ do_link(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_link_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
+
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_LINK);
 
 	oldnodeid = fsdev_io_d2h_u64(fuse_io->disp, arg->oldnodeid);
+	fsdev_io->u_in.link.fobject = ino_to_object(fuse_io, oldnodeid);
+	fsdev_io->u_in.link.new_parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.link.name = name;
 
-	err = spdk_fsdev_link(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			      ino_to_object(fuse_io, oldnodeid), file_object(fuse_io), name,
-			      fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_open(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_open(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
-	int err;
 	struct fuse_open_in *arg;
 	uint32_t flags;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_forget_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	if (!fsdev_d2h_open_flags(disp->fuse_arch, fsdev_io_d2h_u32(fuse_io->disp, arg->flags), &flags)) {
+	if (!fsdev_d2h_open_flags(disp->fuse_arch, fsdev_io_d2h_u32(fuse_io->disp, arg->flags),
+				  &flags)) {
 		SPDK_ERRLOG("Cannot translate flags\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_fopen(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), flags,
-			       fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_OPEN);
+
+	fsdev_io->u_in.open.fobject = file_object(fuse_io);
+	fsdev_io->u_in.open.flags = flags;
+
+	return 0;
 }
 
-static void
-do_read(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_read(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 9;
 	struct fuse_read_in *arg;
 	uint64_t fh;
@@ -1687,10 +1683,8 @@ do_read(struct fuse_io *fuse_io)
 				       compat ? offsetof(struct fuse_read_in, lock_owner) : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_read_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
-
 
 	if (!compat) {
 		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
@@ -1698,20 +1692,23 @@ do_read(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_read(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			      file_object(fuse_io), file_handle(fh),
-			      fsdev_io_d2h_u32(fuse_io->disp, arg->size), fsdev_io_d2h_u64(fuse_io->disp, arg->offset),
-			      flags, fuse_io->out_iov + 1, fuse_io->out_iovcnt - 1, NULL,
-			      fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_READ);
+
+	fsdev_io->u_in.read.fobject = file_object(fuse_io);
+	fsdev_io->u_in.read.fhandle = file_handle(fh);
+	fsdev_io->u_in.read.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
+	fsdev_io->u_in.read.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.read.flags = flags;
+	fsdev_io->u_in.read.iov = fuse_io->out_iov + 1;
+	fsdev_io->u_in.read.iovcnt = fuse_io->out_iovcnt - 1;
+	fsdev_io->u_in.read.opts = NULL;
+
+	return 0;
 }
 
-static void
-do_write(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_write(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 9;
 	struct fuse_write_in *arg;
 	uint64_t fh;
@@ -1721,14 +1718,12 @@ do_write(struct fuse_io *fuse_io)
 				       compat ? FUSE_COMPAT_WRITE_IN_SIZE : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_write_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	if (fuse_io->in_offs.buf_offs) {
 		SPDK_ERRLOG("Data IOVs should be separate from the header IOV\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	if (!compat) {
@@ -1737,32 +1732,33 @@ do_write(struct fuse_io *fuse_io)
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_write(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh),
-			       fsdev_io_d2h_u32(fuse_io->disp, arg->size), fsdev_io_d2h_u64(fuse_io->disp, arg->offset),
-			       flags, fuse_io->in_iov + fuse_io->in_offs.iov_offs, fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs,
-			       NULL, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_WRITE);
+
+	fsdev_io->u_in.write.fobject = file_object(fuse_io);
+	fsdev_io->u_in.write.fhandle = file_handle(fh);
+	fsdev_io->u_in.write.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
+	fsdev_io->u_in.write.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.write.flags = flags;
+	fsdev_io->u_in.write.iov = fuse_io->in_iov + fuse_io->in_offs.iov_offs;
+	fsdev_io->u_in.write.iovcnt = fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs;
+	fsdev_io->u_in.write.opts = NULL;
+
+	return 0;
 }
 
-static void
-do_statfs(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_statfs(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_STATFS);
 
-	err = spdk_fsdev_statfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.statfs.fobject = file_object(fuse_io);
+
+	return 0;
 }
 
-static void
-do_release(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_release(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 8;
 	struct fuse_release_in *arg;
 	uint64_t fh;
@@ -1771,24 +1767,22 @@ do_release(struct fuse_io *fuse_io)
 				       compat ? offsetof(struct fuse_release_in, lock_owner) : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_release_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_release(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), file_handle(fh),
-				 fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_RELEASE);
+
+	fsdev_io->u_in.release.fobject = file_object(fuse_io);
+	fsdev_io->u_in.release.fhandle = file_handle(fh);
+
+	return 0;
 }
 
-static void
-do_fsync(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_fsync(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_fsync_in *arg;
 	uint64_t fh;
 	bool datasync;
@@ -1797,18 +1791,19 @@ do_fsync(struct fuse_io *fuse_io)
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_fsync_in\n");
 		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	datasync = (fsdev_io_d2h_u32(fuse_io->disp, arg->fsync_flags) & 1) ? true : false;
 
-	err = spdk_fsdev_fsync(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh), datasync,
-			       fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FSYNC);
+
+	fsdev_io->u_in.fsync.fobject = file_object(fuse_io);
+	fsdev_io->u_in.fsync.fhandle = file_handle(fh);
+	fsdev_io->u_in.fsync.datasync = datasync;
+
+	return 0;
 }
 
 #define XATTR_FLAGS_MAP \
@@ -1852,10 +1847,9 @@ fuse_xattr_ext_flags_to_fsdev(uint32_t flags)
 	return result;
 }
 
-static void
-do_setxattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_setxattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	bool xattr_ext = !!(disp->mount_flags & FUSE_SETXATTR_EXT);
 	struct fuse_setxattr_in *arg;
@@ -1868,23 +1862,20 @@ do_setxattr(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, size);
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_setxattr_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
 	value = _fsdev_io_in_arg_get_buf(fuse_io, size);
 	if (!value) {
 		SPDK_ERRLOG("Cannot get value of %" PRIu32 " bytes\n", size);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	flags = fuse_xattr_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io->disp, arg->flags));
@@ -1892,18 +1883,20 @@ do_setxattr(struct fuse_io *fuse_io)
 		flags |= fuse_xattr_ext_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io->disp, arg->setxattr_flags));
 	}
 
-	err = spdk_fsdev_setxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, value, size, flags,
-				  fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SETXATTR);
+
+	fsdev_io->u_in.setxattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.setxattr.name = name;
+	fsdev_io->u_in.setxattr.value = value;
+	fsdev_io->u_in.setxattr.size = size;
+	fsdev_io->u_in.setxattr.flags = flags;
+
+	return 0;
 }
 
-static void
-do_getxattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_getxattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_getxattr_in *arg;
 	const char *name;
 	char *buff = NULL;
@@ -1913,21 +1906,18 @@ do_getxattr(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_getxattr_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	if (fuse_io->out_iovcnt < 2) {
 		SPDK_ERRLOG("No buffer to getxattr\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
@@ -1935,7 +1925,7 @@ do_getxattr(struct fuse_io *fuse_io)
 	/* Zero size means requesting size of the xattr value. No need to go further. */
 	if (size > 0) {
 		/*
-		 * NOTE: we want to avoid an additionl allocation and copy and put the xattr
+		 * NOTE: we want to avoid an additional allocation and copy and put the xattr
 		 * directly to the buffer provided in out_iov. In order to do so we have to
 		 * preserve the out_offs, advance it to get the buffer pointer and then restore
 		 * to allow the fuse_dispatcher_io_complete_xattr() to fill the fuse_getxattr_out
@@ -1948,15 +1938,14 @@ do_getxattr(struct fuse_io *fuse_io)
 		if (size < sizeof(struct fuse_getxattr_out)) {
 			SPDK_ERRLOG("Invalid size=%u smaller than the size of fuse_getxattr_out=%lu "
 				    "in getxattr request.\n", size, sizeof(struct fuse_getxattr_out));
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 		size -= sizeof(struct fuse_getxattr_out);
 
 		buff = _fsdev_io_out_arg_get_buf(fuse_io, size); /* Get the buffer for the xattr */
 		if (!buff) {
 			/*
-			 * Should not happen at this point but let's ignore it. Null buff and zere
+			 * Should not happen at this point but let's ignore it. Null buff and zero
 			 * size are valid inputs for spdk_fsdev_getxattr().
 			 */
 			size = 0;
@@ -1964,18 +1953,19 @@ do_getxattr(struct fuse_io *fuse_io)
 		fuse_io->out_offs = out_offs_bu; /* Restore the out offset */
 	}
 
-	err = spdk_fsdev_getxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), name, buff, size,
-				  fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_GETXATTR);
+
+	fsdev_io->u_in.getxattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.getxattr.name = name;
+	fsdev_io->u_in.getxattr.buffer = buff;
+	fsdev_io->u_in.getxattr.size = size;
+
+	return 0;
 }
 
-static void
-do_listxattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_listxattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_getxattr_in *arg;
 	struct iovec *iov;
 	uint32_t size;
@@ -1983,49 +1973,46 @@ do_listxattr(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_getxattr_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
 	iov = fuse_io->out_iov + 1;
 	if (iov->iov_len < size) {
 		SPDK_ERRLOG("Wrong iov len (%zu < %" PRIu32")\n", iov->iov_len, size);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_listxattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), iov->iov_base, size,
-				   fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_LISTXATTR);
+
+	fsdev_io->u_in.listxattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.listxattr.buffer = iov->iov_base;
+	fsdev_io->u_in.listxattr.size = size;
+
+	return 0;
 }
 
-static void
-do_removexattr(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_removexattr(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	const char *name = _fsdev_io_in_arg_get_str(fuse_io);
 
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_removexattr(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				     file_object(fuse_io), name, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_REMOVEXATTR);
+
+	fsdev_io->u_in.removexattr.fobject = file_object(fuse_io);
+	fsdev_io->u_in.removexattr.name = name;
+
+	return 0;
 }
 
-static void
-do_flush(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_flush(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 7;
 	struct fuse_flush_in *arg;
 	uint64_t fh;
@@ -2034,18 +2021,17 @@ do_flush(struct fuse_io *fuse_io)
 				       compat ? offsetof(struct fuse_flush_in, lock_owner) : sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_flush_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_flush(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh),
-			       fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FLUSH);
+
+	fsdev_io->u_in.flush.fobject = file_object(fuse_io);
+	fsdev_io->u_in.flush.fhandle = file_handle(fh);
+
+	return 0;
 }
 
 static void
@@ -2277,7 +2263,7 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 }
 
 static void
-do_mount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_dispatcher_mount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
@@ -2307,21 +2293,32 @@ do_mount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 }
 
 static void
-do_init(struct fuse_io *fuse_io)
+fuse_dispatcher_init_complete_again(struct fuse_io *fuse_io)
+{
+	struct fuse_init_out outarg;
+	size_t outargsize = sizeof(outarg);
+
+	memset(&outarg, 0, sizeof(outarg));
+	outarg.major = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_VERSION);
+	outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, SPDK_FUSE_KERNEL_MINOR_VERSION);
+
+	fuse_dispatcher_io_copy_and_complete(fuse_io, &outarg, outargsize, 0);
+}
+
+static int
+fuse_dispatcher_fill_init(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	size_t compat_size = offsetof(struct fuse_init_in, max_readahead);
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	uint32_t max_readahead = DEFAULT_MAX_READAHEAD;
 	uint32_t requested_flags = 0;
 	uint32_t flags = 0;
-	int rc;
 
 	/* First try to read the legacy header */
 	fuse_io->u.init.in = _fsdev_io_in_arg_get_buf(fuse_io, compat_size);
 	if (!fuse_io->u.init.in) {
 		SPDK_ERRLOG("Cannot get fuse_init_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EBADR);
-		return;
+		return -EBADR;
 	}
 
 	disp->proto_major = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->major);
@@ -2334,8 +2331,7 @@ do_init(struct fuse_io *fuse_io)
 	if (disp->proto_major < FUSE_KERNEL_VERSION) {
 		SPDK_ERRLOG("INIT: unsupported major protocol version: %" PRIu32 "\n",
 			    disp->proto_major);
-		fuse_dispatcher_io_complete_err(fuse_io, -EPROTO);
-		return;
+		return -EPROTO;
 	}
 
 	/* NOTE: it seems that libfuse has made assumption that FUSE_KERNEL_VERSION will never be changed again,
@@ -2343,15 +2339,7 @@ do_init(struct fuse_io *fuse_io)
 	 * As libfuse is considered the de facto standard, we just follow the same logic here.
 	 */
 	if (disp->proto_major > FUSE_KERNEL_VERSION) {
-		struct fuse_init_out outarg;
-		size_t outargsize = sizeof(outarg);
-
-		memset(&outarg, 0, sizeof(outarg));
-		outarg.major = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_VERSION);
-		outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, SPDK_FUSE_KERNEL_MINOR_VERSION);
-
-		fuse_dispatcher_io_copy_and_complete(fuse_io, &outarg, outargsize, 0);
-		return;
+		return -EAGAIN;
 	}
 
 	if (disp->proto_minor > SPDK_FUSE_KERNEL_MINOR_VERSION) {
@@ -2367,8 +2355,7 @@ do_init(struct fuse_io *fuse_io)
 		if (!arg_extra) {
 			SPDK_ERRLOG("INIT: protocol version: %" PRIu32 ".%" PRIu32 " but legacy data found\n",
 				    disp->proto_major, disp->proto_minor);
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 
 		compat_size += COMPAT_FUSE_INIT_IN_6_SIZE;
@@ -2383,7 +2370,7 @@ do_init(struct fuse_io *fuse_io)
 			if (!arg_extra) {
 				SPDK_ERRLOG("INIT: FUSE_INIT_EXT flag set but no INIT_EXT data found\n");
 				fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-				return;
+				return -EINVAL;
 			}
 		}
 	}
@@ -2398,49 +2385,45 @@ do_init(struct fuse_io *fuse_io)
 	SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
 	SET_MOUNT_FLAG(true, flags, O_TRUNC);
 
-	memset(&fuse_io->u.init.opts, 0, sizeof(fuse_io->u.init.opts));
-	fuse_io->u.init.opts.opts_size = sizeof(fuse_io->u.init.opts);
-
-	/* Passing for negotiation only few flags. The rest are always supported. */
-	fuse_io->u.init.opts.flags = fuse_mount_flags_to_fsdev(flags);
-	fuse_io->u.init.opts.max_readahead = max_readahead;
 	fuse_io->u.init.thread = spdk_get_thread();
 
-	rc = spdk_fsdev_mount(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			      &fuse_io->u.init.opts, do_mount_cpl_clb, fuse_io);
-	if (rc) {
-		SPDK_ERRLOG("%s: failed to initiate mount (err=%d)\n", fuse_dispatcher_name(disp), rc);
-		fuse_dispatcher_io_complete_err(fuse_io, rc);
-	}
+	fuse_init_fsdev_io_ex(fuse_io, fsdev_io, SPDK_FSDEV_IO_MOUNT, fuse_dispatcher_mount_cpl_clb);
+
+	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
+	fsdev_io->u_in.mount.opts.opts_size = sizeof(fsdev_io->u_in.mount.opts);
+
+	/* Passing for negotiation only few flags. The rest are always supported. */
+	fsdev_io->u_in.mount.opts.flags = fuse_mount_flags_to_fsdev(flags);
+	fsdev_io->u_in.mount.opts.max_readahead = max_readahead;
+
+	return 0;
 }
 
 #undef SET_MOUNT_FLAG
 
-static void
-do_opendir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_opendir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_open_in *arg;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_open_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_opendir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), fsdev_io_d2h_u32(fuse_io->disp, arg->flags),
-				 fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_OPENDIR);
+
+	fsdev_io->u_in.opendir.fobject = file_object(fuse_io);
+	fsdev_io->u_in.opendir.flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
+
+	return 0;
 }
 
 static int
-do_readdir_entry_clb(void *cb_arg, const char *name,
-		     struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-		     off_t offset, bool *forget)
+fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, const char *name,
+				      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
+				      off_t offset, bool *forget)
 {
 	struct fuse_io *fuse_io = cb_arg;
 	size_t bytes_remained = fuse_io->u.readdir.size - fuse_io->u.readdir.bytes_written;
@@ -2464,10 +2447,21 @@ do_readdir_entry_clb(void *cb_arg, const char *name,
 	return 0;
 }
 
-static void
-do_readdir_common(struct fuse_io *fuse_io, bool plus)
+static int
+fuse_dispatcher_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget)
 {
-	int err;
+	spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn = fsdev_io->u_in.readdir.usr_entry_cb_fn;
+	struct fuse_io *fuse_io = cb_arg;
+
+	return usr_entry_cb_fn(fuse_io, fsdev_io->u_out.readdir.name,
+			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr,
+			       fsdev_io->u_out.readdir.offset, forget);
+}
+
+static int
+fuse_dispatcher_fill_readdir_common(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io,
+				    bool plus)
+{
 	struct fuse_read_in *arg;
 	uint64_t fh;
 	uint32_t size;
@@ -2475,8 +2469,7 @@ do_readdir_common(struct fuse_io *fuse_io, bool plus)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_read_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
@@ -2484,8 +2477,7 @@ do_readdir_common(struct fuse_io *fuse_io, bool plus)
 	fuse_io->u.readdir.writep = _fsdev_io_out_arg_get_buf(fuse_io, size);
 	if (!fuse_io->u.readdir.writep) {
 		SPDK_ERRLOG("Cannot get buffer of %" PRIu32 " bytes\n", size);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fuse_io->u.readdir.plus = plus;
@@ -2494,55 +2486,54 @@ do_readdir_common(struct fuse_io *fuse_io, bool plus)
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_readdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				 file_object(fuse_io), file_handle(fh),
-				 fsdev_io_d2h_u64(fuse_io->disp, arg->offset),
-				 do_readdir_entry_clb, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_READDIR);
+
+	fsdev_io->u_in.readdir.fobject = file_object(fuse_io);
+	fsdev_io->u_in.readdir.fhandle = file_handle(fh);
+	fsdev_io->u_in.readdir.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_entry_clb;
+	fsdev_io->u_in.readdir.usr_entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
+
+	return 0;
 }
 
-static void
-do_readdir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_readdir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	do_readdir_common(fuse_io, false);
+	return fuse_dispatcher_fill_readdir_common(fuse_io, fsdev_io, false);
 }
 
-static void
-do_readdirplus(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_readdirplus(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	do_readdir_common(fuse_io, true);
+	return fuse_dispatcher_fill_readdir_common(fuse_io, fsdev_io, true);
 }
 
-static void
-do_releasedir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_releasedir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_release_in *arg;
 	uint64_t fh;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_release_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	err = spdk_fsdev_releasedir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				    file_object(fuse_io), file_handle(fh),
-				    fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_RELEASEDIR);
+
+	fsdev_io->u_in.releasedir.fobject = file_object(fuse_io);
+	fsdev_io->u_in.releasedir.fhandle = file_handle(fh);
+
+	return 0;
 }
 
-static void
-do_fsyncdir(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_fsyncdir(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_fsync_in *arg;
 	uint64_t fh;
 	bool datasync;
@@ -2550,70 +2541,62 @@ do_fsyncdir(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_fsync_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	datasync = (fsdev_io_d2h_u32(fuse_io->disp, arg->fsync_flags) & 1) ? true : false;
 
-	err = spdk_fsdev_fsyncdir(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				  file_object(fuse_io), file_handle(fh), datasync,
-				  fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FSYNCDIR);
+
+	fsdev_io->u_in.fsyncdir.fobject = file_object(fuse_io);
+	fsdev_io->u_in.fsyncdir.fhandle = file_handle(fh);
+	fsdev_io->u_in.fsyncdir.datasync = datasync;
+
+	return 0;
 }
 
-static void
-do_getlk(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_getlk(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_lk_in *arg;
 	uint64_t fh;
-	uint64_t owner;
-	struct spdk_fsdev_file_lock fsdev_lock;
+	int err;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_lk_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
-	owner = fsdev_io_d2h_u64(fuse_io->disp, arg->owner);
 
-	err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_lock);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_GETLK);
+
+	err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_io->u_in.getlk.lock);
 	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-		return;
+		return err;
 	}
 
-	err = spdk_fsdev_getlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner,
-			       fuse_dispatcher_cpl_cb, fuse_io);
+	fsdev_io->u_in.getlk.fobject = file_object(fuse_io);
+	fsdev_io->u_in.getlk.fhandle = file_handle(fh);
+	fsdev_io->u_in.getlk.owner = fsdev_io_d2h_u64(fuse_io->disp, arg->owner);
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_setlk(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_setlk(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_lk_in *arg;
 	uint64_t fh;
-	struct spdk_fsdev_file_lock fsdev_lock;
 	uint32_t lk_flags;
 	uint64_t owner;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_lk_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
@@ -2637,31 +2620,35 @@ do_setlk(struct fuse_io *fuse_io)
 		default:
 			SPDK_ERRLOG("Invalid lock type %d in fuse_lk_in\n",
 				    fsdev_io_d2h_u32(fuse_io->disp, arg->lk.type));
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 
-		err = spdk_fsdev_flock(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				       file_object(fuse_io), file_handle(fh), op,
-				       fuse_dispatcher_cpl_cb, fuse_io);
+		fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FLOCK);
+
+		fsdev_io->u_in.flock.fobject = file_object(fuse_io);
+		fsdev_io->u_in.flock.fhandle = file_handle(fh);
+		fsdev_io->u_in.flock.operation = op;
 	} else {
-		err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_lock);
+		int err;
+
+		fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SETLK);
+
+		err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fsdev_io->u_in.setlk.lock);
 		if (err) {
-			fuse_dispatcher_io_complete_err(fuse_io, err);
-			return;
+			return err;
 		}
-		err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				       file_object(fuse_io), file_handle(fh), &fsdev_lock, owner, false,
-				       fuse_dispatcher_cpl_cb, fuse_io);
+
+		fsdev_io->u_in.setlk.fobject = file_object(fuse_io);
+		fsdev_io->u_in.setlk.fhandle = file_handle(fh);
+		fsdev_io->u_in.setlk.owner = owner;
+		fsdev_io->u_in.setlk.wait = false;
 	}
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_setlkw(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_setlkw(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	int err;
 	struct fuse_lk_in *arg;
@@ -2669,63 +2656,55 @@ do_setlkw(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_lk_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fuse_io->u.setlkw.fhandle = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	fuse_io->u.setlkw.owner = fsdev_io_d2h_u64(fuse_io->disp, arg->owner);
 
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SETLK);
+
 	err = fuse_to_fsdev_file_lock(fuse_io, &arg->lk, &fuse_io->u.setlkw.lock);
 	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-		return;
+		return err;
 	}
 
-	/*
-	 * Giving it a try to take the lock immediately. If it fails then the
-	 * setlkw request is added to the wait list in do_setlkw_cpl_clb() and
-	 * tries again and so on until the lock is acquired and file stays open.
-	 */
-	err = spdk_fsdev_setlk(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fuse_io->u.setlkw.fhandle),
-			       &fuse_io->u.setlkw.lock, fuse_io->u.setlkw.owner, true,
-			       fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.setlk.fobject = file_object(fuse_io);
+	fsdev_io->u_in.setlk.fhandle = file_handle(fuse_io->u.setlkw.fhandle);
+	fsdev_io->u_in.setlk.lock = fuse_io->u.setlkw.lock;
+	fsdev_io->u_in.setlk.owner = fuse_io->u.setlkw.owner;
+	fsdev_io->u_in.setlk.wait = true;
+
+	return 0;
 }
 
-static void
-do_access(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_access(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_access_in *arg;
 	uint32_t mask;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_access_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	mask = fsdev_io_h2d_u32(fuse_io->disp, arg->mask);
 
-	/* Using effective uid and gid. Without setuid they have uid of the process. */
-	err = spdk_fsdev_access(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), mask, geteuid(), getegid(),
-				fuse_dispatcher_cpl_cb, fuse_io);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_ACCESS);
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.access.fobject = file_object(fuse_io);
+	fsdev_io->u_in.access.mask = mask;
+	fsdev_io->u_in.access.uid = geteuid();
+	fsdev_io->u_in.access.gid = getegid();
+
+	return 0;
 }
 
-static void
-do_create(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_create(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	bool compat = fsdev_io_proto_minor(fuse_io) < 12;
 	struct fuse_create_in *arg;
@@ -2736,15 +2715,13 @@ do_create(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, arg_size);
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_create_in (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	name = _fsdev_io_in_arg_get_str(fuse_io);
 	if (!name) {
 		SPDK_ERRLOG("Cannot get name (compat=%d)\n", compat);
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	mode =  fsdev_io_d2h_u32(fuse_io->disp, arg->mode);
@@ -2754,47 +2731,50 @@ do_create(struct fuse_io *fuse_io)
 
 	if (!fsdev_d2h_open_flags(disp->fuse_arch, fsdev_io_d2h_u32(fuse_io->disp, arg->flags), &flags)) {
 		SPDK_ERRLOG("Cannot translate flags\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_create(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), name, mode, flags, umask, fuse_io->hdr.uid,
-				fuse_io->hdr.gid, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_CREATE);
+
+	fsdev_io->u_in.create.parent_fobject = file_object(fuse_io);
+	fsdev_io->u_in.create.name = name;
+	fsdev_io->u_in.create.mode = mode;
+	fsdev_io->u_in.create.flags = flags;
+	fsdev_io->u_in.create.umask = umask;
+	fsdev_io->u_in.create.euid = fuse_io->hdr.uid;
+	fsdev_io->u_in.create.egid = fuse_io->hdr.gid;
+
+	return 0;
 }
 
-static void
-do_interrupt(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_interrupt(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_interrupt_in *arg;
 	uint64_t unique;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_access_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	unique = fsdev_io_d2h_u64(fuse_io->disp, arg->unique);
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "INTERRUPT: %" PRIu64 "\n", unique);
 
-	err = spdk_fsdev_abort(fuse_io_desc(fuse_io), fuse_io->ch, unique, fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_ABORT);
+
+	fsdev_io->u_in.abort.unique_to_abort = unique;
+
+	return 0;
 }
 
-static void
-do_bmap(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_bmap(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_ERRLOG("BMAP is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	return -ENOSYS;
 }
 
 static struct fuse_ioctl_iovec *
@@ -2956,7 +2936,7 @@ fuse_dispatcher_io_complete_ioctl(struct fuse_io *fuse_io,
 }
 
 static void
-do_ioctl_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_dispatcher_ioctl_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 	bool retry = (status == -EAGAIN);
@@ -2991,13 +2971,13 @@ do_ioctl_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 		fuse_dispatcher_io_complete_err(fuse_io, status);
 	}
 
-	/* Allocated in do_ioctl(). */
+	/* Allocated in fuse_dispatcher_fill_ioctl(). */
 	free(fuse_io->u.ioctl.in_iov);
 	free(fuse_io->u.ioctl.out_iov);
 }
 
-static void
-do_ioctl(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_ioctl(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	int err;
 	struct fuse_ioctl_in *in;
@@ -3013,8 +2993,7 @@ do_ioctl(struct fuse_io *fuse_io)
 	in = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*in));
 	if (!in) {
 		SPDK_ERRLOG("Cannot get fuse_ioctl_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	flags = fsdev_io_d2h_u32(fuse_io->disp, in->flags);
@@ -3025,8 +3004,7 @@ do_ioctl(struct fuse_io *fuse_io)
 	 */
 	if (flags & (FUSE_IOCTL_COMPAT | FUSE_IOCTL_32BIT)) {
 		SPDK_ERRLOG("Compat ioctl is not supported.\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -ENOTSUP);
-		return;
+		return -EINVAL;
 	}
 
 	/*
@@ -3034,8 +3012,7 @@ do_ioctl(struct fuse_io *fuse_io)
 	 */
 	if (flags & FUSE_IOCTL_COMPAT_X32) {
 		SPDK_ERRLOG("Compat x32 ioctl is not supported.\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -ENOTSUP);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, in->fh);
@@ -3048,16 +3025,14 @@ do_ioctl(struct fuse_io *fuse_io)
 		in_iov[0].iov_base = _fsdev_io_in_arg_get_buf(fuse_io, in_size);
 		if (!in_iov[0].iov_base) {
 			SPDK_ERRLOG("Failed to get input buf of size=%u\n", in_size);
-			fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-			return;
+			return -EINVAL;
 		}
 		in_iov[0].iov_len = in_size;
 
 		fuse_io->u.ioctl.in_iov = fuse_ioctl_iovec_copy(in_iov, 1);
 		if (!fuse_io->u.ioctl.in_iov) {
 			SPDK_ERRLOG("Cannot alloc ioctl iovecs.\n");
-			fuse_dispatcher_io_complete_err(fuse_io, -ENOMEM);
-			return;
+			return -EINVAL;
 		}
 		fuse_io->u.ioctl.in_iovcnt = 1;
 	} else {
@@ -3111,43 +3086,56 @@ do_ioctl(struct fuse_io *fuse_io)
 	fuse_io->u.ioctl.flags = flags;
 	fuse_io->u.ioctl.out_size = out_size;
 
-	err = spdk_fsdev_ioctl(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh), request, arg,
-			       fuse_io->u.ioctl.in_iov, fuse_io->u.ioctl.in_iovcnt,
-			       fuse_io->u.ioctl.out_iov, fuse_io->u.ioctl.out_iovcnt,
-			       do_ioctl_cpl_clb, fuse_io);
+	fuse_init_fsdev_io_ex(fuse_io, fsdev_io, SPDK_FSDEV_IO_IOCTL, fuse_dispatcher_ioctl_cpl_clb);
+
+	fsdev_io->u_in.ioctl.fobject = file_object(fuse_io);
+	fsdev_io->u_in.ioctl.fhandle = file_handle(fh);
+	fsdev_io->u_in.ioctl.request = request;
+	fsdev_io->u_in.ioctl.arg = arg;
+
+	fsdev_io->u_in.ioctl.in_iov = fuse_io->u.ioctl.in_iov;
+	fsdev_io->u_in.ioctl.in_iovcnt = fuse_io->u.ioctl.in_iovcnt;
+
+	fsdev_io->u_in.ioctl.out_iov = fuse_io->u.ioctl.out_iov;
+	fsdev_io->u_in.ioctl.out_iovcnt = fuse_io->u.ioctl.out_iovcnt;
+
+	/* Zero out the out values so we know what to free in fuse_dispatcher_ioctl_cpl_clb() */
+	fsdev_io->u_out.ioctl.in_iov = NULL;
+	fsdev_io->u_out.ioctl.in_iovcnt = 0;
+	fsdev_io->u_out.ioctl.out_iov = NULL;
+	fsdev_io->u_out.ioctl.out_iovcnt = 0;
+
+	return 0;
 
 out_err:
-	if (err) {
-		free(fuse_io->u.ioctl.in_iov);
-		free(fuse_io->u.ioctl.out_iov);
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	free(fuse_io->u.ioctl.in_iov);
+	free(fuse_io->u.ioctl.out_iov);
+
+	return err;
 }
 
-static void
-do_poll(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_poll(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_poll_in *arg;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_poll_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fuse_io->u.poll.fhandle = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	fuse_io->u.poll.events = fuse_events_to_fsdev(fsdev_io_d2h_u32(fuse_io->disp, arg->events));
 
-	err = spdk_fsdev_poll(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			      file_object(fuse_io), file_handle(fuse_io->u.poll.fhandle),
-			      fuse_io->u.poll.events, true, fuse_dispatcher_cpl_cb, fuse_io);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_POLL);
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.poll.fobject = file_object(fuse_io);
+	fsdev_io->u_in.poll.fhandle = file_handle(fuse_io->u.poll.fhandle);
+	fsdev_io->u_in.poll.events = fuse_io->u.poll.events;
+	fsdev_io->u_in.poll.wait = true;
+
+	return 0;
 }
 
 #define FALLOC_FLAGS_MAP \
@@ -3176,10 +3164,9 @@ fuse_falloc_flags_to_fsdev(uint32_t flags)
 	return result;
 }
 
-static void
-do_fallocate(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_fallocate(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_fallocate_in *arg;
 	uint32_t mode;
 	uint64_t fh;
@@ -3187,25 +3174,26 @@ do_fallocate(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_fallocate_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
+
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 	mode = fuse_falloc_flags_to_fsdev(fsdev_io_d2h_u32(fuse_io->disp, arg->mode));
 
-	err = spdk_fsdev_fallocate(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				   file_object(fuse_io), file_handle(fh),
-				   mode, fsdev_io_d2h_u64(fuse_io->disp, arg->offset),
-				   fsdev_io_d2h_u64(fuse_io->disp, arg->length),
-				   fuse_dispatcher_cpl_cb, fuse_io);
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_FALLOCATE);
+
+	fsdev_io->u_in.fallocate.fobject = file_object(fuse_io);
+	fsdev_io->u_in.fallocate.fhandle = file_handle(fh);
+	fsdev_io->u_in.fallocate.mode = mode;
+	fsdev_io->u_in.fallocate.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.fallocate.length = fsdev_io_d2h_u64(fuse_io->disp, arg->length);
+
+	return 0;
 }
 
 static void
-do_umount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_dispatcher_fill_umount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
@@ -3220,23 +3208,16 @@ do_umount_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 	fuse_dispatcher_io_complete_err(fuse_io, 0);
 }
 
-static void
-do_destroy(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_destroy(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
-	int rc;
+	fuse_init_fsdev_io_ex(fuse_io, fsdev_io, SPDK_FSDEV_IO_UMOUNT, fuse_dispatcher_fill_umount_cpl_clb);
 
-	rc = spdk_fsdev_umount(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique, do_umount_cpl_clb,
-			       fuse_io);
-	if (rc) {
-		SPDK_ERRLOG("%s: failed to initiate umount (err=%d)\n", fuse_dispatcher_name(disp), rc);
-		fuse_dispatcher_io_complete_err(fuse_io, rc);
-		return;
-	}
+	return 0;
 }
 
 static void
-do_batch_forget_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_dispatcher_fill_batch_forget_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 
@@ -3252,8 +3233,8 @@ do_batch_forget_cpl_clb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io
 	}
 }
 
-static void
-do_batch_forget(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_batch_forget(struct fuse_io *fuse_io)
 {
 	int err;
 	struct fuse_batch_forget_in *arg;
@@ -3264,8 +3245,7 @@ do_batch_forget(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_batch_forget_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	/* Prevent integer overflow.  The compiler emits the following warning
@@ -3282,24 +3262,21 @@ do_batch_forget(struct fuse_io *fuse_io)
 		SPDK_WARNLOG("Too many forgets (%zu >= %zu)\n", scount,
 			     SIZE_MAX / sizeof(forgets[0]));
 		/* FUSE_BATCH_FORGET requires no response */
-		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	count = scount;
 	if (!count) {
 		SPDK_WARNLOG("0 forgets requested\n");
 		/* FUSE_BATCH_FORGET requires no response */
-		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	forgets = _fsdev_io_in_arg_get_buf(fuse_io, count * sizeof(forgets[0]));
 	if (!forgets) {
 		SPDK_WARNLOG("Cannot get expected forgets (%" PRIu32 ")\n", count);
 		/* FUSE_BATCH_FORGET requires no response */
-		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fuse_io->u.batch_forget.to_forget = 0;
@@ -3310,7 +3287,7 @@ do_batch_forget(struct fuse_io *fuse_io)
 		uint64_t nlookup = fsdev_io_d2h_u64(fuse_io->disp, forgets[i].nlookup);
 		err = spdk_fsdev_forget(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
 					ino_to_object(fuse_io, ino), nlookup,
-					do_batch_forget_cpl_clb, fuse_io);
+					fuse_dispatcher_fill_batch_forget_cpl_clb, fuse_io);
 		if (!err) {
 			fuse_io->u.batch_forget.to_forget++;
 		} else {
@@ -3319,15 +3296,15 @@ do_batch_forget(struct fuse_io *fuse_io)
 	}
 
 	if (!fuse_io->u.batch_forget.to_forget) {
-		/* FUSE_BATCH_FORGET requires no response */
-		fuse_dispatcher_io_complete_none(fuse_io, fuse_io->u.batch_forget.status);
+		return fuse_io->u.batch_forget.status;
 	}
+
+	return 1; /* some forgets are still in progress, wait for completions */
 }
 
-static void
-do_lseek(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_lseek(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_lseek_in *arg;
 	uint64_t fh;
 	uint64_t offset;
@@ -3336,8 +3313,7 @@ do_lseek(struct fuse_io *fuse_io)
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_lseek_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
@@ -3361,88 +3337,81 @@ do_lseek(struct fuse_io *fuse_io)
 		break;
 	default:
 		SPDK_ERRLOG("Invalid whence %d in fuse_lseek_in\n", fsdev_io_d2h_u32(fuse_io->disp, arg->whence));
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_lseek(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-			       file_object(fuse_io), file_handle(fh), offset, whence,
-			       fuse_dispatcher_cpl_cb, fuse_io);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_LSEEK);
+	fsdev_io->u_in.lseek.fobject = file_object(fuse_io);
+	fsdev_io->u_in.lseek.fhandle = file_handle(fh);
+	fsdev_io->u_in.lseek.offset = offset;
+	fsdev_io->u_in.lseek.whence = whence;
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_copy_file_range(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_copy_file_range(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_copy_file_range_in *arg;
 	uint64_t fh_in, fh_out, nodeid_out;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_copy_file_range_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	fh_in = fsdev_io_d2h_u64(fuse_io->disp, arg->fh_in);
 	nodeid_out = fsdev_io_d2h_u64(fuse_io->disp, arg->nodeid_out);
 	fh_out = fsdev_io_d2h_u64(fuse_io->disp, arg->fh_out);
 
-	err = spdk_fsdev_copy_file_range(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-					 file_object(fuse_io), file_handle(fh_in),
-					 fsdev_io_d2h_u64(fuse_io->disp, arg->off_in),
-					 ino_to_object(fuse_io, nodeid_out), file_handle(fh_out),
-					 fsdev_io_d2h_u64(fuse_io->disp, arg->off_out),
-					 fsdev_io_d2h_u64(fuse_io->disp, arg->len),
-					 fsdev_io_d2h_u64(fuse_io->disp, arg->flags),
-					 fuse_dispatcher_cpl_cb, fuse_io);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_COPY_FILE_RANGE);
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	fsdev_io->u_in.copy_file_range.fobject_in = file_object(fuse_io);
+	fsdev_io->u_in.copy_file_range.fhandle_in = file_handle(fh_in);
+	fsdev_io->u_in.copy_file_range.off_in = fsdev_io_d2h_u64(fuse_io->disp, arg->off_in);
+	fsdev_io->u_in.copy_file_range.fobject_out = ino_to_object(fuse_io, nodeid_out);
+	fsdev_io->u_in.copy_file_range.fhandle_out = file_handle(fh_out);
+	fsdev_io->u_in.copy_file_range.off_out = fsdev_io_d2h_u64(fuse_io->disp, arg->off_out);
+	fsdev_io->u_in.copy_file_range.len = fsdev_io_d2h_u64(fuse_io->disp, arg->len);
+	fsdev_io->u_in.copy_file_range.flags = fsdev_io_d2h_u64(fuse_io->disp, arg->flags);
+
+	return 0;
 }
 
-static void
-do_setupmapping(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_setupmapping(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_ERRLOG("SETUPMAPPING is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	return -ENOSYS;
 }
 
-static void
-do_removemapping(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_removemapping(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
 	SPDK_ERRLOG("REMOVEMAPPING is not supported\n");
-	fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
+	return -ENOSYS;
 }
 
-static void
-do_syncfs(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_fill_syncfs(struct fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io)
 {
-	int err;
 	struct fuse_syncfs_in *arg;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get fuse_syncfs_in\n");
-		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
-	err = spdk_fsdev_syncfs(fuse_io_desc(fuse_io), fuse_io->ch, fuse_io->hdr.unique,
-				file_object(fuse_io), fuse_dispatcher_cpl_cb, fuse_io);
+	fuse_init_fsdev_io(fuse_io, fsdev_io, SPDK_FSDEV_IO_SYNCFS);
+	fsdev_io->u_in.syncfs.fobject = file_object(fuse_io);
 
-	if (err) {
-		fuse_dispatcher_io_complete_err(fuse_io, err);
-	}
+	return 0;
 }
 
-static void
-do_notify_reply(struct fuse_io *fuse_io)
+static int
+fuse_dispatcher_notify_reply(struct fuse_io *fuse_io)
 {
 	struct fuse_notify_reply_in *arg;
 	struct spdk_fsdev_notify_reply_data notify_reply_data;
@@ -3451,8 +3420,7 @@ do_notify_reply(struct fuse_io *fuse_io)
 	if (!arg) {
 		SPDK_ERRLOG("Cannot get virtiofs_reply_in: unique %" PRIu64", len %u\n",
 			    fuse_io->hdr.unique, fuse_io->hdr.len);
-		fuse_dispatcher_io_complete_none(fuse_io, -EINVAL);
-		return;
+		return -EINVAL;
 	}
 
 	SPDK_INFOLOG(fuse_dispatcher, "FUSE_NOTIFY_REPLY: unique %" PRIu64 ", len %u, error %d\n",
@@ -3463,77 +3431,268 @@ do_notify_reply(struct fuse_io *fuse_io)
 					       fuse_io->hdr.unique);
 	}
 
-	fuse_dispatcher_io_complete_none(fuse_io, 0);
+	return 0;
 }
 
 static const struct {
-	void (*func)(struct fuse_io *fuse_io);
 	const char *name;
-} fuse_ll_ops[] = {
-	[FUSE_LOOKUP]	   = { do_lookup,      "LOOKUP"	     },
-	[FUSE_FORGET]	   = { do_forget,      "FORGET"	     },
-	[FUSE_GETATTR]	   = { do_getattr,     "GETATTR"     },
-	[FUSE_SETATTR]	   = { do_setattr,     "SETATTR"     },
-	[FUSE_READLINK]	   = { do_readlink,    "READLINK"    },
-	[FUSE_SYMLINK]	   = { do_symlink,     "SYMLINK"     },
-	[FUSE_MKNOD]	   = { do_mknod,       "MKNOD"	     },
-	[FUSE_MKDIR]	   = { do_mkdir,       "MKDIR"	     },
-	[FUSE_UNLINK]	   = { do_unlink,      "UNLINK"	     },
-	[FUSE_RMDIR]	   = { do_rmdir,       "RMDIR"	     },
-	[FUSE_RENAME]	   = { do_rename,      "RENAME"	     },
-	[FUSE_LINK]	   = { do_link,	       "LINK"	     },
-	[FUSE_OPEN]	   = { do_open,	       "OPEN"	     },
-	[FUSE_READ]	   = { do_read,       "READ"	     },
-	[FUSE_WRITE]	   = { do_write,       "WRITE"	     },
-	[FUSE_STATFS]	   = { do_statfs,      "STATFS"	     },
-	[FUSE_RELEASE]	   = { do_release,     "RELEASE"     },
-	[FUSE_FSYNC]	   = { do_fsync,       "FSYNC"	     },
-	[FUSE_SETXATTR]	   = { do_setxattr,    "SETXATTR"    },
-	[FUSE_GETXATTR]	   = { do_getxattr,    "GETXATTR"    },
-	[FUSE_LISTXATTR]   = { do_listxattr,   "LISTXATTR"   },
-	[FUSE_REMOVEXATTR] = { do_removexattr, "REMOVEXATTR" },
-	[FUSE_FLUSH]	   = { do_flush,       "FLUSH"	     },
-	[FUSE_INIT]	   = { do_init,	       "INIT"	     },
-	[FUSE_OPENDIR]	   = { do_opendir,     "OPENDIR"     },
-	[FUSE_READDIR]	   = { do_readdir,     "READDIR"     },
-	[FUSE_RELEASEDIR]  = { do_releasedir,  "RELEASEDIR"  },
-	[FUSE_FSYNCDIR]	   = { do_fsyncdir,    "FSYNCDIR"    },
-	[FUSE_GETLK]	   = { do_getlk,       "GETLK"	     },
-	[FUSE_SETLK]	   = { do_setlk,       "SETLK"	     },
-	[FUSE_SETLKW]	   = { do_setlkw,      "SETLKW"	     },
-	[FUSE_ACCESS]	   = { do_access,      "ACCESS"	     },
-	[FUSE_CREATE]	   = { do_create,      "CREATE"	     },
-	[FUSE_INTERRUPT]   = { do_interrupt,   "INTERRUPT"   },
-	[FUSE_BMAP]	   = { do_bmap,	       "BMAP"	     },
-	[FUSE_DESTROY]	   = { do_destroy,     "DESTROY"     },
-	[FUSE_IOCTL]	   = { do_ioctl,       "IOCTL"	     },
-	[FUSE_POLL]	   = { do_poll,        "POLL"	     },
-	[FUSE_NOTIFY_REPLY] = { do_notify_reply, "NOTIFY_REPLY" },
-	[FUSE_BATCH_FORGET] = { do_batch_forget, "BATCH_FORGET" },
-	[FUSE_FALLOCATE]   = { do_fallocate,   "FALLOCATE"   },
-	[FUSE_READDIRPLUS] = { do_readdirplus,	"READDIRPLUS"},
-	[FUSE_RENAME2]     = { do_rename2,      "RENAME2"    },
-	[FUSE_LSEEK] = { do_lseek, "LSEEK" },
-	[FUSE_COPY_FILE_RANGE] = { do_copy_file_range, "COPY_FILE_RANGE" },
-	[FUSE_SETUPMAPPING]  = { do_setupmapping, "SETUPMAPPING" },
-	[FUSE_REMOVEMAPPING] = { do_removemapping, "REMOVEMAPPING" },
-	[FUSE_SYNCFS] = { do_syncfs, "SYNCFS" },
+} fuse_op_names[] = {
+	[FUSE_LOOKUP]		= { "LOOKUP" },
+	[FUSE_FORGET]		= { "FORGET" },
+	[FUSE_GETATTR]		= { "GETATTR" },
+	[FUSE_SETATTR]		= { "SETATTR" },
+	[FUSE_READLINK]		= { "READLINK" },
+	[FUSE_SYMLINK]		= { "SYMLINK" },
+	[FUSE_MKNOD]		= { "MKNOD" },
+	[FUSE_MKDIR]		= { "MKDIR" },
+	[FUSE_UNLINK]		= { "UNLINK" },
+	[FUSE_RMDIR]		= { "RMDIR" },
+	[FUSE_RENAME]		= { "RENAME" },
+	[FUSE_LINK]		= { "LINK" },
+	[FUSE_OPEN]		= { "OPEN" },
+	[FUSE_READ]		= { "READ" },
+	[FUSE_WRITE]		= { "WRITE" },
+	[FUSE_STATFS]		= { "STATFS" },
+	[FUSE_RELEASE]		= { "RELEASE" },
+	[FUSE_FSYNC]		= { "FSYNC" },
+	[FUSE_SETXATTR]		= { "SETXATTR" },
+	[FUSE_GETXATTR]		= { "GETXATTR" },
+	[FUSE_LISTXATTR]	= { "LISTXATTR" },
+	[FUSE_REMOVEXATTR]	= { "REMOVEXATTR" },
+	[FUSE_FLUSH]		= { "FLUSH" },
+	[FUSE_INIT]		= { "INIT" },
+	[FUSE_OPENDIR]		= { "OPENDIR" },
+	[FUSE_READDIR]		= { "READDIR" },
+	[FUSE_RELEASEDIR]	= { "RELEASEDIR" },
+	[FUSE_FSYNCDIR]		= { "FSYNCDIR" },
+	[FUSE_GETLK]		= { "GETLK" },
+	[FUSE_SETLK]		= { "SETLK" },
+	[FUSE_SETLKW]		= { "SETLKW" },
+	[FUSE_ACCESS]		= { "ACCESS" },
+	[FUSE_CREATE]		= { "CREATE" },
+	[FUSE_INTERRUPT]	= { "INTERRUPT" },
+	[FUSE_BMAP]		= { "BMAP" },
+	[FUSE_DESTROY]		= { "DESTROY" },
+	[FUSE_IOCTL]		= { "IOCTL" },
+	[FUSE_POLL]		= { "POLL" },
+	[FUSE_NOTIFY_REPLY]	= { "NOTIFY_REPLY" },
+	[FUSE_BATCH_FORGET]	= { "BATCH_FORGET" },
+	[FUSE_FALLOCATE]	= { "FALLOCATE" },
+	[FUSE_READDIRPLUS]	= { "READDIRPLUS" },
+	[FUSE_RENAME2]		= { "RENAME2" },
+	[FUSE_LSEEK]		= { "LSEEK" },
+	[FUSE_COPY_FILE_RANGE]	= { "COPY_FILE_RANGE" },
+	[FUSE_SETUPMAPPING]	= { "SETUPMAPPING" },
+	[FUSE_REMOVEMAPPING]	= { "REMOVEMAPPING" },
+	[FUSE_SYNCFS]		= { "SYNCFS" },
 };
 
 const char *
 spdk_fuse_dispatcher_get_operation_name(uint32_t opcode)
 {
-	if (opcode >= SPDK_COUNTOF(fuse_ll_ops)) {
+	if (opcode >= SPDK_COUNTOF(fuse_op_names)) {
 		return NULL;
 	}
 
-	return fuse_ll_ops[opcode].name;
+	return fuse_op_names[opcode].name;
 }
 
 static int
-spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
+fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
+{
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	struct spdk_fsdev_io *fsdev_io;
+	int rc;
+
+	fsdev_io = spdk_fsdev_io_get(disp->desc, fuse_io->ch);
+	if (!fsdev_io) {
+		return -ENOBUFS;
+	}
+
+	switch (fuse_io->hdr.opcode) {
+	case FUSE_LOOKUP:
+		rc = fuse_dispatcher_fill_lookup(fuse_io, fsdev_io);
+		break;
+	case FUSE_FORGET:
+		rc = fuse_dispatcher_fill_forget(fuse_io, fsdev_io);
+		break;
+	case FUSE_GETATTR:
+		rc = fuse_dispatcher_fill_getattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_SETATTR:
+		rc = fuse_dispatcher_fill_setattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_READLINK:
+		rc = fuse_dispatcher_fill_readlink(fuse_io, fsdev_io);
+		break;
+	case FUSE_SYMLINK:
+		rc = fuse_dispatcher_fill_symlink(fuse_io, fsdev_io);
+		break;
+	case FUSE_MKNOD:
+		rc = fuse_dispatcher_fill_mknod(fuse_io, fsdev_io);
+		break;
+	case FUSE_MKDIR:
+		rc = fuse_dispatcher_fill_mkdir(fuse_io, fsdev_io);
+		break;
+	case FUSE_UNLINK:
+		rc = fuse_dispatcher_fill_unlink(fuse_io, fsdev_io);
+		break;
+	case FUSE_RMDIR:
+		rc = fuse_dispatcher_fill_rmdir(fuse_io, fsdev_io);
+		break;
+	case FUSE_RENAME:
+		rc = fuse_dispatcher_fill_rename(fuse_io, fsdev_io);
+		break;
+	case FUSE_LINK:
+		rc = fuse_dispatcher_fill_link(fuse_io, fsdev_io);
+		break;
+	case FUSE_OPEN:
+		rc = fuse_dispatcher_fill_open(fuse_io, fsdev_io);
+		break;
+	case FUSE_READ:
+		rc = fuse_dispatcher_fill_read(fuse_io, fsdev_io);
+		break;
+	case FUSE_WRITE:
+		rc = fuse_dispatcher_fill_write(fuse_io, fsdev_io);
+		break;
+	case FUSE_STATFS:
+		rc = fuse_dispatcher_fill_statfs(fuse_io, fsdev_io);
+		break;
+	case FUSE_RELEASE:
+		rc = fuse_dispatcher_fill_release(fuse_io, fsdev_io);
+		break;
+	case FUSE_FSYNC:
+		rc = fuse_dispatcher_fill_fsync(fuse_io, fsdev_io);
+		break;
+	case FUSE_SETXATTR:
+		rc = fuse_dispatcher_fill_setxattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_GETXATTR:
+		rc = fuse_dispatcher_fill_getxattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_LISTXATTR:
+		rc = fuse_dispatcher_fill_listxattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_REMOVEXATTR:
+		rc = fuse_dispatcher_fill_removexattr(fuse_io, fsdev_io);
+		break;
+	case FUSE_FLUSH:
+		rc = fuse_dispatcher_fill_flush(fuse_io, fsdev_io);
+		break;
+	case FUSE_INIT:
+		rc = fuse_dispatcher_fill_init(fuse_io, fsdev_io);
+		if (rc == -EAGAIN) {
+			fuse_dispatcher_init_complete_again(fuse_io);
+			spdk_fsdev_io_put(fsdev_io);
+			return 0;
+		}
+		break;
+	case FUSE_OPENDIR:
+		rc = fuse_dispatcher_fill_opendir(fuse_io, fsdev_io);
+		break;
+	case FUSE_READDIR:
+		rc = fuse_dispatcher_fill_readdir(fuse_io, fsdev_io);
+		break;
+	case FUSE_RELEASEDIR:
+		rc = fuse_dispatcher_fill_releasedir(fuse_io, fsdev_io);
+		break;
+	case FUSE_FSYNCDIR:
+		rc = fuse_dispatcher_fill_fsyncdir(fuse_io, fsdev_io);
+		break;
+	case FUSE_GETLK:
+		rc = fuse_dispatcher_fill_getlk(fuse_io, fsdev_io);
+		break;
+	case FUSE_SETLK:
+		rc = fuse_dispatcher_fill_setlk(fuse_io, fsdev_io);
+		break;
+	case FUSE_SETLKW:
+		rc = fuse_dispatcher_fill_setlkw(fuse_io, fsdev_io);
+		break;
+	case FUSE_ACCESS:
+		rc = fuse_dispatcher_fill_access(fuse_io, fsdev_io);
+		break;
+	case FUSE_CREATE:
+		rc = fuse_dispatcher_fill_create(fuse_io, fsdev_io);
+		break;
+	case FUSE_INTERRUPT:
+		rc = fuse_dispatcher_fill_interrupt(fuse_io, fsdev_io);
+		break;
+	case FUSE_BMAP:
+		rc = fuse_dispatcher_fill_bmap(fuse_io, fsdev_io);
+		break;
+	case FUSE_DESTROY:
+		rc = fuse_dispatcher_fill_destroy(fuse_io, fsdev_io);
+		break;
+	case FUSE_IOCTL:
+		rc = fuse_dispatcher_fill_ioctl(fuse_io, fsdev_io);
+		break;
+	case FUSE_POLL:
+		rc = fuse_dispatcher_fill_poll(fuse_io, fsdev_io);
+		break;
+	case FUSE_NOTIFY_REPLY:
+		rc = fuse_dispatcher_notify_reply(fuse_io);
+		fuse_dispatcher_io_complete_none(fuse_io, rc);
+		spdk_fsdev_io_put(fsdev_io);
+		return 0;
+		break;
+	case FUSE_BATCH_FORGET:
+		rc = fuse_dispatcher_batch_forget(fuse_io);
+		if (rc <= 0) {
+			/* FUSE_BATCH_FORGET requires no response */
+			fuse_dispatcher_io_complete_none(fuse_io, rc);
+			spdk_fsdev_io_put(fsdev_io);
+		}
+		return 0;
+		break;
+	case FUSE_FALLOCATE:
+		rc = fuse_dispatcher_fill_fallocate(fuse_io, fsdev_io);
+		break;
+	case FUSE_READDIRPLUS:
+		rc = fuse_dispatcher_fill_readdirplus(fuse_io, fsdev_io);
+		break;
+	case FUSE_RENAME2:
+		rc = fuse_dispatcher_fill_rename2(fuse_io, fsdev_io);
+		break;
+	case FUSE_LSEEK:
+		rc = fuse_dispatcher_fill_lseek(fuse_io, fsdev_io);
+		break;
+	case FUSE_COPY_FILE_RANGE:
+		rc = fuse_dispatcher_fill_copy_file_range(fuse_io, fsdev_io);
+		break;
+	case FUSE_SETUPMAPPING:
+		rc = fuse_dispatcher_fill_setupmapping(fuse_io, fsdev_io);
+		break;
+	case FUSE_REMOVEMAPPING:
+		rc = fuse_dispatcher_fill_removemapping(fuse_io, fsdev_io);
+		break;
+	case FUSE_SYNCFS:
+		rc = fuse_dispatcher_fill_syncfs(fuse_io, fsdev_io);
+		break;
+	default:
+		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", fuse_io->hdr.opcode);
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc) {
+		if (_fuse_op_requires_reply(fuse_io->hdr.opcode)) {
+			fuse_dispatcher_io_complete_err(fuse_io, rc);
+		} else {
+			fuse_dispatcher_io_complete_none(fuse_io, rc);
+		}
+		spdk_fsdev_io_put(fsdev_io);
+		return rc;
+	}
+
+	spdk_fsdev_io_submit(fsdev_io);
+	return 0;
+}
+
+static int
+fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {
 	struct fuse_in_header *hdr;
+	const char *op_name;
 
 	if (!fuse_io->in_iovcnt || !fuse_io->in_iov) {
 		SPDK_ERRLOG("Bad IO: no IN iov (%d, %p)\n", fuse_io->in_iovcnt, fuse_io->in_iov);
@@ -3565,18 +3724,10 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 		UNUSED(out_hdr); /* We don't need it here, we just made a check and a reservation */
 	}
 
-	if (fuse_io->hdr.opcode >= SPDK_COUNTOF(fuse_ll_ops)) {
-		SPDK_ERRLOG("Bad IO: opt_code is out of range (%" PRIu32 " > %zu)\n", fuse_io->hdr.opcode,
-			    SPDK_COUNTOF(fuse_ll_ops));
-		fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
-		return 0;
-	}
-
-	if (!fuse_ll_ops[fuse_io->hdr.opcode].func) {
-		SPDK_ERRLOG("Bad IO: no handler for (%" PRIu32 ") %s\n", fuse_io->hdr.opcode,
-			    fuse_ll_ops[fuse_io->hdr.opcode].name);
-		fuse_dispatcher_io_complete_err(fuse_io, -ENOSYS);
-		return 0;
+	op_name = spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode);
+	if (!op_name) {
+		SPDK_ERRLOG("IO (%" PRIu32 ") is unsupported\n", fuse_io->hdr.opcode);
+		goto exit;
 	}
 
 	fuse_io->hdr.len = fsdev_io_d2h_u32(fuse_io->disp, hdr->len);
@@ -3587,11 +3738,10 @@ spdk_fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct f
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
 		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32 "\n", fuse_io->hdr.opcode,
-		      fuse_ll_ops[fuse_io->hdr.opcode].name, fuse_io->hdr.len, fuse_io->hdr.unique,
+		      op_name, fuse_io->hdr.len, fuse_io->hdr.unique,
 		      fuse_io->hdr.nodeid, fuse_io->hdr.uid, fuse_io->hdr.gid, fuse_io->hdr.pid);
 
-	fuse_ll_ops[fuse_io->hdr.opcode].func(fuse_io);
-	return 0;
+	return fuse_dispatcher_submit_io(fuse_io);
 
 exit:
 	return -EINVAL;
@@ -3768,7 +3918,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	fuse_io->source_id = source_id;
 	fuse_io->source_unique = source_unique;
 
-	return spdk_fuse_dispatcher_handle_fuse_req(disp, fuse_io);
+	return fuse_dispatcher_handle_fuse_req(disp, fuse_io);
 }
 
 void
