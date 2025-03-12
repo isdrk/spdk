@@ -91,6 +91,8 @@ size_t spdk_fuse_dispatcher_get_io_ctx_size(void);
  * \param in_iovcnt Size of the input IO vectors array.
  * \param out_iov Output IO vectors array.
  * \param out_iovcnt Size of the output IO vectors array.
+ * \param source_id Source ID
+ * \param source_unique per Source ID unique value
  * \param cb Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -99,11 +101,15 @@ size_t spdk_fuse_dispatcher_get_io_ctx_size(void);
  * negated errno on failure, in which case the callback will not be called.
  *  -ENOBUFS - the request cannot be submitted due to a lack of the internal IO objects
  *  -EINVAL - the request cannot be submitted as some FUSE request data is incorrect
+ *
+ * NOTE: each source_id is pinned to a thread. Which means that requests with a specific source_id
+ * can only be submitted on one thread. Multiple source_ids per thread are allowed.
  */
 int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 					struct spdk_io_channel *ch,
 					struct iovec *in_iov, int in_iovcnt,
 					struct iovec *out_iov, int out_iovcnt, void *io_ctx,
+					uint16_t source_id, uint64_t source_unique,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
 /**

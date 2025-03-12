@@ -62,6 +62,8 @@ struct fsdev_fuse_channel {
 	int					clone_fd;
 	void					*request_pool;
 	struct spdk_fuse_poll_group		*poll_group;
+	uint16_t				source_id;
+	uint64_t				source_unique;
 };
 
 struct spdk_fuse_poll_group {
@@ -413,6 +415,8 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 		TAILQ_INSERT_TAIL(&ch->free_requests, req, tailq);
 	}
 
+	ch->source_id = (uint16_t)spdk_env_get_core_index(spdk_env_get_current_core());
+
 	return ch;
 error:
 	fsdev_fuse_channel_destroy(ch);
@@ -485,12 +489,13 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 		}
 
 		ch->num_outstanding++;
+		ch->source_unique++;
 		SPDK_DEBUGLOG(fuse, "%s: processing %s\n", mount->name,
 			      fsdev_fuse_request_get_name(req));
 
 		rc = spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
-				req->in_iovs, req->in_iovcnt, req->out_iovs, req->out_iovcnt,
-				req->ctx, fsdev_fuse_request_submit_cb, req);
+				req->in_iovs, req->in_iovcnt, req->out_iovs, req->out_iovcnt, req->ctx,
+				ch->source_id, ch->source_unique, fsdev_fuse_request_submit_cb, req);
 		if (rc != 0) {
 			ch->num_outstanding--;
 			if (rc == -ENOBUFS) {

@@ -157,6 +157,9 @@ struct fuse_io {
 	struct fuse_in_header hdr;
 	bool in_hdr_with_data;
 
+	uint16_t source_id;
+	uint64_t source_unique;
+
 	union {
 		struct {
 			struct spdk_thread *thread;
@@ -3975,6 +3978,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    struct spdk_io_channel *ch,
 				    struct iovec *in_iov, int in_iovcnt,
 				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
+				    uint16_t source_id, uint64_t source_unique,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
@@ -3997,6 +4001,9 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	fuse_io->in_offs.buf_offs = 0;
 	fuse_io->out_offs.iov_offs = 0;
 	fuse_io->out_offs.buf_offs = 0;
+
+	fuse_io->source_id = source_id;
+	fuse_io->source_unique = source_unique;
 
 	return spdk_fuse_dispatcher_handle_fuse_req(disp, fuse_io);
 }

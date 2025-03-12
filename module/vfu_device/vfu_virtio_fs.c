@@ -40,6 +40,8 @@ struct virtio_fs_endpoint {
 
 	/* virtio_fs ring process poller */
 	struct spdk_poller *ring_poller;
+
+	uint64_t source_unique;
 };
 
 struct virtio_fs_req {
@@ -215,8 +217,12 @@ virtio_fs_process_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_vi
 	out_iov = &req->iovs[in_iovcnt];
 	out_iovcnt = req->iovcnt - in_iovcnt;
 
+	/* we only have one thread here */
+	fs_endpoint->source_unique++;
+
 	spdk_fuse_dispatcher_submit_request(fs_endpoint->fuse_disp, fs_endpoint->io_channel,
 					    in_iov, in_iovcnt, out_iov, out_iovcnt, fs_req->io_ctx,
+					    0, fs_endpoint->source_unique,
 					    virtio_fs_fuse_req_done, fs_req);
 	return 0;
 }

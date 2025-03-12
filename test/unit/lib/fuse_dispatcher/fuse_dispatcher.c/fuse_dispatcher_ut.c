@@ -339,7 +339,7 @@ ut_fuse_disp_test_init_destroy(void)
 	in_iov.iov_len = init_in.hdr.len;
 	out_iov.iov_len = sizeof(init_out.hdr) + sizeof(init_out.init);
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, &out_iov, 1, io_ctx,
-			request_cb, &request_cb_arg);
+			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_mount);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
@@ -387,7 +387,7 @@ ut_fuse_disp_test_init_destroy(void)
 	in_iov.iov_len = init_in.hdr.len;
 	out_iov.iov_len = sizeof(init_out.hdr);
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, &out_iov, 1, io_ctx,
-			request_cb, &request_cb_arg);
+			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_umount);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
@@ -491,7 +491,7 @@ ut_fuse_disp_test_notify_reply(void)
 	in_iov.iov_base = &notify_reply;
 	in_iov.iov_len = notify_reply.hdr.len;
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, NULL, 0, io_ctx,
-			request_cb, &request_cb_arg);
+			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	fsdev_notify_reply_data.status = 0;
 	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
@@ -508,7 +508,7 @@ ut_fuse_disp_test_notify_reply(void)
 	notify_reply.hdr.unique = 2;
 	notify_reply.notify_reply.error = -EINVAL;
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, NULL, 0, io_ctx,
-			request_cb, &request_cb_arg);
+			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	fsdev_notify_reply_data.status = -EINVAL;
 	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
