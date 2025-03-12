@@ -311,7 +311,7 @@ spdk_aio_mgr_io_cpl_cb(io_context_t ctx, struct iocb *iocb, long res, long res2)
 
 static struct spdk_aio_mgr_io *
 spdk_aio_mgr_submit_io(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ctx, int fd,
-		       uint64_t offs, uint32_t size, struct iovec *iovs, uint32_t iovcnt, bool read)
+		       uint64_t offs, uint32_t size, const struct iovec *iovs, uint32_t iovcnt, bool read)
 {
 	struct spdk_aio_mgr_io *aio;
 	int res;
@@ -386,20 +386,6 @@ spdk_aio_mgr_create(uint32_t max_aios)
 	}
 
 	return mgr;
-}
-
-static struct spdk_aio_mgr_io *
-spdk_aio_mgr_read(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ctx,
-		  int fd, uint64_t offs, uint32_t size, struct iovec *iovs, uint32_t iovcnt)
-{
-	return spdk_aio_mgr_submit_io(mgr, clb, ctx, fd, offs, size, iovs, iovcnt, true);
-}
-
-static struct spdk_aio_mgr_io *
-spdk_aio_mgr_write(struct spdk_aio_mgr *mgr, fsdev_aio_done_cb clb, void *ctx,
-		   int fd, uint64_t offs, uint32_t size, const struct iovec *iovs, uint32_t iovcnt)
-{
-	return spdk_aio_mgr_submit_io(mgr, clb, ctx, fd, offs, size, (struct iovec *)iovs, iovcnt, false);
 }
 
 static void
@@ -2852,9 +2838,11 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	vfsdev_io->aio = spdk_aio_mgr_read(ch->mgr, fsdev_aio_read_cb, fsdev_io, fhandle->fd, offs, size,
-					   outvec,
-					   outcnt);
+	vfsdev_io->aio = spdk_aio_mgr_submit_io(ch->mgr, fsdev_aio_read_cb, fsdev_io, fhandle->fd, offs,
+						size,
+						outvec,
+						outcnt,
+						true);
 	if (vfsdev_io->aio) {
 		vfsdev_io->ch = ch;
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
@@ -2979,8 +2967,8 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	vfsdev_io->aio = spdk_aio_mgr_write(ch->mgr, fsdev_aio_write_cb, fsdev_io,
-					    fhandle->fd, offs, size, invec, incnt);
+	vfsdev_io->aio = spdk_aio_mgr_submit_io(ch->mgr, fsdev_aio_write_cb, fsdev_io,
+						fhandle->fd, offs, size, invec, incnt, false);
 	if (vfsdev_io->aio) {
 		vfsdev_io->ch = ch;
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
