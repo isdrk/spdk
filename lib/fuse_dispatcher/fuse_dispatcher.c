@@ -2223,6 +2223,11 @@ fsdev_mount_flags_to_fuse(uint32_t flags)
 		stage |= (FUSE_##flag);			   \
 	}
 
+#define SET_MOUNT_FLAG2(cond, stage, flag) \
+	if ((cond) && (requested_flags2 & ((FUSE_##flag) >> 32))) { \
+		stage |= ((FUSE_##flag) >> 32);			   \
+	}
+
 /* Maximal number of pages for unlimited max_xfer_size. Using FUSE page limit value. */
 #define SPDK_FSDEV_PAGE_LIMIT 256
 
@@ -2231,10 +2236,12 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 			    const struct spdk_fsdev_mount_opts *negotiated_opts)
 {
 	uint32_t requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
+	uint32_t requested_flags2 = 0;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct fuse_init_out outarg;
 	size_t outargsize = sizeof(outarg);
 	uint32_t supported = 0;
+	uint32_t supported2 = 0;
 	uint32_t max_xfer_size;
 	void *out_buf;
 
@@ -2248,6 +2255,10 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 		outargsize = FUSE_COMPAT_INIT_OUT_SIZE;
 	} else if (disp->proto_minor < 23) {
 		outargsize = FUSE_COMPAT_22_INIT_OUT_SIZE;
+	}
+
+	if (requested_flags & FUSE_INIT_EXT) {
+		requested_flags2 = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags2);
 	}
 
 	/* Always supported if requested by the FUSE. */
@@ -2265,13 +2276,22 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	SET_MOUNT_FLAG(true, supported, SUBMOUNTS);
 	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV_V2);
 	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
-
 	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
 	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
+	SET_MOUNT_FLAG(true, supported, INIT_EXT);
+
+	if (supported & FUSE_INIT_EXT) {
+		SET_MOUNT_FLAG2(true, supported2, DIRECT_IO_ALLOW_MMAP);
+	}
 
 	/* Sending back the fsdev negotiated mount opts. */
 	supported |= fsdev_mount_flags_to_fuse(negotiated_opts->flags);
 	outarg.flags = fsdev_io_h2d_u32(fuse_io->disp, supported);
+	if (supported & FUSE_INIT_EXT) {
+		outarg.flags2 = fsdev_io_h2d_u32(fuse_io->disp, supported2);
+	}
+
+	outarg.flags2 = fsdev_io_h2d_u32(fuse_io->disp, supported2);
 	disp->mount_flags = supported;
 
 	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io->disp, negotiated_opts->max_readahead);
