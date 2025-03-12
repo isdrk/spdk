@@ -330,6 +330,8 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 
 	if (!fhandle->hdr.is_fobject) {
 		fhandle->hdr.refcount++;
+		/* We do not currently believe this value goes over 2 (one for creation, one for temporary usage on stack) */
+		assert(fhandle->hdr.refcount == 2);
 	} else {
 		/* Error: the key rather belongs to a fobject */
 		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
@@ -644,7 +646,7 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 }
 
 static uint64_t
-file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
+file_handle_unref(struct aio_fsdev_file_handle *fhandle)
 {
 	struct aio_fsdev_file_object *fobject = NULL;
 	struct aio_fsdev *vfsdev = fhandle->vfsdev;
@@ -653,12 +655,10 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 	assert(fhandle->hdr.refcount > 0);
 
 	spdk_spin_lock(&vfsdev->lock);
-	if (!force_removal) {
-		refcount = --fhandle->hdr.refcount;
-		if (refcount) {
-			spdk_spin_unlock(&vfsdev->lock);
-			return refcount;
-		}
+	refcount = --fhandle->hdr.refcount;
+	if (refcount) {
+		spdk_spin_unlock(&vfsdev->lock);
+		return refcount;
 	}
 
 	fobject = spdk_lut_get(vfsdev->lut, fhandle->fobject_lut_key);
@@ -678,7 +678,7 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 
 	assert(fobject); /* There shouldn't be NULL fobject in the LUT and neither of the error conditions above should ever hit */
 
-	refcount = force_removal ? 0 : fhandle->hdr.refcount;
+	refcount = fhandle->hdr.refcount;
 	if (!refcount) {
 		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
 		if (fobject) {
@@ -707,12 +707,6 @@ file_handle_unref_ex(struct aio_fsdev_file_handle *fhandle, bool force_removal)
 	free(fhandle);
 
 	return 0;
-}
-
-static inline uint64_t
-file_handle_unref(struct aio_fsdev_file_handle *fhandle)
-{
-	return file_handle_unref_ex(fhandle, false);
 }
 
 static int
@@ -779,10 +773,18 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 
 	while (!TAILQ_EMPTY(&fobject->handles)) {
 		struct aio_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
-		file_handle_unref_ex(fhandle, true);
+		refcount = file_handle_unref(fhandle);
+		if (refcount > 0) {
+			SPDK_ERRLOG("Unexpected additional refcount on file handle!\n");
+			assert(false);
+			/* Force clean up */
+			while (refcount > 0) {
+				refcount = file_handle_unref(fhandle);
+			}
+		}
 #ifdef __clang_analyzer__
 		/*
-		 * scan-build fails to comprehend that file_handle_unref_ex() removes the fhandle
+		 * scan-build fails to comprehend that file_handle_unref() removes the fhandle
 		 * from the queue, so it thinks it's remained accessible and throws the "Use of
 		 * memory after it is freed" error here.
 		 * The loop below "teaches" the scan-build that the freed fhandle is not on the
