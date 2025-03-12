@@ -140,8 +140,6 @@ function usage() {
 	echo "                           If path is given, it should contain 'include/mellanox/xlio_extra.h' file."
 	echo " --with-static-xlio        Link with static libxlio. Requires --with-xlio."
 	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
-	echo " --with-aio-fsdev          Build aio FSDEV component."
-	echo " --without-aio-fsdev       No path required."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -729,13 +727,6 @@ for i in "$@"; do
 		--with-dpcp=*)
 			check_dir "$i"
 			CONFIG[DPCP_DIR]=$(readlink -f ${i#*=})
-			;;
-		--with-aio-fsdev)
-			CONFIG[AIO_FSDEV]=y
-			AIO_FSDEV_REQUIRED=y
-			;;
-		--without-aio-fsdev)
-			CONFIG[AIO_FSDEV]=n
 			;;
 		--)
 			break
@@ -1376,17 +1367,7 @@ if [[ -n ${CONFIG[MAX_NUMA_NODES]} ]]; then
 	fi
 fi
 
-if [[ "${CONFIG[FSDEV]}" = "n" ]]; then
-	if [[ "$AIO_FSDEV_REQUIRED" = "y" ]]; then
-		echo "ERROR: --with-aio-fsdev cannot be specified as fsdev is disabled."
-		exit 1
-	fi
-
-	# if AIO_FSDEV is not explicitly required by user, we just silently disable it
-	CONFIG[AIO_FSDEV]=n
-fi
-
-if [[ "${CONFIG[AIO_FSDEV]}" = "y" ]]; then
+if [[ "${CONFIG[FSDEV]}" = "y" ]]; then
 	if echo -e '#define _GNU_SOURCE\n#include <unistd.h>\n' \
 		'int main(void) { return copy_file_range(0, 0, 0, 0, 0, 0); }\n' \
 		| "${BUILD_CMD[@]}" - 2> /dev/null; then

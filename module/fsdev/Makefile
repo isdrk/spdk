@@ -7,7 +7,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-ifeq ($(CONFIG_AIO_FSDEV), y)
+ifeq ($(OS),Linux)
 DIRS-y += aio
 endif
 
