@@ -32,6 +32,11 @@
 #define PAGE_SIZE 4096
 #endif
 
+/* SPDK only supports minor version 34 currently, even though our fuse_kernel.h
+ * has a higher number.
+ */
+#define SPDK_FUSE_KERNEL_MINOR_VERSION 34
+
 /*
  * NOTE: It appeared that the open flags have different values on the different HW architechtures.
  *
@@ -2407,16 +2412,16 @@ do_init(struct fuse_io *fuse_io)
 
 		memset(&outarg, 0, sizeof(outarg));
 		outarg.major = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_VERSION);
-		outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, FUSE_KERNEL_MINOR_VERSION);
+		outarg.minor = fsdev_io_h2d_u32(fuse_io->disp, SPDK_FUSE_KERNEL_MINOR_VERSION);
 
 		fuse_dispatcher_io_copy_and_complete(fuse_io, &outarg, outargsize, 0);
 		return;
 	}
 
-	if (disp->proto_minor > FUSE_KERNEL_MINOR_VERSION) {
+	if (disp->proto_minor > SPDK_FUSE_KERNEL_MINOR_VERSION) {
 		SPDK_DEBUGLOG(fuse_dispatcher, "INIT: proto_minor adjusted: %" PRIu32 " -> %" PRIu32 "\n",
-			      disp->proto_minor, FUSE_KERNEL_MINOR_VERSION);
-		disp->proto_minor = FUSE_KERNEL_MINOR_VERSION;
+			      disp->proto_minor, SPDK_FUSE_KERNEL_MINOR_VERSION);
+		disp->proto_minor = SPDK_FUSE_KERNEL_MINOR_VERSION;
 	}
 
 	if (disp->proto_minor >= 6) {
