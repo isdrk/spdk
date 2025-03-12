@@ -648,18 +648,26 @@ file_handle_create(struct aio_fsdev_file_object *fobject, int fd)
 static uint64_t
 file_handle_unref(struct aio_fsdev_file_handle *fhandle)
 {
-	struct aio_fsdev_file_object *fobject = NULL;
 	struct aio_fsdev *vfsdev = fhandle->vfsdev;
 	uint64_t refcount;
 
+	spdk_spin_lock(&vfsdev->lock);
 	assert(fhandle->hdr.refcount > 0);
+	refcount = --fhandle->hdr.refcount;
+	spdk_spin_unlock(&vfsdev->lock);
+
+	return refcount;
+}
+
+static void
+file_handle_destroy(struct aio_fsdev_file_handle *fhandle)
+{
+	struct aio_fsdev_file_object *fobject = NULL;
+	struct aio_fsdev *vfsdev = fhandle->vfsdev;
+
+	assert(fhandle->hdr.refcount == 0);
 
 	spdk_spin_lock(&vfsdev->lock);
-	refcount = --fhandle->hdr.refcount;
-	if (refcount) {
-		spdk_spin_unlock(&vfsdev->lock);
-		return refcount;
-	}
 
 	fobject = spdk_lut_get(vfsdev->lut, fhandle->fobject_lut_key);
 	if (fobject == SPDK_LUT_INVALID_VALUE) {
@@ -678,24 +686,15 @@ file_handle_unref(struct aio_fsdev_file_handle *fhandle)
 
 	assert(fobject); /* There shouldn't be NULL fobject in the LUT and neither of the error conditions above should ever hit */
 
-	refcount = fhandle->hdr.refcount;
-	if (!refcount) {
-		spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
-		if (fobject) {
-			TAILQ_REMOVE(&fobject->handles, fhandle, link);
-		}
+	spdk_lut_remove(vfsdev->lut, fhandle->hdr.lut_key);
+	if (fobject) {
+		TAILQ_REMOVE(&fobject->handles, fhandle, link);
 	}
+
 	spdk_spin_unlock(&vfsdev->lock);
 
 	if (fobject) {
 		file_object_unref(fobject, 1); /* unref the ref we took above */
-	}
-
-	if (refcount) {
-		return refcount;
-	}
-
-	if (fobject) {
 		file_object_unref(fobject, 1); /* unref for the fhandle */
 	}
 
@@ -705,8 +704,6 @@ file_handle_unref(struct aio_fsdev_file_handle *fhandle)
 
 	close(fhandle->fd);
 	free(fhandle);
-
-	return 0;
 }
 
 static int
@@ -782,6 +779,7 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 				refcount = file_handle_unref(fhandle);
 			}
 		}
+		file_handle_destroy(fhandle);
 #ifdef __clang_analyzer__
 		/*
 		 * scan-build fails to comprehend that file_handle_unref() removes the fhandle
@@ -892,8 +890,9 @@ do_return:
 	if (error) {
 		if (fhandle) {
 			uint64_t refcnt = file_handle_unref(fhandle);
-			assert(!refcnt);
+			assert(refcnt == 0);
 			UNUSED(refcnt);
+			file_handle_destroy(fhandle);
 		} else if (fd != -1) {
 			close(fd);
 		}
@@ -926,6 +925,7 @@ fsdev_aio_op_releasedir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_
 
 	file_handle_unref(fhandle); /* fsdev_io_op_opendir() */
 	file_handle_unref(fhandle); /* this call */
+	file_handle_destroy(fhandle);
 	res = 0;
 
 	/*
@@ -2606,6 +2606,7 @@ fsdev_aio_op_release(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	file_handle_unref(fhandle); /* the release */
 	file_handle_unref(fhandle); /* for fsdev_aio_get_fhandle */
+	file_handle_destroy(fhandle);
 
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "RELEASE succeeded for " FOBJECT_FMT " fh=%p)\n",
