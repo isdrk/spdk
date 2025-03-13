@@ -2350,6 +2350,12 @@ nvme_ctrlr_identify_iocs_specific_nvm(struct spdk_nvme_ctrlr *ctrlr)
 {
 	int	rc;
 
+	if (!nvme_ctrlr_multi_iocs_enabled(ctrlr)) {
+		nvme_ctrlr_set_state(ctrlr, NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS,
+				     ctrlr->opts.admin_timeout_ms);
+		return 0;
+	}
+
 	assert(!ctrlr->cdata_nvm);
 	ctrlr->cdata_nvm = spdk_zmalloc(sizeof(*ctrlr->cdata_nvm), 64, NULL, SPDK_ENV_SOCKET_ID_ANY,
 					SPDK_MALLOC_SHARE | SPDK_MALLOC_DMA);
