@@ -229,8 +229,14 @@ struct aio_fsdev {
 #endif
 };
 
+struct aio_fsdev_io;
+
+typedef void (*fsdev_aio_done_cb)(struct aio_fsdev_io *aio, uint32_t data_size, int error);
+
 struct aio_fsdev_io {
-	struct spdk_aio_mgr_io *aio;
+	struct iocb io;
+	fsdev_aio_done_cb clb;
+	uint32_t data_size;
 	struct aio_io_channel *ch;
 	int status;
 	TAILQ_ENTRY(aio_fsdev_io) link;
@@ -238,17 +244,10 @@ struct aio_fsdev_io {
 
 struct aio_io_channel {
 	struct spdk_poller *poller;
-	TAILQ_HEAD(, spdk_aio_mgr_io) ios_in_flight;
 	TAILQ_HEAD(, aio_fsdev_io) ios_in_progress;
 	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
 	io_context_t io_ctx;
-	struct {
-		struct spdk_aio_mgr_io *arr;
-		uint32_t size;
-		TAILQ_HEAD(, spdk_aio_mgr_io) pool;
-	} aios;
 	uint32_t num_completions;
-
 };
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
@@ -257,73 +256,49 @@ static struct fsdev_aio_module_opts g_opts = {
 	.max_io_depth = 256,
 };
 
+static inline struct aio_fsdev *
+fsdev_to_aio_fsdev(struct spdk_fsdev *fsdev)
+{
+	return SPDK_CONTAINEROF(fsdev, struct aio_fsdev, fsdev);
+}
+
+static inline struct spdk_fsdev_io *
+aio_to_fsdev_io(const struct aio_fsdev_io *aio_io)
+{
+	return SPDK_CONTAINEROF(aio_io, struct spdk_fsdev_io, driver_ctx);
+}
+
+static inline struct aio_fsdev_io *
+fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
+{
+	return (struct aio_fsdev_io *)fsdev_io->driver_ctx;
+}
+
 #define MAX_EVENTS 1024
-
-typedef void (*fsdev_aio_done_cb)(struct spdk_fsdev_io *fsdev_io, uint32_t data_size, int error);
-
-struct spdk_aio_mgr_io {
-	struct aio_io_channel *ch;
-	TAILQ_ENTRY(spdk_aio_mgr_io) link;
-	struct iocb io;
-	fsdev_aio_done_cb clb;
-	struct spdk_fsdev_io *fsdev_io;
-	uint32_t data_size;
-};
-
-static struct spdk_aio_mgr_io *
-aio_mgr_get_aio(struct aio_io_channel *ch, fsdev_aio_done_cb clb, struct spdk_fsdev_io *fsdev_io)
-{
-	struct spdk_aio_mgr_io *aio = TAILQ_FIRST(&ch->aios.pool);
-
-	if (aio) {
-		aio->ch = ch;
-		aio->clb = clb;
-		aio->fsdev_io = fsdev_io;
-		aio->data_size = 0;
-		TAILQ_REMOVE(&ch->aios.pool, aio, link);
-	}
-
-	return aio;
-}
-
-static inline void
-aio_mgr_put_aio(struct aio_io_channel *ch, struct spdk_aio_mgr_io *aio)
-{
-	TAILQ_INSERT_TAIL(&ch->aios.pool, aio, link);
-}
 
 static void
 spdk_aio_mgr_io_cpl_cb(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
-	struct spdk_aio_mgr_io *aio = SPDK_CONTAINEROF(iocb, struct spdk_aio_mgr_io, io);
-
-	TAILQ_REMOVE(&aio->ch->ios_in_flight, aio, link);
-
-	aio->clb(aio->fsdev_io, res, -res2);
+	struct aio_fsdev_io *aio = SPDK_CONTAINEROF(iocb, struct aio_fsdev_io, io);
 
 	aio->ch->num_completions++;
 
-	aio_mgr_put_aio(aio->ch, aio);
+	aio->clb(aio, res, -res2);
 }
 
-static struct spdk_aio_mgr_io *
+static int
 spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
-		       struct spdk_fsdev_io *fsdev_io, int fd,
+		       struct aio_fsdev_io *aio, int fd,
 		       uint64_t offs, uint32_t size, const struct iovec *iovs, uint32_t iovcnt, bool read)
 {
-	struct spdk_aio_mgr_io *aio;
 	int res;
 	struct iocb *ios[1];
 
 	SPDK_DEBUGLOG(fsdev_aio, "%s: fd=%d offs=%" PRIu64 " size=%" PRIu32 " iovcnt=%" PRIu32 "\n",
 		      read ? "read" : "write", fd, offs, size, iovcnt);
 
-	aio = aio_mgr_get_aio(ch, clb, fsdev_io);
-	if (!aio) {
-		SPDK_ERRLOG("Cannot get aio\n");
-		clb(fsdev_io, 0, -EFAULT);
-		return NULL;
-	}
+	aio->clb = clb;
+	aio->data_size = 0;
 
 	if (read) {
 		io_prep_preadv(&aio->io, fd, iovs, iovcnt, offs);
@@ -338,18 +313,16 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
 	SPDK_DEBUGLOG(fsdev_aio, "%s: aio=%p submitted with res=%d\n", read ? "read" : "write", aio,
 		      res);
 	if (res > 0) {
-		TAILQ_INSERT_TAIL(&ch->ios_in_flight, aio, link);
-		return aio;
+		return 0;
 	} else {
-		aio->clb(aio->fsdev_io, 0, res != 0 ? res : -EINVAL);
-		aio_mgr_put_aio(ch, aio);
-		return NULL;
+		aio->clb(aio, 0, res != 0 ? res : -EINVAL);
+		return -1;
 	}
 
 }
 
 static void
-spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct spdk_aio_mgr_io *aio)
+spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
 {
 	int res;
 	struct io_event result;
@@ -378,24 +351,6 @@ spdk_aio_mgr_poll(struct aio_io_channel *ch)
 	}
 
 	return ch->num_completions ? true : false;
-}
-
-static inline struct aio_fsdev *
-fsdev_to_aio_fsdev(struct spdk_fsdev *fsdev)
-{
-	return SPDK_CONTAINEROF(fsdev, struct aio_fsdev, fsdev);
-}
-
-static inline struct spdk_fsdev_io *
-aio_to_fsdev_io(const struct aio_fsdev_io *aio_io)
-{
-	return SPDK_CONTAINEROF(aio_io, struct spdk_fsdev_io, driver_ctx);
-}
-
-static inline struct aio_fsdev_io *
-fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
-{
-	return (struct aio_fsdev_io *)fsdev_io->driver_ctx;
 }
 
 static inline struct aio_fsdev_file_object *
@@ -2728,13 +2683,13 @@ fsdev_aio_op_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io
 }
 
 static void
-fsdev_aio_read_cb(struct spdk_fsdev_io *fsdev_io, uint32_t data_size, int error)
+fsdev_aio_read_cb(struct aio_fsdev_io *vfsdev_io, uint32_t data_size, int error)
 {
-	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
 	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 
-	if (vfsdev_io->aio) {
+	if (vfsdev_io->ch) {
 		TAILQ_REMOVE(&vfsdev_io->ch->ios_in_progress, vfsdev_io, link);
 	}
 
@@ -2788,12 +2743,12 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	vfsdev_io->aio = spdk_aio_mgr_submit_io(ch, fsdev_aio_read_cb, fsdev_io, fhandle->fd, offs,
-						size,
-						outvec,
-						outcnt,
-						true);
-	if (vfsdev_io->aio) {
+	res = spdk_aio_mgr_submit_io(ch, fsdev_aio_read_cb, vfsdev_io, fhandle->fd, offs,
+				     size,
+				     outvec,
+				     outcnt,
+				     true);
+	if (res == 0) {
 		vfsdev_io->ch = ch;
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
@@ -2835,14 +2790,14 @@ clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 }
 
 static void
-fsdev_aio_write_cb(struct spdk_fsdev_io *fsdev_io, uint32_t data_size, int error)
+fsdev_aio_write_cb(struct aio_fsdev_io *vfsdev_io, uint32_t data_size, int error)
 {
-	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
 	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 	uint32_t flags;
 
-	if (vfsdev_io->aio) {
+	if (vfsdev_io->ch) {
 		TAILQ_REMOVE(&vfsdev_io->ch->ios_in_progress, vfsdev_io, link);
 	}
 
@@ -2916,9 +2871,9 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	vfsdev_io->aio = spdk_aio_mgr_submit_io(ch, fsdev_aio_write_cb, fsdev_io,
-						fhandle->fd, offs, size, invec, incnt, false);
-	if (vfsdev_io->aio) {
+	res = spdk_aio_mgr_submit_io(ch, fsdev_aio_write_cb, vfsdev_io,
+				     fhandle->fd, offs, size, invec, incnt, false);
+	if (res == 0) {
 		vfsdev_io->ch = ch;
 		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
 	}
@@ -4064,7 +4019,7 @@ aio_io_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
 	case SPDK_FSDEV_IO_READ:
 	case SPDK_FSDEV_IO_WRITE:
 		/* The IO is currently in the kernel. All we can is to try to cancel it. */
-		spdk_aio_mgr_cancel(ch, vfsdev_io->aio);
+		spdk_aio_mgr_cancel(ch, vfsdev_io);
 		break;
 	default:
 		/* The IO is in our queue. Remove and complete it. */
@@ -4148,7 +4103,6 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 	struct aio_io_channel *ch = ctx_buf;
 	struct spdk_thread *thread = spdk_get_thread();
 	int res;
-	uint32_t i;
 
 	UNUSED(thread);
 
@@ -4158,23 +4112,10 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 		return -ENOMEM;
 	}
 
-	ch->aios.arr = calloc(g_opts.max_io_depth, sizeof(ch->aios.arr[0]));
-	if (!ch->aios.arr) {
-		SPDK_ERRLOG("cannot alloc aios pool of %" PRIu32 "\n", g_opts.max_io_depth);
-		io_queue_release(ch->io_ctx);
-		return -ENOMEM;
-	}
-
-	TAILQ_INIT(&ch->ios_in_flight);
-	TAILQ_INIT(&ch->aios.pool);
-
-	for (i = 0; i < g_opts.max_io_depth; i++) {
-		TAILQ_INSERT_TAIL(&ch->aios.pool, &ch->aios.arr[i], link);
-	}
-
-	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll, ch, 0);
 	TAILQ_INIT(&ch->ios_in_progress);
 	TAILQ_INIT(&ch->ios_to_complete);
+
+	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll, ch, 0);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio fsdev IO channel: thread %s, thread id %" PRIu64
 		      "\n",
@@ -4192,8 +4133,7 @@ aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 
 	spdk_poller_unregister(&ch->poller);
 
-	assert(TAILQ_EMPTY(&ch->ios_in_flight));
-	free(ch->aios.arr);
+	assert(TAILQ_EMPTY(&ch->ios_in_progress));
 	io_queue_release(ch->io_ctx);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Destroyed aio fsdev IO channel: thread %s, thread id %" PRIu64
