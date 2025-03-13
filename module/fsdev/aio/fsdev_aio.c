@@ -357,21 +357,6 @@ spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
 	}
 }
 
-static bool
-spdk_aio_mgr_poll(struct aio_io_channel *ch)
-{
-	int res;
-
-	ch->num_completions = 0;
-
-	res = io_queue_run(ch->io_ctx);
-	if (res) {
-		SPDK_WARNLOG("polling failed with err=%d\n", res);
-	}
-
-	return ch->num_completions ? true : false;
-}
-
 static inline struct aio_fsdev_file_object *
 fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_fobject)
 {
@@ -4024,11 +4009,17 @@ aio_io_poll(void *arg)
 	struct aio_fsdev_io *vfsdev_io, *tmp;
 	struct aio_io_channel *ch = arg;
 	TAILQ_HEAD(, aio_fsdev_io) ios = TAILQ_HEAD_INITIALIZER(ios);
-	int res = SPDK_POLLER_IDLE;
+	int res;
+	int rc;
 
-	if (spdk_aio_mgr_poll(ch)) {
-		res = SPDK_POLLER_BUSY;
+	ch->num_completions = 0;
+
+	rc = io_queue_run(ch->io_ctx);
+	if (rc) {
+		SPDK_WARNLOG("polling failed with err=%d\n", rc);
 	}
+
+	res = ch->num_completions ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
 
 	TAILQ_SWAP(&ch->ios_to_complete, &ios, aio_fsdev_io, link);
 	while ((vfsdev_io = TAILQ_FIRST(&ios))) {
