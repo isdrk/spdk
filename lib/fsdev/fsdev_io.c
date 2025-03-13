@@ -14,27 +14,16 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 		      void *usr_cb_fn, void *usr_cb_arg, enum spdk_fsdev_io_type type)
 {
 	struct spdk_fsdev_io *fsdev_io;
-	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
 
-	channel->stat->io[type].count++;
-
-	fsdev_io = fsdev_channel_get_io(channel);
-	if (!fsdev_io) {
-		channel->stat->num_out_of_io++;
-		return NULL;
+	fsdev_io = spdk_fsdev_io_get(desc, ch);
+	if (fsdev_io) {
+		fsdev_io->internal.type = type;
+		fsdev_io->internal.unique = unique;
+		fsdev_io->internal.usr_cb_fn = usr_cb_fn;
+		fsdev_io->internal.usr_cb_arg = usr_cb_arg;
+		fsdev_io->internal.submit_tsc = spdk_get_ticks();
+		fsdev_io->internal.cleanup_cb_fn = NULL;
 	}
-
-	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
-	fsdev_io->internal.ch = channel;
-	fsdev_io->internal.desc = desc;
-	fsdev_io->internal.type = type;
-	fsdev_io->internal.unique = unique;
-	fsdev_io->internal.usr_cb_fn = usr_cb_fn;
-	fsdev_io->internal.usr_cb_arg = usr_cb_arg;
-	fsdev_io->internal.status = -ENOSYS;
-	fsdev_io->internal.in_submit_request = false;
-	fsdev_io->internal.submit_tsc = spdk_get_ticks();
-	fsdev_io->internal.cleanup_cb_fn = NULL;
 
 	return fsdev_io;
 }

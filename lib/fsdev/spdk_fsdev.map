@@ -12,8 +12,8 @@
 	spdk_fsdev_get_name;
 	spdk_fsdev_desc_get_fsdev;
 	spdk_fsdev_get_io_channel;
-	spdk_fsdev_submit_fuse_request;
-	spdk_fsdev_free_io;
+	spdk_fsdev_io_get;
+	spdk_fsdev_io_put;
 	spdk_fsdev_set_opts;
 	spdk_fsdev_get_opts;
 	spdk_fsdev_set_instance_opts;

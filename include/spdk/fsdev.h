@@ -1224,6 +1224,23 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
 }
 
 /**
+ * Get an I/O request.
+ *
+ * \param desc Filesystem device descriptor.
+ * \param ch I/O channel.
+ *
+ * \return non-NULL I/O request on success, otherwise - NULL.
+ */
+struct spdk_fsdev_io *spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch);
+
+/**
+ * Release an I/O request.
+ *
+ * \param fsdev_io I/O request.
+ */
+void spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io);
+
+/**
  * Mount the filesystem.
  *
  * \param desc Filesystem device descriptor.

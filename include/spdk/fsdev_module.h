@@ -315,16 +315,6 @@ spdk_fsdev_io_get_unique(struct spdk_fsdev_io *fsdev_io)
 }
 
 /**
- * Free an I/O request. This should only be called after the completion callback
- * for the I/O has been called and notifies the fsdev layer that memory may now
- * be released.
- *
- * \param fsdev_io I/O request.
- */
-void spdk_fsdev_free_io(struct spdk_fsdev_io *fsdev_io);
-
-
-/**
  * Get a thread that given fsdev_io was submitted on.
  *
  * \param fsdev_io I/O

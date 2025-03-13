@@ -486,7 +486,7 @@ spdk_fsdev_finish(spdk_fsdev_fini_cb cb_fn, void *cb_arg)
 	fsdev_finish_unregister_fsdevs_iter(NULL, 0);
 }
 
-struct spdk_fsdev_io *
+static struct spdk_fsdev_io *
 fsdev_channel_get_io(struct spdk_fsdev_channel *channel)
 {
 	struct spdk_fsdev_mgmt_channel *ch = channel->shared_resource->mgmt_ch;
@@ -508,8 +508,29 @@ fsdev_channel_get_io(struct spdk_fsdev_channel *channel)
 	return fsdev_io;
 }
 
+struct spdk_fsdev_io *
+spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch)
+{
+	struct spdk_fsdev_io *fsdev_io;
+	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
+
+	fsdev_io = fsdev_channel_get_io(channel);
+	if (!fsdev_io) {
+		channel->stat->num_out_of_io++;
+		return NULL;
+	}
+
+	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
+	fsdev_io->internal.ch = channel;
+	fsdev_io->internal.desc = desc;
+	fsdev_io->internal.type = __SPDK_FSDEV_IO_LAST;
+	fsdev_io->internal.status = -ENOSYS;
+	fsdev_io->internal.in_submit_request = false;
+
+	return fsdev_io;
+}
 void
-spdk_fsdev_free_io(struct spdk_fsdev_io *fsdev_io)
+spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io)
 {
 	struct spdk_fsdev_mgmt_channel *ch;
 
@@ -1381,7 +1402,7 @@ fsdev_io_complete(void *ctx)
 		fsdev_ch->stat->num_io_errors++;
 	}
 
-	spdk_fsdev_free_io(fsdev_io);
+	spdk_fsdev_io_put(fsdev_io);
 }
 
 
