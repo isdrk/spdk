@@ -231,11 +231,8 @@ struct aio_fsdev {
 
 struct aio_fsdev_io;
 
-typedef void (*fsdev_aio_done_cb)(struct aio_fsdev_io *aio, uint32_t data_size, int error);
-
 struct aio_fsdev_io {
 	struct iocb io;
-	fsdev_aio_done_cb clb;
 	uint32_t data_size;
 	int status;
 	TAILQ_ENTRY(aio_fsdev_io) link;
@@ -275,23 +272,46 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 
 #define MAX_EVENTS 1024
 
+static int clear_suid_sgid(struct aio_fsdev_io *vfsdev_io);
+
 static void
-spdk_aio_mgr_io_cpl_cb(io_context_t ctx, struct iocb *iocb, long res, long res2)
+fsdev_aio_cb(io_context_t ctx, struct iocb *iocb, long res, long res2)
 {
 	struct aio_fsdev_io *aio = SPDK_CONTAINEROF(iocb, struct aio_fsdev_io, io);
 	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(aio);
 	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
 	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 
+	TAILQ_REMOVE(&aioch->ios_in_progress, aio, link);
+
 	aioch->num_completions++;
 
-	aio->clb(aio, res, -res2);
+	switch (spdk_fsdev_io_get_type(fsdev_io)) {
+	case SPDK_FSDEV_IO_READ:
+		fsdev_io->u_out.read.data_size = res;
+		break;
+	case SPDK_FSDEV_IO_WRITE:
+		fsdev_io->u_out.write.data_size = res;
+
+		if (res2 >= 0 && (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
+			/* We do not check the return value because
+			 * failure is not fatal. */
+			clear_suid_sgid(aio);
+		}
+		break;
+	default:
+		break;
+	}
+
+	aio->status = -res2;
+	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, aio, link);
 }
 
 static int
-spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
-		       struct aio_fsdev_io *aio, int fd,
-		       uint64_t offs, uint32_t size, const struct iovec *iovs, uint32_t iovcnt, bool read)
+spdk_aio_mgr_submit_io(struct aio_io_channel *ch, struct aio_fsdev_io *aio, int fd,
+		       uint64_t offs, uint32_t size,
+		       const struct iovec *iovs, uint32_t iovcnt,
+		       bool read)
 {
 	int res;
 	struct iocb *ios[1];
@@ -299,7 +319,6 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
 	SPDK_DEBUGLOG(fsdev_aio, "%s: fd=%d offs=%" PRIu64 " size=%" PRIu32 " iovcnt=%" PRIu32 "\n",
 		      read ? "read" : "write", fd, offs, size, iovcnt);
 
-	aio->clb = clb;
 	aio->data_size = 0;
 
 	if (read) {
@@ -307,7 +326,7 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
 	} else {
 		io_prep_pwritev(&aio->io, fd, iovs, iovcnt, offs);
 	}
-	io_set_callback(&aio->io, spdk_aio_mgr_io_cpl_cb);
+	io_set_callback(&aio->io, fsdev_aio_cb);
 
 
 	ios[0] = &aio->io;
@@ -317,7 +336,7 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, fsdev_aio_done_cb clb,
 	if (res > 0) {
 		return 0;
 	} else {
-		aio->clb(aio, 0, res != 0 ? res : -EINVAL);
+		fsdev_aio_cb(ch->io_ctx, &aio->io, 0, res != 0 ? res : -EINVAL);
 		return -1;
 	}
 
@@ -332,7 +351,7 @@ spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
 	res = io_cancel(ch->io_ctx, &aio->io, &result);
 	if (res) {
 		SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", aio);
-		spdk_aio_mgr_io_cpl_cb(ch->io_ctx, &aio->io, ECANCELED, 0);
+		fsdev_aio_cb(ch->io_ctx, &aio->io, ECANCELED, 0);
 	} else {
 		SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", aio, res);
 	}
@@ -2682,20 +2701,6 @@ fsdev_aio_op_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io
 	return 0;
 }
 
-static void
-fsdev_aio_read_cb(struct aio_fsdev_io *vfsdev_io, uint32_t data_size, int error)
-{
-	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
-	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
-
-	TAILQ_REMOVE(&aioch->ios_in_progress, vfsdev_io, link);
-
-	fsdev_io->u_out.read.data_size = data_size;
-	vfsdev_io->status = error;
-	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, vfsdev_io, link);
-}
-
 static int
 fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2742,7 +2747,7 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
-	spdk_aio_mgr_submit_io(ch, fsdev_aio_read_cb, vfsdev_io, fhandle->fd, offs,
+	spdk_aio_mgr_submit_io(ch, vfsdev_io, fhandle->fd, offs,
 			       size,
 			       outvec,
 			       outcnt,
@@ -2796,33 +2801,6 @@ fail:
 	return error;
 }
 
-static void
-fsdev_aio_write_cb(struct aio_fsdev_io *vfsdev_io, uint32_t data_size, int error)
-{
-	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
-	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
-	uint32_t flags;
-
-	TAILQ_REMOVE(&aioch->ios_in_progress, vfsdev_io, link);
-
-	flags = fsdev_io->u_in.write.flags;
-
-	fsdev_io->u_out.write.data_size = data_size;
-
-	/* If requested, we must kill the SUID and SGID bits */
-	if (!error && (flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
-		error = clear_suid_sgid(vfsdev_io);
-		if (error) {
-			/* Not fatal */
-			error = 0;
-		}
-	}
-
-	vfsdev_io->status = error;
-	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, vfsdev_io, link);
-}
-
 static int
 fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2869,7 +2847,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
-	spdk_aio_mgr_submit_io(ch, fsdev_aio_write_cb, vfsdev_io,
+	spdk_aio_mgr_submit_io(ch, vfsdev_io,
 			       fhandle->fd, offs, size, invec, incnt, false);
 	res = IO_STATUS_ASYNC;
 
