@@ -240,6 +240,7 @@ struct aio_fsdev_io {
 
 struct aio_io_channel {
 	struct spdk_poller *poller;
+	TAILQ_HEAD(, aio_fsdev_io) ios_for_submit;
 	TAILQ_HEAD(, aio_fsdev_io) ios_in_progress;
 	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
 	io_context_t io_ctx;
@@ -282,40 +283,30 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 
 	TAILQ_REMOVE(&aioch->ios_in_progress, aio, link);
 
-	switch (spdk_fsdev_io_get_type(fsdev_io)) {
-	case SPDK_FSDEV_IO_READ:
-		fsdev_io->u_out.read.data_size = res;
-		break;
-	case SPDK_FSDEV_IO_WRITE:
-		fsdev_io->u_out.write.data_size = res;
+	if (res >= 0) {
+		switch (spdk_fsdev_io_get_type(fsdev_io)) {
+		case SPDK_FSDEV_IO_READ:
+			fsdev_io->u_out.read.data_size = res;
+			break;
+		case SPDK_FSDEV_IO_WRITE:
+			fsdev_io->u_out.write.data_size = res;
 
-		if (res2 >= 0 && (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
-			/* We do not check the return value because
-			 * failure is not fatal. */
-			clear_suid_sgid(aio);
+			if (res2 >= 0 && (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
+				/* We do not check the return value because
+				* failure is not fatal. */
+				clear_suid_sgid(aio);
+			}
+			break;
+		default:
+			break;
 		}
-		break;
-	default:
-		break;
+	} else {
+		SPDK_ERRLOG("aio operation failed: %ld\n", res);
+		assert(false);
 	}
 
 	aio->status = -res2;
 	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, aio, link);
-}
-
-static void
-spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
-{
-	int res;
-	struct io_event result;
-
-	res = io_cancel(ch->io_ctx, &aio->io, &result);
-	if (res) {
-		SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", aio);
-		fsdev_aio_cb(aio, ECANCELED, 0);
-	} else {
-		SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", aio, res);
-	}
 }
 
 static inline struct aio_fsdev_file_object *
@@ -1579,7 +1570,7 @@ fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 * become ready to perform I/O
 	 */
 	if (res == 0 && fsdev_io->u_in.poll.wait) {
-		TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+		TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 		res = IO_STATUS_ASYNC;
 		goto fop_failed;
 	}
@@ -2092,7 +2083,7 @@ fsdev_aio_do_setlk(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 
 		if (res == -EAGAIN && fsdev_io->u_in.setlk.wait) {
-			TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+			TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 			res = IO_STATUS_ASYNC;
 		}
 
@@ -2660,11 +2651,11 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct iovec *iovs = fsdev_io->u_in.read.iov;
 	uint32_t iovcnt = fsdev_io->u_in.read.iovcnt;
 	int res;
-	struct iocb *ios[1];
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.read.opts || !fsdev_io->u_in.read.opts->memory_domain);
 
+	UNUSED(size);
 	UNUSED(flags);
 	UNUSED(size);
 
@@ -2694,7 +2685,7 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+	TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 
 	SPDK_DEBUGLOG(fsdev_aio, "read: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
 		      fhandle->fd, offs, size, iovcnt);
@@ -2703,13 +2694,6 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	io_prep_preadv(&vfsdev_io->io, fhandle->fd, iovs, iovcnt, offs);
 	vfsdev_io->io.data = vfsdev_io;
-
-	ios[0] = &vfsdev_io->io;
-	res = io_submit(ch->io_ctx, 1, ios);
-	SPDK_DEBUGLOG(fsdev_aio, "read: aio=%p submitted with res=%d\n", vfsdev_io, res);
-	if (res <= 0) {
-		fsdev_aio_cb(vfsdev_io, 0, res != 0 ? res : -EINVAL);
-	}
 
 	res = IO_STATUS_ASYNC;
 
@@ -2772,11 +2756,11 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	const struct iovec *iovs = fsdev_io->u_in.write.iov;
 	uint32_t iovcnt =  fsdev_io->u_in.write.iovcnt;
 	int res;
-	struct iocb *ios[1];
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.write.opts || !fsdev_io->u_in.write.opts->memory_domain);
 
+	UNUSED(size);
 	UNUSED(flags);
 	UNUSED(size);
 
@@ -2806,7 +2790,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+	TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 
 	SPDK_DEBUGLOG(fsdev_aio, "write: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
 		      fhandle->fd, offs, size, iovcnt);
@@ -2814,15 +2798,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	vfsdev_io->data_size = 0;
 
 	io_prep_pwritev(&vfsdev_io->io, fhandle->fd, iovs, iovcnt, offs);
-
 	vfsdev_io->io.data = vfsdev_io;
-
-	ios[0] = &vfsdev_io->io;
-	res = io_submit(ch->io_ctx, 1, ios);
-	SPDK_DEBUGLOG(fsdev_aio, "write: aio=%p submitted with res=%d\n", vfsdev_io, res);
-	if (res <= 0) {
-		fsdev_aio_cb(vfsdev_io, 0, res != 0 ? res : -EINVAL);
-	}
 
 	res = IO_STATUS_ASYNC;
 
@@ -3955,38 +3931,38 @@ bad_fobject_in:
 #endif
 }
 
-static void
-aio_io_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
-{
-	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
-
-	switch (type) {
-	case SPDK_FSDEV_IO_READ:
-	case SPDK_FSDEV_IO_WRITE:
-		/* The IO is currently in the kernel. All we can is to try to cancel it. */
-		spdk_aio_mgr_cancel(ch, vfsdev_io);
-		break;
-	default:
-		/* The IO is in our queue. Remove and complete it. */
-		TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
-		spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
-		break;
-	}
-}
-
 static int
 fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
-	struct aio_fsdev_io *vfsdev_io;
+	struct aio_fsdev_io *vfsdev_io, *tmp;
 	uint64_t unique_to_abort = fsdev_io->u_in.abort.unique_to_abort;
 
-	TAILQ_FOREACH(vfsdev_io, &ch->ios_in_progress, link) {
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_for_submit, link, tmp) {
 		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
-			aio_io_cancel(ch, vfsdev_io);
-			return 0;
+			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
+			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+		}
+	}
+
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
+		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
+		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
+			int res;
+			struct io_event result;
+
+			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
+
+			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
+			if (res) {
+				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
+				fsdev_aio_cb(vfsdev_io, ECANCELED, 0);
+			} else {
+				SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", vfsdev_io, res);
+			}
 		}
 	}
 
@@ -4000,6 +3976,8 @@ aio_io_poll(void *arg)
 	struct aio_io_channel *ch = arg;
 	TAILQ_HEAD(, aio_fsdev_io) ios = TAILQ_HEAD_INITIALIZER(ios);
 	struct io_event events[32];
+	struct iocb *iocbs[32];
+	long to_submit = 0;
 	int i, rc, res;
 	struct timespec timeout;
 
@@ -4018,40 +3996,58 @@ aio_io_poll(void *arg)
 
 	res = rc > 0 ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
 
-	TAILQ_SWAP(&ch->ios_to_complete, &ios, aio_fsdev_io, link);
-	while ((vfsdev_io = TAILQ_FIRST(&ios))) {
-		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-		TAILQ_REMOVE(&ios, vfsdev_io, link);
-		spdk_fsdev_io_complete(fsdev_io, vfsdev_io->status);
-		res = SPDK_POLLER_BUSY;
-	}
-
-#define RETRY_IO(retry_func) \
-		TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link); \
-		res = retry_func(ch, fsdev_io); \
-		if (res != IO_STATUS_ASYNC) { \
-			spdk_fsdev_io_complete(fsdev_io, res); \
-		} \
-		res = SPDK_POLLER_BUSY;
-
-
-	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
+	TAILQ_SWAP(&ch->ios_for_submit, &ios, aio_fsdev_io, link);
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ios, link, tmp) {
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 		enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 
+		TAILQ_REMOVE(&ios, vfsdev_io, link);
+
+		rc = -EOPNOTSUPP;
+		res = SPDK_POLLER_BUSY;
+
 		switch (type) {
+		case SPDK_FSDEV_IO_READ:
+		case SPDK_FSDEV_IO_WRITE:
+			TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+			iocbs[to_submit++] = &vfsdev_io->io;
+			rc = IO_STATUS_ASYNC;
+			break;
 		case SPDK_FSDEV_IO_POLL:
-			RETRY_IO(fsdev_aio_do_poll);
+			rc = fsdev_aio_do_poll(ch, fsdev_io);
 			break;
 		case SPDK_FSDEV_IO_SETLK:
-			RETRY_IO(fsdev_aio_do_setlk);
+			rc = fsdev_aio_do_setlk(ch, fsdev_io);
 			break;
 		default:
 			break;
 		}
+
+		if (rc != IO_STATUS_ASYNC) {
+			TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
+		}
+
+		if (to_submit == SPDK_COUNTOF(iocbs)) {
+			break;
+		}
 	}
 
-#undef RETRY_IO
+	if (to_submit > 0) {
+		rc = io_submit(ch->io_ctx, to_submit, iocbs);
+		if (rc < to_submit) {
+			/* TODO: Need to handle this error. Just blow up for now. */
+			assert(false);
+		}
+	}
+
+	TAILQ_SWAP(&ch->ios_to_complete, &ios, aio_fsdev_io, link);
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ios, link, tmp) {
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
+		TAILQ_REMOVE(&ios, vfsdev_io, link);
+		spdk_fsdev_io_complete(fsdev_io, vfsdev_io->status);
+		res = SPDK_POLLER_BUSY;
+	}
 
 	return res;
 }
@@ -4071,10 +4067,13 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 		return -ENOMEM;
 	}
 
+	TAILQ_INIT(&ch->ios_for_submit);
 	TAILQ_INIT(&ch->ios_in_progress);
 	TAILQ_INIT(&ch->ios_to_complete);
 
 	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll, ch, 0);
+
+	UNUSED(thread);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Created aio fsdev IO channel: thread %s, thread id %" PRIu64
 		      "\n",
@@ -4477,12 +4476,31 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 	struct fsdev_aio_reset_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
 	struct aio_fsdev_io *vfsdev_io, *tmp;
 
-	/* We use TAILQ_FOREACH_SAFE as aio_io_cancel can remove the IO from the queue */
-	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
-		/* We only must cancel the IOs which belong to our aio_fsdev. */
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_for_submit, link, tmp) {
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
 		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
-			aio_io_cancel(ch, vfsdev_io);
+			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
+			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+		}
+	}
+
+	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
+		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
+			int res;
+			struct io_event result;
+
+			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
+
+			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
+			if (res) {
+				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
+				fsdev_aio_cb(vfsdev_io, ECANCELED, 0);
+			} else {
+				SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", vfsdev_io, res);
+			}
 		}
 	}
 
