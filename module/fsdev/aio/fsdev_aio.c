@@ -303,40 +303,6 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, aio, link);
 }
 
-static int
-spdk_aio_mgr_submit_io(struct aio_io_channel *ch, struct aio_fsdev_io *aio, int fd,
-		       uint64_t offs, uint32_t size,
-		       const struct iovec *iovs, uint32_t iovcnt,
-		       bool read)
-{
-	int res;
-	struct iocb *ios[1];
-
-	SPDK_DEBUGLOG(fsdev_aio, "%s: fd=%d offs=%" PRIu64 " size=%" PRIu32 " iovcnt=%" PRIu32 "\n",
-		      read ? "read" : "write", fd, offs, size, iovcnt);
-
-	aio->data_size = 0;
-
-	if (read) {
-		io_prep_preadv(&aio->io, fd, iovs, iovcnt, offs);
-	} else {
-		io_prep_pwritev(&aio->io, fd, iovs, iovcnt, offs);
-	}
-	aio->io.data = aio;
-
-	ios[0] = &aio->io;
-	res = io_submit(ch->io_ctx, 1, ios);
-	SPDK_DEBUGLOG(fsdev_aio, "%s: aio=%p submitted with res=%d\n", read ? "read" : "write", aio,
-		      res);
-	if (res > 0) {
-		return 0;
-	} else {
-		fsdev_aio_cb(aio, 0, res != 0 ? res : -EINVAL);
-		return -1;
-	}
-
-}
-
 static void
 spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
 {
@@ -2691,17 +2657,19 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	size_t size = fsdev_io->u_in.read.size;
 	uint64_t offs = fsdev_io->u_in.read.offs;
 	uint32_t flags = fsdev_io->u_in.read.flags;
-	struct iovec *outvec = fsdev_io->u_in.read.iov;
-	uint32_t outcnt = fsdev_io->u_in.read.iovcnt;
+	struct iovec *iovs = fsdev_io->u_in.read.iov;
+	uint32_t iovcnt = fsdev_io->u_in.read.iovcnt;
 	int res;
+	struct iocb *ios[1];
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.read.opts || !fsdev_io->u_in.read.opts->memory_domain);
 
 	UNUSED(flags);
+	UNUSED(size);
 
-	if (!outcnt || !outvec) {
-		SPDK_ERRLOG("bad outvec: iov=%p outcnt=%" PRIu32 "\n", outvec, outcnt);
+	if (!iovs || !iovcnt) {
+		SPDK_ERRLOG("bad outvec: iov=%p outcnt=%" PRIu32 "\n", iovs, iovcnt);
 		return -EINVAL;
 	}
 
@@ -2711,8 +2679,8 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		fsdev_io->u_out.read.data_size = 0;
 		vfsdev_io->status = 0;
 
-		for (i = 0; i < outcnt; i++, outvec++) {
-			fsdev_io->u_out.read.data_size += outvec->iov_len;
+		for (i = 0; i < iovcnt; i++, iovs++) {
+			fsdev_io->u_out.read.data_size += iovs->iov_len;
 		}
 
 		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
@@ -2727,11 +2695,21 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
-	spdk_aio_mgr_submit_io(ch, vfsdev_io, fhandle->fd, offs,
-			       size,
-			       outvec,
-			       outcnt,
-			       true);
+
+	SPDK_DEBUGLOG(fsdev_aio, "read: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
+		      fhandle->fd, offs, size, iovcnt);
+
+	vfsdev_io->data_size = 0;
+
+	io_prep_preadv(&vfsdev_io->io, fhandle->fd, iovs, iovcnt, offs);
+	vfsdev_io->io.data = vfsdev_io;
+
+	ios[0] = &vfsdev_io->io;
+	res = io_submit(ch->io_ctx, 1, ios);
+	SPDK_DEBUGLOG(fsdev_aio, "read: aio=%p submitted with res=%d\n", vfsdev_io, res);
+	if (res <= 0) {
+		fsdev_aio_cb(vfsdev_io, 0, res != 0 ? res : -EINVAL);
+	}
 
 	res = IO_STATUS_ASYNC;
 
@@ -2791,17 +2769,19 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	size_t size = fsdev_io->u_in.write.size;
 	uint64_t offs = fsdev_io->u_in.write.offs;
 	uint32_t flags = fsdev_io->u_in.write.flags;
-	const struct iovec *invec = fsdev_io->u_in.write.iov;
-	uint32_t incnt =  fsdev_io->u_in.write.iovcnt;
+	const struct iovec *iovs = fsdev_io->u_in.write.iov;
+	uint32_t iovcnt =  fsdev_io->u_in.write.iovcnt;
 	int res;
+	struct iocb *ios[1];
 
 	/* we don't suport the memory domains at the moment */
 	assert(!fsdev_io->u_in.write.opts || !fsdev_io->u_in.write.opts->memory_domain);
 
 	UNUSED(flags);
+	UNUSED(size);
 
-	if (!incnt || !invec) { /* there should be at least one iovec with data */
-		SPDK_ERRLOG("bad invec: iov=%p cnt=%" PRIu32 "\n", invec, incnt);
+	if (!iovcnt || !iovs) { /* there should be at least one iovec with data */
+		SPDK_ERRLOG("bad invec: iov=%p cnt=%" PRIu32 "\n", iovs, iovcnt);
 		return -EINVAL;
 	}
 
@@ -2811,8 +2791,8 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		fsdev_io->u_out.write.data_size = 0;
 		vfsdev_io->status = 0;
 
-		for (i = 0; i < incnt; i++, invec++) {
-			fsdev_io->u_out.write.data_size += invec->iov_len;
+		for (i = 0; i < iovcnt; i++, iovs++) {
+			fsdev_io->u_out.write.data_size += iovs->iov_len;
 		}
 
 		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
@@ -2827,8 +2807,23 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
-	spdk_aio_mgr_submit_io(ch, vfsdev_io,
-			       fhandle->fd, offs, size, invec, incnt, false);
+
+	SPDK_DEBUGLOG(fsdev_aio, "write: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
+		      fhandle->fd, offs, size, iovcnt);
+
+	vfsdev_io->data_size = 0;
+
+	io_prep_pwritev(&vfsdev_io->io, fhandle->fd, iovs, iovcnt, offs);
+
+	vfsdev_io->io.data = vfsdev_io;
+
+	ios[0] = &vfsdev_io->io;
+	res = io_submit(ch->io_ctx, 1, ios);
+	SPDK_DEBUGLOG(fsdev_aio, "write: aio=%p submitted with res=%d\n", vfsdev_io, res);
+	if (res <= 0) {
+		fsdev_aio_cb(vfsdev_io, 0, res != 0 ? res : -EINVAL);
+	}
+
 	res = IO_STATUS_ASYNC;
 
 	return res;
