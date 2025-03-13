@@ -1355,15 +1355,15 @@ fsdev_io_complete(void *ctx)
 
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
 
-	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
-				     fsdev_io->internal.status,
-				     fsdev_io);
-
 	if (type == SPDK_FSDEV_IO_READ) {
 		fsdev_ch->stat->bytes_read += fsdev_io->u_out.read.data_size;
 	} else if (type == SPDK_FSDEV_IO_WRITE) {
 		fsdev_ch->stat->bytes_written += fsdev_io->u_out.write.data_size;
 	}
+
+	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
+				     fsdev_io->internal.status,
+				     fsdev_io);
 
 	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
 
