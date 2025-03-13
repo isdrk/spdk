@@ -526,6 +526,7 @@ spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch)
 	fsdev_io->internal.type = __SPDK_FSDEV_IO_LAST;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
+	fsdev_io->internal.cleanup_cb_fn = NULL;
 
 	return fsdev_io;
 }
@@ -552,11 +553,13 @@ spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io)
 }
 
 void
-fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
+spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 {
 	struct spdk_fsdev *fsdev = fsdev_io->fsdev;
 	struct spdk_fsdev_channel *ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
+
+	fsdev_io->internal.submit_tsc = spdk_get_ticks();
 
 	TAILQ_INSERT_TAIL(&ch->io_submitted, fsdev_io, internal.ch_link);
 

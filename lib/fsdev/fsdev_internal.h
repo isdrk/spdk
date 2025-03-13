@@ -11,8 +11,6 @@
 
 #include "spdk/thread.h"
 
-void fsdev_io_submit(struct spdk_fsdev_io *fsdev_io);
-
 #define __io_ch_to_fsdev_ch(io_ch)	((struct spdk_fsdev_channel *)spdk_io_channel_get_ctx(io_ch))
 
 typedef TAILQ_HEAD(, spdk_fsdev_io) fsdev_io_tailq_t;

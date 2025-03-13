@@ -1234,9 +1234,22 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
 struct spdk_fsdev_io *spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch);
 
 /**
+ * Submit I/O request.
+ *
+ * \param fsdev_io I/O request.
+ *
+ * Note: spdk_fsdev_io_put() cannot be called for a submitted I/O request, i.e., for an \p fsdev_io for which
+ * spdk_fsdev_io_submit() has been called. Such an \p fsdev_io will be freed automatically after the user callback
+ * is called.
+ */
+void spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io);
+
+/**
  * Release an I/O request.
  *
  * \param fsdev_io I/O request.
+ *
+ * Note: should only be called for the I/O requests which has not been submitted.
  */
 void spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io);
 

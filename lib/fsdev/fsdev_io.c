@@ -21,8 +21,6 @@ fsdev_io_get_and_fill(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 		fsdev_io->internal.unique = unique;
 		fsdev_io->internal.usr_cb_fn = usr_cb_fn;
 		fsdev_io->internal.usr_cb_arg = usr_cb_arg;
-		fsdev_io->internal.submit_tsc = spdk_get_ticks();
-		fsdev_io->internal.cleanup_cb_fn = NULL;
 	}
 
 	return fsdev_io;
@@ -42,7 +40,7 @@ spdk_fsdev_mount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 
 	fsdev_io->u_in.mount.opts = *opts;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -57,7 +55,7 @@ spdk_fsdev_umount(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 		return -ENOBUFS;
 	}
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 
 }
@@ -81,7 +79,7 @@ spdk_fsdev_lseek(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.lseek.offset = offset;
 	fsdev_io->u_in.lseek.whence = whence;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -103,7 +101,7 @@ spdk_fsdev_poll(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.poll.events = events;
 	fsdev_io->u_in.poll.wait = wait;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 
 }
@@ -123,7 +121,7 @@ spdk_fsdev_lookup(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	fsdev_io->u_in.lookup.name = name;
 	fsdev_io->u_in.lookup.parent_fobject = parent_fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -141,7 +139,7 @@ spdk_fsdev_syncfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 
 	fsdev_io->u_in.syncfs.fobject = fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -163,7 +161,7 @@ spdk_fsdev_access(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.access.uid = uid;
 	fsdev_io->u_in.access.gid = gid;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -199,7 +197,7 @@ spdk_fsdev_ioctl(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_out.ioctl.out_iov = NULL;
 	fsdev_io->u_out.ioctl.out_iovcnt = 0;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -218,7 +216,7 @@ spdk_fsdev_forget(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	fsdev_io->u_in.forget.fobject = fobject;
 	fsdev_io->u_in.forget.nlookup = nlookup;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -237,7 +235,7 @@ spdk_fsdev_getattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.getattr.fobject = fobject;
 	fsdev_io->u_in.getattr.fhandle = fhandle;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -259,7 +257,7 @@ spdk_fsdev_setattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.setattr.attr = *attr;
 	fsdev_io->u_in.setattr.to_set = to_set;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -277,7 +275,7 @@ spdk_fsdev_readlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 	fsdev_io->u_in.readlink.fobject = fobject;
 	fsdev_io->u_out.readlink.linkname = NULL;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -299,7 +297,7 @@ spdk_fsdev_symlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.symlink.euid = euid;
 	fsdev_io->u_in.symlink.egid = egid;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -322,7 +320,7 @@ spdk_fsdev_getlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.getlk.lock = *lock_to_check;
 	fsdev_io->u_in.getlk.owner = owner;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -346,7 +344,7 @@ spdk_fsdev_setlk(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.setlk.owner = owner;
 	fsdev_io->u_in.setlk.wait = wait;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -370,7 +368,7 @@ spdk_fsdev_mknod(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.mknod.euid = euid;
 	fsdev_io->u_in.mknod.egid = egid;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -393,7 +391,7 @@ spdk_fsdev_mkdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.mkdir.euid = euid;
 	fsdev_io->u_in.mkdir.egid = egid;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -412,7 +410,7 @@ spdk_fsdev_unlink(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	fsdev_io->u_in.unlink.name = name;
 	fsdev_io->u_in.unlink.parent_fobject = parent_fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -431,7 +429,7 @@ spdk_fsdev_rmdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.rmdir.name = name;
 	fsdev_io->u_in.rmdir.parent_fobject = parent_fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -454,7 +452,7 @@ spdk_fsdev_rename(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	fsdev_io->u_in.rename.new_parent_fobject = new_parent_fobject;
 	fsdev_io->u_in.rename.flags = flags;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -474,7 +472,7 @@ spdk_fsdev_link(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64
 	fsdev_io->u_in.link.fobject = fobject;
 	fsdev_io->u_in.link.new_parent_fobject = new_parent_fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -493,7 +491,7 @@ spdk_fsdev_fopen(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.open.fobject = fobject;
 	fsdev_io->u_in.open.flags = flags;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -520,7 +518,7 @@ spdk_fsdev_read(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint64
 	fsdev_io->u_in.read.iovcnt = iovcnt;
 	fsdev_io->u_in.read.opts = opts;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -547,7 +545,7 @@ spdk_fsdev_write(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.write.iovcnt = iovcnt;
 	fsdev_io->u_in.write.opts = opts;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -564,7 +562,7 @@ spdk_fsdev_statfs(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 
 	fsdev_io->u_in.statfs.fobject = fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -583,7 +581,7 @@ spdk_fsdev_release(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.release.fobject = fobject;
 	fsdev_io->u_in.release.fhandle = fhandle;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -603,7 +601,7 @@ spdk_fsdev_fsync(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.fsync.fhandle = fhandle;
 	fsdev_io->u_in.fsync.datasync = datasync;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -625,7 +623,7 @@ spdk_fsdev_setxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 	fsdev_io->u_in.setxattr.size = size;
 	fsdev_io->u_in.setxattr.flags = flags;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -646,7 +644,7 @@ spdk_fsdev_getxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 	fsdev_io->u_in.getxattr.buffer = buffer;
 	fsdev_io->u_in.getxattr.size = size;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -666,7 +664,7 @@ spdk_fsdev_listxattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 	fsdev_io->u_in.listxattr.buffer = buffer;
 	fsdev_io->u_in.listxattr.size = size;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -685,7 +683,7 @@ spdk_fsdev_removexattr(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 	fsdev_io->u_in.removexattr.name = name;
 	fsdev_io->u_in.removexattr.fobject = fobject;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -704,7 +702,7 @@ spdk_fsdev_flush(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.flush.fobject = fobject;
 	fsdev_io->u_in.flush.fhandle = fhandle;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -723,7 +721,7 @@ spdk_fsdev_opendir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.opendir.fobject = fobject;
 	fsdev_io->u_in.opendir.flags = flags;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -754,7 +752,7 @@ spdk_fsdev_readdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uin
 	fsdev_io->u_in.readdir.entry_cb_fn = _spdk_fsdev_readdir_entry_clb;
 	fsdev_io->u_in.readdir.usr_entry_cb_fn = entry_cb_fn;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -773,7 +771,7 @@ spdk_fsdev_releasedir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, 
 	fsdev_io->u_in.releasedir.fobject = fobject;
 	fsdev_io->u_in.releasedir.fhandle = fhandle;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -793,7 +791,7 @@ spdk_fsdev_fsyncdir(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, ui
 	fsdev_io->u_in.fsyncdir.fhandle = fhandle;
 	fsdev_io->u_in.fsyncdir.datasync = datasync;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -813,7 +811,7 @@ spdk_fsdev_flock(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint6
 	fsdev_io->u_in.flock.fhandle = fhandle;
 	fsdev_io->u_in.flock.operation = operation;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -837,7 +835,7 @@ spdk_fsdev_create(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, uint
 	fsdev_io->u_in.create.euid = euid;
 	fsdev_io->u_in.create.egid = egid;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -854,7 +852,7 @@ spdk_fsdev_abort(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
 
 	fsdev_io->u_in.abort.unique_to_abort = unique_to_abort;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -877,7 +875,7 @@ spdk_fsdev_fallocate(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch, u
 	fsdev_io->u_in.fallocate.offset = offset;
 	fsdev_io->u_in.fallocate.length = length;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
 
@@ -905,6 +903,6 @@ spdk_fsdev_copy_file_range(struct spdk_fsdev_desc *desc, struct spdk_io_channel 
 	fsdev_io->u_in.copy_file_range.len = len;
 	fsdev_io->u_in.copy_file_range.flags = flags;
 
-	fsdev_io_submit(fsdev_io);
+	spdk_fsdev_io_submit(fsdev_io);
 	return 0;
 }
