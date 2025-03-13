@@ -69,8 +69,12 @@ struct spdk_fsdev_opts {
 	 * Size of fsdev IO objects cache per thread
 	 */
 	uint32_t fsdev_io_cache_size;
+	/**
+	 * Max number of sources.
+	 */
+	uint16_t max_num_sources;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 12, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 14, "Incorrect size");
 
 /** fsdev mount options */
 struct spdk_fsdev_mount_opts {

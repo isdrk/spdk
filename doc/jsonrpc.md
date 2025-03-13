@@ -14242,7 +14242,8 @@ Example response:
   "id": 1,
   "result": {
     "fsdev_io_pool_size": 65535,
-    "fsdev_io_cache_size": 256
+    "fsdev_io_cache_size": 256,
+    "max_num_sources": 1024
   }
 }
 ~~~
@@ -14257,6 +14258,7 @@ Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 fsdev_io_pool_size      | Required | int         | Size of fsdev IO objects pool.
 fsdev_io_cache_size     | Required | int         | Size of fsdev IO objects cache per thread.
+max_num_sources         | Optional | int         | Max number of sources.
 
 #### Example
 
@@ -14268,7 +14270,8 @@ Example request:
   "id": 1,
   "params": {
     "fsdev_io_pool_size": 65535,
-    "fsdev_io_cache_size": 256
+    "fsdev_io_cache_size": 256,
+    "max_num_sources": 256
   }
 }
 ~~~

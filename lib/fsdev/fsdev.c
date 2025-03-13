@@ -18,10 +18,12 @@
 
 #define SPDK_FSDEV_IO_POOL_SIZE (64 * 1024 - 1)
 #define SPDK_FSDEV_IO_CACHE_SIZE 256
+#define SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT 4096
 
 static struct spdk_fsdev_opts g_fsdev_opts = {
 	.fsdev_io_pool_size = SPDK_FSDEV_IO_POOL_SIZE,
 	.fsdev_io_cache_size = SPDK_FSDEV_IO_CACHE_SIZE,
+	.max_num_sources = SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT / 4, /* default is 1/4 of limit */
 };
 
 TAILQ_HEAD(spdk_fsdev_list, spdk_fsdev);
@@ -238,6 +240,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_uint32(w, "fsdev_io_pool_size", g_fsdev_opts.fsdev_io_pool_size);
 	spdk_json_write_named_uint32(w, "fsdev_io_cache_size", g_fsdev_opts.fsdev_io_cache_size);
+	spdk_json_write_named_uint32(w, "max_num_sources", g_fsdev_opts.max_num_sources);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 
@@ -753,13 +756,19 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 		return -EINVAL;
 	}
 
-#define SET_FIELD(field) \
-        if (offsetof(struct spdk_fsdev_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
-                g_fsdev_opts.field = opts->field; \
-        } \
+	if (opts->max_num_sources > SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT) {
+		SPDK_ERRLOG("max_num_sources must not exceed %" PRIu16 "\n", SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT);
+		return -EINVAL;
+	}
 
-	SET_FIELD(fsdev_io_pool_size);
-	SET_FIELD(fsdev_io_cache_size);
+#define SET_FIELD(cond, field) \
+	if ((cond) && (offsetof(struct spdk_fsdev_opts, field) + sizeof(opts->field) <= opts->opts_size)) { \
+		g_fsdev_opts.field = opts->field; \
+	}
+
+	SET_FIELD(true, fsdev_io_pool_size);
+	SET_FIELD(true, fsdev_io_cache_size);
+	SET_FIELD(opts->max_num_sources != 0, max_num_sources);
 
 	g_fsdev_opts.opts_size = opts->opts_size;
 
@@ -790,10 +799,11 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 
 	SET_FIELD(fsdev_io_pool_size);
 	SET_FIELD(fsdev_io_cache_size);
+	SET_FIELD(max_num_sources);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 12, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 14, "Incorrect size");
 
 #undef SET_FIELD
 	return 0;

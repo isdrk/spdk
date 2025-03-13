@@ -36,6 +36,7 @@ rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_uint32(w, "fsdev_io_pool_size", opts.fsdev_io_pool_size);
 	spdk_json_write_named_uint32(w, "fsdev_io_cache_size", opts.fsdev_io_cache_size);
+	spdk_json_write_named_uint16(w, "max_num_sources", opts.max_num_sources);
 	spdk_json_write_object_end(w);
 	spdk_jsonrpc_end_result(request, w);
 }
@@ -44,11 +45,13 @@ SPDK_RPC_REGISTER("fsdev_get_opts", rpc_fsdev_get_opts, SPDK_RPC_RUNTIME)
 struct rpc_fsdev_set_opts {
 	uint32_t fsdev_io_pool_size;
 	uint32_t fsdev_io_cache_size;
+	uint16_t max_num_sources;
 };
 
 static const struct spdk_json_object_decoder rpc_fsdev_set_opts_decoders[] = {
 	{"fsdev_io_pool_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_pool_size), spdk_json_decode_uint32, false},
 	{"fsdev_io_cache_size", offsetof(struct rpc_fsdev_set_opts, fsdev_io_cache_size), spdk_json_decode_uint32, false},
+	{"max_num_sources", offsetof(struct rpc_fsdev_set_opts, max_num_sources), spdk_json_decode_uint16, true},
 };
 
 static void
@@ -76,6 +79,7 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 
 	opts.fsdev_io_pool_size = ctx.fsdev_io_pool_size;
 	opts.fsdev_io_cache_size = ctx.fsdev_io_cache_size;
+	opts.max_num_sources = ctx.max_num_sources;
 
 	rc = spdk_fsdev_set_opts(&opts);
 	if (rc) {
