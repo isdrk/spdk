@@ -2754,23 +2754,29 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 }
 
 static int
-clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
+clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 {
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct spdk_fsdev_file_attr st = {};
 	mode_t new_mode;
 	int fd, error;
 
+	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
+	if (!fobject) {
+		return 0;
+	}
+
 	error = file_object_fill_attr(fobject, &st);
 	if (error) {
-		return error;
+		goto fail;
 	}
 
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 	if (fd == -1) {
 		error = -errno;
-		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
-			    vfsdev->proc_self_fd, fobject->fd_str, O_RDWR, error);
-		return error;
+		goto fail;
 	}
 
 	new_mode = st.mode & ~(S_ISGID | S_ISUID);
@@ -2781,6 +2787,12 @@ clear_suid_sgid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 	}
 	close(fd);
 
+fail:
+	file_object_unref(fobject, 1);
+	if (error != 0) {
+		SPDK_ERRLOG("Failed to clear suid/sgid on successfull "
+			    "write with err=%d - ignoriing\n", error);
+	}
 	return error;
 }
 
@@ -2800,17 +2812,9 @@ fsdev_aio_write_cb(struct aio_fsdev_io *vfsdev_io, uint32_t data_size, int error
 
 	/* If requested, we must kill the SUID and SGID bits */
 	if (!error && (flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
-		struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-		struct aio_fsdev_file_object *fobject;
-
-		fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
-		if (fobject) {
-			error = clear_suid_sgid(vfsdev, fobject);
-			if (error) {
-				SPDK_ERRLOG("Failed to clear suid/sgid on successfull "
-					    "write with err=%d - ignoriing\n", error);
-			}
-			file_object_unref(fobject, 1);
+		error = clear_suid_sgid(vfsdev_io);
+		if (error) {
+			/* Not fatal */
 			error = 0;
 		}
 	}
