@@ -2299,7 +2299,6 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 		outarg.flags2 = fsdev_io_h2d_u32(fuse_io->disp, supported2);
 	}
 
-	outarg.flags2 = fsdev_io_h2d_u32(fuse_io->disp, supported2);
 	disp->mount_flags = supported;
 
 	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io->disp, negotiated_opts->max_readahead);
