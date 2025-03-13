@@ -243,7 +243,6 @@ struct aio_io_channel {
 	TAILQ_HEAD(, aio_fsdev_io) ios_in_progress;
 	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
 	io_context_t io_ctx;
-	uint32_t num_completions;
 };
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
@@ -275,16 +274,13 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 static int clear_suid_sgid(struct aio_fsdev_io *vfsdev_io);
 
 static void
-fsdev_aio_cb(io_context_t ctx, struct iocb *iocb, long res, long res2)
+fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 {
-	struct aio_fsdev_io *aio = SPDK_CONTAINEROF(iocb, struct aio_fsdev_io, io);
 	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(aio);
 	struct spdk_io_channel *ioch = spdk_fsdev_io_get_io_channel(fsdev_io);
 	struct aio_io_channel *aioch = spdk_io_channel_get_ctx(ioch);
 
 	TAILQ_REMOVE(&aioch->ios_in_progress, aio, link);
-
-	aioch->num_completions++;
 
 	switch (spdk_fsdev_io_get_type(fsdev_io)) {
 	case SPDK_FSDEV_IO_READ:
@@ -326,8 +322,7 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, struct aio_fsdev_io *aio, int 
 	} else {
 		io_prep_pwritev(&aio->io, fd, iovs, iovcnt, offs);
 	}
-	io_set_callback(&aio->io, fsdev_aio_cb);
-
+	aio->io.data = aio;
 
 	ios[0] = &aio->io;
 	res = io_submit(ch->io_ctx, 1, ios);
@@ -336,7 +331,7 @@ spdk_aio_mgr_submit_io(struct aio_io_channel *ch, struct aio_fsdev_io *aio, int 
 	if (res > 0) {
 		return 0;
 	} else {
-		fsdev_aio_cb(ch->io_ctx, &aio->io, 0, res != 0 ? res : -EINVAL);
+		fsdev_aio_cb(aio, 0, res != 0 ? res : -EINVAL);
 		return -1;
 	}
 
@@ -351,7 +346,7 @@ spdk_aio_mgr_cancel(struct aio_io_channel *ch, struct aio_fsdev_io *aio)
 	res = io_cancel(ch->io_ctx, &aio->io, &result);
 	if (res) {
 		SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", aio);
-		fsdev_aio_cb(ch->io_ctx, &aio->io, ECANCELED, 0);
+		fsdev_aio_cb(aio, ECANCELED, 0);
 	} else {
 		SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", aio, res);
 	}
@@ -4009,17 +4004,24 @@ aio_io_poll(void *arg)
 	struct aio_fsdev_io *vfsdev_io, *tmp;
 	struct aio_io_channel *ch = arg;
 	TAILQ_HEAD(, aio_fsdev_io) ios = TAILQ_HEAD_INITIALIZER(ios);
-	int res;
-	int rc;
+	struct io_event events[32];
+	int i, rc, res;
+	struct timespec timeout;
 
-	ch->num_completions = 0;
+	timeout.tv_sec = 0;
+	timeout.tv_nsec = 0;
 
-	rc = io_queue_run(ch->io_ctx);
-	if (rc) {
-		SPDK_WARNLOG("polling failed with err=%d\n", rc);
+	rc = io_getevents(ch->io_ctx, 0, 32, events, &timeout);
+	if (rc < 0) {
+		SPDK_ERRLOG("%s\n", strerror(-rc));
+		rc = 0;
 	}
 
-	res = ch->num_completions ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
+	for (i = 0; i < rc; i++) {
+		fsdev_aio_cb(events[i].data, events[i].res, events[i].res2);
+	}
+
+	res = rc > 0 ? SPDK_POLLER_BUSY : SPDK_POLLER_IDLE;
 
 	TAILQ_SWAP(&ch->ios_to_complete, &ios, aio_fsdev_io, link);
 	while ((vfsdev_io = TAILQ_FIRST(&ios))) {
