@@ -14264,7 +14264,7 @@ Example request:
 ~~~json
 {
   "jsonrpc": "2.0",
-  "method": "fsdev_get_opts",
+  "method": "fsdev_set_opts",
   "id": 1,
   "params": {
     "fsdev_io_pool_size": 65535,
@@ -14279,10 +14279,7 @@ Example response:
 {
   "jsonrpc": "2.0",
   "id": 1,
-  "result": {
-    "fsdev_io_pool_size": 65535,
-    "fsdev_io_cache_size": 256
-  }
+  "result": true
 }
 ~~~
 
