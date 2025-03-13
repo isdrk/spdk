@@ -199,6 +199,20 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 }
 
 static bool
+fsdevperf_job_is_wildcard(struct fsdevperf_job *job)
+{
+	char name[PATH_MAX];
+	int rc;
+
+	rc = fsdevperf_get_fsdev_name(job->path, name, sizeof(name));
+	if (rc != 0) {
+		return false;
+	}
+
+	return strcmp(name, "*") == 0;
+}
+
+static bool
 fsdevperf_job_is_random(struct fsdevperf_job *job)
 {
 	return job->flags & FSDEVPERF_JOB_RANDOM;
@@ -1568,10 +1582,75 @@ fsdevperf_poller(void *ctx)
 	return SPDK_POLLER_BUSY;
 }
 
+static const struct fsdevperf_job_ops g_default_job_ops = {
+	.start_task = fsdevperf_task_run,
+	.job_done = fsdevperf_user_job_done,
+};
+
+static int
+fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
+{
+	struct fsdevperf_job *job, *main = g_app.main_job;
+	const char *filename = fsdevperf_get_filename(main->path);
+
+	job = fsdevperf_job_alloc(spdk_fsdev_get_name(fsdev), &g_default_job_ops, 0);
+	if (job == NULL) {
+		return -ENOMEM;
+	}
+
+	job->path = spdk_sprintf_alloc("/%s%s%s", job->name,
+				       filename != NULL ? "/" : "",
+				       filename != NULL ? filename : "");
+	if (job->path == NULL) {
+		fsdevperf_job_free(job);
+		return -ENOMEM;
+	}
+
+	job->io_pattern = main->io_pattern;
+	job->io_size = main->io_size;
+	job->io_depth = main->io_depth;
+	job->filesize = main->filesize;
+	job->size = main->size;
+	job->num_files = main->num_files;
+	job->runtime = main->runtime;
+
+	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+
+	return 0;
+}
+
+static int
+fsdevperf_create_jobs(void)
+{
+	int rc;
+
+	if (!fsdevperf_job_is_wildcard(g_app.main_job)) {
+		return 0;
+	}
+
+	rc = spdk_for_each_fsdev(NULL, fsdevperf_for_each_fsdev_create_job);
+	if (rc != 0) {
+		return rc;
+	}
+
+	TAILQ_REMOVE(&g_app.jobs, g_app.main_job, tailq);
+	if (TAILQ_EMPTY(&g_app.jobs)) {
+		fsdevperf_errmsg("no fsdev(s) were found\n");
+		return -ENODEV;
+	}
+
+	return 0;
+}
+
 static void
 fsdevperf_run(void)
 {
 	int rc;
+
+	rc = fsdevperf_create_jobs();
+	if (rc != 0) {
+		goto error;
+	}
 
 	rc = fsdevperf_init_threads();
 	if (rc != 0) {
@@ -1668,11 +1747,6 @@ fsdevperf_job_check_params(struct fsdevperf_job *job)
 
 	return 0;
 }
-
-static const struct fsdevperf_job_ops g_default_job_ops = {
-	.start_task = fsdevperf_task_run,
-	.job_done = fsdevperf_user_job_done,
-};
 
 static struct option g_options[] = {
 #define FSDEVPERF_OPT_PATH 'P'
@@ -1888,7 +1962,8 @@ fsdevperf_usage(void)
 {
 	printf(" -P, --path=<path>                    path to a file in the form of /<fsdev>[/<file>]\n");
 	printf("                                      If <file> is omitted, fsdevperf will create a file\n");
-	printf("                                      on each thread\n");
+	printf("                                      on each thread.  If <fsdev> is a wildcard (*), I/O\n");
+	printf("                                      will be sent to files on all available fsdevs\n");
 	printf(" -o, --iosize=<iosize>                I/O size\n");
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
