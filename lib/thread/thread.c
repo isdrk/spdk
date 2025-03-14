@@ -2801,21 +2801,28 @@ spdk_io_channel_send_msg(struct spdk_thread *thread, void *io_device,
 	c->ctx = ctx;
 
 	rc = spdk_thread_send_msg(thread, _io_channel_send_msg, c);
-	assert(rc == 0);
+	if (rc != 0) {
+		SPDK_WARNLOG("Failed to send io_channel msg, rc = %d\n", rc);
+		free(c);
+	}
 }
 
 void
 spdk_for_each_channel_broadcast(void *io_device, spdk_channel_msg_fn fn, void *ctx)
 {
 	struct spdk_thread *thread;
+	bool is_exited;
 
 	pthread_mutex_lock(&g_devlist_mutex);
 
 	thread = TAILQ_FIRST(&g_threads);
 	while (thread != NULL) {
+		is_exited = spdk_thread_is_exited(thread);
 		pthread_mutex_unlock(&g_devlist_mutex);
 
-		spdk_io_channel_send_msg(thread, io_device, fn, ctx);
+		if (!is_exited) {
+			spdk_io_channel_send_msg(thread, io_device, fn, ctx);
+		}
 
 		pthread_mutex_lock(&g_devlist_mutex);
 		thread = TAILQ_NEXT(thread, tailq);
