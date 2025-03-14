@@ -186,6 +186,37 @@ spdk_lut_insert(struct spdk_lut *lut, void *value)
 	return key;
 }
 
+int
+spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
+{
+	struct spdk_lut_node *node;
+
+	assert(key < lut->max_size);
+
+	while (key >= lut->num_nodes) {
+		if (!lut_extend_unsafe(lut)) {
+			return -ENOMEM;
+		}
+	}
+
+	node = lut_get_node(lut, key);
+	if (node->valid) {
+		return -EALREADY;
+	}
+
+	STAILQ_REMOVE(&lut->free_nodes, node, spdk_lut_node, u.link);
+	node->u.ptr = value;
+
+	/* Barrier here so that 'valid' isn't shown as 1 before
+	 * all of the above stuff has completed. */
+	spdk_wmb();
+
+	node->valid = 1;
+
+	return 0;
+}
+
+
 void *
 spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 {
