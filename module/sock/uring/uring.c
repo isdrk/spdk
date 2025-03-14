@@ -651,12 +651,9 @@ retry:
 						    src_addr ? src_addr : "", portnum);
 					close(fd);
 					fd = -1;
-					<<< <<< < HEAD
 					freeaddrinfo(src_ai);
 					src_ai = NULL;
-					== == == =
-						>>> >>> > 4c9ee4a09dbac(NVDA 25.01)
-						break;
+					break;
 				}
 				freeaddrinfo(src_ai);
 				src_ai = NULL;
