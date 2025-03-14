@@ -797,6 +797,14 @@ struct fsdev_fuse_umount_ctx {
 	struct spdk_fuse_mount		*mount;
 	struct spdk_io_channel_iter	*iter;
 	struct spdk_thread		*thread;
+	struct {
+		struct spdk_io_channel	*ioch;
+		struct iovec		in_iov;
+		struct fuse_in_header	in_hdr;
+		struct iovec		out_iov;
+		struct fuse_in_header	out_hdr;
+		void			*ctx;
+	} destroy;
 	spdk_fuse_umount_cb		cb_fn;
 	void				*cb_ctx;
 };
@@ -809,6 +817,7 @@ fsdev_fuse_umount_exec_user_cb(void *_ctx)
 	if (ctx->cb_fn != NULL) {
 		ctx->cb_fn(ctx->cb_ctx);
 	}
+	free(ctx->destroy.ctx);
 	free(ctx);
 }
 
@@ -822,12 +831,52 @@ fsdev_fuse_umount_cleanup(void *_ctx)
 }
 
 static void
+fsdev_fuse_umount_fuse_destroy_cb(void *cb_ctx, int status)
+{
+	struct fsdev_fuse_umount_ctx *ctx = cb_ctx;
+
+	if (status != 0) {
+		SPDK_WARNLOG("FUSE_DESTROY failed: %s\n", spdk_strerror(-status));
+	}
+	if (ctx->destroy.ioch) {
+		spdk_put_io_channel(ctx->destroy.ioch);
+		ctx->destroy.ioch = NULL;
+	}
+	/* The cleanup needs to be done on the same thread as the initial mount */
+	spdk_thread_exec_msg(ctx->mount->thread, fsdev_fuse_umount_cleanup, ctx);
+}
+
+static void
 fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 {
 	struct fsdev_fuse_umount_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
+	struct spdk_fuse_mount *mount = ctx->mount;
+	int rc;
 
-	/* The cleanup needs to be done on the same thread as the initial mount */
-	spdk_thread_exec_msg(ctx->mount->thread, fsdev_fuse_umount_cleanup, ctx);
+	ctx->destroy.ctx = calloc(1, spdk_fuse_dispatcher_get_io_ctx_size());
+	if (ctx->destroy.ctx == NULL) {
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM);
+		return;
+	}
+
+	ctx->destroy.ioch = spdk_fsdev_get_io_channel(mount->fsdev_desc);
+	if (ctx->destroy.ioch == NULL) {
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM);
+		return;
+	}
+
+	ctx->destroy.in_hdr.len = sizeof(ctx->destroy.in_hdr);
+	ctx->destroy.in_hdr.opcode = FUSE_DESTROY;
+	ctx->destroy.in_iov.iov_base = &ctx->destroy.in_hdr;
+	ctx->destroy.in_iov.iov_len = sizeof(ctx->destroy.in_hdr);
+	ctx->destroy.out_iov.iov_base = &ctx->destroy.out_hdr;
+	ctx->destroy.out_iov.iov_len = sizeof(ctx->destroy.out_hdr);
+	rc = spdk_fuse_dispatcher_submit_request(mount->dispatcher, ctx->destroy.ioch,
+			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, ctx->destroy.ctx, 0, 0,
+			fsdev_fuse_umount_fuse_destroy_cb, ctx);
+	if (rc != 0) {
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, rc);
+	}
 }
 
 static void
