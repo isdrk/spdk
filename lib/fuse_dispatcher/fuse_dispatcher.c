@@ -32,6 +32,11 @@
 #define PAGE_SIZE 4096
 #endif
 
+/* Size of fuse_init_in in v7.6 - v7.36 */
+#define COMPAT_FUSE_INIT_IN_6_SIZE 16
+/* Size of fuse_init_in w/ FUSE_INIT_EXT set */
+#define COMPAT_FUSE_INIT_IN_EXT_SIZE 64
+
 /* SPDK only supports minor version 34 currently, even though our fuse_kernel.h
  * has a higher number.
  */
@@ -2448,8 +2453,9 @@ do_init(struct fuse_io *fuse_io)
 	}
 
 	if (disp->proto_minor >= 6) {
-		/* Read the rest of struct fuse_init_in */
-		void *arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*fuse_io->u.init.in) - compat_size);
+		/* Read the rest of struct fuse_init_in (w/o INIT_EXT) */
+		void *arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, COMPAT_FUSE_INIT_IN_6_SIZE -
+				  compat_size);
 		if (!arg_extra) {
 			SPDK_ERRLOG("INIT: protocol version: %" PRIu32 ".%" PRIu32 " but legacy data found\n",
 				    disp->proto_major, disp->proto_minor);
@@ -2457,10 +2463,21 @@ do_init(struct fuse_io *fuse_io)
 			return;
 		}
 
+		compat_size += COMPAT_FUSE_INIT_IN_6_SIZE;
 		requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
 		max_readahead = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->max_readahead);
 		SPDK_INFOLOG(fuse_dispatcher, "requested: flags=0x%" PRIx32 " max_readahead=%" PRIu32 "\n",
 			     requested_flags, max_readahead);
+		/* Make sure we can safely read the extended portion */
+		if (requested_flags & FUSE_INIT_EXT) {
+			arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, COMPAT_FUSE_INIT_IN_EXT_SIZE -
+							     compat_size);
+			if (!arg_extra) {
+				SPDK_ERRLOG("INIT: FUSE_INIT_EXT flag set but no INIT_EXT data found\n");
+				fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+				return;
+			}
+		}
 	}
 
 	/* Negotiate the following options if requested by the FUSE. */
