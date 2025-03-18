@@ -418,7 +418,7 @@ spdk_rdma_provider_memory_key_put_ref(void *mkey)
 }
 
 uint32_t
-spdk_rdma_provider_memory_key_get_key(void *_mkey, uint32_t key)
+spdk_rdma_provider_memory_key_get_key(void *mkey)
 {
 	return UINT32_MAX;
 }
