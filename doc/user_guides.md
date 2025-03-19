@@ -8,6 +8,7 @@
 - @subpage nvmf
 - @subpage vhost
 - @subpage bdev
+- @subpage fsdev
 - @subpage blobfs
 - @subpage jsonrpc
 - @subpage jsonrpc_proxy

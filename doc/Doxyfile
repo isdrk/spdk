@@ -818,6 +818,7 @@ INPUT                  += \
                          distributions.md \
                          event.md \
                          fips.md \
+                         fsdev.md \
                          ftl.md \
                          gdb_macros.md \
                          getting_started.md \
