@@ -31,7 +31,7 @@ install_mountprog() {
 	local prog="$rootdir/scripts/$mountprog" link="/sbin/$mountprog"
 	if [[ -e "$link" ]]; then
 		if [[ "$(readlink -f "$link")" != "$prog" ]]; then
-			errmsg "$prog already exists, aborting"
+			errmsg "$link already exists, aborting"
 			return 1
 		fi
 	else
