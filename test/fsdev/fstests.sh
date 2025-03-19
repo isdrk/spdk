@@ -60,7 +60,17 @@ start_fuse() {
 	return 1
 }
 
+show_summary() {
+	local total failed skipped
+
+	read -r total skipped failed < <(xmlstarlet sel -t -v '/testsuite/@tests' -o ' ' \
+		-t -v '/testsuite/@skipped' -o ' ' -t -v '/testsuite/@failures' -n \
+		"${config[xfsdir]}/results/result.xml")
+	echo "Pass rate: $((total - skipped - failed))/$((total - skipped))"
+}
+
 run() {
+	local options=()
 	cat - > "$testdir/fstests.config" <<- CONFIG
 		export TEST_DEV="${config[fsdev]}"
 		export TEST_DIR="${config[mountpoint]}"
@@ -70,10 +80,12 @@ run() {
 		export FUSE_SUBTYP=.spdk
 	CONFIG
 	export HOST_OPTIONS="$testdir/fstests.config"
+	[[ "${config[summary]}" == true ]] && options+=(-R xunit)
 	(
 		cd "${config[xfsdir]}"
-		./check "$@"
+		./check "${options[@]}" "$@"
 	)
+	[[ "${config[summary]}" == true ]] && show_summary
 }
 
 parse_device() {
@@ -154,6 +166,7 @@ while (($# > 0)); do
 	shift
 done
 
+command -v xmlstarlet &> /dev/null && config[summary]=true
 if [[ "${config[external]}" == true ]] && ! fuse_running; then
 	errmsg "$rootdir/examples/fuse is not running, aborting"
 	exit 1

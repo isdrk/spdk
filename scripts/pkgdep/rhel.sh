@@ -103,7 +103,7 @@ fi
 yum install -y gcc gcc-c++ make CUnit-devel libaio-devel openssl-devel \
 	libuuid-devel libiscsi-devel ncurses-devel json-c-devel libcmocka-devel \
 	clang clang-devel python3-pip unzip keyutils keyutils-libs-devel fuse3-devel patchelf \
-	pkgconfig
+	pkgconfig xmlstarlet
 
 # Minimal install
 # workaround for arm: ninja fails with dep on skbuild python module
