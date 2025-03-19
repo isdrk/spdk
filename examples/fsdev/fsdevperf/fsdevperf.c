@@ -136,6 +136,8 @@ struct fsdevperf_job {
 	char				*name;
 	char				*path;
 	size_t				num_active;
+	size_t				num_tasks;
+	size_t				num_ready;
 	void				*buf;
 	struct fsdevperf_job_ops	ops;
 	TAILQ_HEAD(, fsdevperf_task)	tasks;
@@ -689,6 +691,7 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 
 			TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
 			TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
+			job->num_tasks++;
 		}
 	}
 
@@ -719,7 +722,6 @@ fsdevperf_dump_stats(void)
 	struct fsdevperf_filesystem *fs;
 	double task_iops, job_iops, total_iops;
 	double task_mbps, job_mbps, total_mbps;
-	size_t num_tasks;
 	double runtime;
 	char path[PATH_MAX];
 
@@ -729,7 +731,6 @@ fsdevperf_dump_stats(void)
 	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
 		job_iops = 0;
 		job_mbps = 0;
-		num_tasks = 0;
 
 		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu, nrfiles=%zu):\n",
 		       job->name, fsdevperf_job_get_io_pattern_name(job), job->io_size,
@@ -748,10 +749,9 @@ fsdevperf_dump_stats(void)
 
 			job_iops += task_iops;
 			job_mbps += task_mbps;
-			num_tasks++;
 		}
 
-		if (num_tasks > 1) {
+		if (job->num_tasks > 1) {
 			printf("  %30s %4s %10s %10.2f %10.2f\n", "", "", "",
 			       job_iops, job_mbps);
 		}
@@ -1037,6 +1037,7 @@ fsdevperf_cleanup_files(void)
 			}
 			TAILQ_INSERT_TAIL(&thread->tasks, task, tailq.thread);
 			TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
+			job->num_tasks++;
 		}
 
 		g_app.cleanup_job = job;
@@ -1399,23 +1400,58 @@ fsdevperf_task_lookup(struct fsdevperf_task *task)
 }
 
 static void
+fsdevperf_task_do_start(void *ctx)
+{
+	struct fsdevperf_task *task = ctx;
+	struct fsdevperf_job *job = task->job;
+
+	if (task->status != 0) {
+		return;
+	}
+
+	job->ops.start_task(task);
+}
+
+static void
+fsdevperf_task_sync_job(void *ctx)
+{
+	struct fsdevperf_task *task = ctx;
+	struct fsdevperf_job *job = task->job;
+
+	if (++job->num_ready == job->num_tasks) {
+		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+			spdk_thread_send_msg(task->thread->thread, fsdevperf_task_do_start, task);
+		}
+	}
+}
+
+static void
+fsdevperf_task_stafs_done(void *ctx, int status, struct spdk_fsdev_io *fsdev_io)
+{
+	spdk_thread_send_msg(spdk_thread_get_app_thread(), fsdevperf_task_sync_job, ctx);
+}
+
+static void
 fsdevperf_task_start(void *ctx)
 {
 	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_filesystem *fs = task->fs;
-	struct fsdevperf_job *job = task->job;
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(fs->fsdev_desc);
+	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
 
 	task->seed = rand();
 	task->ioch = spdk_fsdev_get_io_channel(fs->fsdev_desc);
 	if (task->ioch == NULL) {
 		fsdevperf_errmsg("failed to get IO channel for %s on core %u\n",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 spdk_env_get_current_core());
+				 spdk_fsdev_get_name(fsdev), spdk_env_get_current_core());
 		fsdevperf_task_done(task, -ENOMEM);
 		return;
 	}
 
-	job->ops.start_task(task);
+	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, fsdevperf_task_next_id(task),
+			   SPDK_FSDEV_IO_STATFS, fsdevperf_task_stafs_done, task);
+	fsdev_io->u_in.statfs.fobject = fs->root;
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -1511,6 +1547,7 @@ fsdevperf_setup_files(void)
 		TAILQ_INSERT_TAIL(&job->tasks, task, tailq.job);
 		thread = TAILQ_NEXT(thread, tailq) ? TAILQ_NEXT(thread, tailq) :
 			 TAILQ_FIRST(&g_app.threads);
+		job->num_tasks++;
 	}
 
 	fsdevperf_job_start(job);
