@@ -650,8 +650,6 @@ spdk_fsdev_get_io_channel(struct spdk_fsdev_desc *desc)
 int
 spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 {
-	uint32_t min_pool_size;
-
 	if (!opts) {
 		SPDK_ERRLOG("opts cannot be NULL\n");
 		return -EINVAL;
@@ -659,20 +657,6 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 
 	if (!opts->opts_size) {
 		SPDK_ERRLOG("opts_size inside opts cannot be zero value\n");
-		return -EINVAL;
-	}
-
-	/*
-	 * Add 1 to the thread count to account for the extra mgmt_ch that gets created during subsystem
-	 *  initialization.  A second mgmt_ch will be created on the same thread when the application starts
-	 *  but before the deferred put_io_channel event is executed for the first mgmt_ch.
-	 */
-	min_pool_size = opts->fsdev_io_cache_size * (spdk_thread_get_count() + 1);
-	if (opts->fsdev_io_pool_size < min_pool_size) {
-		SPDK_ERRLOG("fsdev_io_pool_size %" PRIu32 " is not compatible with fsdev_io_cache_size %" PRIu32
-			    " and %" PRIu32 " threads\n", opts->fsdev_io_pool_size, opts->fsdev_io_cache_size,
-			    spdk_thread_get_count());
-		SPDK_ERRLOG("fsdev_io_pool_size must be at least %" PRIu32 "\n", min_pool_size);
 		return -EINVAL;
 	}
 
@@ -686,8 +670,6 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 		g_fsdev_opts.field = opts->field; \
 	}
 
-	SET_FIELD(true, fsdev_io_pool_size);
-	SET_FIELD(true, fsdev_io_cache_size);
 	SET_FIELD(opts->max_num_sources != 0, max_num_sources);
 
 	g_fsdev_opts.opts_size = opts->opts_size;
@@ -717,8 +699,6 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 		opts->field = g_fsdev_opts.field; \
 	}
 
-	SET_FIELD(fsdev_io_pool_size);
-	SET_FIELD(fsdev_io_cache_size);
 	SET_FIELD(max_num_sources);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,

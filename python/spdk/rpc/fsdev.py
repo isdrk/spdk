@@ -14,21 +14,15 @@ def fsdev_get_opts(client):
     return client.call('fsdev_get_opts')
 
 
-def fsdev_set_opts(client, fsdev_io_pool_size: int = None, fsdev_io_cache_size: int = None, max_num_sources: int = None):
+def fsdev_set_opts(client,  max_num_sources: int = None):
     """Set fsdev subsystem opts.
 
     Args:
-        io_pool_size: size of fsdev IO objects pool
-        io_cache_size: size of fsdev IO objects cache per thread
         max_num_sources: max number of sources
     """
     params = {
     }
 
-    if fsdev_io_pool_size is not None:
-        params['fsdev_io_pool_size'] = fsdev_io_pool_size
-    if fsdev_io_cache_size is not None:
-        params['fsdev_io_cache_size'] = fsdev_io_cache_size
     if max_num_sources is not None:
         params['max_num_sources'] = max_num_sources
 

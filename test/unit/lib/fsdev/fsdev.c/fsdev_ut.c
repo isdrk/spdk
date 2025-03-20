@@ -397,15 +397,13 @@ ut_fsdev_test_set_opts(void)
 	CU_ASSERT(rc == 0);
 
 	new_opts.opts_size = sizeof(new_opts);
-	new_opts.fsdev_io_pool_size = old_opts.fsdev_io_pool_size * 2;
-	new_opts.fsdev_io_cache_size = old_opts.fsdev_io_cache_size * 2;
+	new_opts.max_num_sources = old_opts.max_num_sources / 2;
 	rc = spdk_fsdev_set_opts(&new_opts);
 	CU_ASSERT(rc == 0);
 
 	rc = spdk_fsdev_get_opts(&new_opts, sizeof(new_opts));
 	CU_ASSERT(rc == 0);
-	CU_ASSERT(old_opts.fsdev_io_pool_size * 2 == new_opts.fsdev_io_pool_size);
-	CU_ASSERT(old_opts.fsdev_io_cache_size * 2 == new_opts.fsdev_io_cache_size);
+	CU_ASSERT(old_opts.max_num_sources / 2 == new_opts.max_num_sources);
 }
 
 static void

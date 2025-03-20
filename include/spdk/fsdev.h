@@ -61,14 +61,8 @@ struct spdk_fsdev_opts {
 	 * New added fields should be put at the end of the struct.
 	 */
 	uint32_t opts_size;
-	/**
-	 * Size of fsdev IO objects pool
-	 */
-	uint32_t fsdev_io_pool_size;
-	/**
-	 * Size of fsdev IO objects cache per thread
-	 */
-	uint32_t fsdev_io_cache_size;
+	uint32_t reserved1;
+	uint32_t reserved2;
 	/**
 	 * Max number of sources.
 	 */
