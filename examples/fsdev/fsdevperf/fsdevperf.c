@@ -1880,6 +1880,10 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 
 	switch (ch) {
 	case FSDEVPERF_OPT_PATH:
+		if (!TAILQ_EMPTY(&g_app.jobs)) {
+			fsdevperf_errmsg("-P, --path and -j, --jobs are mutually exclusive\n");
+			return -EINVAL;
+		}
 		job->path = strdup(arg);
 		if (job->path == NULL) {
 			return -ENOMEM;
@@ -1895,6 +1899,10 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		job->flags |= FSDEVPERF_JOB_RANDOM;
 		break;
 	case FSDEVPERF_OPT_JOBS:
+		if (job->path != NULL) {
+			fsdevperf_errmsg("-P, --path and -j, --jobs are mutually exclusive\n");
+			return -EINVAL;
+		}
 		if (fsdevperf_load_jobs(arg)) {
 			return -EINVAL;
 		}
