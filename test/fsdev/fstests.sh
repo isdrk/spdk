@@ -66,7 +66,7 @@ run() {
 		export TEST_DIR="${config[mountpoint]}"
 		export SCRATCH_DEV="${config[scratch_fsdev]}"
 		export SCRATCH_MNT="${config[scratch_mountpoint]}"
-		export FSTYPE=fuse
+		export FSTYP=fuse
 		export FUSE_SUBTYP=.spdk
 	CONFIG
 	export HOST_OPTIONS="$testdir/fstests.config"
