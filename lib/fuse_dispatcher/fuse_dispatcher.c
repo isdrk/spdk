@@ -2447,7 +2447,8 @@ fuse_dispatcher_fill_opendir(struct fuse_io *fuse_io)
 }
 
 static int
-fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, const char *name,
+fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, struct spdk_fsdev_io *fsdev_io,
+				      const char *name,
 				      struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
 				      off_t offset, bool *forget)
 {
@@ -2471,16 +2472,6 @@ fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, const char *name,
 	*forget = fuse_io->u.readdir.plus ? false : true;
 
 	return 0;
-}
-
-static int
-fuse_dispatcher_readdir_entry_clb(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget)
-{
-	spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn = fsdev_io->u_in.readdir.usr_entry_cb_fn;
-
-	return usr_entry_cb_fn(fsdev_io, fsdev_io->u_out.readdir.name,
-			       fsdev_io->u_out.readdir.fobject, &fsdev_io->u_out.readdir.attr,
-			       fsdev_io->u_out.readdir.offset, forget);
 }
 
 static int
@@ -2516,8 +2507,7 @@ fuse_dispatcher_fill_readdir_common(struct fuse_io *fuse_io, bool plus)
 	fsdev_io->u_in.readdir.fobject = file_object(fuse_io);
 	fsdev_io->u_in.readdir.fhandle = file_handle(fh);
 	fsdev_io->u_in.readdir.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
-	fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_entry_clb;
-	fsdev_io->u_in.readdir.usr_entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
+	fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
 
 	return 0;
 }

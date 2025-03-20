@@ -2101,7 +2101,7 @@ fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	uint64_t offset = fsdev_io->u_in.readdir.offset;
+	off_t offset = (off_t)fsdev_io->u_in.readdir.offset;
 	struct aio_fsdev_file_object *entry_fobject;
 	int res;
 
@@ -2125,8 +2125,8 @@ fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	while (1) {
-		off_t nextoff;
 		const char *name;
+		struct spdk_fsdev_file_attr attr = {0};
 		bool forget = false;
 
 		if (!fhandle->dir.entry) {
@@ -2143,7 +2143,7 @@ fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			}
 		}
 
-		nextoff = fhandle->dir.entry->d_off;
+		offset = fhandle->dir.entry->d_off;
 		name = fhandle->dir.entry->d_name;
 		entry_fobject = NULL;
 
@@ -2153,27 +2153,21 @@ fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 
 		if (is_dot_or_dotdot(name)) {
-			fsdev_io->u_out.readdir.fobject = NULL;
-			memset(&fsdev_io->u_out.readdir.attr, 0, sizeof(fsdev_io->u_out.readdir.attr));
-			fsdev_io->u_out.readdir.attr.ino = fhandle->dir.entry->d_ino;
-			fsdev_io->u_out.readdir.attr.mode = DT_DIR << 12;
+			attr.ino = fhandle->dir.entry->d_ino;
+			attr.mode = DT_DIR << 12;
 			goto skip_lookup;
 		}
 
-		res = fsdev_aio_do_lookup(vfsdev, fobject, name, &entry_fobject,
-					  &fsdev_io->u_out.readdir.attr);
+		res = fsdev_aio_do_lookup(vfsdev, fobject, name, &entry_fobject, &attr);
 		if (res) {
 			SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", name, res);
 			goto fop_failed;
 		}
 
-		fsdev_io->u_out.readdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, entry_fobject);
-
 skip_lookup:
-		fsdev_io->u_out.readdir.name = name;
-		fsdev_io->u_out.readdir.offset = nextoff;
-
-		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io, fsdev_io->internal.usr_cb_arg, &forget);
+		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io, name,
+				entry_fobject ? fsdev_aio_get_spdk_fobject(vfsdev, entry_fobject) : NULL,
+				&attr, offset, &forget);
 		if ((forget || res) && entry_fobject) {
 			file_object_unref(entry_fobject, 1);
 		}
@@ -2183,13 +2177,13 @@ skip_lookup:
 
 skip_entry:
 		fhandle->dir.entry = NULL;
-		fhandle->dir.offset = nextoff;
+		fhandle->dir.offset = offset;
 	}
 
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
-		      FOBJECT_ARGS(fobject), fhandle, offset, fsdev_io->u_out.readdir.offset);
+		      FOBJECT_ARGS(fobject), fhandle, offset, offset);
 fop_failed:
 	file_handle_unref(fhandle);
 bad_fhandle:

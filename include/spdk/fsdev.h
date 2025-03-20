@@ -792,7 +792,8 @@ typedef void (spdk_fsdev_cpl_cb)(void *cb_arg, int status, struct spdk_fsdev_io 
 /**
  * Read directory per-entry callback
  *
- * \param cb_arg Context passed to the corresponding spdk_fsdev_ API
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_io_submit API
+ * \param fsdev_io Filesystem device I/O.
  * \param name Name of the entry
  * \param fobject File object. NULL for "." and "..".
  * \param attr File attributes.
@@ -805,7 +806,7 @@ typedef void (spdk_fsdev_cpl_cb)(void *cb_arg, int status, struct spdk_fsdev_io 
  *       referenced unless this callback sets the \p forget to true. Otherwise, it's up to
  *       the user to call \p spdk_fsdev_forget when the \p fobject is no longer needed.
  */
-typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg,
+typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_fsdev_io *fsdev_io,
 		const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
 		off_t offset, bool *forget);
 
@@ -963,8 +964,7 @@ struct spdk_fsdev_io {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
 			uint64_t offset;
-			int (*entry_cb_fn)(struct spdk_fsdev_io *fsdev_io, void *cb_arg, bool *forget);
-			spdk_fsdev_readdir_entry_cb *usr_entry_cb_fn;
+			spdk_fsdev_readdir_entry_cb *entry_cb_fn;
 		} readdir;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
@@ -1112,12 +1112,6 @@ struct spdk_fsdev_io {
 		struct {
 			struct spdk_fsdev_file_handle *fhandle;
 		} opendir;
-		struct {
-			const char *name;
-			struct spdk_fsdev_file_object *fobject;
-			struct spdk_fsdev_file_attr attr;
-			off_t offset;
-		} readdir;
 		struct {
 			struct spdk_fsdev_file_object *fobject;
 			struct spdk_fsdev_file_handle *fhandle;
