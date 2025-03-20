@@ -16,13 +16,9 @@
 #include "spdk/string.h"
 #include "fsdev_internal.h"
 
-#define SPDK_FSDEV_IO_POOL_SIZE (64 * 1024 - 1)
-#define SPDK_FSDEV_IO_CACHE_SIZE 256
 #define SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT 4096
 
 static struct spdk_fsdev_opts g_fsdev_opts = {
-	.fsdev_io_pool_size = SPDK_FSDEV_IO_POOL_SIZE,
-	.fsdev_io_cache_size = SPDK_FSDEV_IO_CACHE_SIZE,
 	.max_num_sources = SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT / 4, /* default is 1/4 of limit */
 };
 
@@ -39,8 +35,6 @@ fsdev_name_cmp(struct spdk_fsdev_name *name1, struct spdk_fsdev_name *name2)
 RB_GENERATE_STATIC(fsdev_name_tree, spdk_fsdev_name, node, fsdev_name_cmp);
 
 struct spdk_fsdev_mgr {
-	struct spdk_mempool *fsdev_io_pool;
-
 	TAILQ_HEAD(fsdev_module_list, spdk_fsdev_module) fsdev_modules;
 
 	struct spdk_fsdev_list fsdevs;
@@ -130,17 +124,6 @@ SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NU
 		   "Incorrect size");
 
 struct spdk_fsdev_mgmt_channel {
-	/*
-	 * Each thread keeps a cache of fsdev_io - this allows
-	 *  fsdev threads which are *not* DPDK threads to still
-	 *  benefit from a per-thread fsdev_io cache.  Without
-	 *  this, non-DPDK threads fetching from the mempool
-	 *  incur a cmpxchg on get and put.
-	 */
-	fsdev_io_stailq_t per_thread_cache;
-	uint32_t	per_thread_cache_count;
-	uint32_t	fsdev_io_cache_size;
-
 	TAILQ_HEAD(, spdk_fsdev_shared_resource) shared_resources;
 };
 
@@ -238,8 +221,6 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "method", "fsdev_set_opts");
 	spdk_json_write_named_object_begin(w, "params");
-	spdk_json_write_named_uint32(w, "fsdev_io_pool_size", g_fsdev_opts.fsdev_io_pool_size);
-	spdk_json_write_named_uint32(w, "fsdev_io_cache_size", g_fsdev_opts.fsdev_io_cache_size);
 	spdk_json_write_named_uint32(w, "max_num_sources", g_fsdev_opts.max_num_sources);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
@@ -266,46 +247,16 @@ static void
 fsdev_mgmt_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_fsdev_mgmt_channel *ch = ctx_buf;
-	struct spdk_fsdev_io *fsdev_io;
 
 	if (!TAILQ_EMPTY(&ch->shared_resources)) {
 		SPDK_ERRLOG("Module channel list wasn't empty on mgmt channel free\n");
 	}
-
-	while (!STAILQ_EMPTY(&ch->per_thread_cache)) {
-		fsdev_io = STAILQ_FIRST(&ch->per_thread_cache);
-		STAILQ_REMOVE_HEAD(&ch->per_thread_cache, internal.buf_link);
-		ch->per_thread_cache_count--;
-		spdk_mempool_put(g_fsdev_mgr.fsdev_io_pool, (void *)fsdev_io);
-	}
-
-	assert(ch->per_thread_cache_count == 0);
-	return;
 }
 
 static int
 fsdev_mgmt_channel_create(void *io_device, void *ctx_buf)
 {
 	struct spdk_fsdev_mgmt_channel *ch = ctx_buf;
-	struct spdk_fsdev_io *fsdev_io;
-	uint32_t i;
-
-	STAILQ_INIT(&ch->per_thread_cache);
-	ch->fsdev_io_cache_size = g_fsdev_opts.fsdev_io_cache_size;
-
-	/* Pre-populate fsdev_io cache to ensure this thread cannot be starved. */
-	ch->per_thread_cache_count = 0;
-	for (i = 0; i < ch->fsdev_io_cache_size; i++) {
-		fsdev_io = spdk_mempool_get(g_fsdev_mgr.fsdev_io_pool);
-		if (fsdev_io == NULL) {
-			SPDK_ERRLOG("You need to increase fsdev_io_pool_size using fsdev_set_options RPC.\n");
-			assert(false);
-			fsdev_mgmt_channel_destroy(io_device, ctx_buf);
-			return -1;
-		}
-		ch->per_thread_cache_count++;
-		STAILQ_INSERT_HEAD(&ch->per_thread_cache, fsdev_io, internal.buf_link);
-	}
 
 	TAILQ_INIT(&ch->shared_resources);
 	return 0;
@@ -363,19 +314,6 @@ spdk_fsdev_initialize(spdk_fsdev_init_cb cb_fn, void *cb_arg)
 
 	snprintf(mempool_name, sizeof(mempool_name), "fsdev_io_%d", getpid());
 
-	g_fsdev_mgr.fsdev_io_pool = spdk_mempool_create(mempool_name,
-				    g_fsdev_opts.fsdev_io_pool_size,
-				    sizeof(struct spdk_fsdev_io) +
-				    fsdev_module_get_max_ctx_size(),
-				    0,
-				    SPDK_ENV_NUMA_ID_ANY);
-
-	if (g_fsdev_mgr.fsdev_io_pool == NULL) {
-		SPDK_ERRLOG("Could not allocate spdk_fsdev_io pool\n");
-		fsdev_init_complete(-1);
-		return;
-	}
-
 	spdk_io_device_register(&g_fsdev_mgr, fsdev_mgmt_channel_create,
 				fsdev_mgmt_channel_destroy,
 				sizeof(struct spdk_fsdev_mgmt_channel),
@@ -395,16 +333,6 @@ static void
 fsdev_mgr_unregister_cb(void *io_device)
 {
 	spdk_fsdev_fini_cb cb_fn = g_fini_cb_fn;
-
-	if (g_fsdev_mgr.fsdev_io_pool) {
-		if (spdk_mempool_count(g_fsdev_mgr.fsdev_io_pool) != g_fsdev_opts.fsdev_io_pool_size) {
-			SPDK_ERRLOG("fsdev IO pool count is %zu but should be %u\n",
-				    spdk_mempool_count(g_fsdev_mgr.fsdev_io_pool),
-				    g_fsdev_opts.fsdev_io_pool_size);
-		}
-
-		spdk_mempool_free(g_fsdev_mgr.fsdev_io_pool);
-	}
 
 	cb_fn(g_fini_cb_arg);
 	g_fini_cb_fn = NULL;
@@ -486,70 +414,29 @@ spdk_fsdev_finish(spdk_fsdev_fini_cb cb_fn, void *cb_arg)
 	fsdev_finish_unregister_fsdevs_iter(NULL, 0);
 }
 
-static struct spdk_fsdev_io *
-fsdev_channel_get_io(struct spdk_fsdev_channel *channel)
+int
+spdk_fsdev_get_io_ctx_size(void)
 {
-	struct spdk_fsdev_mgmt_channel *ch = channel->shared_resource->mgmt_ch;
-	struct spdk_fsdev_io *fsdev_io;
-
-	if (spdk_unlikely(channel->flags & FSDEV_CH_RESET_IN_PROGRESS)) {
-		SPDK_DEBUGLOG(fsdev, "Reset in progress: no IO allowed\n");
-		return NULL;
-	}
-
-	if (ch->per_thread_cache_count > 0) {
-		fsdev_io = STAILQ_FIRST(&ch->per_thread_cache);
-		STAILQ_REMOVE_HEAD(&ch->per_thread_cache, internal.buf_link);
-		ch->per_thread_cache_count--;
-	} else {
-		fsdev_io = spdk_mempool_get(g_fsdev_mgr.fsdev_io_pool);
-	}
-
-	return fsdev_io;
+	return sizeof(struct spdk_fsdev_io) + fsdev_module_get_max_ctx_size();
 }
 
-struct spdk_fsdev_io *
-spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch)
+void
+spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
+		   struct spdk_io_channel *ch,
+		   uint64_t unique, enum spdk_fsdev_io_type type,
+		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
-	struct spdk_fsdev_io *fsdev_io;
-	struct spdk_fsdev_channel *channel = __io_ch_to_fsdev_ch(ch);
-
-	fsdev_io = fsdev_channel_get_io(channel);
-	if (!fsdev_io) {
-		channel->stat->num_out_of_io++;
-		return NULL;
-	}
-
-	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
-	fsdev_io->internal.ch = channel;
+	fsdev_io->internal.ch = __io_ch_to_fsdev_ch(ch);
 	fsdev_io->internal.desc = desc;
-	fsdev_io->internal.type = __SPDK_FSDEV_IO_LAST;
+	fsdev_io->internal.type = type;
+	fsdev_io->internal.unique = unique;
+	fsdev_io->internal.usr_cb_fn = cb_fn;
+	fsdev_io->internal.usr_cb_arg = cb_arg;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
 	fsdev_io->internal.cleanup_cb_fn = NULL;
 
-	return fsdev_io;
-}
-void
-spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io)
-{
-	struct spdk_fsdev_mgmt_channel *ch;
-
-	assert(fsdev_io != NULL);
-
-	ch = fsdev_io->internal.ch->shared_resource->mgmt_ch;
-
-	if (fsdev_io->internal.cleanup_cb_fn) {
-		spdk_fsdev_io_cleanup_cb cleanup_cb_fn = fsdev_io->internal.cleanup_cb_fn;
-		cleanup_cb_fn(fsdev_io->internal.cleanup_cb_arg);
-	}
-
-	if (ch->per_thread_cache_count < ch->fsdev_io_cache_size) {
-		ch->per_thread_cache_count++;
-		STAILQ_INSERT_HEAD(&ch->per_thread_cache, fsdev_io, internal.buf_link);
-	} else {
-		spdk_mempool_put(g_fsdev_mgr.fsdev_io_pool, (void *)fsdev_io);
-	}
+	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
 }
 
 void
@@ -1361,9 +1248,12 @@ static inline void
 fsdev_io_complete(void *ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
-	enum spdk_fsdev_io_type type = fsdev_io->internal.type;
+	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 	struct spdk_fsdev_channel *fsdev_ch = fsdev_io->internal.ch;
+	uint64_t submit_tsc;
 	uint64_t tsc_diff;
+	spdk_fsdev_io_cleanup_cb cleanup_cb_fn;
+	void *cleanup_cb_arg;
 
 	if (spdk_unlikely(fsdev_io->internal.in_submit_request)) {
 		/*
@@ -1385,11 +1275,25 @@ fsdev_io_complete(void *ctx)
 		fsdev_ch->stat->bytes_written += fsdev_io->u_out.write.data_size;
 	}
 
-	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
-				     fsdev_io->internal.status,
-				     fsdev_io);
+	/* We must not access the fsdev_io after the user callback, so we
+	 * do all the necessary work here or save relevant data fields for later use.
+	 */
+	submit_tsc = fsdev_io->internal.submit_tsc;
+	cleanup_cb_fn = fsdev_io->internal.cleanup_cb_fn;
+	cleanup_cb_arg = fsdev_io->internal.cleanup_cb_arg;
 
-	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
+	if (fsdev_io->internal.status) {
+		fsdev_ch->stat->num_io_errors++;
+	}
+
+	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
+				     fsdev_io->internal.status, fsdev_io);
+
+	tsc_diff = spdk_get_ticks() - submit_tsc;
+
+	if (cleanup_cb_fn) {
+		cleanup_cb_fn(cleanup_cb_arg);
+	}
 
 	if (tsc_diff < fsdev_ch->stat->io[type].min_ticks) {
 		fsdev_ch->stat->io[type].min_ticks = tsc_diff;
@@ -1400,14 +1304,7 @@ fsdev_io_complete(void *ctx)
 	}
 
 	fsdev_ch->stat->io[type].total_ticks += tsc_diff;
-
-	if (fsdev_io->internal.status) {
-		fsdev_ch->stat->num_io_errors++;
-	}
-
-	spdk_fsdev_io_put(fsdev_io);
 }
-
 
 void
 spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status)

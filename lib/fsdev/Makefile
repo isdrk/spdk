@@ -8,7 +8,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 SO_VER := 2
 SO_MINOR := 1
 
-C_SRCS = fsdev.c fsdev_io.c fsdev_rpc.c
+C_SRCS = fsdev.c fsdev_rpc.c
 LIBNAME = fsdev
 
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_fsdev.map)

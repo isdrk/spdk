@@ -24,6 +24,7 @@
 #define UT_FOBJECT ((struct spdk_fsdev_file_object *)0xDEADDEAD)
 #define UT_FHANDLE ((struct spdk_fsdev_file_handle *)0xBEABBEAB)
 #define UT_FNAME "ut_test.file"
+#define UT_IO_BUFF_SIZE 111
 
 #define UT_RMEM_POOL ((struct spdk_rmem_pool *)0xBEADBEAD)
 #define UT_RMEM_POOL_ENTRY ((struct spdk_rmem_entry *)0xDEABDEAB)
@@ -35,12 +36,6 @@ DEFINE_STUB(spdk_fsdev_reset, int, (struct spdk_fsdev_desc *desc, spdk_fsdev_res
 				    void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_reset_supported, bool, (struct spdk_fsdev *fsdev), true);
 DEFINE_STUB(spdk_fsdev_get_notify_max_data_size, uint32_t, (const struct spdk_fsdev *fsdev), 0);
-DEFINE_STUB(spdk_fsdev_forget, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-				     uint64_t unique,
-				     struct spdk_fsdev_file_object *fobject, uint64_t nlookup,
-				     spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
-DEFINE_STUB(spdk_fsdev_umount, int, (struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch,
-				     uint64_t unique, spdk_fsdev_cpl_cb cb_fn, void *cb_arg), 0);
 DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
 DEFINE_STUB(spdk_rmem_get_backend_dir, const char *, (void), NULL);
 DEFINE_STUB(spdk_rmem_set_backend_dir, int, (const char *backend_dir_name), 0);
@@ -56,19 +51,22 @@ DEFINE_STUB_V(spdk_rmem_entry_release, (struct spdk_rmem_entry *entry));
 DEFINE_STUB_V(spdk_rmem_pool_destroy, (struct spdk_rmem_pool *pool));
 
 static struct spdk_fsdev_desc *g_ut_fsdev_desc = (struct spdk_fsdev_desc *)0xBEADFEAD;
-static struct spdk_fsdev_io g_ut_fsdev_io;
 
-struct spdk_fsdev_io *
-spdk_fsdev_io_get(struct spdk_fsdev_desc *desc, struct spdk_io_channel *ch)
+void
+spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
+		   struct spdk_io_channel *ch,
+		   uint64_t unique, enum spdk_fsdev_io_type type,
+		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
-	ut_call_record_begin(spdk_fsdev_io_get);
+	ut_call_record_begin(spdk_fsdev_io_init);
+	ut_call_record_param_ptr(fsdev_io);
 	ut_call_record_param_ptr(desc);
 	ut_call_record_param_ptr(ch);
+	ut_call_record_param_int(unique);
+	ut_call_record_param_int(type);
+	ut_call_record_param_ptr(cb_fn);
+	ut_call_record_param_ptr(cb_arg);
 	ut_call_record_end();
-
-	memset(&g_ut_fsdev_io, 0, sizeof(g_ut_fsdev_io));
-
-	return &g_ut_fsdev_io;
 }
 
 void
@@ -79,12 +77,12 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	ut_call_record_end();
 }
 
-void
-spdk_fsdev_io_put(struct spdk_fsdev_io *fsdev_io)
+int
+spdk_fsdev_get_io_ctx_size(void)
 {
-	ut_call_record_begin(spdk_fsdev_io_put);
-	ut_call_record_param_ptr(fsdev_io);
+	ut_call_record_begin(spdk_fsdev_get_io_ctx_size);
 	ut_call_record_end();
+	return sizeof(struct spdk_fsdev_io) +  UT_IO_BUFF_SIZE;
 }
 
 static void
@@ -155,10 +153,9 @@ ut_fuse_disp_test_init_destroy(void)
 	struct iovec in_iov = { .iov_base = &init_in };
 	struct fuse_out init_out;
 	struct iovec out_iov = { .iov_base = &init_out };
-	struct spdk_fsdev_mount_opts opts = {};
 	spdk_fsdev_cpl_cb *mount_cb_fn;
 	spdk_fsdev_cpl_cb *umount_cb_fn;
-	struct spdk_fsdev_io fsdev_io = {};
+	struct spdk_fsdev_io *fsdev_io;
 	void *cb_arg;
 	int rc;
 
@@ -182,29 +179,31 @@ ut_fuse_disp_test_init_destroy(void)
 			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ut_calls_get_call_count() == 2);
-	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_get);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == g_ut_fsdev_desc);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
+
+	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_init);
+	fsdev_io = ut_calls_param_get_ptr(0, 0);
+	CU_ASSERT((uintptr_t)fsdev_io > (uintptr_t)io_ctx);
+	CU_ASSERT((uintptr_t)fsdev_io - (uintptr_t)io_ctx < io_ctx_size);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == g_ut_fsdev_desc);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 2) == io_channel);
+	CU_ASSERT(ut_calls_param_get_int(0, 3) == 1); /* unique */
+	CU_ASSERT(ut_calls_param_get_int(0, 4) == SPDK_FSDEV_IO_MOUNT); /* type */
+	mount_cb_fn = ut_calls_param_get_ptr(0, 5);
+	cb_arg = ut_calls_param_get_ptr(0, 6);
+
 	CU_ASSERT(ut_calls_get_func(1) == spdk_fsdev_io_submit);
-	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &g_ut_fsdev_io);
-	CU_ASSERT(g_ut_fsdev_io.internal.type == SPDK_FSDEV_IO_MOUNT);
-	opts.opts_size = sizeof(opts);
-	opts.max_xfer_size = 0;
-	opts.max_readahead = 16384;
-	opts.flags = SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP | SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA |
-		     SPDK_FSDEV_MOUNT_WRITEBACK_CACHE | SPDK_FSDEV_MOUNT_POSIX_ACL | SPDK_FSDEV_MOUNT_POSIX_LOCKS;
-	CU_ASSERT(ut_hash(&g_ut_fsdev_io.u_in.mount.opts,
-			  sizeof(g_ut_fsdev_io.u_in.mount.opts)) == ut_hash(&opts, sizeof(opts)));
-	mount_cb_fn = g_ut_fsdev_io.internal.usr_cb_fn;
-	cb_arg = g_ut_fsdev_io.internal.usr_cb_arg;
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev_io);
 
 	ut_calls_reset();
-	opts.max_readahead = 4096;
-	opts.max_xfer_size = 131072;
-	/* POSIX_ACL is not supported by fsdev */
-	opts.flags &= ~SPDK_FSDEV_MOUNT_POSIX_ACL;
-	fsdev_io.u_out.mount.opts = opts;
-	mount_cb_fn(cb_arg, 0, &fsdev_io);
+	fsdev_io->u_out.mount.opts.opts_size = sizeof(fsdev_io->u_out.mount.opts);
+	fsdev_io->u_out.mount.opts.max_xfer_size = 131072;
+	fsdev_io->u_out.mount.opts.max_readahead = 16384;
+	/* Unset SPDK_FSDEV_MOUNT_POSIX_ACL */
+	fsdev_io->u_out.mount.opts.flags = SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP |
+					   SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA |
+					   SPDK_FSDEV_MOUNT_WRITEBACK_CACHE | SPDK_FSDEV_MOUNT_POSIX_LOCKS;
+
+	mount_cb_fn(cb_arg, 0, fsdev_io);
 	CU_ASSERT(ut_calls_get_func(0) == request_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &request_cb_arg);
 	CU_ASSERT(ut_calls_param_get_int(0, 1) == 0);
@@ -213,7 +212,7 @@ ut_fuse_disp_test_init_destroy(void)
 	CU_ASSERT(init_out.hdr.unique == 1);
 	CU_ASSERT(init_out.init.major == 7);
 	CU_ASSERT(init_out.init.minor == 34);
-	CU_ASSERT(init_out.init.max_readahead == 4096);
+	CU_ASSERT(init_out.init.max_readahead == 16384);
 	CU_ASSERT(init_out.init.flags == (FUSE_ASYNC_READ | FUSE_POSIX_LOCKS | FUSE_MAX_PAGES |
 					  FUSE_EXPORT_SUPPORT | FUSE_AUTO_INVAL_DATA |
 					  FUSE_WRITEBACK_CACHE));
@@ -235,18 +234,24 @@ ut_fuse_disp_test_init_destroy(void)
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, &out_iov, 1, io_ctx,
 			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(rc == 0);
 	CU_ASSERT(ut_calls_get_call_count() == 2);
-	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_get);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == g_ut_fsdev_desc);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
+
+	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_init);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev_io);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == g_ut_fsdev_desc);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 2) == io_channel);
+	CU_ASSERT(ut_calls_param_get_int(0, 3) == 2); /* unique */
+	CU_ASSERT(ut_calls_param_get_int(0, 4) == SPDK_FSDEV_IO_UMOUNT); /* type */
+	umount_cb_fn = ut_calls_param_get_ptr(0, 5);
+	cb_arg = ut_calls_param_get_ptr(0, 6);
+
 	CU_ASSERT(ut_calls_get_func(1) == spdk_fsdev_io_submit);
-	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &g_ut_fsdev_io);
-	CU_ASSERT(g_ut_fsdev_io.internal.type == SPDK_FSDEV_IO_UMOUNT);
-	umount_cb_fn = g_ut_fsdev_io.internal.usr_cb_fn;
-	cb_arg = g_ut_fsdev_io.internal.usr_cb_arg;
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev_io);
 
 	ut_calls_reset();
-	umount_cb_fn(cb_arg, 0, NULL);
+	umount_cb_fn(cb_arg, 0, fsdev_io);
 	CU_ASSERT(ut_calls_get_func(0) == request_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &request_cb_arg);
 	CU_ASSERT(ut_calls_param_get_int(0, 1) == 0);
@@ -344,17 +349,14 @@ ut_fuse_disp_test_notify_reply(void)
 			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	fsdev_notify_reply_data.status = 0;
-	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_get);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == g_ut_fsdev_desc);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
-	CU_ASSERT(ut_calls_get_func(1) == notify_reply_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &notify_cb_arg);
-	CU_ASSERT(ut_calls_param_get_hash(1, 1) ==
+	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &notify_cb_arg);
+	CU_ASSERT(ut_calls_param_get_hash(0, 1) ==
 		  ut_hash(&fsdev_notify_reply_data, sizeof(fsdev_notify_reply_data)));
-	CU_ASSERT(ut_calls_param_get_int(1, 2) == 1);
-	CU_ASSERT(ut_calls_get_func(2) == request_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(2, 0) == &request_cb_arg);
-	CU_ASSERT(ut_calls_param_get_int(2, 1) == 0);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == 1);
+	CU_ASSERT(ut_calls_get_func(1) == request_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &request_cb_arg);
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == 0);
 
 	/* Reply with error */
 	ut_calls_reset();
@@ -364,17 +366,14 @@ ut_fuse_disp_test_notify_reply(void)
 			0, 0, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	fsdev_notify_reply_data.status = -EINVAL;
-	CU_ASSERT(ut_calls_get_func(0) == spdk_fsdev_io_get);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == g_ut_fsdev_desc);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == io_channel);
-	CU_ASSERT(ut_calls_get_func(1) == notify_reply_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &notify_cb_arg);
-	CU_ASSERT(ut_calls_param_get_hash(1, 1) ==
+	CU_ASSERT(ut_calls_get_func(0) == notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &notify_cb_arg);
+	CU_ASSERT(ut_calls_param_get_hash(0, 1) ==
 		  ut_hash(&fsdev_notify_reply_data, sizeof(fsdev_notify_reply_data)));
-	CU_ASSERT(ut_calls_param_get_int(1, 2) == 2);
-	CU_ASSERT(ut_calls_get_func(2) == request_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(2, 0) == &request_cb_arg);
-	CU_ASSERT(ut_calls_param_get_int(2, 1) == 0);
+	CU_ASSERT(ut_calls_param_get_int(0, 2) == 2);
+	CU_ASSERT(ut_calls_get_func(1) == request_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(1, 0) == &request_cb_arg);
+	CU_ASSERT(ut_calls_param_get_int(1, 1) == 0);
 
 	spdk_fuse_dispatcher_delete(disp);
 }

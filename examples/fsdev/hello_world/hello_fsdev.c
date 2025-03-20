@@ -30,6 +30,14 @@ struct hello_context_t {
 	int thread_count;
 };
 
+#define ALIGNED_CONTEXT_SIZE SPDK_ALIGN_CEIL(sizeof(struct hello_context_t), 8)
+
+static inline struct spdk_fsdev_io *
+hello_context_get_fsdev_io(struct hello_context_t *hello_context)
+{
+	return (struct spdk_fsdev_io *)(((char *)hello_context) + ALIGNED_CONTEXT_SIZE);
+}
+
 struct hello_thread_t {
 	struct hello_context_t *hello_context;
 	struct spdk_thread *thread;
@@ -42,6 +50,14 @@ struct hello_thread_t {
 	struct spdk_fsdev_file_attr attr;
 	struct iovec iov[2];
 };
+
+#define ALIGNED_THREAD_SIZE SPDK_ALIGN_CEIL(sizeof(struct hello_thread_t), 8)
+
+static inline struct spdk_fsdev_io *
+hello_thread_get_fsdev_io(struct hello_thread_t *hello_thread)
+{
+	return (struct spdk_fsdev_io *)(((char *)hello_thread) + ALIGNED_THREAD_SIZE);
+}
 
 /*
  * Usage function for printing parameters that are specific to this application
@@ -89,15 +105,14 @@ umount_complete(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 static void
 hello_umount(struct hello_context_t *hello_context)
 {
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_context_get_fsdev_io(hello_context);
 
 	SPDK_NOTICELOG("Unmount\n");
-	res = spdk_fsdev_umount(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0,
-				umount_complete, hello_context);
-	if (res) {
-		SPDK_ERRLOG("Failed to unmount (err=%d)\n", res);
-		hello_app_done(hello_context, res);
-	}
+
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
+			   0, SPDK_FSDEV_IO_UMOUNT, umount_complete, hello_context);
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -162,17 +177,17 @@ static void
 hello_unlink(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Unlink file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_unlink(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-				unlink_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("unlink failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_UNLINK, unlink_complete, hello_thread);
+
+	fsdev_io->u_in.unlink.parent_fobject = hello_context->root_fobject;
+	fsdev_io->u_in.unlink.name = hello_thread->file_name;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -193,19 +208,21 @@ static void
 hello_setattr(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Setattr file %s\n", hello_thread->file_name);
 
 	hello_thread->attr.mode &= ~S_IRWXO;
-	res = spdk_fsdev_setattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				 hello_thread->unique, hello_thread->fobject, NULL,
-				 &hello_thread->attr, SPDK_FSDEV_ATTR_MODE,
-				 setattr_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("setattr failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_SETATTR, setattr_complete, hello_thread);
+
+	fsdev_io->u_in.setattr.fobject = hello_thread->fobject;
+	fsdev_io->u_in.setattr.fhandle = NULL;
+	fsdev_io->u_in.setattr.to_set = SPDK_FSDEV_ATTR_MODE;
+	fsdev_io->u_in.setattr.attr   = hello_thread->attr;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -226,17 +243,17 @@ static void
 hello_getattr(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Getattr file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_getattr(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				 hello_thread->unique, hello_thread->fobject, NULL,
-				 getattr_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("getattr failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_GETATTR, getattr_complete, hello_thread);
+
+	fsdev_io->u_in.getattr.fobject = hello_thread->fobject;
+	fsdev_io->u_in.getattr.fhandle = NULL;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -257,17 +274,17 @@ static void
 hello_release(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Release file handle %p\n", hello_thread->fhandle);
 
-	res = spdk_fsdev_release(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				 hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-				 release_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("release failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_RELEASE, release_complete, hello_thread);
+
+	fsdev_io->u_in.release.fobject = hello_thread->fobject;
+	fsdev_io->u_in.release.fhandle = hello_thread->fhandle;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -300,7 +317,7 @@ static void
 hello_read(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Read from file handle %p\n", hello_thread->fhandle);
 
@@ -311,14 +328,19 @@ hello_read(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	res = spdk_fsdev_read(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			      hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-			      DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
-			      read_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("write failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_READ, read_complete, hello_thread);
+
+	fsdev_io->u_in.read.fobject = hello_thread->fobject;
+	fsdev_io->u_in.read.fhandle = hello_thread->fhandle;
+	fsdev_io->u_in.read.size = DATA_SIZE;
+	fsdev_io->u_in.read.offs = 0;
+	fsdev_io->u_in.read.flags = 0;
+	fsdev_io->u_in.read.iov = hello_thread->iov;
+	fsdev_io->u_in.read.iovcnt = 2;
+	fsdev_io->u_in.read.opts = NULL;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -341,7 +363,7 @@ hello_write(struct hello_thread_t *hello_thread)
 {
 	uint8_t data = spdk_env_get_current_core();
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Write to file handle %p\n", hello_thread->fhandle);
 
@@ -352,14 +374,20 @@ hello_write(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	res = spdk_fsdev_write(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			       hello_thread->unique, hello_thread->fobject, hello_thread->fhandle,
-			       DATA_SIZE, 0, 0, hello_thread->iov, 2, NULL,
-			       write_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("write failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_WRITE, write_complete, hello_thread);
+
+
+	fsdev_io->u_in.write.fobject = hello_thread->fobject;
+	fsdev_io->u_in.write.fhandle = hello_thread->fhandle;
+	fsdev_io->u_in.write.size = DATA_SIZE;
+	fsdev_io->u_in.write.offs = 0;
+	fsdev_io->u_in.write.flags = 0;
+	fsdev_io->u_in.write.iov = hello_thread->iov;
+	fsdev_io->u_in.write.iovcnt = 2;
+	fsdev_io->u_in.write.opts = NULL;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -380,17 +408,17 @@ static void
 hello_open(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Open fobject %p\n", hello_thread->fobject);
 
-	res = spdk_fsdev_fopen(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			       hello_thread->unique, hello_thread->fobject, O_RDWR,
-			       fopen_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("open failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_OPEN, fopen_complete, hello_thread);
+
+	fsdev_io->u_in.open.fobject = hello_thread->fobject;
+	fsdev_io->u_in.open.flags = O_RDWR;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -411,17 +439,17 @@ static void
 hello_lookup(struct hello_thread_t *hello_thread)
 {
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Lookup file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_lookup(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-				hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-				lookup_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("lookup failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_LOOKUP, lookup_complete, hello_thread);
+
+	fsdev_io->u_in.lookup.parent_fobject = hello_context->root_fobject;
+	fsdev_io->u_in.lookup.name = hello_thread->file_name;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -443,17 +471,22 @@ hello_mknod(void *ctx)
 {
 	struct hello_thread_t *hello_thread = (struct hello_thread_t *)ctx;
 	struct hello_context_t *hello_context = hello_thread->hello_context;
-	int res;
+	struct spdk_fsdev_io *fsdev_io = hello_thread_get_fsdev_io(hello_thread);
 
 	SPDK_NOTICELOG("Mknod file %s\n", hello_thread->file_name);
 
-	res = spdk_fsdev_mknod(hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			       hello_thread->unique, hello_context->root_fobject, hello_thread->file_name,
-			       S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO, 0, 0022, 0, 0, mknod_complete, hello_thread);
-	if (res) {
-		SPDK_ERRLOG("mknod failed with %d\n", res);
-		hello_thread_done(hello_thread, EIO);
-	}
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
+			   hello_thread->unique, SPDK_FSDEV_IO_MKNOD, mknod_complete, hello_thread);
+
+	fsdev_io->u_in.mknod.parent_fobject = hello_context->root_fobject;
+	fsdev_io->u_in.mknod.name = hello_thread->file_name;
+	fsdev_io->u_in.mknod.mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
+	fsdev_io->u_in.mknod.umask = 0022;
+	fsdev_io->u_in.mknod.rdev = 0;
+	fsdev_io->u_in.mknod.euid = 0;
+	fsdev_io->u_in.mknod.egid = 0;
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 static void
@@ -464,7 +497,7 @@ hello_start_thread(void *ctx)
 	/* File name size assumes that core number will fit into 3 characters */
 	const int filename_size = strlen(TEST_FILENAME) + 5;
 
-	hello_thread = calloc(1, sizeof(struct hello_thread_t));
+	hello_thread = calloc(1, ALIGNED_THREAD_SIZE + spdk_fsdev_get_io_ctx_size());
 	if (!hello_thread) {
 		SPDK_ERRLOG("Failed to allocate thread context\n");
 		spdk_thread_send_msg(hello_context->app_thread, hello_app_notify_thread_done, hello_context);
@@ -557,8 +590,8 @@ static void
 hello_start(void *arg1)
 {
 	struct hello_context_t *hello_context = arg1;
-	struct spdk_fsdev_mount_opts opts = {};
 	int rc = 0;
+	struct spdk_fsdev_io *fsdev_io;
 	hello_context->fsdev_desc = NULL;
 
 	SPDK_NOTICELOG("Successfully started the application\n");
@@ -593,14 +626,16 @@ hello_start(void *arg1)
 	}
 
 	SPDK_NOTICELOG("Mount\n");
-	opts.opts_size = sizeof(opts);
-	rc = spdk_fsdev_mount(hello_context->fsdev_desc, hello_context->fsdev_io_channel, 0, &opts,
-			      mount_complete, hello_context);
-	if (rc) {
-		SPDK_ERRLOG("Failed to initiate mount (err=%d)\n", rc);
-		hello_app_done(hello_context, rc);
-		return;
-	}
+
+	fsdev_io = hello_context_get_fsdev_io(hello_context);
+
+	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
+			   0, SPDK_FSDEV_IO_MOUNT, mount_complete, hello_context);
+
+	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
+	fsdev_io->u_in.mount.opts.opts_size = sizeof(fsdev_io->u_in.mount.opts);
+
+	spdk_fsdev_io_submit(fsdev_io);
 }
 
 int
@@ -608,7 +643,13 @@ main(int argc, char **argv)
 {
 	struct spdk_app_opts opts = {};
 	int rc = 0;
-	struct hello_context_t hello_context = {};
+	struct hello_context_t *hello_context;
+
+	hello_context = calloc(1, ALIGNED_CONTEXT_SIZE + spdk_fsdev_get_io_ctx_size());
+	if (!hello_context) {
+		SPDK_ERRLOG("Could not allocate hello context\n");
+		return -1;
+	}
 
 	/* Set default values in opts structure. */
 	spdk_app_opts_init(&opts, sizeof(opts));
@@ -622,7 +663,7 @@ main(int argc, char **argv)
 				      hello_fsdev_usage)) != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		exit(rc);
 	}
-	hello_context.fsdev_name = g_fsdev_name;
+	hello_context->fsdev_name = g_fsdev_name;
 
 	/*
 	 * spdk_app_start() will initialize the SPDK framework, call hello_start(),
@@ -630,7 +671,7 @@ main(int argc, char **argv)
 	 * error occurs, spdk_app_start() will return with rc even without calling
 	 * hello_start().
 	 */
-	rc = spdk_app_start(&opts, hello_start, &hello_context);
+	rc = spdk_app_start(&opts, hello_start, hello_context);
 	if (rc) {
 		SPDK_ERRLOG("ERROR starting application\n");
 	}
@@ -641,5 +682,7 @@ main(int argc, char **argv)
 
 	/* Gracefully close out all of the SPDK subsystems. */
 	spdk_app_fini();
+
+	free(hello_context);
 	return rc;
 }

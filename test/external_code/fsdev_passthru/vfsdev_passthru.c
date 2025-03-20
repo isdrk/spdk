@@ -72,6 +72,8 @@ struct pt_io_channel {
  */
 struct passthru_fsdev_io {
 	uint8_t test;
+
+	struct spdk_fsdev_io *child_fsdev_io;
 };
 
 static void vfsdev_passthru_submit_request(struct spdk_io_channel *ch,
@@ -138,6 +140,7 @@ vfsdev_passthru_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *child_io)
 	}
 
 	memcpy(&fsdev_io->u_out, &child_io->u_out, sizeof(fsdev_io->u_out));
+	free(child_io);
 	spdk_fsdev_io_complete(fsdev_io, status);
 }
 
@@ -153,336 +156,28 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 	struct pt_io_channel *pt_ch = spdk_io_channel_get_ctx(ch);
 	struct passthru_fsdev_io *io_ctx = (struct passthru_fsdev_io *)fsdev_io->driver_ctx;
 	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
-	int rc = 0;
+	struct spdk_fsdev_io *child_io;
+
+	child_io = malloc(spdk_fsdev_get_io_ctx_size());
+	if (!child_io) {
+		SPDK_ERRLOG("Cannot allocate child fsdev_io\n");
+		spdk_fsdev_io_complete(fsdev_io, -ENOMEM);
+		return;
+	}
 
 	/* Setup a per IO context value; we don't do anything with it in the vfsdev other
 	 * than confirm we get the same thing back in the completion callback just to
 	 * demonstrate.
 	 */
 	io_ctx->test = 0x5a;
+	io_ctx->child_fsdev_io = child_io;
 
-	switch (type) {
-	case SPDK_FSDEV_IO_MOUNT:
-		rc = spdk_fsdev_mount(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      &fsdev_io->u_in.mount.opts,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_UMOUNT:
-		rc = spdk_fsdev_umount(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LOOKUP:
-		rc = spdk_fsdev_lookup(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.lookup.parent_fobject,
-				       fsdev_io->u_in.lookup.name,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FORGET:
-		rc = spdk_fsdev_forget(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.forget.fobject,
-				       fsdev_io->u_in.forget.nlookup,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_MKNOD:
-		rc = spdk_fsdev_mknod(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.mknod.parent_fobject,
-				      fsdev_io->u_in.mknod.name,
-				      fsdev_io->u_in.mknod.mode,
-				      fsdev_io->u_in.mknod.rdev,
-				      fsdev_io->u_in.mknod.umask,
-				      fsdev_io->u_in.mknod.euid,
-				      fsdev_io->u_in.mknod.egid,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_OPEN:
-		rc = spdk_fsdev_fopen(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.open.fobject,
-				      fsdev_io->u_in.open.flags,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_WRITE:
-		rc = spdk_fsdev_write(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.write.fobject,
-				      fsdev_io->u_in.write.fhandle,
-				      fsdev_io->u_in.write.size,
-				      fsdev_io->u_in.write.offs,
-				      fsdev_io->u_in.write.flags,
-				      fsdev_io->u_in.write.iov,
-				      fsdev_io->u_in.write.iovcnt,
-				      fsdev_io->u_in.write.opts,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_READ:
-		rc = spdk_fsdev_read(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				     fsdev_io->u_in.read.fobject,
-				     fsdev_io->u_in.read.fhandle,
-				     fsdev_io->u_in.read.size,
-				     fsdev_io->u_in.read.offs,
-				     fsdev_io->u_in.read.flags,
-				     fsdev_io->u_in.read.iov,
-				     fsdev_io->u_in.read.iovcnt,
-				     fsdev_io->u_in.read.opts,
-				     vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RELEASE:
-		rc = spdk_fsdev_release(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.release.fobject,
-					fsdev_io->u_in.release.fhandle,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_UNLINK:
-		rc = spdk_fsdev_unlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.unlink.parent_fobject,
-				       fsdev_io->u_in.unlink.name,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_GETATTR:
-		rc = spdk_fsdev_getattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.getattr.fobject,
-					fsdev_io->u_in.getattr.fhandle,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SETATTR:
-		rc = spdk_fsdev_setattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.setattr.fobject,
-					fsdev_io->u_in.setattr.fhandle,
-					&fsdev_io->u_in.setattr.attr,
-					fsdev_io->u_in.setattr.to_set,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_READLINK:
-		rc = spdk_fsdev_readlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					 fsdev_io->u_in.readlink.fobject,
-					 vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SYMLINK:
-		rc = spdk_fsdev_symlink(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.symlink.parent_fobject,
-					fsdev_io->u_in.symlink.target,
-					fsdev_io->u_in.symlink.linkpath,
-					fsdev_io->u_in.symlink.euid,
-					fsdev_io->u_in.symlink.egid,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_MKDIR:
-		rc = spdk_fsdev_mkdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.mkdir.parent_fobject,
-				      fsdev_io->u_in.mkdir.name,
-				      fsdev_io->u_in.mkdir.mode,
-				      fsdev_io->u_in.mkdir.umask,
-				      fsdev_io->u_in.mkdir.euid,
-				      fsdev_io->u_in.mkdir.egid,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RMDIR:
-		rc = spdk_fsdev_rmdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.rmdir.parent_fobject,
-				      fsdev_io->u_in.rmdir.name,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RENAME:
-		rc = spdk_fsdev_rename(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.rename.parent_fobject,
-				       fsdev_io->u_in.rename.name,
-				       fsdev_io->u_in.rename.new_parent_fobject,
-				       fsdev_io->u_in.rename.new_name,
-				       fsdev_io->u_in.rename.flags,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LINK:
-		rc = spdk_fsdev_link(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				     fsdev_io->u_in.link.fobject,
-				     fsdev_io->u_in.link.new_parent_fobject,
-				     fsdev_io->u_in.link.name,
-				     vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_STATFS:
-		rc = spdk_fsdev_statfs(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.statfs.fobject,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FSYNC:
-		rc = spdk_fsdev_fsync(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.fsync.fobject,
-				      fsdev_io->u_in.fsync.fhandle,
-				      fsdev_io->u_in.fsync.datasync,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SETXATTR:
-		rc = spdk_fsdev_setxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					 fsdev_io->u_in.setxattr.fobject,
-					 fsdev_io->u_in.setxattr.name,
-					 fsdev_io->u_in.setxattr.value,
-					 fsdev_io->u_in.setxattr.size,
-					 fsdev_io->u_in.setxattr.flags,
-					 vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_GETXATTR:
-		rc = spdk_fsdev_getxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					 fsdev_io->u_in.getxattr.fobject,
-					 fsdev_io->u_in.getxattr.name,
-					 fsdev_io->u_in.getxattr.buffer,
-					 fsdev_io->u_in.getxattr.size,
-					 vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LISTXATTR:
-		rc = spdk_fsdev_listxattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					  fsdev_io->u_in.listxattr.fobject,
-					  fsdev_io->u_in.listxattr.buffer,
-					  fsdev_io->u_in.listxattr.size,
-					  vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_REMOVEXATTR:
-		rc = spdk_fsdev_removexattr(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					    fsdev_io->u_in.removexattr.fobject,
-					    fsdev_io->u_in.removexattr.name,
-					    vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FLUSH:
-		rc = spdk_fsdev_flush(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.flush.fobject,
-				      fsdev_io->u_in.flush.fhandle,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_OPENDIR:
-		rc = spdk_fsdev_opendir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.opendir.fobject,
-					fsdev_io->u_in.opendir.flags,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_READDIR:
-		rc = spdk_fsdev_readdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					fsdev_io->u_in.readdir.fobject,
-					fsdev_io->u_in.readdir.fhandle,
-					fsdev_io->u_in.readdir.offset,
-					fsdev_io->u_in.readdir.usr_entry_cb_fn,
-					vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RELEASEDIR:
-		rc = spdk_fsdev_releasedir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					   fsdev_io->u_in.releasedir.fobject,
-					   fsdev_io->u_in.releasedir.fhandle,
-					   vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FSYNCDIR:
-		rc = spdk_fsdev_fsyncdir(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					 fsdev_io->u_in.fsyncdir.fobject,
-					 fsdev_io->u_in.fsyncdir.fhandle,
-					 fsdev_io->u_in.fsyncdir.datasync,
-					 vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FLOCK:
-		rc = spdk_fsdev_flock(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.flock.fobject,
-				      fsdev_io->u_in.flock.fhandle,
-				      fsdev_io->u_in.flock.operation,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_CREATE:
-		rc = spdk_fsdev_create(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.create.parent_fobject,
-				       fsdev_io->u_in.create.name,
-				       fsdev_io->u_in.create.mode,
-				       fsdev_io->u_in.create.flags,
-				       fsdev_io->u_in.create.umask,
-				       fsdev_io->u_in.create.euid,
-				       fsdev_io->u_in.create.egid,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_ABORT:
-		rc = spdk_fsdev_abort(pt_node->base_desc, pt_ch->base_ch,
-				      fsdev_io->u_in.abort.unique_to_abort,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FALLOCATE:
-		rc = spdk_fsdev_fallocate(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-					  fsdev_io->u_in.fallocate.fobject,
-					  fsdev_io->u_in.fallocate.fhandle,
-					  fsdev_io->u_in.fallocate.mode,
-					  fsdev_io->u_in.fallocate.offset,
-					  fsdev_io->u_in.fallocate.length,
-					  vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
-		rc = spdk_fsdev_copy_file_range(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-						fsdev_io->u_in.copy_file_range.fobject_in,
-						fsdev_io->u_in.copy_file_range.fhandle_in,
-						fsdev_io->u_in.copy_file_range.off_in,
-						fsdev_io->u_in.copy_file_range.fobject_out,
-						fsdev_io->u_in.copy_file_range.fhandle_out,
-						fsdev_io->u_in.copy_file_range.off_out,
-						fsdev_io->u_in.copy_file_range.len,
-						fsdev_io->u_in.copy_file_range.flags,
-						vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SYNCFS:
-		rc = spdk_fsdev_syncfs(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.syncfs.fobject,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_ACCESS:
-		rc = spdk_fsdev_access(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				       fsdev_io->u_in.access.fobject,
-				       fsdev_io->u_in.access.mask,
-				       fsdev_io->u_in.access.uid,
-				       fsdev_io->u_in.access.gid,
-				       vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LSEEK:
-		rc = spdk_fsdev_lseek(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.lseek.fobject,
-				      fsdev_io->u_in.lseek.fhandle,
-				      fsdev_io->u_in.lseek.offset,
-				      fsdev_io->u_in.lseek.whence,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_POLL:
-		rc = spdk_fsdev_poll(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				     fsdev_io->u_in.poll.fobject,
-				     fsdev_io->u_in.poll.fhandle,
-				     fsdev_io->u_in.poll.events,
-				     fsdev_io->u_in.poll.wait,
-				     vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_IOCTL:
-		rc = spdk_fsdev_ioctl(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.ioctl.fobject,
-				      fsdev_io->u_in.ioctl.fhandle,
-				      fsdev_io->u_in.ioctl.request,
-				      fsdev_io->u_in.ioctl.arg,
-				      fsdev_io->u_in.ioctl.in_iov,
-				      fsdev_io->u_in.ioctl.in_iovcnt,
-				      fsdev_io->u_in.ioctl.out_iov,
-				      fsdev_io->u_in.ioctl.out_iovcnt,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_GETLK:
-		rc = spdk_fsdev_getlk(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.getlk.fobject,
-				      fsdev_io->u_in.getlk.fhandle,
-				      &fsdev_io->u_in.getlk.lock,
-				      fsdev_io->u_in.getlk.owner,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SETLK:
-		rc = spdk_fsdev_setlk(pt_node->base_desc, pt_ch->base_ch, fsdev_io->internal.unique,
-				      fsdev_io->u_in.setlk.fobject,
-				      fsdev_io->u_in.setlk.fhandle,
-				      &fsdev_io->u_in.setlk.lock,
-				      fsdev_io->u_in.setlk.owner,
-				      fsdev_io->u_in.setlk.wait,
-				      vfsdev_passthru_cpl_cb, fsdev_io);
-		break;
-	default:
-		SPDK_ERRLOG("passthru: unknown I/O type %d\n", type);
-		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
-		return;
-	}
+	spdk_fsdev_io_init(child_io, pt_node->base_desc, pt_ch->base_ch, spdk_fsdev_io_get_unique(fsdev_io),
+			   type, vfsdev_passthru_cpl_cb, fsdev_io);
 
-	if (rc != 0) {
-		SPDK_ERRLOG("ERROR on fsdev_io submission!\n");
-		spdk_fsdev_io_complete(fsdev_io, rc);
-	}
+	memcpy(&child_io->u_in, &fsdev_io->u_in, sizeof(fsdev_io->u_in));
+
+	spdk_fsdev_io_submit(child_io);
 }
 
 /* We supplied this as an entry point for upper layers who want to communicate to this
