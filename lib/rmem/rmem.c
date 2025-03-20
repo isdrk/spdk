@@ -431,6 +431,14 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 		goto bad_params;
 	}
 
+	pthread_spin_lock(&g_lock);
+	TAILQ_FOREACH(pool, &g_pools, link) {
+		if (!strcmp(name, pool->name)) {
+			SPDK_ERRLOG("%s: already registered.\n", name);
+			goto pool_registered;
+		}
+	}
+
 	oflags = restore ? O_RDWR : (O_RDWR | O_CREAT);
 	fd = openat(g_backend_dir, name, oflags, S_IRUSR | S_IWUSR);
 	if (fd == -1) {
@@ -477,14 +485,6 @@ rmem_pool_create_or_restore(const char *name, bool restore, uint32_t entry_size,
 		num_entries = hdr->num_entries;
 
 		munmap(hdr, sizeof(*hdr));
-	}
-
-	pthread_spin_lock(&g_lock);
-	TAILQ_FOREACH(pool, &g_pools, link) {
-		if (!strcmp(name, pool->name)) {
-			SPDK_ERRLOG("%s: already registered.\n", name);
-			goto pool_registered;
-		}
 	}
 
 	pool = calloc(1, sizeof(*pool));
@@ -546,11 +546,11 @@ pool_extend_failed:
 extra_alloc_failed:
 	free(pool);
 alloc_failed:
-pool_registered:
-	pthread_spin_unlock(&g_lock);
 file_error:
 	close(fd);
+pool_registered:
 open_failed:
+	pthread_spin_unlock(&g_lock);
 bad_params:
 	return NULL;
 }
