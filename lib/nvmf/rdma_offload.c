@@ -6659,7 +6659,7 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 	if (spdk_interrupt_mode_is_enabled()) {
-		drc = doca_pe_set_event_mode(opoller->pe, DOCA_PE_EVENT_MODE_PROGRESS_SELECTIVE);
+		drc = doca_pe_set_event_mode(opoller->pe, DOCA_PE_EVENT_MODE_PROGRESS_ALL);
 		if (DOCA_IS_ERROR(drc)) {
 			SPDK_ERRLOG("Failed to set event mode: %s\n", doca_error_get_descr(drc));
 			nvmf_offload_poller_destroy(opoller);
