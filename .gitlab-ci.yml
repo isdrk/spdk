@@ -19,7 +19,7 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
 
 stages:
-  - build
+  - pre-test
   - test
 
 .do_build:
@@ -40,7 +40,7 @@ stages:
 
 build-job:
   extends: .do_build
-  stage: build
+  stage: pre-test
   image: "$FEDORA_IMAGE"
   script:
     # Cache FIO sources && configure results
@@ -64,23 +64,34 @@ build-job:
       - ./include/spdk/version.h
       - ./python
 
-build-shared-debug-job:
+build-verbs-debug:
   extends: .do_build
-  stage: build
+  stage: pre-test
+  image: "$FEDORA_IMAGE"
+  script:
+    - cd $CI_PROJECT_DIR
+    - ./configure --with-rdma --target-arch=haswell --with-crypto --with-vfio-user --with-xlio --with-shared --enable-debug --enable-werror
+    - make -j4
+
+unittest-mlx5_dv-debug:
+  extends: .do_build
+  stage: pre-test
   image: "$FEDORA_IMAGE"
   script:
     - cd $CI_PROJECT_DIR
     - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-vfio-user --with-xlio --with-shared --enable-debug --enable-werror
     - make -j4
+    - ./test/unit/unittest.sh
 
-build-shared-release-job:
+unittest-mlx5_dv-release:
   extends: .do_build
-  stage: build
+  stage: pre-test
   image: "$FEDORA_IMAGE"
   script:
     - cd $CI_PROJECT_DIR
     - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-vfio-user --with-xlio --with-shared --enable-werror
     - make -j4
+    - ./test/unit/unittest.sh
 
 .test-job-vm-template:
   stage: test
@@ -151,7 +162,7 @@ test-crypto-k8s-job:
 
 coverity-job:
   extends: .do_build
-  stage: build
+  stage: pre-test
   image: "$COV_IMAGE"
   script:
     - apt-get -q update
@@ -176,7 +187,7 @@ coverity-job:
 
 code-style-job:
   extends: .do_build
-  stage: build
+  stage: pre-test
   image: "$COV_IMAGE"
   script:
     - apt-get -q update
