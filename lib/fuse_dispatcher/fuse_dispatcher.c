@@ -1089,157 +1089,139 @@ fuse_dispatcher_add_direntry_plus(struct fuse_io *fuse_io, char *buf, size_t buf
 }
 
 static void
+fuse_dispatcher_no_resp_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	/* FUSE_FORGET and FUSE_INTERRUPT require no response */
+	switch (spdk_fsdev_io_get_type(fsdev_io)) {
+	case SPDK_FSDEV_IO_ABORT:
+	case SPDK_FSDEV_IO_FORGET:
+		fuse_dispatcher_io_complete_none(fuse_io, status);
+		break;
+	default:
+		/* No other IOs should be completed thru this callback */
+		assert(false);
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		break;
+	}
+}
+
+static void
+fuse_dispatcher_readdir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	if (spdk_fsdev_io_get_type(fsdev_io) != SPDK_FSDEV_IO_READDIR) {
+		assert(false);
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
+		return;
+	}
+
+	if (status && status != -EAGAIN) {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+		return;
+	}
+
+	fuse_dispatcher_io_complete_ok(fuse_io, fuse_io->u.readdir.bytes_written);
+}
+
+static void
 fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
+
+	if (status) {
+		fuse_dispatcher_io_complete_err(fuse_io, status);
+		return;
+	}
 
 	switch (spdk_fsdev_io_get_type(fsdev_io)) {
 	case SPDK_FSDEV_IO_MOUNT:
 	case SPDK_FSDEV_IO_UMOUNT:
 	case SPDK_FSDEV_IO_IOCTL:
+	case SPDK_FSDEV_IO_ABORT:
+	case SPDK_FSDEV_IO_FORGET:
+	case SPDK_FSDEV_IO_READDIR:
 		/* We use a different completion callback for these because the completion path is more complex */
 		assert(false);
+		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
 		return;
 	case SPDK_FSDEV_IO_LOOKUP:
-		if (!status) {
-			fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.lookup.fobject,
-							  &fsdev_io->u_out.lookup.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.lookup.fobject,
+						  &fsdev_io->u_out.lookup.attr);
 		break;
-	case SPDK_FSDEV_IO_FORGET:
-		fuse_dispatcher_io_complete_none(fuse_io, status); /* FUSE_FORGET requires no response */
-		return;
 	case SPDK_FSDEV_IO_GETATTR:
-		if (!status) {
-			fuse_dispatcher_io_complete_attr(fuse_io, &fsdev_io->u_out.getattr.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_attr(fuse_io, &fsdev_io->u_out.getattr.attr);
 		break;
 	case SPDK_FSDEV_IO_SETATTR:
-		if (!status) {
-			fuse_dispatcher_io_complete_attr(fuse_io, &fsdev_io->u_out.setattr.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_attr(fuse_io, &fsdev_io->u_out.setattr.attr);
 		break;
 	case SPDK_FSDEV_IO_READLINK:
-		if (!status) {
-			fuse_dispatcher_io_copy_and_complete(fuse_io, fsdev_io->u_out.readlink.linkname,
-							     strlen(fsdev_io->u_out.readlink.linkname) + 1, 0);
-			return;
-		}
+		fuse_dispatcher_io_copy_and_complete(fuse_io, fsdev_io->u_out.readlink.linkname,
+						     strlen(fsdev_io->u_out.readlink.linkname) + 1, 0);
 		break;
 	case SPDK_FSDEV_IO_SYMLINK:
-		if (!status) {
-			fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.symlink.fobject,
-							  &fsdev_io->u_out.symlink.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.symlink.fobject,
+						  &fsdev_io->u_out.symlink.attr);
 		break;
 	case SPDK_FSDEV_IO_MKNOD:
-		if (!status) {
-			fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.mknod.fobject,
-							  &fsdev_io->u_out.mknod.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.mknod.fobject,
+						  &fsdev_io->u_out.mknod.attr);
 		break;
 	case SPDK_FSDEV_IO_MKDIR:
-		if (!status) {
-			fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.mkdir.fobject,
-							  &fsdev_io->u_out.mkdir.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.mkdir.fobject,
+						  &fsdev_io->u_out.mkdir.attr);
 		break;
 	case SPDK_FSDEV_IO_LINK:
-		if (!status) {
-			fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.link.fobject,
-							  &fsdev_io->u_out.link.attr);
-			return;
-		}
+		fuse_dispatcher_io_complete_entry(fuse_io, fsdev_io->u_out.link.fobject,
+						  &fsdev_io->u_out.link.attr);
 		break;
 	case SPDK_FSDEV_IO_OPEN:
-		if (!status) {
-			fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.open.fhandle);
-			return;
-		}
+		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.open.fhandle);
 		break;
 	case SPDK_FSDEV_IO_READ:
 		fuse_dispatcher_io_complete(fuse_io, fsdev_io->u_out.read.data_size, status);
-		return;
+		break;
 	case SPDK_FSDEV_IO_WRITE:
 		fuse_dispatcher_io_complete_write(fuse_io, fsdev_io->u_out.write.data_size, status);
-		return;
+		break;
 	case SPDK_FSDEV_IO_STATFS:
-		if (!status) {
-			fuse_dispatcher_io_complete_statfs(fuse_io, &fsdev_io->u_out.statfs.statfs);
-			return;
-		}
+		fuse_dispatcher_io_complete_statfs(fuse_io, &fsdev_io->u_out.statfs.statfs);
 		break;
 	case SPDK_FSDEV_IO_GETXATTR:
-		if (!status) {
-			fuse_dispatcher_io_complete_xattr(fuse_io, fsdev_io->u_out.getxattr.value_size);
-			return;
-		}
+		fuse_dispatcher_io_complete_xattr(fuse_io, fsdev_io->u_out.getxattr.value_size);
 		break;
 	case SPDK_FSDEV_IO_LISTXATTR:
-		if (!status) {
-			if (fsdev_io->u_out.listxattr.size_only) {
-				fuse_dispatcher_io_complete_xattr(fuse_io, fsdev_io->u_out.listxattr.data_size);
-			} else {
-				fuse_dispatcher_io_complete_ok(fuse_io, fsdev_io->u_out.listxattr.data_size);
-			}
+		if (fsdev_io->u_out.listxattr.size_only) {
+			fuse_dispatcher_io_complete_xattr(fuse_io, fsdev_io->u_out.listxattr.data_size);
+		} else {
+			fuse_dispatcher_io_complete_ok(fuse_io, fsdev_io->u_out.listxattr.data_size);
 		}
 		break;
 	case SPDK_FSDEV_IO_OPENDIR:
-		if (!status) {
-			fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.opendir.fhandle);
-			return;
-		}
-		break;
-	case SPDK_FSDEV_IO_READDIR:
-		if (!status || (status == EAGAIN && fuse_io->u.readdir.bytes_written == fuse_io->u.readdir.size)) {
-			fuse_dispatcher_io_complete_ok(fuse_io, fuse_io->u.readdir.bytes_written);
-			return;
-		}
+		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.opendir.fhandle);
 		break;
 	case SPDK_FSDEV_IO_CREATE:
-		if (!status) {
-			fuse_dispatcher_io_complete_create(fuse_io, fsdev_io->u_out.create.fobject,
-							   &fsdev_io->u_out.create.attr, fsdev_io->u_out.create.fhandle);
-			return;
-		}
+		fuse_dispatcher_io_complete_create(fuse_io, fsdev_io->u_out.create.fobject,
+						   &fsdev_io->u_out.create.attr, fsdev_io->u_out.create.fhandle);
 		break;
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		fuse_dispatcher_io_complete_write(fuse_io, fsdev_io->u_out.copy_file_range.data_size, status);
-		return;
+		break;
 	case SPDK_FSDEV_IO_LSEEK:
-		if (!status) {
-			fuse_dispatcher_io_complete_lseek(fuse_io, fsdev_io->u_out.lseek.offset);
-			return;
-		}
+		fuse_dispatcher_io_complete_lseek(fuse_io, fsdev_io->u_out.lseek.offset);
 		break;
 	case SPDK_FSDEV_IO_POLL:
-		if (!status) {
-			/* Events available, completing the operation. */
-			fuse_dispatcher_io_complete_poll(fuse_io, fsdev_io->u_out.poll.revents);
-			return;
-		}
+		fuse_dispatcher_io_complete_poll(fuse_io, fsdev_io->u_out.poll.revents);
 		break;
 	case SPDK_FSDEV_IO_GETLK:
-		if (!status) {
-			fuse_dispatcher_io_complete_getlk(fuse_io, &fsdev_io->u_out.getlk.lock);
-			return;
-		}
+		fuse_dispatcher_io_complete_getlk(fuse_io, &fsdev_io->u_out.getlk.lock);
 		break;
-	case SPDK_FSDEV_IO_ABORT:
-		/* FUSE_INTERRUPT should complete the *original* request, no need for a reply */
-		fuse_dispatcher_io_complete_none(fuse_io, status);
-		return;
 	default:
+		fuse_dispatcher_io_complete_err(fuse_io, 0);
 		break;
 	}
-
-	fuse_dispatcher_io_complete_err(fuse_io, status);
 }
 
 /*
@@ -1297,7 +1279,8 @@ fuse_dispatcher_fill_forget(struct fuse_io *fuse_io)
 		return -EINVAL;
 	}
 
-	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_FORGET);
+	/* FUSE_FORGET requires no response */
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_FORGET, fuse_dispatcher_no_resp_cpl_cb);
 
 	fsdev_io->u_in.forget.fobject = file_object(fuse_io);
 	fsdev_io->u_in.forget.nlookup = fsdev_io_d2h_u64(fuse_io->disp, arg->nlookup);
@@ -2502,7 +2485,7 @@ fuse_dispatcher_fill_readdir_common(struct fuse_io *fuse_io, bool plus)
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_READDIR);
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READDIR, fuse_dispatcher_readdir_cpl_cb);
 
 	fsdev_io->u_in.readdir.fobject = file_object(fuse_io);
 	fsdev_io->u_in.readdir.fhandle = file_handle(fh);
@@ -2786,7 +2769,8 @@ fuse_dispatcher_fill_interrupt(struct fuse_io *fuse_io)
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "INTERRUPT: %" PRIu64 "\n", unique);
 
-	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_ABORT);
+	/* FUSE_INTERRUPT requires no response */
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_ABORT, fuse_dispatcher_no_resp_cpl_cb);
 
 	fsdev_io->u_in.abort.unique_to_abort = unique;
 
