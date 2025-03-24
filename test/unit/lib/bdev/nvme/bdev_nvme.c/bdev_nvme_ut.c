@@ -187,6 +187,8 @@ DEFINE_STUB(spdk_nvme_ns_get_pi_type, enum spdk_nvme_pi_type, (struct spdk_nvme_
 DEFINE_STUB(spdk_nvme_ns_get_pi_format, enum spdk_nvme_pi_format, (struct spdk_nvme_ns *ns),
 	    SPDK_NVME_16B_GUARD_PI);
 
+DEFINE_STUB(spdk_nvme_ns_supports_write_uncorrectable, bool, (struct spdk_nvme_ns *ns), true);
+
 DEFINE_STUB(spdk_nvme_ns_supports_compare, bool, (struct spdk_nvme_ns *ns), false);
 
 DEFINE_STUB(spdk_nvme_ns_get_md_size, uint32_t, (struct spdk_nvme_ns *ns), 0);
@@ -1262,6 +1264,14 @@ spdk_nvme_ns_cmd_reservation_report(struct spdk_nvme_ns *ns,
 				    spdk_nvme_cmd_cb cb_fn, void *cb_arg)
 {
 	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_RESERVATION_REPORT, cb_fn, cb_arg);
+}
+
+int
+spdk_nvme_ns_cmd_write_uncorrectable(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
+				     uint64_t lba, uint32_t lba_count,
+				     spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	return ut_submit_nvme_request(ns, qpair, SPDK_NVME_OPC_WRITE_UNCORRECTABLE, cb_fn, cb_arg);
 }
 
 struct spdk_nvme_poll_group *
@@ -2579,6 +2589,7 @@ test_submit_nvme_cmd(void)
 	ut_test_submit_nvme_cmd(ch, bdev_io, SPDK_BDEV_IO_TYPE_WRITE);
 	ut_test_submit_nvme_cmd(ch, bdev_io, SPDK_BDEV_IO_TYPE_COMPARE);
 	ut_test_submit_nvme_cmd(ch, bdev_io, SPDK_BDEV_IO_TYPE_UNMAP);
+	ut_test_submit_nvme_cmd(ch, bdev_io, SPDK_BDEV_IO_TYPE_WRITE_UNCORRECTABLE);
 
 	ut_test_submit_nop(ch, bdev_io, SPDK_BDEV_IO_TYPE_FLUSH);
 
