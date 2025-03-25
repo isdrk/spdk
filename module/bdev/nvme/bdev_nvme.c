@@ -974,15 +974,25 @@ static void
 _bdev_nvme_delete_io_path(struct nvme_bdev_channel *nbdev_ch, struct nvme_io_path *io_path)
 {
 	struct nvme_bdev *nbdev;
+	struct nvme_qpair *nvme_qpair;
+	struct nvme_ctrlr *nvme_ctrlr;
+	struct nvme_ns *nvme_ns;
 
 	nbdev = spdk_io_channel_get_io_device(spdk_io_channel_from_ctx(nbdev_ch));
 
+	nvme_qpair = io_path->qpair;
+	assert(nvme_qpair != NULL);
+
+	nvme_ctrlr = nvme_qpair->ctrlr;
+	assert(nvme_ctrlr != NULL);
+
 	/* Add the statistics to nvme_ns before this path is destroyed. */
-	pthread_mutex_lock(&nbdev->mutex);
-	if (nbdev->ref != 0 && io_path->nvme_ns->stat != NULL && io_path->stat != NULL) {
-		spdk_bdev_add_io_stat(io_path->nvme_ns->stat, io_path->stat);
+	pthread_mutex_lock(&nvme_ctrlr->mutex);
+	nvme_ns = nvme_ctrlr_get_ns(nvme_ctrlr, nbdev->nsid);
+	if (nvme_ns != NULL && nvme_ns->stat != NULL && io_path->stat != NULL) {
+		spdk_bdev_add_io_stat(nvme_ns->stat, io_path->stat);
 	}
-	pthread_mutex_unlock(&nbdev->mutex);
+	pthread_mutex_unlock(&nvme_ctrlr->mutex);
 
 	bdev_nvme_clear_current_io_path(nbdev_ch);
 	bdev_nvme_clear_retry_io_path(nbdev_ch, io_path);
