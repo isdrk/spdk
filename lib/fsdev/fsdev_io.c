@@ -62,13 +62,15 @@ fsdev_io_free(struct spdk_fsdev_io *fsdev_io)
 
 	tsc_diff = spdk_get_ticks() - fsdev_io->internal.submit_tsc;
 
-	if (tsc_diff < channel->stat->io[type].min_latency_ticks) {
-		channel->stat->io[type].min_latency_ticks = tsc_diff;
+	if (tsc_diff < channel->stat->io[type].min_ticks) {
+		channel->stat->io[type].min_ticks = tsc_diff;
 	}
 
-	if (tsc_diff > channel->stat->io[type].max_latency_ticks) {
-		channel->stat->io[type].max_latency_ticks = tsc_diff;
+	if (tsc_diff > channel->stat->io[type].max_ticks) {
+		channel->stat->io[type].max_ticks = tsc_diff;
 	}
+
+	channel->stat->io[type].total_ticks += tsc_diff;
 
 	if (fsdev_io->internal.status) {
 		channel->stat->num_io_errors++;

@@ -14346,52 +14346,106 @@ Example response:
     "fsdevs": [
       {
         "name": "fsdev0",
-        "io": {
-          "mount": {
-            "count": 1,
-            "max_latency_ticks": 145384,
-            "min_latency_ticks": 145384
-          },
-          "lookup": {
-            "count": 18,
-            "max_latency_ticks": 13828182,
-            "min_latency_ticks": 41132
-          },
-          "forget": {
-            "count": 11,
-            "max_latency_ticks": 71684,
-            "min_latency_ticks": 31922
-          },
-          "getattr": {
-            "count": 43,
-            "max_latency_ticks": 13864914,
-            "min_latency_ticks": 23098
-          },
-          "open": {
-            "count": 7,
-            "max_latency_ticks": 2309832,
-            "min_latency_ticks": 54062
-          },
-          "read": {
-            "count": 1733507,
-            "max_latency_ticks": 45798992,
-            "min_latency_ticks": 447254
-          },
-          "write": {
-            "count": 1734244,
-            "max_latency_ticks": 45676558,
-            "min_latency_ticks": 456126
-          },
-          "getxattr": {
-            "count": 33,
-            "max_latency_ticks": 1722712,
-            "min_latency_ticks": 24690
-          }
+        "mount": {
+          "ops": 1,
+          "max_ticks": 117396,
+          "min_ticks": 117396,
+          "total_ticks": 117396
         },
-        "bytes_read": 7100444672,
-        "bytes_written": 7103463424,
+        "lookup": {
+          "ops": 29,
+          "max_ticks": 604320,
+          "min_ticks": 36804,
+          "total_ticks": 3865546
+        },
+        "getattr": {
+          "ops": 67,
+          "max_ticks": 607590,
+          "min_ticks": 26626,
+          "total_ticks": 6809552
+        },
+        "setattr": {
+          "ops": 3,
+          "max_ticks": 72650,
+          "min_ticks": 36236,
+          "total_ticks": 162506
+        },
+        "open": {
+          "ops": 13,
+          "max_ticks": 623764,
+          "min_ticks": 39404,
+          "total_ticks": 4099498
+        },
+        "read": {
+          "ops": 161190,
+          "bytes": 660226052,
+          "max_ticks": 1222408,
+          "min_ticks": 18348,
+          "total_ticks": 38690674906
+        },
+        "write": {
+          "ops": 423621,
+          "bytes": 1735147524,
+          "max_ticks": 108279770,
+          "min_ticks": 27652,
+          "total_ticks": 52567940436
+        },
+        "release": {
+          "ops": 14,
+          "max_ticks": 416968,
+          "min_ticks": 39976,
+          "total_ticks": 3304162
+        },
+        "fsync": {
+          "ops": 1,
+          "max_ticks": 5644244296,
+          "min_ticks": 5644244296,
+          "total_ticks": 5644244296
+        },
+        "getxattr": {
+          "ops": 6,
+          "max_ticks": 64456,
+          "min_ticks": 34112,
+          "total_ticks": 280200
+        },
+        "flush": {
+          "ops": 15,
+          "max_ticks": 429358,
+          "min_ticks": 29100,
+          "total_ticks": 3740392
+        },
+        "opendir": {
+          "ops": 1,
+          "max_ticks": 73164,
+          "min_ticks": 73164,
+          "total_ticks": 73164
+        },
+        "readdir": {
+          "ops": 2,
+          "max_ticks": 1450516,
+          "min_ticks": 33468,
+          "total_ticks": 1483984
+        },
+        "releasedir": {
+          "ops": 1,
+          "max_ticks": 49936,
+          "min_ticks": 49936,
+          "total_ticks": 49936
+        },
+        "create": {
+          "ops": 1,
+          "max_ticks": 152224,
+          "min_ticks": 152224,
+          "total_ticks": 152224
+        },
+        "fallocate": {
+          "ops": 1,
+          "max_ticks": 920542,
+          "min_ticks": 920542,
+          "total_ticks": 920542
+        },
         "num_out_of_io": 0,
-        "num_io_errors": 33
+        "num_io_errors": 10,
         "num_notifies": {
           "inval_data": 0,
           "inval_entry": 1

@@ -577,7 +577,7 @@ fsdev_init_io_stat(struct spdk_fsdev_io_stat *stat)
 	memset(stat, 0, sizeof(*stat));
 
 	for (i = 0; i < SPDK_COUNTOF(stat->io); i++) {
-		stat->io[i].min_latency_ticks = UINT64_MAX;
+		stat->io[i].min_ticks = UINT64_MAX;
 	}
 }
 
@@ -650,13 +650,15 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 	for (i = 0; i < SPDK_COUNTOF(from_stat->io); i++) {
 		to_stat->io[i].count += from_stat->io[i].count;
 
-		if (to_stat->io[i].max_latency_ticks < from_stat->io[i].max_latency_ticks) {
-			to_stat->io[i].max_latency_ticks = from_stat->io[i].max_latency_ticks;
+		if (to_stat->io[i].max_ticks < from_stat->io[i].max_ticks) {
+			to_stat->io[i].max_ticks = from_stat->io[i].max_ticks;
 		}
 
-		if (to_stat->io[i].min_latency_ticks > from_stat->io[i].min_latency_ticks) {
-			to_stat->io[i].min_latency_ticks = from_stat->io[i].min_latency_ticks;
+		if (to_stat->io[i].min_ticks > from_stat->io[i].min_ticks) {
+			to_stat->io[i].min_ticks = from_stat->io[i].min_ticks;
 		}
+
+		to_stat->io[i].total_ticks += from_stat->io[i].total_ticks;
 	}
 
 	to_stat->bytes_read += from_stat->bytes_read;
