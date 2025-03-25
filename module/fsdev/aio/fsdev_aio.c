@@ -16,7 +16,7 @@
 #define FILE_PTR_LUT_INIT_SIZE 1000
 #define FILE_PTR_LUT_BITS 63
 #define FILE_PTR_LUT_BASE (((uint64_t)1) << FILE_PTR_LUT_BITS)
-#define FILE_PTR_LUT_MAX_SIZE (UINT64_MAX - FILE_PTR_LUT_BASE)
+#define FILE_PTR_LUT_MAX_SIZE (1024 * 1024 * 1024) /* 1 billion files maximum */
 #define FILE_PTR_LUT_GROWTH_STEP 1000
 
 #define IO_STATUS_ASYNC INT_MIN
@@ -156,8 +156,6 @@ struct aio_fsdev_fhdr {
 	uint64_t refcount;
 };
 
-/* Unfortunately, uint64_t lut_key : SPDK_LUT_MAX_KEY_BITS keeps being re-formatted by astyle */
-SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
 /* The sizeof(struct aio_fsdev_fhdr) a multiple of sizeof(uint64_t) */
 SPDK_STATIC_ASSERT(sizeof(struct aio_fsdev_fhdr) == 16, "Incorrect size");
 

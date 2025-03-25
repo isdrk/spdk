@@ -10,17 +10,18 @@
 #include "spdk/util.h"
 #include "spdk/lut.h"
 
-/* SPDK_LUT_MAX_KEY_BITS must be < 64 to share the same uint64_t with the 'valid' field */
-SPDK_STATIC_ASSERT(SPDK_LUT_MAX_KEY_BITS == 63, "Incorrect number of bits");
+#define SPDK_LUT_TWO_MB (2 * 1024 * 1024)
 
-#define SPDK_LUT_MAX_SIZE ((((uint64_t)1) << SPDK_LUT_MAX_KEY_BITS) - 1)
+struct spdk_lut_addr {
+	uint64_t valid : 1;
+	uint64_t value: 63;
+};
 
-#define SPDK_LUT_SET_SIZE 1024
+SPDK_STATIC_ASSERT(sizeof(uintptr_t) == sizeof(struct spdk_lut_addr),
+		   "This implementation assumes 64 bit arch");
 
 struct spdk_lut_node {
-	uint64_t valid : 1;
-	/* unfortunately, uint64_t lut_key : SPDK_LUT_MAX_KEY_BITS keeps being re-formatted by astyle */
-	uint64_t key : 63;
+	uint64_t key;
 	/* NOTE: the current implementation never uses both link and ptr simultaneously.
 	 * The link is only used while a node is in the free_nodes list, while the ptr is only used on insert, after
 	 * we remove it from the free_nodes list and mark as valid.
@@ -28,127 +29,87 @@ struct spdk_lut_node {
 	 * that allows us to make the node as small as 16 bytes and therefore improve the cache utilization.
 	 */
 	union {
-		void *ptr;
+		struct spdk_lut_addr addr;
 		STAILQ_ENTRY(spdk_lut_node) link;
-		uint64_t pad;  /* To make sure that size of this structure is a multiply of 8 */
 	} u;
 };
 
-/* The sizeof(struct spdk_lut_node) must be a multiple of 8 to ensure proper alignment  */
+/* The sizeof(struct spdk_lut_node) must be exactly 16 bytes  */
 SPDK_STATIC_ASSERT(sizeof(struct spdk_lut_node) == 16, "Incorrect size");
 
-struct spdk_lut_node_set {
-	struct spdk_lut_node nodes[SPDK_LUT_SET_SIZE];
-	struct spdk_lut_node_set *next;
-};
-
 struct spdk_lut {
-	struct spdk_lut_node_set node_set;
+	struct spdk_lut_node *nodes;
 	uint64_t num_nodes;
+	uint64_t growth_step;
 	uint64_t max_size;
 	STAILQ_HEAD(, spdk_lut_node) free_nodes;
 };
 
-static inline size_t
-lut_node_size(struct spdk_lut *lut)
+static int
+lut_extend(struct spdk_lut *lut, uint64_t size)
 {
-	return sizeof(struct spdk_lut_node);
-}
-
-static inline struct spdk_lut_node *
-lut_get_node(struct spdk_lut *lut, uint64_t key)
-{
-	struct spdk_lut_node_set *set;
-	uint64_t remainder = key;
-
-	set = &lut->node_set;
-	while (remainder >= SPDK_LUT_SET_SIZE) {
-		set = set->next;
-		if (set == NULL) {
-			return NULL;
-		}
-		remainder -= SPDK_LUT_SET_SIZE;
-	}
-
-	return &set->nodes[remainder];
-}
-
-static bool
-lut_extend_unsafe(struct spdk_lut *lut)
-{
-	struct spdk_lut_node_set *set, *new_set;
 	struct spdk_lut_node *node;
+	void *placement, *ptr;
 	uint64_t i;
+	int rc;
 
-	if (lut->num_nodes + SPDK_LUT_SET_SIZE > lut->max_size) {
-		SPDK_ERRLOG("The map size will exceed the max: %" PRIu64 " > %" PRIu64 "nodes\n",
-			    lut->num_nodes + SPDK_LUT_SET_SIZE, lut->max_size);
-		return false;
+	/* This is the address where we need to populate */
+	placement = (void *)(lut->nodes + lut->num_nodes);
+
+	ptr = mmap(placement, size * sizeof(struct spdk_lut_node),
+		   PROT_READ | PROT_WRITE,
+		   MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE | MAP_FIXED,
+		   -1, 0);
+	if (ptr == MAP_FAILED) {
+		rc = errno;
+		SPDK_ERRLOG("Unable to populate lut memory. rc: %d\n", rc);
+		return -rc;
 	}
 
-	set = &lut->node_set;
-	while (set->next != NULL) {
-		set = set->next;
-	}
-
-	new_set = calloc(1, sizeof(*new_set));
-	if (!new_set) {
-		SPDK_ERRLOG("Cannot alloc new node set\n");
-		return false;
-	}
-
-	for (i = 0; i < SPDK_LUT_SET_SIZE; i++) {
-		node = &new_set->nodes[i];
-		node->valid = 0;
-		node->key = lut->num_nodes + i;
+	for (i = lut->num_nodes; i < lut->num_nodes + size; i++) {
+		node = &lut->nodes[i];
+		node->key = i;
 		STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
+		assert(node->u.addr.valid == 0);
 	}
 
-	lut->num_nodes += SPDK_LUT_SET_SIZE;
-
-	/* Barrier here so that next isn't shown as non-NULL before
-	 * all of the above stuff has completed. */
+	/* Barrier here so that 'num_nodes' isn't increased before
+	 * the above nodes have been populated with their keys. */
 	spdk_wmb();
 
-	set->next = new_set;
+	lut->num_nodes += size;
 
-	return true;
+	return 0;
 }
 
-static struct spdk_lut_node *
-lut_insert_unsafe(struct spdk_lut *lut, void *value)
+static uint64_t
+lut_make_2mb_multiple(uint64_t size)
 {
-	struct spdk_lut_node *node;
+	size *= sizeof(struct spdk_lut_node);
+	size = spdk_divide_round_up(size, SPDK_LUT_TWO_MB) * SPDK_LUT_TWO_MB;
+	size /= sizeof(struct spdk_lut_node);
 
-	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend_unsafe(lut)) {
-		return NULL;
-	}
-
-	node = STAILQ_FIRST(&lut->free_nodes);
-	STAILQ_REMOVE_HEAD(&lut->free_nodes, u.link);
-	node->u.ptr = value;
-
-	/* Barrier here so that 'valid' isn't shown as 1 before
-	 * all of the above stuff has completed. */
-	spdk_wmb();
-
-	node->valid = 1;
-
-	return node;
+	return size;
 }
 
 struct spdk_lut *
 spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint64_t max_size)
 {
 	struct spdk_lut *lut;
-	struct spdk_lut_node_set *set;
-	struct spdk_lut_node *node;
-	uint64_t i;
+	int rc;
 
-	if (max_size < init_size || max_size > SPDK_LUT_MAX_SIZE) {
+	if (max_size < init_size) {
 		SPDK_ERRLOG("Invalid sizes: init=%" PRIu64 " max=%" PRIu64 "\n", init_size, max_size);
 		return NULL;
 	}
+
+	/* Instead of failing, reduce the max size to our internal maximum. Eventually all code will be updated
+	 * to provide a reasonable maximum value and we can instead fail here if it is too target. */
+	max_size = spdk_min(max_size, SPDK_LUT_MAX_SIZE);
+
+	init_size = lut_make_2mb_multiple(init_size);
+	growth_step = lut_make_2mb_multiple(growth_step);
+	max_size = lut_make_2mb_multiple(max_size);
 
 	lut = calloc(1, sizeof(*lut));
 	if (!lut) {
@@ -158,16 +119,26 @@ spdk_lut_create(uint64_t init_size, uint64_t growth_step, uint64_t max_size)
 
 	STAILQ_INIT(&lut->free_nodes);
 	lut->max_size = max_size;
+	lut->growth_step = growth_step;
 
-	set = &lut->node_set;
-	for (i = 0; i < SPDK_LUT_SET_SIZE; i++) {
-		node = &set->nodes[i];
-		node->valid = 0;
-		node->key = i;
-		STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
+	/* Reserve address space to handle the maximum size, but do not populate it with memory yet. */
+	lut->nodes = mmap(NULL, max_size * sizeof(struct spdk_lut_node),
+			  PROT_NONE,
+			  MAP_PRIVATE | MAP_ANONYMOUS,
+			  -1, 0);
+	if (lut->nodes == MAP_FAILED) {
+		SPDK_ERRLOG("Failed to create memory mapping for lut. rc: %d\n", errno);
+		free(lut);
+		return NULL;
 	}
 
-	lut->num_nodes = SPDK_LUT_SET_SIZE;
+	/* Populate the initial part of the array. */
+	rc = lut_extend(lut, init_size);
+	if (rc != 0) {
+		munmap(lut->nodes, max_size);
+		free(lut);
+		return NULL;
+	}
 
 	return lut;
 }
@@ -176,42 +147,52 @@ uint64_t
 spdk_lut_insert(struct spdk_lut *lut, void *value)
 {
 	struct spdk_lut_node *node;
-	uint64_t key = SPDK_LUT_INVALID_KEY;
+	struct spdk_lut_addr addr = {
+		.valid = 1,
+		.value = (uint64_t)value
+	};
 
-	node = lut_insert_unsafe(lut, value);
-	if (node) {
-		key = node->key;
+	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend(lut, lut->growth_step)) {
+		return SPDK_LUT_INVALID_KEY;
 	}
 
-	return key;
+	node = STAILQ_FIRST(&lut->free_nodes);
+	STAILQ_REMOVE_HEAD(&lut->free_nodes, u.link);
+
+	node->u.addr = addr;
+
+	return node->key;
 }
 
 int
 spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
 {
 	struct spdk_lut_node *node;
+	struct spdk_lut_addr addr;
 
 	assert(key < lut->max_size);
 
 	while (key >= lut->num_nodes) {
-		if (!lut_extend_unsafe(lut)) {
+		if (!lut_extend(lut, lut->growth_step)) {
 			return -ENOMEM;
 		}
 	}
 
-	node = lut_get_node(lut, key);
-	if (node->valid) {
+	node = &lut->nodes[key];
+
+	/* Copy the address out of the node in a single load instruction */
+	addr = node->u.addr;
+
+	if (addr.valid) {
 		return -EALREADY;
 	}
 
 	STAILQ_REMOVE(&lut->free_nodes, node, spdk_lut_node, u.link);
-	node->u.ptr = value;
 
-	/* Barrier here so that 'valid' isn't shown as 1 before
-	 * all of the above stuff has completed. */
-	spdk_wmb();
+	addr.valid = 1;
+	addr.value = (uint64_t)value;
 
-	node->valid = 1;
+	node->u.addr = addr;
 
 	return 0;
 }
@@ -221,48 +202,46 @@ void *
 spdk_lut_get(struct spdk_lut *lut, uint64_t key)
 {
 	struct spdk_lut_node *node;
-	void *value = SPDK_LUT_INVALID_VALUE;
+	struct spdk_lut_addr addr;
 
-	if (key < lut->num_nodes) {
-		node = lut_get_node(lut, key);
-		if (node->valid) {
-
-			/* Barrier here so that our read of 'ptr' never reorders with our
-			 * read of 'valid'. This probably is not necessary because
-			 * most architectures strictly order reads and the writes
-			 * have been ordered by other barriers, but it'll just be
-			 * a no-op in that case. */
-			spdk_rmb();
-
-			value = node->u.ptr;
-		}
+	if (key >= lut->num_nodes) {
+		return SPDK_LUT_INVALID_VALUE;
 	}
 
-	return value;
+	node = &lut->nodes[key];
+
+	/* Copy the address out of the node in a single load instruction */
+	addr = node->u.addr;
+
+	if (addr.valid) {
+		/* This cast is ugly, but it tells the compiler that I do in fact
+		 * know what I'm doing. I want to cast a 63 bit value to a 64 bit
+		 * value, and then treat that as a pointer. */
+		return (void *)(uint64_t)addr.value;
+	}
+
+	return NULL;
 }
 
 int
 spdk_lut_foreach(struct spdk_lut *lut, spdk_lut_foreach_cb cb_fn, void *cb_arg)
 {
 	struct spdk_lut_node *node;
+	struct spdk_lut_addr addr;
 	uint64_t key;
 	int rc = 0;
 
 	for (key = 0; key < lut->num_nodes ; key++) {
-		node = lut_get_node(lut, key);
+		node = &lut->nodes[key];
 
-		if (!node->valid) {
+		/* Copy the address out of the node in a single load instruction */
+		addr = node->u.addr;
+
+		if (!addr.valid) {
 			continue;
 		}
 
-		/* Barrier here so that our read of 'ptr' never reorders with our
-		 * read of 'valid'. This probably is not necessary because
-		 * most architectures strictly order reads and the writes
-		 * have been ordered by other barriers, but it'll just be
-		 * a no-op in that case. */
-		spdk_rmb();
-
-		rc = cb_fn(cb_arg, key, node->u.ptr);
+		rc = cb_fn(cb_arg, key, (void *)(uint64_t)addr.value);
 		if (rc) {
 			break;
 		}
@@ -275,13 +254,18 @@ int
 spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 {
 	struct spdk_lut_node *node;
+	struct spdk_lut_addr addr;
 	bool rc = -ENOENT;
 
 	if (key < lut->num_nodes) {
-		node = lut_get_node(lut, key);
-		if (node->valid) {
-			node->valid = 0;
-			STAILQ_INSERT_TAIL(&lut->free_nodes, node, u.link);
+		node = &lut->nodes[key];
+
+		/* Copy the address out of the node in a single load instruction */
+		addr = node->u.addr;
+
+		if (addr.valid) {
+			STAILQ_INSERT_HEAD(&lut->free_nodes, node, u.link);
+			assert(node->u.addr.valid == 0);
 			rc = 0;
 		}
 	}
@@ -292,16 +276,6 @@ spdk_lut_remove(struct spdk_lut *lut, uint64_t key)
 void
 spdk_lut_free(struct spdk_lut *lut)
 {
-	struct spdk_lut_node_set *set, *next;
-
-	set = &lut->node_set;
-
-	set = set->next;
-	while (set) {
-		next = set->next;
-		free(set);
-		set = next;
-	}
-
+	munmap(lut->nodes, lut->max_size * sizeof(struct spdk_lut_node));
 	free(lut);
 }

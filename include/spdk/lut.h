@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define SPDK_LUT_MAX_KEY_BITS 63
+#define SPDK_LUT_MAX_SIZE (1024 * 1024 * 1024)
 #define SPDK_LUT_INVALID_KEY UINT64_MAX
 #define SPDK_LUT_INVALID_VALUE ((void *)UINTPTR_MAX)
 
