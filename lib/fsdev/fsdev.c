@@ -535,6 +535,7 @@ fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	TAILQ_INSERT_TAIL(&ch->io_submitted, fsdev_io, internal.ch_link);
 
 	ch->io_outstanding++;
+	ch->stat->io[fsdev_io->internal.type].io_outstanding++;
 	shared_resource->io_outstanding++;
 	fsdev_io->internal.in_submit_request = true;
 	fsdev->fn_table->submit_request(ch->channel, fsdev_io);
@@ -659,6 +660,7 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 		}
 
 		to_stat->io[i].total_ticks += from_stat->io[i].total_ticks;
+		to_stat->io[i].io_outstanding += from_stat->io[i].io_outstanding;
 	}
 
 	to_stat->bytes_read += from_stat->bytes_read;
@@ -1361,6 +1363,7 @@ spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 	assert(fsdev_ch->io_outstanding > 0);
 	assert(shared_resource->io_outstanding > 0);
 	fsdev_ch->io_outstanding--;
+	fsdev_ch->stat->io[fsdev_io->internal.type].io_outstanding--;
 	shared_resource->io_outstanding--;
 	fsdev_io_complete(fsdev_io);
 }

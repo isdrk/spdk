@@ -227,6 +227,8 @@ struct spdk_fsdev_io_stat {
 		uint64_t min_ticks;
 		/* Total latency */
 		uint64_t total_ticks;
+		/* Number of IOs outstanding */
+		uint64_t io_outstanding;
 	} io[__SPDK_FSDEV_IO_LAST];
 	/** Number of bytes read */
 	uint64_t bytes_read;

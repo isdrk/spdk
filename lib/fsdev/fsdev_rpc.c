@@ -265,6 +265,7 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 
 		spdk_json_write_named_object_begin(w, name);
 		spdk_json_write_named_uint64(w, "ops", stat->io[i].count);
+		spdk_json_write_named_uint64(w, "inflight_ops", stat->io[i].io_outstanding);
 		switch (i) {
 		case SPDK_FSDEV_IO_READ:
 			spdk_json_write_named_uint64(w, "bytes", stat->bytes_read);
