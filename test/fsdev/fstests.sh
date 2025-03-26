@@ -10,6 +10,7 @@ rootdir=$(readlink -f "$testdir/../..")
 
 mountprog="mount.fuse.spdk"
 declare -A config
+remove_mountprog=
 fusepid=
 
 errmsg() { echo "$0: $*" >&2; }
@@ -21,7 +22,7 @@ cleanup() {
 		kill "$fusepid" || :
 		wait "$fusepid" || :
 	fi
-	if [[ "$(readlink -f "/sbin/$mountprog")" == "$rootdir/scripts/$mountprog" ]]; then
+	if [[ $remove_mountprog == true ]]; then
 		rm -f "/sbin/$mountprog"
 	fi
 	rm -f "$rootdir/.mountenv" "$testdir/fstests.config"
@@ -34,8 +35,10 @@ install_mountprog() {
 			errmsg "$link already exists, aborting"
 			return 1
 		fi
+		remove_mountprog=false
 	else
 		ln -s "$prog" "$link"
+		remove_mountprog=true
 	fi
 	cat - > "$rootdir/.mountenv" <<- ENV
 		FSDEV_FUSE_MOUNT_OPTIONS+=' --fstype=fuse'
