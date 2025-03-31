@@ -81,6 +81,7 @@ extern "C" {
 #include <sys/eventfd.h>
 #include <sys/epoll.h>
 #include <sys/fanotify.h>
+#include <sys/mount.h>
 #include <sched.h>
 #endif
 

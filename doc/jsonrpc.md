@@ -14753,9 +14753,9 @@ Name                    | Optional | Type    | Description
 ----------------------- | -------- | ------- | -----------
 name                    | Required | string  | Name of the fsdev to mount
 mountpoint              | Required | string  | Directory where to mount fsdev
-options                 | Optional | object  | @ref rpc_fuse_mount_options object
+options                 | Optional | object  | @ref rpc_fuse_mount_fuse_options object
 
-#### Mount options {#rpc_fuse_mount_options}
+#### FUSE mount options {#rpc_fuse_mount_fuse_options}
 
 Name                    | Optional | Type    | Description
 ----------------------- | -------- | ------- | -----------
@@ -14763,6 +14763,13 @@ max_io_depth            | Optional | number  | Maximum I/O depth on each core pe
 max_xfer_size           | Optional | number  | Maximum transfer size
 clone_fd                | Optional | boolean | Clone the /dev/fuse fd on each core
 fstype                  | Optional | string  | Override filesystem type passed to mount(2)
+options                 | Optional | array   | Array of @ref rpc_fuse_mount_options
+
+#### Mount options {#rpc_fuse_mount_options}
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+name                    | Optional | string  | Name of the option
 
 #### Example
 

@@ -15,6 +15,86 @@ struct rpc_fuse_mount {
 	struct spdk_fuse_mount_opts	opts;
 };
 
+struct rpc_fuse_mount_option {
+	char *name;
+};
+
+static void
+rpc_fuse_free_mount_option(struct rpc_fuse_mount_option *opt)
+{
+	free(opt->name);
+}
+
+static const struct spdk_json_object_decoder rpc_fuse_mount_option_decoders[] = {
+	{ "name", offsetof(struct rpc_fuse_mount_option, name), spdk_json_decode_string },
+};
+
+struct rpc_fuse_mount_flag {
+	const char	*enable;
+	const char	*disable;
+	uint64_t	flag;
+};
+
+static int
+rpc_fuse_parse_mount_flag(struct rpc_fuse_mount_option *opt, uint64_t *flag)
+{
+	struct rpc_fuse_mount_flag flags[] = {
+		{ "ro",			"rw",			MS_RDONLY },
+		{ "nosuid",		"suid",			MS_NOSUID },
+		{ "nodev",		"dev",			MS_NODEV },
+		{ "noexec",		"exec",			MS_NOEXEC },
+		{ "sync",		"async",		MS_SYNCHRONOUS },
+		{ "dirsync",		"nodirsync",		MS_DIRSYNC },
+		{ "nosymfollow",	"symfollow",		MS_NOSYMFOLLOW },
+		{ "noatime",		"atime",		MS_NOATIME },
+		{ "nodiratime",		"diratime",		MS_NODIRATIME },
+		{ "silent",		"loud",			MS_SILENT },
+		{ "relatime",		"norelatime",		MS_RELATIME },
+		{ "strictatime",	"nostrictatime",	MS_STRICTATIME },
+		{ "lazytime",		"nolazytime",		MS_LAZYTIME },
+	};
+	size_t i;
+
+	for (i = 0; i < SPDK_COUNTOF(flags); i++) {
+		if (strcmp(flags[i].enable, opt->name) == 0) {
+			*flag |= flags[i].flag;
+			return 0;
+		}
+		if (strcmp(flags[i].disable, opt->name) == 0) {
+			return 0;
+		}
+	}
+
+	return -EINVAL;
+}
+
+static int
+rpc_fuse_decode_mount_option(const struct spdk_json_val *val, void *out)
+{
+	struct rpc_fuse_mount *fm = out;
+	struct rpc_fuse_mount_option opt = {};
+	int rc;
+
+	rc = spdk_json_decode_object(val, rpc_fuse_mount_option_decoders,
+				     SPDK_COUNTOF(rpc_fuse_mount_option_decoders), &opt);
+	if (rc != 0) {
+		return rc;
+	}
+
+	rc = rpc_fuse_parse_mount_flag(&opt, &fm->opts.flags);
+	if (rc != 0) {
+		SPDK_ERRLOG("Unknown flag: %s\n", opt.name);
+	}
+	rpc_fuse_free_mount_option(&opt);
+	return rc;
+}
+
+static int
+rpc_fuse_decode_mount_options(const struct spdk_json_val *val, void *out)
+{
+	return spdk_json_decode_array(val, rpc_fuse_decode_mount_option, out, SIZE_MAX, NULL, 0);
+}
+
 #define opts_offsetof(opt) \
 	(offsetof(struct rpc_fuse_mount, opts) + offsetof(struct spdk_fuse_mount_opts, opt))
 
@@ -22,6 +102,7 @@ static const struct spdk_json_object_decoder rpc_fuse_mount_opts_decoders[] = {
 	{ "max_io_depth", opts_offsetof(max_io_depth), spdk_json_decode_uint64, true },
 	{ "max_xfer_size", opts_offsetof(max_xfer_size), spdk_json_decode_uint64, true },
 	{ "clone_fd", opts_offsetof(clone_fd), spdk_json_decode_bool, true },
+	{ "options", 0, rpc_fuse_decode_mount_options, true },
 	{ "fstype", offsetof(struct rpc_fuse_mount, fstype), spdk_json_decode_string, true },
 };
 

@@ -23,6 +23,8 @@ struct spdk_fuse_mount_opts {
 	bool		clone_fd;
 	/** Overrides filesystem type passed to mount(2) */
 	const char	*fstype;
+	/** Flags passed to mount(2) */
+	uint64_t	flags;
 };
 
 /**

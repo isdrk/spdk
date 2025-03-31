@@ -6,9 +6,13 @@ def fuse_set_options(client, **kwargs):
 
 
 def fuse_mount(client, fsdev, mountpoint, **kwargs):
+    def fmt(name, value):
+        if name != 'options':
+            return value
+        return [{'name': o} for o in value.split(',')]
     return client.call('fuse_mount',
                        {'fsdev': fsdev, 'mountpoint': mountpoint,
-                        'options': {k: v for k, v in kwargs.items() if v is not None}})
+                        'options': {k: fmt(k, v) for k, v in kwargs.items() if v is not None}})
 
 
 def fuse_umount(client, mount):

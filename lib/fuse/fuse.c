@@ -11,8 +11,6 @@
 
 #include "linux/fuse_kernel.h"
 
-#include <sys/mount.h>
-
 struct spdk_fuse_mount {
 	struct spdk_fsdev_desc		*fsdev_desc;
 	struct spdk_fuse_dispatcher	*dispatcher;
@@ -644,7 +642,8 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	}
 
 	rc = mount(mnt->name, mnt->mountpoint,
-		   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype), 0, mopts);
+		   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
+		   SPDK_GET_FIELD(opts, flags, 0), mopts);
 	if (rc != 0) {
 		rc = -errno;
 		SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);

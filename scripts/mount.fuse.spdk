@@ -9,5 +9,16 @@ rootdir=$(readlink -f $(dirname $(readlink -f "$0"))/..)
 
 [[ -e "$rootdir/.mountenv" ]] && source "$rootdir/.mountenv"
 
-"$rootdir/scripts/rpc.py" $FSDEV_FUSE_RPC_OPTIONS fuse_mount "$1" "$2" \
+device="$1" mountpoint="$2"
+shift 2
+while (($# > 0)); do
+	case "$1" in
+		-o)
+			FSDEV_FUSE_MOUNT_OPTIONS+=" -o $2"
+			shift
+			;;
+	esac
+	shift
+done
+"$rootdir/scripts/rpc.py" $FSDEV_FUSE_RPC_OPTIONS fuse_mount "$device" "$mountpoint" \
 	$FSDEV_FUSE_MOUNT_OPTIONS &>> "${FSDEV_FUSE_LOG:-/dev/null}"
