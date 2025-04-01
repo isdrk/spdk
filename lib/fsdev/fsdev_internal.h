@@ -38,6 +38,9 @@ struct spdk_fsdev_channel {
 	/* Channel flags */
 	uint32_t		flags;
 
+	/* Trace ID */
+	uint16_t		trace_id;
+
 	/* Stat */
 	struct spdk_fsdev_io_stat *stat;
 };

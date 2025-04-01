@@ -14,6 +14,8 @@
 #include "spdk/fsdev_module.h"
 #include "spdk/log.h"
 #include "spdk/string.h"
+#include "spdk/trace.h"
+#include "spdk_internal/trace_defs.h"
 #include "fsdev_internal.h"
 
 #define SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT 4096
@@ -454,6 +456,8 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	ch->stat->io[fsdev_io->internal.type].io_outstanding++;
 	shared_resource->io_outstanding++;
 	fsdev_io->internal.in_submit_request = true;
+	spdk_trace_record(TRACE_FSDEV_IO_START, ch->trace_id, 0, (uintptr_t)fsdev_io,
+			  fsdev_io->internal.type, ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 	fsdev->fn_table->submit_request(ch->channel, fsdev_io);
 	fsdev_io->internal.in_submit_request = false;
 }
@@ -555,6 +559,7 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 	ch->shared_resource = shared_resource;
 	TAILQ_INIT(&ch->io_submitted);
 	fsdev_init_io_stat(ch->stat);
+	ch->trace_id = fsdev->internal.trace_id;
 
 	return 0;
 }
@@ -1297,6 +1302,8 @@ spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 	fsdev_ch->io_outstanding--;
 	fsdev_ch->stat->io[fsdev_io->internal.type].io_outstanding--;
 	shared_resource->io_outstanding--;
+	spdk_trace_record(TRACE_FSDEV_IO_DONE, fsdev_ch->trace_id, 0, (uintptr_t)fsdev_io,
+			  fsdev_ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 	TAILQ_REMOVE(&fsdev_ch->io_submitted, fsdev_io, internal.ch_link);
 	fsdev_io_complete(fsdev_io);
 }
@@ -1357,6 +1364,7 @@ fsdev_register(struct spdk_fsdev *fsdev)
 	fsdev->internal.status = SPDK_FSDEV_STATUS_READY;
 	TAILQ_INIT(&fsdev->internal.open_descs);
 	fsdev_init_io_stat(fsdev->internal.hist_stat);
+	fsdev->internal.trace_id = spdk_trace_register_owner(OWNER_TYPE_FSDEV, fsdev->name);
 
 	ret = fsdev_name_add(&fsdev->internal.fsdev_name, fsdev, fsdev->name);
 	if (ret != 0) {
@@ -1391,6 +1399,7 @@ fsdev_destroy_cb(void *io_device)
 	cb_fn = fsdev->internal.unregister_cb;
 	cb_arg = fsdev->internal.unregister_ctx;
 
+	spdk_trace_unregister_owner(fsdev->internal.trace_id);
 	free(fsdev->internal.hist_stat);
 	spdk_spin_destroy(&fsdev->internal.spinlock);
 
@@ -1840,3 +1849,32 @@ spdk_fsdev_module_list_find(const char *name)
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fsdev)
+
+static void
+fsdev_trace(void)
+{
+	struct spdk_trace_tpoint_opts opts[] = {
+		{
+			"FSDEV_IO_START", TRACE_FSDEV_IO_START,
+			OWNER_TYPE_FSDEV, OBJECT_FSDEV_IO, 1,
+			{
+				{ "type", SPDK_TRACE_ARG_TYPE_INT, 4 },
+				{ "qd", SPDK_TRACE_ARG_TYPE_INT, 4 },
+				{ "ctx", SPDK_TRACE_ARG_TYPE_PTR, 8 },
+			}
+		},
+		{
+			"FSDEV_IO_DONE", TRACE_FSDEV_IO_DONE,
+			OWNER_TYPE_FSDEV, OBJECT_FSDEV_IO, 0,
+			{
+				{ "qd", SPDK_TRACE_ARG_TYPE_INT, 4 },
+				{ "ctx", SPDK_TRACE_ARG_TYPE_PTR, 8 },
+			}
+		}
+	};
+
+	spdk_trace_register_owner_type(OWNER_TYPE_FSDEV, 'f');
+	spdk_trace_register_object(OBJECT_FSDEV_IO, 'f');
+	spdk_trace_register_description_ext(opts, SPDK_COUNTOF(opts));
+}
+SPDK_TRACE_REGISTER_FN(fsdev_trace, "fsdev", TRACE_GROUP_FSDEV);

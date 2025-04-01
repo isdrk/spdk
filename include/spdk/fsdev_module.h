@@ -200,6 +200,9 @@ struct spdk_fsdev {
 		/** The fsdev status */
 		enum spdk_fsdev_status status;
 
+		/** unique ID for trace */
+		uint16_t trace_id;
+
 		/** Callback function that will be called after fsdev destruct is completed. */
 		spdk_fsdev_unregister_cb unregister_cb;
 
