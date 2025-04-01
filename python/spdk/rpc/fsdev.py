@@ -14,17 +14,17 @@ def fsdev_get_opts(client):
     return client.call('fsdev_get_opts')
 
 
-def fsdev_set_opts(client,  max_num_sources: int = None):
+def fsdev_set_opts(client,  max_source_id: int = None):
     """Set fsdev subsystem opts.
 
     Args:
-        max_num_sources: max number of sources
+        max_source_id: max source ID
     """
     params = {
     }
 
-    if max_num_sources is not None:
-        params['max_num_sources'] = max_num_sources
+    if max_source_id is not None:
+        params['max_source_id'] = max_source_id
 
     return client.call('fsdev_set_opts', params)
 

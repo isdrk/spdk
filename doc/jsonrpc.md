@@ -14242,7 +14242,7 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "max_num_sources": 1024
+    "max_source_id": 1024
   }
 }
 ~~~
@@ -14255,7 +14255,7 @@ Set fsdev module options.
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-max_num_sources         | Required | int         | Max number of sources.
+max_source_id           | Required | int         | Max source ID.
 
 #### Example
 
@@ -14266,7 +14266,7 @@ Example request:
   "method": "fsdev_set_opts",
   "id": 1,
   "params": {
-    "max_num_sources": 256
+    "max_source_id": 256
   }
 }
 ~~~

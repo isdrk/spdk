@@ -18,10 +18,10 @@
 #include "spdk_internal/trace_defs.h"
 #include "fsdev_internal.h"
 
-#define SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT 4096
+#define SPDK_FSDEV_MAX_SOURCE_ID 4096
 
 static struct spdk_fsdev_opts g_fsdev_opts = {
-	.max_num_sources = SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT / 4, /* default is 1/4 of limit */
+	.max_source_id = SPDK_FSDEV_MAX_SOURCE_ID / 4, /* default is 1/4 of limit */
 };
 
 TAILQ_HEAD(spdk_fsdev_list, spdk_fsdev);
@@ -223,7 +223,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "method", "fsdev_set_opts");
 	spdk_json_write_named_object_begin(w, "params");
-	spdk_json_write_named_uint32(w, "max_num_sources", g_fsdev_opts.max_num_sources);
+	spdk_json_write_named_uint32(w, "max_source_id", g_fsdev_opts.max_source_id);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 
@@ -670,8 +670,8 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 		return -EINVAL;
 	}
 
-	if (opts->max_num_sources > SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT) {
-		SPDK_ERRLOG("max_num_sources must not exceed %" PRIu16 "\n", SPDK_FSDEV_MAX_NUM_SOURCES_LIMIT);
+	if (opts->max_source_id > SPDK_FSDEV_MAX_SOURCE_ID) {
+		SPDK_ERRLOG("max_source_id must not exceed %" PRIu16 "\n", SPDK_FSDEV_MAX_SOURCE_ID);
 		return -EINVAL;
 	}
 
@@ -680,7 +680,7 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 		g_fsdev_opts.field = opts->field; \
 	}
 
-	SET_FIELD(opts->max_num_sources != 0, max_num_sources);
+	SET_FIELD(opts->max_source_id != 0, max_source_id);
 
 	g_fsdev_opts.opts_size = opts->opts_size;
 
@@ -709,7 +709,7 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 		opts->field = g_fsdev_opts.field; \
 	}
 
-	SET_FIELD(max_num_sources);
+	SET_FIELD(max_source_id);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */

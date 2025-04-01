@@ -64,9 +64,9 @@ struct spdk_fsdev_opts {
 	uint32_t reserved1;
 	uint32_t reserved2;
 	/**
-	 * Max number of sources.
+	 * Max source ID.
 	 */
-	uint16_t max_num_sources;
+	uint16_t max_source_id;
 } __attribute__((packed));
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 14, "Incorrect size");
 
