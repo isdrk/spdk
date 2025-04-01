@@ -1245,8 +1245,6 @@ fsdev_io_complete(void *ctx)
 		return;
 	}
 
-	TAILQ_REMOVE(&fsdev_ch->io_submitted, fsdev_io, internal.ch_link);
-
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
 
 	if (type == SPDK_FSDEV_IO_READ) {
@@ -1299,6 +1297,7 @@ spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 	fsdev_ch->io_outstanding--;
 	fsdev_ch->stat->io[fsdev_io->internal.type].io_outstanding--;
 	shared_resource->io_outstanding--;
+	TAILQ_REMOVE(&fsdev_ch->io_submitted, fsdev_io, internal.ch_link);
 	fsdev_io_complete(fsdev_io);
 }
 
