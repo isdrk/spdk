@@ -110,7 +110,7 @@ hello_umount(struct hello_context_t *hello_context)
 	SPDK_NOTICELOG("Unmount\n");
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
-			   0, SPDK_FSDEV_IO_UMOUNT, umount_complete, hello_context);
+			   0, SPDK_FSDEV_IO_UMOUNT, 0, 0, umount_complete, hello_context);
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -182,7 +182,7 @@ hello_unlink(struct hello_thread_t *hello_thread)
 	SPDK_NOTICELOG("Unlink file %s\n", hello_thread->file_name);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_UNLINK, unlink_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_UNLINK, 0, 0, unlink_complete, hello_thread);
 
 	fsdev_io->u_in.unlink.parent_fobject = hello_context->root_fobject;
 	fsdev_io->u_in.unlink.name = hello_thread->file_name;
@@ -215,7 +215,7 @@ hello_setattr(struct hello_thread_t *hello_thread)
 	hello_thread->attr.mode &= ~S_IRWXO;
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_SETATTR, setattr_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_SETATTR, 0, 0, setattr_complete, hello_thread);
 
 	fsdev_io->u_in.setattr.fobject = hello_thread->fobject;
 	fsdev_io->u_in.setattr.fhandle = NULL;
@@ -248,7 +248,7 @@ hello_getattr(struct hello_thread_t *hello_thread)
 	SPDK_NOTICELOG("Getattr file %s\n", hello_thread->file_name);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_GETATTR, getattr_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_GETATTR, 0, 0, getattr_complete, hello_thread);
 
 	fsdev_io->u_in.getattr.fobject = hello_thread->fobject;
 	fsdev_io->u_in.getattr.fhandle = NULL;
@@ -279,7 +279,7 @@ hello_release(struct hello_thread_t *hello_thread)
 	SPDK_NOTICELOG("Release file handle %p\n", hello_thread->fhandle);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_RELEASE, release_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_RELEASE, 0, 0, release_complete, hello_thread);
 
 	fsdev_io->u_in.release.fobject = hello_thread->fobject;
 	fsdev_io->u_in.release.fhandle = hello_thread->fhandle;
@@ -329,7 +329,7 @@ hello_read(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_READ, read_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_READ, 0, 0, read_complete, hello_thread);
 
 	fsdev_io->u_in.read.fobject = hello_thread->fobject;
 	fsdev_io->u_in.read.fhandle = hello_thread->fhandle;
@@ -375,7 +375,7 @@ hello_write(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_WRITE, write_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_WRITE, 0, 0, write_complete, hello_thread);
 
 
 	fsdev_io->u_in.write.fobject = hello_thread->fobject;
@@ -413,7 +413,7 @@ hello_open(struct hello_thread_t *hello_thread)
 	SPDK_NOTICELOG("Open fobject %p\n", hello_thread->fobject);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_OPEN, fopen_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_OPEN, 0, 0, fopen_complete, hello_thread);
 
 	fsdev_io->u_in.open.fobject = hello_thread->fobject;
 	fsdev_io->u_in.open.flags = O_RDWR;
@@ -444,7 +444,7 @@ hello_lookup(struct hello_thread_t *hello_thread)
 	SPDK_NOTICELOG("Lookup file %s\n", hello_thread->file_name);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_LOOKUP, lookup_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_LOOKUP, 0, 0, lookup_complete, hello_thread);
 
 	fsdev_io->u_in.lookup.parent_fobject = hello_context->root_fobject;
 	fsdev_io->u_in.lookup.name = hello_thread->file_name;
@@ -476,7 +476,7 @@ hello_mknod(void *ctx)
 	SPDK_NOTICELOG("Mknod file %s\n", hello_thread->file_name);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
-			   hello_thread->unique, SPDK_FSDEV_IO_MKNOD, mknod_complete, hello_thread);
+			   hello_thread->unique, SPDK_FSDEV_IO_MKNOD, 0, 0, mknod_complete, hello_thread);
 
 	fsdev_io->u_in.mknod.parent_fobject = hello_context->root_fobject;
 	fsdev_io->u_in.mknod.name = hello_thread->file_name;
@@ -630,7 +630,7 @@ hello_start(void *arg1)
 	fsdev_io = hello_context_get_fsdev_io(hello_context);
 
 	spdk_fsdev_io_init(fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
-			   0, SPDK_FSDEV_IO_MOUNT, mount_complete, hello_context);
+			   0, SPDK_FSDEV_IO_MOUNT, 0, 0, mount_complete, hello_context);
 
 	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
 	fsdev_io->u_in.mount.opts.opts_size = sizeof(fsdev_io->u_in.mount.opts);

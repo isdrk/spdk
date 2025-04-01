@@ -641,7 +641,7 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 	ut_complete_next_request = false; /* Make sure the flush IO won't be completed */
 
 	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, UT_UNIQUE, SPDK_FSDEV_IO_FLUSH,
-			   ut_fsdev_reset_flush_cpl_cb, utfsdev);
+			   0, 0, ut_fsdev_reset_flush_cpl_cb, utfsdev);
 
 	fsdev_io->u_in.flush.fobject = UT_FOBJECT;
 	fsdev_io->u_in.flush.fhandle = UT_FHANDLE;
@@ -902,7 +902,7 @@ ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, uint64_t u
 	fsdev_io = calloc(1, spdk_fsdev_get_io_ctx_size());
 	CU_ASSERT(fsdev_io != NULL);
 
-	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, unique, type, ut_fsdev_test_io_cpl_cb,
+	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, unique, type, 0, 0, ut_fsdev_test_io_cpl_cb,
 			   (void *)UT_UNIQUE);
 
 	ut_calls_reset();

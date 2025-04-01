@@ -318,6 +318,32 @@ spdk_fsdev_io_get_unique(struct spdk_fsdev_io *fsdev_io)
 }
 
 /**
+ * Get I/O source id
+ *
+ * \param fsdev_io I/O to complete.
+ *
+ * \return I/O source id
+ */
+static inline uint16_t
+spdk_fsdev_io_get_source_id(struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_io->internal.source_id;
+}
+
+/**
+ * Get I/O source unique
+ *
+ * \param fsdev_io I/O to complete.
+ *
+ * \return I/O source unique
+ */
+static inline uint64_t
+spdk_fsdev_io_get_source_unique(struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_io->internal.source_unique;
+}
+
+/**
  * Get a thread that given fsdev_io was submitted on.
  *
  * \param fsdev_io I/O

@@ -173,7 +173,8 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 	io_ctx->child_fsdev_io = child_io;
 
 	spdk_fsdev_io_init(child_io, pt_node->base_desc, pt_ch->base_ch, spdk_fsdev_io_get_unique(fsdev_io),
-			   type, vfsdev_passthru_cpl_cb, fsdev_io);
+			   type, spdk_fsdev_io_get_source_id(fsdev_io), spdk_fsdev_io_get_source_unique(fsdev_io),
+			   vfsdev_passthru_cpl_cb, fsdev_io);
 
 	memcpy(&child_io->u_in, &fsdev_io->u_in, sizeof(fsdev_io->u_in));
 

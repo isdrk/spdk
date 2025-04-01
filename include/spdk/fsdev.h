@@ -1184,6 +1184,12 @@ struct spdk_fsdev_io {
 		/** Status for the IO */
 		int status;
 
+		/* Source ID */
+		uint16_t source_id;
+
+		/* Source Unique */
+		uint64_t source_unique;
+
 		/** Member used for linking child I/Os together. */
 		TAILQ_ENTRY(spdk_fsdev_io) link;
 
@@ -1231,12 +1237,15 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
  * \param ch I/O channel.
  * \param unique Unique I/O id.
  * \param type I/O type.
+ * \param source_id Source id.
+ * \param source_unique Source unique.
  * \param cb_fn Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  */
 void spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 			struct spdk_io_channel *ch,
 			uint64_t unique, enum spdk_fsdev_io_type type,
+			uint16_t source_id, uint64_t source_unique,
 			spdk_fsdev_cpl_cb *cb_fn, void *cb_arg);
 
 /**

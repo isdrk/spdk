@@ -426,6 +426,7 @@ void
 spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 		   struct spdk_io_channel *ch,
 		   uint64_t unique, enum spdk_fsdev_io_type type,
+		   uint16_t source_id, uint64_t source_unique,
 		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
 	fsdev_io->internal.ch = __io_ch_to_fsdev_ch(ch);
@@ -437,6 +438,8 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
 	fsdev_io->internal.cleanup_cb_fn = NULL;
+	fsdev_io->internal.source_id = source_id;
+	fsdev_io->internal.source_unique = source_unique;
 
 	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
 }

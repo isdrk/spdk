@@ -56,6 +56,7 @@ void
 spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 		   struct spdk_io_channel *ch,
 		   uint64_t unique, enum spdk_fsdev_io_type type,
+		   uint16_t source_id, uint64_t source_unique,
 		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
 	ut_call_record_begin(spdk_fsdev_io_init);
@@ -64,6 +65,8 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 	ut_call_record_param_ptr(ch);
 	ut_call_record_param_int(unique);
 	ut_call_record_param_int(type);
+	ut_call_record_param_int(source_id);
+	ut_call_record_param_int(source_unique);
 	ut_call_record_param_ptr(cb_fn);
 	ut_call_record_param_ptr(cb_arg);
 	ut_call_record_end();
@@ -176,7 +179,7 @@ ut_fuse_disp_test_init_destroy(void)
 	in_iov.iov_len = init_in.hdr.len;
 	out_iov.iov_len = sizeof(init_out.hdr) + sizeof(init_out.init);
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, &out_iov, 1, io_ctx,
-			0, 0, request_cb, &request_cb_arg);
+			100, 1000, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(ut_calls_get_call_count() == 2);
 
@@ -188,8 +191,10 @@ ut_fuse_disp_test_init_destroy(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, 2) == io_channel);
 	CU_ASSERT(ut_calls_param_get_int(0, 3) == 1); /* unique */
 	CU_ASSERT(ut_calls_param_get_int(0, 4) == SPDK_FSDEV_IO_MOUNT); /* type */
-	mount_cb_fn = ut_calls_param_get_ptr(0, 5);
-	cb_arg = ut_calls_param_get_ptr(0, 6);
+	CU_ASSERT(ut_calls_param_get_int(0, 5) == 100); /* source_id */
+	CU_ASSERT(ut_calls_param_get_int(0, 6) == 1000); /* source_unique */
+	mount_cb_fn = ut_calls_param_get_ptr(0, 7);
+	cb_arg = ut_calls_param_get_ptr(0, 8);
 
 	CU_ASSERT(ut_calls_get_func(1) == spdk_fsdev_io_submit);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev_io);
@@ -232,7 +237,7 @@ ut_fuse_disp_test_init_destroy(void)
 	in_iov.iov_len = init_in.hdr.len;
 	out_iov.iov_len = sizeof(init_out.hdr);
 	rc = spdk_fuse_dispatcher_submit_request(disp, io_channel, &in_iov, 1, &out_iov, 1, io_ctx,
-			0, 0, request_cb, &request_cb_arg);
+			20, 200, request_cb, &request_cb_arg);
 	CU_ASSERT(rc == 0);
 
 	CU_ASSERT(rc == 0);
@@ -244,8 +249,10 @@ ut_fuse_disp_test_init_destroy(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, 2) == io_channel);
 	CU_ASSERT(ut_calls_param_get_int(0, 3) == 2); /* unique */
 	CU_ASSERT(ut_calls_param_get_int(0, 4) == SPDK_FSDEV_IO_UMOUNT); /* type */
-	umount_cb_fn = ut_calls_param_get_ptr(0, 5);
-	cb_arg = ut_calls_param_get_ptr(0, 6);
+	CU_ASSERT(ut_calls_param_get_int(0, 5) == 20); /* source_id */
+	CU_ASSERT(ut_calls_param_get_int(0, 6) == 200); /* source_unique */
+	umount_cb_fn = ut_calls_param_get_ptr(0, 7);
+	cb_arg = ut_calls_param_get_ptr(0, 8);
 
 	CU_ASSERT(ut_calls_get_func(1) == spdk_fsdev_io_submit);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev_io);

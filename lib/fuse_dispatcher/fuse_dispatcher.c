@@ -1251,7 +1251,8 @@ fuse_init_fsdev_io_ex(struct fuse_io *fuse_io, enum spdk_fsdev_io_type type,
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 
-	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, fuse_io->hdr.unique, type, cb_fn, fuse_io);
+	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, fuse_io->hdr.unique, type, fuse_io->source_id,
+			   fuse_io->source_unique, cb_fn, fuse_io);
 }
 
 static inline void
@@ -3759,10 +3760,12 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 	fuse_io->hdr.pid = fsdev_io_d2h_u32(fuse_io->disp, hdr->pid);
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
-		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32 "\n", fuse_io->hdr.opcode,
-		      spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
+		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
+		      " core_id=%" PRIu32 " source_id=%" PRIu16 " source_unique=%" PRIu64 "\n",
+		      fuse_io->hdr.opcode, spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
 		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
-		      fuse_io->hdr.gid, fuse_io->hdr.pid);
+		      fuse_io->hdr.gid, fuse_io->hdr.pid, spdk_env_get_current_core(),
+		      fuse_io->source_id, fuse_io->source_unique);
 
 	return fuse_dispatcher_submit_io(fuse_io);
 
