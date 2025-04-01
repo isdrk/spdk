@@ -38,7 +38,7 @@ rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 	spdk_json_write_object_end(w);
 	spdk_jsonrpc_end_result(request, w);
 }
-SPDK_RPC_REGISTER("fsdev_get_opts", rpc_fsdev_get_opts, SPDK_RPC_RUNTIME)
+SPDK_RPC_REGISTER("fsdev_get_opts", rpc_fsdev_get_opts, SPDK_RPC_STARTUP | SPDK_RPC_RUNTIME)
 
 struct rpc_fsdev_set_opts {
 	uint16_t max_num_sources;
@@ -82,7 +82,7 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 
 	spdk_jsonrpc_send_bool_response(request, true);
 }
-SPDK_RPC_REGISTER("fsdev_set_opts", rpc_fsdev_set_opts, SPDK_RPC_RUNTIME)
+SPDK_RPC_REGISTER("fsdev_set_opts", rpc_fsdev_set_opts, SPDK_RPC_STARTUP)
 
 struct rpc_fsdev_get_fsdevs {
 	char *name;
