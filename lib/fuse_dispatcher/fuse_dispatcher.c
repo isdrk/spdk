@@ -3522,7 +3522,7 @@ const char *
 spdk_fuse_dispatcher_get_operation_name(uint32_t opcode)
 {
 	if (opcode >= SPDK_COUNTOF(fuse_op_names)) {
-		return NULL;
+		return "UNKNOWN";
 	}
 
 	return fuse_op_names[opcode].name;
@@ -3712,7 +3712,6 @@ static int
 fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {
 	struct fuse_in_header *hdr;
-	const char *op_name;
 
 	if (!fuse_io->in_iovcnt || !fuse_io->in_iov) {
 		SPDK_ERRLOG("Bad IO: no IN iov (%d, %p)\n", fuse_io->in_iovcnt, fuse_io->in_iov);
@@ -3744,12 +3743,6 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 		UNUSED(out_hdr); /* We don't need it here, we just made a check and a reservation */
 	}
 
-	op_name = spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode);
-	if (!op_name) {
-		SPDK_ERRLOG("IO (%" PRIu32 ") is unsupported\n", fuse_io->hdr.opcode);
-		goto exit;
-	}
-
 	fuse_io->hdr.len = fsdev_io_d2h_u32(fuse_io->disp, hdr->len);
 	fuse_io->hdr.nodeid = fsdev_io_d2h_u64(fuse_io->disp, hdr->nodeid);
 	fuse_io->hdr.uid = fsdev_io_d2h_u32(fuse_io->disp, hdr->uid);
@@ -3758,8 +3751,9 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
 		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32 "\n", fuse_io->hdr.opcode,
-		      op_name, fuse_io->hdr.len, fuse_io->hdr.unique,
-		      fuse_io->hdr.nodeid, fuse_io->hdr.uid, fuse_io->hdr.gid, fuse_io->hdr.pid);
+		      spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
+		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
+		      fuse_io->hdr.gid, fuse_io->hdr.pid);
 
 	return fuse_dispatcher_submit_io(fuse_io);
 

@@ -95,14 +95,8 @@ static const char *
 fsdev_fuse_request_get_name(struct fsdev_fuse_request *req)
 {
 	struct fuse_in_header *in = req->buf;
-	const char *name;
 
-	name = spdk_fuse_dispatcher_get_operation_name(in->opcode);
-	if (name != NULL) {
-		return name;
-	}
-
-	return "UNKNOWN";
+	return spdk_fuse_dispatcher_get_operation_name(in->opcode);
 }
 
 static struct fuse_in_header *

@@ -151,7 +151,7 @@ uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *d
  *
  * \param opcode opcode of the operation.
  *
- * \return name of the operation or NULL in case of an error.
+ * \return name of the operation or "UNKNOWN" in case the opcode is not known.
  */
 const char *spdk_fuse_dispatcher_get_operation_name(uint32_t opcode);
 
