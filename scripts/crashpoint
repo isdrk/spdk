@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+from argparse import ArgumentParser
+from dataclasses import dataclass
+from elftools.elf.elffile import ELFFile
+import os
+import subprocess
+import sys
+import tempfile
+
+
+@dataclass
+class Location:
+    addr: int
+    file: str
+    line: int
+
+
+class Symbol:
+    def __init__(self, name, elffile, cu, die):
+        self.name = name
+        self.elffile = elffile
+        self.cu = cu
+        self.die = die
+        self.addr_range = (die.attributes['DW_AT_low_pc'].value,
+                           die.attributes['DW_AT_low_pc'].value +
+                           die.attributes['DW_AT_high_pc'].value)
+        self.locations = self._init_locations()
+
+    @staticmethod
+    def find(library, name):
+        f = open(library, 'rb')
+        elffile = ELFFile(f)
+        if not elffile.has_dwarf_info():
+            raise ValueError(f'{library} has no DWARF info')
+
+        info = elffile.get_dwarf_info()
+        for cu in info.iter_CUs():
+            for die in cu.iter_DIEs():
+                if die.tag != 'DW_TAG_subprogram':
+                    continue
+                try:
+                    if die.attributes['DW_AT_name'].value.decode('ascii') == name:
+                        return Symbol(name, elffile, cu, die)
+                except KeyError:
+                    pass
+        raise ValueError(f'{library} doesn\'t contain {name}')
+
+    def _check_addr(self, addr):
+        start, end = self.addr_range
+        return addr >= start and addr < end
+
+    def _init_location(self, prog, entry):
+        files = prog.header['file_entry']
+        idx = entry.state.file
+        if prog.header.version < 5:
+            idx -= 1
+        if idx < 0:
+            raise ValueError('Malformed DWARF file index')
+        file = files[idx]
+        diridx = file['dir_index']
+        if diridx == 0 and prog.header.version < 5:
+            filename = file.name.decode()
+        else:
+            if prog.header.version < 5:
+                diridx -= 1
+            if diridx < 0:
+                raise ValueError('Malformed DWARF directory index')
+            filename = os.path.join(prog.header['include_directory'][diridx].decode(),
+                                    file.name.decode())
+        return Location(addr=entry.state.address,
+                        file=filename,
+                        line=entry.state.line)
+
+    def _init_locations(self):
+        info = self.elffile.get_dwarf_info()
+        prog = info.line_program_for_CU(self.cu)
+        locs = []
+        if prog is None:
+            raise ValueError(f'Missing DWARF location info')
+        for entry in prog.get_entries():
+            if entry.state is None:
+                continue
+            if self._check_addr(entry.state.address):
+                locs.append(self._init_location(prog, entry))
+        return locs
+
+
+def crash(pid, library, symbol, location, skip, verbose):
+    sym = Symbol.find(library, symbol)
+    if location < 0 or len(sym.locations) <= location:
+        raise ValueError(f'Invalid location: {location}, '
+                         f'only 0-{len(sym.locations) - 1} available')
+    begin, loc = sym.locations[0], sym.locations[location]
+    offset = loc.addr - begin.addr
+    tmp = tempfile.NamedTemporaryFile()
+    script = '\n'.join([f'break *{symbol} + {hex(offset)}',
+                        f'commands',
+                        f'kill',
+                        f'end',
+                        f'ignore 1 {skip}',
+                        f'info break',
+                        f'continue'])
+    if verbose:
+        print(script)
+    tmp.file.write(bytes(script, 'ascii'))
+    tmp.file.flush()
+    # gdb crashes when exiting from within the breakpoint in the non-interactive mode, so we cannot
+    # capture its exit code
+    subprocess.run(['gdb', '-batch', '-p', str(pid), '-x', tmp.name])
+    return 0
+
+
+def count_lines(library, symbol, verbose):
+    sym = Symbol.find(library, symbol)
+    if verbose:
+        lines = open(sym.locations[0].file, 'r').read().split('\n')
+        filename = os.path.basename(sym.locations[0].file)
+        for loc in sym.locations:
+            sys.stderr.write('{:6x} {}:{} {}\n'.format(loc.addr, filename, loc.line,
+                                                       lines[loc.line - 1]))
+        sys.stderr.flush()
+    print(len(sym.locations))
+    return 0
+
+
+def main():
+    parser = ArgumentParser()
+    parser.add_argument('-f', '--file', help='object containing the symbol',
+                        metavar='FILE', required=True)
+    parser.add_argument('-s', '--symbol', help='symbol to install the crashpoint',
+                        metavar='SYMBOL', required=True)
+    parser.add_argument('-c', '--count', help='list the number of possible breakpoints locations',
+                        action='store_true')
+    parser.add_argument('-l', '--location', help='install crashpoint at LOCATION',
+                        metavar='LOCATION', type=int, default=0)
+    parser.add_argument('-p', '--pid', help='PID of the process to trace', type=int)
+    parser.add_argument('-z', '--skip', help='skip COUNT hits before crashing', type=int,
+                        default=0, metavar='COUNT')
+    parser.add_argument('-v', '--verbose', help='enable verbose logging', action='store_true')
+    args = parser.parse_args()
+    try:
+        if args.count:
+            return count_lines(args.file, args.symbol, args.verbose)
+        else:
+            if args.pid is None:
+                raise ValueError('Missing argument: -p, --pid')
+            return crash(args.pid, args.file, args.symbol, args.location, args.skip, args.verbose)
+    except ValueError as ex:
+        print(ex)
+    except FileNotFoundError as ex:
+        print(f'{ex.filename}: {ex.strerror}')
+    except KeyboardInterrupt:
+        pass
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
