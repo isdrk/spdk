@@ -731,6 +731,8 @@ file_handle_destroy(struct aio_fsdev_file_handle *fhandle)
 		fobject = NULL;
 	}
 
+	assert(fobject);
+
 	if (spdk_likely(fobject->hdr.is_fobject)) {
 		file_object_ref(fobject);
 	} else {
@@ -918,6 +920,7 @@ fsdev_aio_op_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fhandle->dir.dp = fdopendir(fd);
 	if (fhandle->dir.dp == NULL) {
 		error = -errno;
+		assert(error);
 		SPDK_ERRLOG("fdopendir failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
 		goto do_return;
 	}
@@ -1634,13 +1637,13 @@ fsdev_aio_ioctl_retry(struct spdk_fsdev_io *fsdev_io,
 	if (in_iovcnt && in_iov) {
 		fsdev_io->u_out.ioctl.in_iov = iov;
 		fsdev_io->u_out.ioctl.in_iovcnt = in_iovcnt;
-		memcpy(fsdev_io->u_out.ioctl.in_iov, in_iov, in_iovcnt  * sizeof(struct iovec));
+		memcpy(fsdev_io->u_out.ioctl.in_iov, in_iov, in_iovcnt * sizeof(struct iovec));
 	}
 
 	if (out_iovcnt && out_iov) {
 		fsdev_io->u_out.ioctl.out_iov = iov + in_iovcnt;
 		fsdev_io->u_out.ioctl.out_iovcnt = out_iovcnt;
-		memcpy(fsdev_io->u_out.ioctl.out_iov, in_iov + in_iovcnt, out_iovcnt  * sizeof(struct iovec));
+		memcpy(fsdev_io->u_out.ioctl.out_iov, out_iov, out_iovcnt * sizeof(struct iovec));
 	}
 
 	spdk_fsdev_io_set_cleanup_callback(fsdev_io, fsdev_aio_ioctl_io_free, iov);
