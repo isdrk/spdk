@@ -3691,7 +3691,7 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", fuse_io->hdr.opcode);
-		rc = -EINVAL;
+		rc = -ENOSYS;
 		break;
 	}
 
