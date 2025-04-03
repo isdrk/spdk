@@ -3701,7 +3701,7 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 		} else {
 			fuse_dispatcher_io_complete_none(fuse_io, rc);
 		}
-		return rc;
+		return 0;
 	}
 
 	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
