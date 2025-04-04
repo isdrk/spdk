@@ -12,7 +12,7 @@ set -- "--transport=tcp" "--iso" "$@"
 source "$rootdir/test/common/autotest_common.sh"
 source "$rootdir/test/nvmf/common.sh"
 
-NULL_META=16 NULL_BLOCK_SIZE=512 NULL_SIZE=64 NULL_DIF=1
+NULL_META=16 NULL_BLOCK_SIZE=512 NULL_SIZE=64 NULL_DIF=1 LARGE_POOL_COUNT=2047 SMALL_POOL_COUNT=8192
 
 create_subsystem() {
 	local sub_id=${1:-0}
@@ -48,7 +48,78 @@ destroy_subsystems() {
 }
 
 create_transport() { rpc_cmd nvmf_create_transport $NVMF_TRANSPORT_OPTS; }
-create_json_sub_conf() { gen_nvmf_target_json "$@"; }
+
+function create_json_sub_conf() {
+	local subsystem config=()
+
+	for subsystem in "${@:-1}"; do
+		config+=(
+			"$(
+				cat <<- EOF
+					{
+						"params": {
+							"name": "Nvme$subsystem",
+							"trtype": "$TEST_TRANSPORT",
+							"traddr": "$NVMF_FIRST_TARGET_IP",
+							"adrfam": "ipv4",
+							"trsvcid": "$NVMF_PORT",
+							"subnqn": "nqn.2016-06.io.spdk:cnode$subsystem",
+							"hostnqn": "nqn.2016-06.io.spdk:host$subsystem"
+						},
+						"method": "bdev_nvme_attach_controller"
+					}
+				EOF
+			)"
+		)
+	done
+	jq . <<- JSON
+		{
+			"subsystems": [
+			{
+				"subsystem": "iobuf",
+				"config": [
+				{
+					"method": "iobuf_set_options",
+					"params": {
+						"large_pool_count": $LARGE_POOL_COUNT,
+						"small_pool_count": $SMALL_POOL_COUNT
+					}
+				}
+			]
+			},
+			{
+				"subsystem": "bdev",
+				"config": [
+				{
+					"method": "bdev_nvme_set_options",
+					"params": {
+					"action_on_timeout": "none",
+					"timeout_us": 0,
+					"transport_retry_count": 4,
+					"arbitration_burst": 0,
+					"low_priority_weight": 0,
+					"medium_priority_weight": 0,
+					"high_priority_weight": 0,
+					"nvme_adminq_poll_period_us": 10000,
+					"keep_alive_timeout_ms" : 10000,
+					"nvme_ioq_poll_period_us": 0,
+					"io_queue_requests": 0,
+					"delay_cmd_submit": true
+				}
+			},
+						$(
+			IFS=","
+			printf '%s\n' "${config[*]}"
+		),
+			{
+				"method": "bdev_wait_for_examine"
+			}
+					]
+				}
+			]
+		}
+	JSON
+}
 
 gen_fio_conf() {
 	local file
@@ -100,7 +171,8 @@ fio_dif_rand_params() {
 	local NULL_DIF
 	local bs numjobs runtime iodepth files
 
-	NULL_DIF=3 bs=128k numjobs=3 iodepth=3 runtime=5
+	#this test uses more disks, default number of iobuf buffers is not enough due to additional consumption by bdev nvme
+	NULL_DIF=3 bs=128k numjobs=3 iodepth=3 runtime=5 LARGE_POOL_COUNT=4095 SMALL_POOL_COUNT=16384
 
 	create_subsystems 0
 	fio <(create_json_sub_conf 0)
@@ -117,6 +189,8 @@ fio_dif_rand_params() {
 	create_subsystems 0 1
 	fio <(create_json_sub_conf 0 1)
 	destroy_subsystems 0 1
+
+	LARGE_POOL_COUNT=2047 SMALL_POOL_COUNT=8192
 }
 
 fio_dif_digest() {
