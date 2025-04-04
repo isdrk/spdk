@@ -152,7 +152,7 @@ spdk_lut_insert(struct spdk_lut *lut, void *value)
 		.value = (uint64_t)value
 	};
 
-	if (STAILQ_EMPTY(&lut->free_nodes) && !lut_extend(lut, lut->growth_step)) {
+	if (STAILQ_EMPTY(&lut->free_nodes) && lut_extend(lut, lut->growth_step)) {
 		return SPDK_LUT_INVALID_KEY;
 	}
 
@@ -173,7 +173,7 @@ spdk_lut_insert_at(struct spdk_lut *lut, void *value, uint64_t key)
 	assert(key < lut->max_size);
 
 	while (key >= lut->num_nodes) {
-		if (!lut_extend(lut, lut->growth_step)) {
+		if (lut_extend(lut, lut->growth_step)) {
 			return -ENOMEM;
 		}
 	}
