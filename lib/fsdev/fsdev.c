@@ -1295,7 +1295,16 @@ spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 	struct spdk_fsdev_channel *fsdev_ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = fsdev_ch->shared_resource;
 
-	assert(status <= 0);
+	/* Positive status values are not allowed, in some cases they can
+	 * crash the host kernel when received for operations where they are
+	 * not expected. So forcibly negate them when found. But this indicates
+	 * a bug in the fsdev module that needs to be fixed.
+	 */
+	if (status > 0) {
+		SPDK_ERRLOG("status=%d, negating to -%d\n", status, status);
+		assert(false);
+		status = -status;
+	}
 	fsdev_io->internal.status = status;
 	assert(fsdev_ch->io_outstanding > 0);
 	assert(shared_resource->io_outstanding > 0);
