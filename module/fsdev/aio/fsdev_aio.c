@@ -1083,8 +1083,11 @@ static void
 fsdev_aio_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
 			  void *reply_ctx)
 {
+	struct aio_fsdev *vfsdev = reply_ctx;
+
 	SPDK_INFOLOG(fsdev_aio, "Notify reply: status %d, ctx %p\n",
 		     notify_reply_data->status, reply_ctx);
+	spdk_fsdev_notify_reply_add_stat(&vfsdev->fsdev, SPDK_FSDEV_NOTIFY_INVAL_ENTRY);
 }
 
 static void
@@ -1100,7 +1103,7 @@ fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, struct file_han
 			     FOBJECT_ARGS(fobject), fobject->fd, file_name);
 		spdk_fsdev_notify_inval_entry(&vfsdev->fsdev,
 					      fsdev_aio_get_spdk_fobject(vfsdev, fobject),
-					      file_name, fsdev_aio_notify_reply_cb, NULL);
+					      file_name, fsdev_aio_notify_reply_cb, vfsdev);
 		file_object_unref(fobject, 1);
 	} else {
 		SPDK_INFOLOG(fsdev_aio, "Fobject not found for parent of %s\n", file_name);

@@ -14407,9 +14407,15 @@ Example response:
         },
         "num_out_of_io": 0,
         "num_io_errors": 10,
-        "num_notifies": {
-          "inval_data": 0,
-          "inval_entry": 1
+        "notifications": {
+          "inval_data": {
+            "count": 0,
+            "replies": 0
+          },
+          "inval_entry": {
+            "count": 0,
+            "replies": 0
+          }
         }
       }
     ]

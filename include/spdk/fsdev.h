@@ -232,8 +232,13 @@ struct spdk_fsdev_io_stat {
 	uint64_t num_out_of_io;
 	/** Number of IOs completed with an error */
 	uint64_t num_io_errors;
-	/** Number of emitted notifications by type */
-	uint64_t num_notifies[SPDK_FSDEV_NOTIFY_NUM_TYPES];
+	/** Notifications statistics by type */
+	struct {
+		/** Number of emitted notifications */
+		uint64_t count;
+		/** Number of received notification replies */
+		uint64_t replies;
+	} notify[SPDK_FSDEV_NOTIFY_NUM_TYPES];
 };
 
 /**

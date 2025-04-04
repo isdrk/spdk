@@ -408,6 +408,14 @@ int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 				  spdk_fsdev_notify_reply_cb_t reply_cb,
 				  void *reply_ctx);
 
+/**
+ * Increment filesystem device notification reply statistics.
+ *
+ * \param fsdev Filesystem device.
+ * \param type Notification type.
+ */
+void spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type type);
+
 /*
  *  Macro used to register module for later initialization.
  */

@@ -52,6 +52,7 @@
 	spdk_fsdev_module_list_find;
 	spdk_fsdev_notify_inval_data;
 	spdk_fsdev_notify_inval_entry;
+	spdk_fsdev_notify_reply_add_stat;
 
 	# Everything else
 	local: *;

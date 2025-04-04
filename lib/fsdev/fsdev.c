@@ -589,8 +589,9 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 	to_stat->bytes_written += from_stat->bytes_written;
 	to_stat->num_out_of_io += from_stat->num_out_of_io;
 	to_stat->num_io_errors += from_stat->num_io_errors;
-	for (i = 0; i < SPDK_COUNTOF(from_stat->num_notifies); i++) {
-		to_stat->num_notifies[i] += from_stat->num_notifies[i];
+	for (i = 0; i < SPDK_COUNTOF(from_stat->notify); i++) {
+		to_stat->notify[i].count += from_stat->notify[i].count;
+		to_stat->notify[i].replies += from_stat->notify[i].replies;
 	}
 }
 
@@ -1076,6 +1077,12 @@ spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 	};
 
 	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
+void
+spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type type)
+{
+	__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].replies, 1, __ATOMIC_RELAXED);
 }
 
 bool
