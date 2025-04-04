@@ -45,13 +45,11 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 #define SPDK_BDEV_QOS_IO_SLICE			100
 #define SPDK_BDEV_QOS_BYTE_SLICE		40960
 
-#define SPDK_BDEV_IO_POLL_INTERVAL_IN_MSEC	1000
-
 /* The maximum number of children requests for a UNMAP or WRITE ZEROES command
  * when splitting into children requests at a time.
  */
 #define SPDK_BDEV_MAX_CHILDREN_UNMAP_WRITE_ZEROES_REQS (8)
-#define BDEV_RESET_CHECK_OUTSTANDING_IO_PERIOD 1000000
+#define BDEV_RESET_CHECK_OUTSTANDING_IO_PERIOD_IN_USEC SPDK_SEC_TO_USEC
 
 /* The maximum number of children requests for a COPY command
  * when splitting into children requests at a time.
@@ -1844,7 +1842,7 @@ _bdev_io_handle_no_mem(struct spdk_bdev_io *bdev_io, enum bdev_io_retry_state st
 			 * Any IOs submitted may trigger retry of queued IOs. This poller handles a case when no
 			 * new IOs submitted, e.g. qd==1 */
 			shared_resource->nomem_poller = SPDK_POLLER_REGISTER(bdev_no_mem_poller, shared_resource,
-							SPDK_BDEV_IO_POLL_INTERVAL_IN_MSEC * 10);
+							10 * SPDK_MSEC_TO_USEC);
 		}
 		/* If bdev module completed an I/O that has an accel sequence with NOMEM status, the
 		 * ownership of that sequence is transferred back to the bdev layer, so we need to
@@ -4795,10 +4793,7 @@ spdk_bdev_set_timeout(struct spdk_bdev_desc *desc, uint64_t timeout_in_sec,
 
 	if (timeout_in_sec) {
 		assert(cb_fn != NULL);
-		desc->io_timeout_poller = SPDK_POLLER_REGISTER(bdev_poll_timeout_io,
-					  desc,
-					  SPDK_BDEV_IO_POLL_INTERVAL_IN_MSEC * SPDK_SEC_TO_USEC /
-					  1000);
+		desc->io_timeout_poller = SPDK_POLLER_REGISTER(bdev_poll_timeout_io, desc, SPDK_SEC_TO_USEC);
 		if (desc->io_timeout_poller == NULL) {
 			SPDK_ERRLOG("can not register the desc timeout IO poller\n");
 			return -1;
@@ -7392,7 +7387,7 @@ bdev_reset_check_outstanding_io_done(struct spdk_bdev *bdev, void *_ctx, int sta
 	if (status == -EBUSY) {
 		if (spdk_get_ticks() < bdev_io->u.reset.wait_poller.stop_time_tsc) {
 			bdev_io->u.reset.wait_poller.poller = SPDK_POLLER_REGISTER(bdev_reset_poll_for_outstanding_io,
-							      bdev_io, BDEV_RESET_CHECK_OUTSTANDING_IO_PERIOD);
+							      bdev_io, BDEV_RESET_CHECK_OUTSTANDING_IO_PERIOD_IN_USEC);
 		} else {
 			if (TAILQ_EMPTY(&ch->io_memory_domain) && TAILQ_EMPTY(&ch->io_accel_exec)) {
 				/* If outstanding IOs are still present and reset_io_drain_timeout
@@ -9594,7 +9589,7 @@ spdk_bdev_open_async(const char *bdev_name, bool write, spdk_bdev_event_cb_t eve
 		return -ENOMEM;
 	}
 
-	ctx->poller = SPDK_POLLER_REGISTER(bdev_open_async, ctx, 100 * 1000);
+	ctx->poller = SPDK_POLLER_REGISTER(bdev_open_async, ctx, 100 * SPDK_MSEC_TO_USEC);
 	if (ctx->poller == NULL) {
 		SPDK_ERRLOG("Failed to register bdev_open_async poller\n");
 		free(ctx->bdev_name);
