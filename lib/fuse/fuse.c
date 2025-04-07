@@ -551,6 +551,164 @@ fsdev_fuse_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fs
 }
 
 static int
+normalize_hard_path(char *dst, size_t dst_size, const char *path)
+{
+	char tmp_path[PATH_MAX];
+	bool is_absolute;
+	size_t written = 0, token_len, len;
+	char *tokens[PATH_MAX / 2];
+	char *token, *str;
+	int levels[PATH_MAX / 2];
+	int i, token_count = 0, current_level = 0;
+
+	if (dst == NULL || dst_size == 0 || path == NULL || strlen(path) >= PATH_MAX) {
+		return -1;
+	}
+
+	/* Create a modifiable copy of the input path */
+	snprintf(tmp_path, PATH_MAX, "%s", path);
+
+	/* Initialize destination buffer */
+	dst[0] = '\0';
+
+	is_absolute = (path[0] == '/');
+
+	if (is_absolute) {
+		if (dst_size == 1) {
+			return -1;
+		}
+		dst[0] = '/';
+		dst[1] = '\0';
+		written = 1;
+	}
+
+	/* Parse components using strsep */
+	str = tmp_path;
+	while ((token = strsep(&str, "/")) != NULL) {
+		if (*token == '\0') {
+			/* Skip empty components (consecutive slashes) */
+			continue;
+		} else if (strcmp(token, ".") == 0) {
+			/* Skip "." components */
+			continue;
+		} else if (strcmp(token, "..") == 0) {
+			if (!is_absolute && current_level <= 0) {
+				/* In relative paths, keep ".." if we cannot go up further */
+				if (token_count >= PATH_MAX / 2) {
+					return -1;
+				}
+				tokens[token_count] = "..";
+				levels[token_count] = --current_level;
+				token_count++;
+			} else if (current_level > 0) {
+				/* Remove last component if possible */
+				while (token_count > 0 &&
+				       levels[token_count - 1] != current_level - 1) {
+					token_count--;
+				}
+				if (token_count > 0) {
+					token_count--;
+				}
+				current_level--;
+			}
+		} else {
+			/* Add normal component */
+			if (token_count >= PATH_MAX / 2) {
+				return -1;
+			}
+			tokens[token_count] = token;
+			levels[token_count] = current_level++;
+			token_count++;
+		}
+	}
+
+	/* Rebuild path from components */
+	for (i = 0; i < token_count; i++) {
+		if (i > 0) {
+			/* Add separator between components */
+			if (written < dst_size - 1) {
+				dst[written++] = '/';
+				dst[written] = '\0';
+			} else {
+				/* Buffer overflow */
+				return -1;
+			}
+		}
+
+		token_len = strlen(tokens[i]);
+		if (written + token_len < dst_size) {
+			memcpy(dst + written, tokens[i], token_len);
+			written += token_len;
+			dst[written] = '\0';
+		} else {
+			/* Buffer overflow */
+			return -1;
+		}
+	}
+
+	/* Handle special cases */
+	if (dst[0] == '\0') {
+		if (path[0] == '\0') {
+			if (dst_size > 1) {
+				snprintf(dst, dst_size, ".");
+			} else {
+				return -1;
+			}
+		} else if (is_absolute) {
+			if (dst_size > 1) {
+				snprintf(dst, dst_size, "/");
+			} else {
+				return -1;
+			}
+		} else {
+			if (dst_size > 1) {
+				snprintf(dst, dst_size, ".");
+			} else {
+				return -1;
+			}
+		}
+	}
+
+	/* Remove trailing slash if not root */
+	len = strlen(dst);
+	if (len > 1 && dst[len - 1] == '/') {
+		dst[len - 1] = '\0';
+	}
+
+	return 0;
+}
+
+static int
+fsdev_fuse_validate_mountpoint(const char *mountpoint)
+{
+	struct spdk_fuse_mount *mnt;
+	char normalized1[PATH_MAX], normalized2[PATH_MAX];
+	int rc;
+
+	rc = normalize_hard_path(normalized1, PATH_MAX, mountpoint);
+	if (rc != 0) {
+		SPDK_ERRLOG("Normalizing %s failed, rc=%d\n", mountpoint, rc);
+		return rc;
+	}
+
+	TAILQ_FOREACH(mnt, &g_fuse.mounts, tailq) {
+		rc = normalize_hard_path(normalized2, PATH_MAX, mnt->mountpoint);
+		if (rc != 0) {
+			SPDK_ERRLOG("Normalizing %s failed, rc=%d\n", mnt->mountpoint, rc);
+			return rc;
+		}
+
+		if (strstr(normalized1, normalized2) == normalized1) {
+			SPDK_ERRLOG("Mounting %s in FUSE fsdev %s is not supported.\n",
+				    normalized1, normalized2);
+			return -ENOTSUP;
+		}
+	}
+
+	return 0;
+}
+
+static int
 fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const char *mountpoint,
 		      struct spdk_fuse_mount_opts *opts)
 {
@@ -558,6 +716,18 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	struct stat st;
 	char mopts[128];
 	int rc;
+
+	if (spdk_env_get_core_count() == 1) {
+		/* Deadlock will occur if a file is mounted inside a FUSE file system
+		 * when number of CPU cores is 1. Detect this case and return error
+		 * to avoid deadlock. But, this operation works if number of CPU cores
+		 * is 2 or more. Hence, enable the check only with 1 CPU core case.
+		 */
+		rc = fsdev_fuse_validate_mountpoint(mountpoint);
+		if (rc != 0) {
+			return rc;
+		}
+	}
 
 	mnt = calloc(1, sizeof(*mnt));
 	if (mnt == NULL) {

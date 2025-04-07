@@ -5,6 +5,7 @@
  */
 
 #include "spdk/stdinc.h"
+#include "spdk/util.h"
 
 #include "spdk_internal/cunit.h"
 
@@ -521,7 +522,6 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_strtoll);
 	CU_ADD_TEST(suite, test_strarray);
 	CU_ADD_TEST(suite, test_strcpy_replace);
-
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 
