@@ -1312,9 +1312,9 @@ enum spdk_fsdev_poll_event_type {
  * SPDK_FSDEV_WRITE_LOCKOWNER: lock_owner field is valid
  * SPDK_FSDEV_WRITE_KILL_SUIDGID: kill suid and sgid bits
  */
-#define SPDK_FSDEV_WRITE_CACHE		(1 << 0)
-#define SPDK_FSDEV_WRITE_LOCKOWNER	(1 << 1)
-#define SPDK_FSDEV_WRITE_KILL_SUIDGID	(1 << 2)
+#define SPDK_FSDEV_WRITE_CACHE		(1ULL << 32)
+#define SPDK_FSDEV_WRITE_LOCKOWNER	(1ULL << 33)
+#define SPDK_FSDEV_WRITE_KILL_SUIDGID	(1ULL << 34)
 
 #define SPDK_FSDEV_FALLOC_FL_KEEP_SIZE     0x01 /* default is extend size */
 #define SPDK_FSDEV_FALLOC_FL_PUNCH_HOLE    0x02 /* de-allocates range */

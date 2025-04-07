@@ -1722,6 +1722,22 @@ fuse_dispatcher_fill_read(struct fuse_io *fuse_io)
 	return 0;
 }
 
+static inline void
+fuse_dispatcher_map_write_fuse_flags(struct spdk_fsdev_io *fsdev_io, uint32_t fuse_write_flags)
+{
+	assert(((fsdev_io->u_in.write.flags >> 32) & UINT32_MAX) == 0);
+
+	if (fuse_write_flags & FUSE_WRITE_CACHE) {
+		fsdev_io->u_in.write.flags |= SPDK_FSDEV_WRITE_CACHE;
+	}
+	if (fuse_write_flags & FUSE_WRITE_LOCKOWNER) {
+		fsdev_io->u_in.write.flags |= SPDK_FSDEV_WRITE_LOCKOWNER;
+	}
+	if (fuse_write_flags & FUSE_WRITE_KILL_SUIDGID) {
+		fsdev_io->u_in.write.flags |= SPDK_FSDEV_WRITE_KILL_SUIDGID;
+	}
+}
+
 static int
 fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 {
@@ -1729,7 +1745,7 @@ fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 	bool compat = fsdev_io_proto_minor(fuse_io) < 9;
 	struct fuse_write_in *arg;
 	uint64_t fh;
-	uint64_t flags = 0;
+	uint64_t flags = 0, write_flags = 0;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io,
 				       compat ? FUSE_COMPAT_WRITE_IN_SIZE : sizeof(*arg));
@@ -1746,6 +1762,7 @@ fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 	if (!compat) {
 		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
 	}
+	write_flags = fsdev_io_d2h_u32(fuse_io->disp, arg->write_flags);
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
@@ -1756,6 +1773,7 @@ fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 	fsdev_io->u_in.write.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
 	fsdev_io->u_in.write.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
 	fsdev_io->u_in.write.flags = flags;
+	fuse_dispatcher_map_write_fuse_flags(fsdev_io, write_flags);
 	fsdev_io->u_in.write.iov = fuse_io->in_iov + fuse_io->in_offs.iov_offs;
 	fsdev_io->u_in.write.iovcnt = fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs;
 	fsdev_io->u_in.write.opts = NULL;
