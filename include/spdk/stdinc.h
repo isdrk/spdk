@@ -95,6 +95,13 @@ extern "C" {
 #define ENOKEY 126
 #endif
 
+/* Some Linux distros don't define MS_NOSYMFOLLOW even if updating glibc.
+ * The following is a workaround.
+ */
+#ifndef MS_NOSYMFOLLOW
+#define MS_NOSYMFOLLOW 256
+#endif
+
 #ifdef __cplusplus
 }
 #endif
