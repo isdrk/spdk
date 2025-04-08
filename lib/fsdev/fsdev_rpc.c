@@ -35,13 +35,32 @@ rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 	w = spdk_jsonrpc_begin_result(request);
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_uint16(w, "max_source_id", opts.max_source_id);
+	spdk_json_write_named_bool(w, "recovery_enabled", opts.recovery_enabled);
 	spdk_json_write_object_end(w);
 	spdk_jsonrpc_end_result(request, w);
 }
 SPDK_RPC_REGISTER("fsdev_get_opts", rpc_fsdev_get_opts, SPDK_RPC_STARTUP | SPDK_RPC_RUNTIME)
 
+static int
+rpc_decode_disable_recovery(const struct spdk_json_val *val, void *out)
+{
+	bool *recovery_enabled = out;
+	bool disable_recovery;
+	int rc;
+
+	rc = spdk_json_decode_bool(val, &disable_recovery);
+	if (rc) {
+		return rc;
+	}
+
+	*recovery_enabled = !disable_recovery;
+	return 0;
+}
+
+
 static const struct spdk_json_object_decoder rpc_fsdev_set_opts_decoders[] = {
 	{"max_source_id", offsetof(struct spdk_fsdev_opts, max_source_id), spdk_json_decode_uint16, true},
+	{"disable_recovery", offsetof(struct spdk_fsdev_opts, recovery_enabled), rpc_decode_disable_recovery, true},
 };
 
 static void

@@ -67,8 +67,12 @@ struct spdk_fsdev_opts {
 	 * Max source ID.
 	 */
 	uint16_t max_source_id;
+	/**
+	 * Recovery enabled.
+	 */
+	uint8_t recovery_enabled;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 14, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 15, "Incorrect size");
 
 /** fsdev mount options */
 struct spdk_fsdev_mount_opts {

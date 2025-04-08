@@ -14242,7 +14242,8 @@ Example response:
   "jsonrpc": "2.0",
   "id": 1,
   "result": {
-    "max_source_id": 1024
+    "max_source_id": 1024,
+    "recovery_enabled": false
   }
 }
 ~~~
@@ -14255,7 +14256,14 @@ Set fsdev module options.
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-max_source_id           | Required | int         | Max source ID.
+max_source_id           | Optional | int         | Max source ID.
+recovery_enabled        | Optional | int         | Recovery is enabled.
+
+NOTE: Recovery is enabled by default, so `recovery_enabled` is set to `true`.
+When recovery is enabled, fsdev modules that support recovery will first attempt to recover during
+the creation of an fsdev, and will fall back to from-scratch creation if recovery fails.
+Normally, recovery should remain enabled. However, one may choose to set recovery_enabled to `false`
+for debugging purposes or as a workaround if there are issues with SHMEM.
 
 #### Example
 
@@ -14266,7 +14274,8 @@ Example request:
   "method": "fsdev_set_opts",
   "id": 1,
   "params": {
-    "max_source_id": 256
+    "max_source_id": 256,
+    "recovery_enabled": false
   }
 }
 ~~~
