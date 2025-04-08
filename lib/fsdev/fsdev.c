@@ -1038,9 +1038,8 @@ fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *noti
 		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
 					  reply_cb, reply_ctx);
 		res = 0;
-		spdk_spin_lock(&fsdev->internal.spinlock);
-		fsdev->internal.hist_stat->num_notifies[notify_data->type]++;
-		spdk_spin_unlock(&fsdev->internal.spinlock);
+		__atomic_add_fetch(&fsdev->internal.hist_stat->notify[notify_data->type].count,
+				   1, __ATOMIC_RELAXED);
 	}
 
 	return res;
