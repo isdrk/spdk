@@ -586,10 +586,16 @@ fill_entry(struct fuse_io *fuse_io, struct fuse_entry_out *arg,
 
 static void
 fill_open(struct fuse_io *fuse_io, struct fuse_open_out *arg,
-	  struct spdk_fsdev_file_handle *fhandle)
+	  struct spdk_fsdev_file_handle *fhandle, uint32_t flags)
 {
+	uint32_t open_flags = 0;
+
+	if (flags & O_DIRECT) {
+		open_flags |= FOPEN_DIRECT_IO;
+	}
+
 	arg->fh = fsdev_io_h2d_u64(fuse_io->disp, file_fh(fhandle));
-	arg->open_flags = fsdev_io_h2d_u64(fuse_io->disp, FOPEN_DIRECT_IO);
+	arg->open_flags = fsdev_io_h2d_u64(fuse_io->disp, open_flags);
 }
 
 static void
@@ -725,7 +731,8 @@ fuse_dispatcher_io_complete_entry(struct fuse_io *fuse_io, struct spdk_fsdev_fil
 }
 
 static void
-fuse_dispatcher_io_complete_open(struct fuse_io *fuse_io, struct spdk_fsdev_file_handle *fhandle)
+fuse_dispatcher_io_complete_open(struct fuse_io *fuse_io, struct spdk_fsdev_file_handle *fhandle,
+				 uint32_t flags)
 {
 	struct fuse_open_out *arg;
 
@@ -736,7 +743,7 @@ fuse_dispatcher_io_complete_open(struct fuse_io *fuse_io, struct spdk_fsdev_file
 		return;
 	}
 
-	fill_open(fuse_io, arg, fhandle);
+	fill_open(fuse_io, arg, fhandle, flags);
 
 	fuse_dispatcher_io_complete_ok(fuse_io, sizeof(*arg));
 }
@@ -744,7 +751,7 @@ fuse_dispatcher_io_complete_open(struct fuse_io *fuse_io, struct spdk_fsdev_file
 static void
 fuse_dispatcher_io_complete_create(struct fuse_io *fuse_io, struct spdk_fsdev_file_object *fobject,
 				   const struct spdk_fsdev_file_attr *attr,
-				   struct spdk_fsdev_file_handle *fhandle)
+				   struct spdk_fsdev_file_handle *fhandle, uint32_t flags)
 {
 	char buf[sizeof(struct fuse_entry_out) + sizeof(struct fuse_open_out)];
 	size_t entrysize = fsdev_io_proto_minor(fuse_io) < 9 ?
@@ -754,7 +761,7 @@ fuse_dispatcher_io_complete_create(struct fuse_io *fuse_io, struct spdk_fsdev_fi
 
 	memset(buf, 0, sizeof(buf));
 	fill_entry(fuse_io, earg, fobject, attr);
-	fill_open(fuse_io, oarg, fhandle);
+	fill_open(fuse_io, oarg, fhandle, flags);
 
 	fuse_dispatcher_io_copy_and_complete(fuse_io, buf, entrysize + sizeof(struct fuse_open_out), 0);
 }
@@ -1178,7 +1185,8 @@ fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 						  &fsdev_io->u_out.link.attr);
 		break;
 	case SPDK_FSDEV_IO_OPEN:
-		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.open.fhandle);
+		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.open.fhandle,
+						 fsdev_io->u_in.open.flags);
 		break;
 	case SPDK_FSDEV_IO_READ:
 		fuse_dispatcher_io_complete(fuse_io, fsdev_io->u_out.read.data_size, status);
@@ -1200,11 +1208,14 @@ fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 		}
 		break;
 	case SPDK_FSDEV_IO_OPENDIR:
-		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.opendir.fhandle);
+		fuse_dispatcher_io_complete_open(fuse_io, fsdev_io->u_out.opendir.fhandle,
+						 fsdev_io->u_in.opendir.flags);
 		break;
 	case SPDK_FSDEV_IO_CREATE:
 		fuse_dispatcher_io_complete_create(fuse_io, fsdev_io->u_out.create.fobject,
-						   &fsdev_io->u_out.create.attr, fsdev_io->u_out.create.fhandle);
+						   &fsdev_io->u_out.create.attr,
+						   fsdev_io->u_out.create.fhandle,
+						   fsdev_io->u_in.create.flags);
 		break;
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		fuse_dispatcher_io_complete_write(fuse_io, fsdev_io->u_out.copy_file_range.data_size, status);
