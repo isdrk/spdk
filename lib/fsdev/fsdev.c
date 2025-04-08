@@ -453,6 +453,7 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	TAILQ_INSERT_TAIL(&ch->io_submitted, fsdev_io, internal.ch_link);
 
 	ch->io_outstanding++;
+	ch->stat->io[fsdev_io->internal.type].count++;
 	ch->stat->io[fsdev_io->internal.type].io_outstanding++;
 	shared_resource->io_outstanding++;
 	fsdev_io->internal.in_submit_request = true;
