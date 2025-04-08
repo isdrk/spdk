@@ -1477,23 +1477,24 @@ spdk_thread_send_critical_msg(struct spdk_thread *thread, spdk_msg_fn fn)
 
 #ifdef __linux__
 static int
-interrupt_timerfd_process(void *arg)
+interrupt_poller_process(void *arg)
 {
 	struct spdk_poller *poller = arg;
 	uint64_t exp;
 	int rc;
 
-	/* clear the level of interval timer */
-	rc = read(poller->intr->efd, &exp, sizeof(exp));
-	if (rc < 0) {
-		if (rc == -EAGAIN) {
-			return 0;
+	if (poller->period_ticks) {
+		/* clear the level of interval timer */
+		rc = read(poller->intr->efd, &exp, sizeof(exp));
+		if (rc < 0) {
+			if (rc == -EAGAIN) {
+				return 0;
+			}
+
+			return rc;
 		}
-
-		return rc;
+		SPDK_DTRACE_PROBE2(timerfd_exec, poller->fn, poller->arg);
 	}
-
-	SPDK_DTRACE_PROBE2(timerfd_exec, poller->fn, poller->arg);
 
 	return poller->fn(poller->arg);
 }
@@ -1509,7 +1510,7 @@ period_poller_interrupt_init(struct spdk_poller *poller)
 		return -errno;
 	}
 
-	poller->intr = spdk_interrupt_register(timerfd, interrupt_timerfd_process, poller, poller->name);
+	poller->intr = spdk_interrupt_register(timerfd, interrupt_poller_process, poller, poller->name);
 	if (poller->intr == NULL) {
 		close(timerfd);
 		return -1;
@@ -1601,7 +1602,7 @@ busy_poller_interrupt_init(struct spdk_poller *poller)
 		return -errno;
 	}
 
-	poller->intr = spdk_interrupt_register(busy_efd, poller->fn, poller->arg, poller->name);
+	poller->intr = spdk_interrupt_register(busy_efd, interrupt_poller_process, poller, poller->name);
 	if (poller->intr == NULL) {
 		close(busy_efd);
 		return -1;
