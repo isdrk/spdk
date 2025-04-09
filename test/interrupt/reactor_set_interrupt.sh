@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #  SPDX-License-Identifier: BSD-3-Clause
 #  Copyright (C) 2021 Intel Corporation
+#  Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES.
 #  All rights reserved.
 #
 testdir=$(readlink -f $(dirname $0))
@@ -24,6 +25,8 @@ function reactor_set_intr_mode() {
 	else
 		echo "spdk_thread ids are ${thd0_ids[*]} on reactor0."
 	fi
+
+	$rpc_py --plugin interrupt_plugin pause_pollers
 
 	# CPU utilization of reactor 0~2 should be idle
 	for i in {0..2}; do

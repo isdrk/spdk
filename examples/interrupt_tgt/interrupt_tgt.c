@@ -41,13 +41,62 @@ struct rpc_reactor_set_interrupt_mode {
 enum interrupt_tgt_op_on_thread {
 	INTERRUPT_TGT_OP_CREATE,
 	INTERRUPT_TGT_OP_DELETE,
+	INTERRUPT_TGT_OP_PAUSE,
+	INTERRUPT_TGT_OP_RESUME,
 };
 
 struct interrupt_tgt_op_on_thread_ctx {
 	enum interrupt_tgt_op_on_thread op;
 	int rc;
 	struct interrupt_tgt_ctx *tgt_ctx;
+	struct spdk_jsonrpc_request *request;
 };
+
+static void interrupt_tgt_op_on_thread(void *ctx);
+
+static void
+rpc_op_done(void *ctx)
+{
+	struct interrupt_tgt_op_on_thread_ctx *op_ctx = ctx;
+
+	SPDK_NOTICELOG("%s pollers done\n", op_ctx->op == INTERRUPT_TGT_OP_RESUME ? "resume" : "pause");
+	spdk_jsonrpc_send_bool_response(op_ctx->request, true);
+	free(op_ctx);
+}
+
+static void
+rpc_exec_op_on_threads(struct spdk_jsonrpc_request *request, enum interrupt_tgt_op_on_thread op)
+{
+	struct interrupt_tgt_op_on_thread_ctx *op_ctx;
+
+	op_ctx = calloc(1, sizeof * op_ctx);
+	if (!op_ctx) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "No memory");
+		return;
+	}
+	op_ctx->tgt_ctx = &g_tgt_ctx;
+	op_ctx->op = op;
+	op_ctx->request = request;
+
+	spdk_for_each_thread(interrupt_tgt_op_on_thread, op_ctx, rpc_op_done);
+}
+
+static void
+rpc_pause_pollers(struct spdk_jsonrpc_request *request,
+		  const struct spdk_json_val *params)
+{
+	rpc_exec_op_on_threads(request, INTERRUPT_TGT_OP_PAUSE);
+}
+SPDK_RPC_REGISTER("pause_pollers", rpc_pause_pollers, SPDK_RPC_RUNTIME)
+
+static void
+rpc_resume_pollers(struct spdk_jsonrpc_request *request,
+		   const struct spdk_json_val *params)
+{
+	rpc_exec_op_on_threads(request, INTERRUPT_TGT_OP_RESUME);
+}
+SPDK_RPC_REGISTER("resume_pollers", rpc_resume_pollers, SPDK_RPC_RUNTIME)
 
 static const struct spdk_json_object_decoder rpc_reactor_set_interrupt_mode_decoders[] = {
 	{"lcore", offsetof(struct rpc_reactor_set_interrupt_mode, lcore), spdk_json_decode_int32},
@@ -168,9 +217,13 @@ interrupt_stop_done(void *ctx)
 {
 	struct interrupt_tgt_op_on_thread_ctx *op_ctx = ctx;
 	struct interrupt_tgt_ctx *tgt_ctx = op_ctx->tgt_ctx;
+	struct interrupt_tgt_poller *poller, *tmp;
 
 	free(op_ctx);
-	assert(TAILQ_EMPTY(&tgt_ctx->pollers));
+	TAILQ_FOREACH_SAFE(poller, &tgt_ctx->pollers, link, tmp) {
+		TAILQ_REMOVE(&tgt_ctx->pollers, poller, link);
+		free(poller);
+	}
 
 	spdk_app_stop(tgt_ctx->rc);
 }
@@ -211,21 +264,25 @@ interrupt_tgt_op_on_thread(void *ctx)
 				op_ctx->rc = -ENOMEM;
 				return;
 			}
-			spdk_poller_pause(poller->busy);
 			poller->timer = SPDK_POLLER_REGISTER(timer_noop, poller, 1000);
 			if (!poller->timer) {
 				spdk_poller_unregister(&poller->busy);
 				op_ctx->rc = -ENOMEM;
 				return;
 			}
-			spdk_poller_pause(poller->timer);
 			break;
 		case INTERRUPT_TGT_OP_DELETE:
-			TAILQ_REMOVE(&tgt_ctx->pollers, poller, link);
 			spdk_poller_unregister(&poller->busy);
 			spdk_poller_unregister(&poller->timer);
 			spdk_thread_exit(poller->thread);
-			free(poller);
+			break;
+		case INTERRUPT_TGT_OP_PAUSE:
+			spdk_poller_pause(poller->busy);
+			spdk_poller_pause(poller->timer);
+			break;
+		case INTERRUPT_TGT_OP_RESUME:
+			spdk_poller_resume(poller->busy);
+			spdk_poller_resume(poller->timer);
 			break;
 		default:
 			abort();
