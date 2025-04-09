@@ -382,6 +382,8 @@ _thread_lib_init(size_t ctx_sz, size_t msg_mempool_sz)
 
 static void thread_interrupt_destroy(struct spdk_thread *thread);
 static int thread_interrupt_create(struct spdk_thread *thread);
+static inline void poller_set_interrupt_mode(struct spdk_poller *poller, bool enable);
+static inline void poller_pause_resume_set_interrupt_mode(struct spdk_poller *poller, bool enable);
 
 static void
 _free_thread(struct spdk_thread *thread)
@@ -991,6 +993,7 @@ thread_execute_poller(struct spdk_thread *thread, struct spdk_poller *poller)
 	case SPDK_POLLER_STATE_PAUSING:
 		TAILQ_REMOVE(&thread->active_pollers, poller, tailq);
 		TAILQ_INSERT_TAIL(&thread->paused_pollers, poller, tailq);
+		poller_pause_resume_set_interrupt_mode(poller, false);
 		poller->state = SPDK_POLLER_STATE_PAUSED;
 		return 0;
 	case SPDK_POLLER_STATE_WAITING:
@@ -1024,6 +1027,7 @@ thread_execute_poller(struct spdk_thread *thread, struct spdk_poller *poller)
 	case SPDK_POLLER_STATE_PAUSING:
 		TAILQ_REMOVE(&thread->active_pollers, poller, tailq);
 		TAILQ_INSERT_TAIL(&thread->paused_pollers, poller, tailq);
+		poller_pause_resume_set_interrupt_mode(poller, false);
 		poller->state = SPDK_POLLER_STATE_PAUSED;
 		break;
 	case SPDK_POLLER_STATE_PAUSED:
@@ -1052,6 +1056,7 @@ thread_execute_timed_poller(struct spdk_thread *thread, struct spdk_poller *poll
 		return 0;
 	case SPDK_POLLER_STATE_PAUSING:
 		TAILQ_INSERT_TAIL(&thread->paused_pollers, poller, tailq);
+		poller_pause_resume_set_interrupt_mode(poller, false);
 		poller->state = SPDK_POLLER_STATE_PAUSED;
 		return 0;
 	case SPDK_POLLER_STATE_WAITING:
@@ -1083,6 +1088,7 @@ thread_execute_timed_poller(struct spdk_thread *thread, struct spdk_poller *poll
 		break;
 	case SPDK_POLLER_STATE_PAUSING:
 		TAILQ_INSERT_TAIL(&thread->paused_pollers, poller, tailq);
+		poller_pause_resume_set_interrupt_mode(poller, false);
 		poller->state = SPDK_POLLER_STATE_PAUSED;
 		break;
 	case SPDK_POLLER_STATE_PAUSED:
@@ -1952,6 +1958,7 @@ spdk_poller_resume(struct spdk_poller *poller)
 	/* fallthrough */
 	case SPDK_POLLER_STATE_PAUSING:
 		poller->state = SPDK_POLLER_STATE_WAITING;
+		poller_pause_resume_set_interrupt_mode(poller, true);
 		break;
 	case SPDK_POLLER_STATE_RUNNING:
 	case SPDK_POLLER_STATE_WAITING:
@@ -2154,6 +2161,8 @@ spdk_for_each_thread(spdk_msg_fn fn, void *ctx, spdk_msg_fn cpl)
 static inline void
 poller_set_interrupt_mode(struct spdk_poller *poller, bool interrupt_mode)
 {
+	assert(spdk_interrupt_mode_is_enabled());
+
 	if (poller->state == SPDK_POLLER_STATE_UNREGISTERED) {
 		return;
 	}
@@ -2161,6 +2170,15 @@ poller_set_interrupt_mode(struct spdk_poller *poller, bool interrupt_mode)
 	if (poller->set_intr_cb_fn) {
 		poller->set_intr_cb_fn(poller, poller->set_intr_cb_arg, interrupt_mode);
 	}
+}
+
+static inline void
+poller_pause_resume_set_interrupt_mode(struct spdk_poller *poller, bool enable)
+{
+	if (!poller->thread->in_interrupt) {
+		return;
+	}
+	poller_set_interrupt_mode(poller, enable);
 }
 
 void
