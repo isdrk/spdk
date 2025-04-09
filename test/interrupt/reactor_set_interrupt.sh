@@ -75,6 +75,65 @@ function reactor_set_intr_mode() {
 	return 0
 }
 
+function pollers_are_active() {
+	pollers_stats=$($rpc_py thread_get_pollers)
+	active_count_1=$(echo "$pollers_stats" | jq -r '.threads | map(select(.name != "app_thread")) | map([.active_pollers[]?.run_count] | add // 0) | add ')
+	timed_count_1=$(echo "$pollers_stats" | jq -r '.threads | map(select(.name != "app_thread")) | map([.timed_pollers[]?.run_count] | add // 0) | add ')
+	sleep 1
+	pollers_stats=$($rpc_py thread_get_pollers)
+	active_count_2=$(echo "$pollers_stats" | jq -r '.threads | map(select(.name != "app_thread")) | map([.active_pollers[]?.run_count] | add // 0) | add ')
+	timed_count_2=$(echo "$pollers_stats" | jq -r '.threads | map(select(.name != "app_thread")) | map([.timed_pollers[]?.run_count] | add // 0) | add ')
+	if [[ $active_count_2 -gt $active_count_1 && $timed_count_2 -gt $timed_count_1 ]]; then
+		echo 1
+	else
+		echo 0
+	fi
+}
+
+function thread_pause_resume_pollers() {
+	local spdk_pid=$1
+
+	$rpc_py --plugin interrupt_plugin pause_pollers
+	[[ $(pollers_are_active) == 0 ]]
+	$rpc_py --plugin interrupt_plugin resume_pollers
+	sleep 1
+	[[ $(pollers_are_active) == 1 ]]
+	$rpc_py --plugin interrupt_plugin pause_pollers
+	sleep 1
+	[[ $(pollers_are_active) == 0 ]]
+
+	# Set reactor to poll mode while pollers are paused
+	for i in {0..2}; do
+		$rpc_py --plugin interrupt_plugin reactor_set_interrupt_mode $i -d
+	done
+
+	[[ $(pollers_are_active) == 0 ]]
+	$rpc_py --plugin interrupt_plugin resume_pollers
+	sleep 1
+	[[ $(pollers_are_active) == 1 ]]
+	$rpc_py --plugin interrupt_plugin pause_pollers
+	sleep 1
+
+	# Set reactor to interrupt mode while pollers are paused
+	for i in {0..2}; do
+		$rpc_py --plugin interrupt_plugin reactor_set_interrupt_mode $i
+	done
+
+	[[ $(pollers_are_active) == 0 ]]
+	$rpc_py --plugin interrupt_plugin resume_pollers
+	sleep 1
+	[[ $(pollers_are_active) == 1 ]]
+
+	# Set reactor to interrupt mode while pollers are running
+	for i in {0..2}; do
+		$rpc_py --plugin interrupt_plugin reactor_set_interrupt_mode $i -d
+	done
+
+	[[ $(pollers_are_active) == 1 ]]
+
+	return 0
+}
+
 function reactor_set_mode_without_threads() {
 	reactor_set_intr_mode $1 "without_thd"
 	return 0
@@ -102,6 +161,15 @@ setup_bdev_mem
 setup_bdev_aio
 
 reactor_set_mode_with_threads $intr_tgt_pid
+
+trap - SIGINT SIGTERM EXIT
+killprocess $intr_tgt_pid
+cleanup
+
+# Pause/resume pollers during interrupt mode
+start_intr_tgt
+
+thread_pause_resume_pollers $intr_tgt_pid
 
 trap - SIGINT SIGTERM EXIT
 killprocess $intr_tgt_pid
