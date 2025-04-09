@@ -29,7 +29,7 @@
 /* See https://libfuse.github.io/doxygen/structfuse__conn__info.html */
 #define MAX_BACKGROUND (100)
 #define TIME_GRAN (1)
-#define DEFAULT_WRITEBACK_CACHE true
+#define DEFAULT_WRITEBACK_CACHE false
 #define DEFAULT_MAX_XFER_SIZE 0x00020000
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define DEFAULT_XATTR_ENABLED false
@@ -1006,6 +1006,8 @@ fsdev_aio_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts 
 	if (vfsdev->opts.writeback_cache_enabled) {
 		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
 		vfsdev->opts.writeback_cache_enabled = writeback_cache_enabled;
+		SPDK_WARNLOG("Enabling writeback cache is unsafe and requires additional "
+			     "synchronization from the applications\n");
 	} else {
 		/* The writeback_cache_enabled was disabled upon creation => we reflect it in the opts */
 		writeback_cache_enabled = false;
