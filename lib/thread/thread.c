@@ -1551,7 +1551,7 @@ period_poller_set_interrupt_mode(struct spdk_poller *poller, void *cb_arg, bool 
 	SPDK_DEBUGLOG(thread, "timerfd set poller %s into %s mode\n", poller->name,
 		      interrupt_mode ? "interrupt" : "poll");
 
-	if (interrupt_mode) {
+	if (interrupt_mode && poller_is_active(poller)) {
 		/* Set repeated timer expiration */
 		new_tv.it_interval.tv_sec = poller->period_ticks / ticks;
 		new_tv.it_interval.tv_nsec = poller->period_ticks % ticks * SPDK_SEC_TO_NSEC / ticks;
@@ -1580,13 +1580,15 @@ period_poller_set_interrupt_mode(struct spdk_poller *poller, void *cb_arg, bool 
 			assert(false);
 		}
 
-		/* In order to reuse poller_insert_timer, fix now_tick, so next_run_tick would be
-		 * now_tick + ticks * old_tv.it_value.tv_sec + (ticks * old_tv.it_value.tv_nsec) / SPDK_SEC_TO_NSEC
-		 */
-		now_tick = now_tick - poller->period_ticks + ticks * old_tv.it_value.tv_sec + \
-			   (ticks * old_tv.it_value.tv_nsec) / SPDK_SEC_TO_NSEC;
-		poller_remove_timer(poller->thread, poller);
-		poller_insert_timer(poller->thread, poller, now_tick);
+		if (poller_is_active(poller)) {
+			/* In order to reuse poller_insert_timer, fix now_tick, so next_run_tick would be
+			 * now_tick + ticks * old_tv.it_value.tv_sec + (ticks * old_tv.it_value.tv_nsec) / SPDK_SEC_TO_NSEC
+			 */
+			now_tick = now_tick - poller->period_ticks + ticks * old_tv.it_value.tv_sec + \
+				   (ticks * old_tv.it_value.tv_nsec) / SPDK_SEC_TO_NSEC;
+			poller_remove_timer(poller->thread, poller);
+			poller_insert_timer(poller->thread, poller, now_tick);
+		}
 	}
 }
 
