@@ -122,6 +122,8 @@ typedef void (*spdk_poller_set_interrupt_mode_cb)(struct spdk_poller *poller, vo
  * When registering the poller set interrupt callback, the callback will get
  * executed immediately if its spdk_thread is in the interrupt mode.
  *
+ * The callback is also called when the poller is being paused/resumed.
+ *
  * Callers may pass NULL for the cb_fn, signifying that no callback is
  * necessary when the interrupt mode changes.
  *
@@ -667,7 +669,10 @@ void spdk_poller_unregister(struct spdk_poller **ppoller);
  * Pause a poller on the current thread.
  *
  * The poller is not run until it is resumed with spdk_poller_resume().  It is
- * perfectly fine to pause an already paused poller.
+ * perfectly fine to pause an already paused poller. When interrupt mode is enabled,
+ * a paused poller is moved to the non-interrupt mode; in that case the user receives
+ * a callback if one was set with \ref spdk_poller_register_interrupt
+ *
  *
  * \param poller The poller to pause.
  */
@@ -677,7 +682,9 @@ void spdk_poller_pause(struct spdk_poller *poller);
  * Resume a poller on the current thread.
  *
  * Resumes a poller paused with spdk_poller_pause().  It is perfectly fine to
- * resume an unpaused poller.
+ * resume an unpaused poller. When interrupt mode is enabled, a resumed poller
+ * is moved to the interrupt mode; in that case the user receives
+  * a callback if one was set with \ref spdk_poller_register_interrupt
  *
  * \param poller The poller to resume.
  */

@@ -1499,10 +1499,13 @@ interrupt_poller_process(void *arg)
 
 			return rc;
 		}
+		poller_remove_timer(poller->thread, poller);
 		SPDK_DTRACE_PROBE2(timerfd_exec, poller->fn, poller->arg);
+
+		return thread_execute_timed_poller(poller->thread, poller, spdk_get_ticks());
 	}
 
-	return poller->fn(poller->arg);
+	return thread_execute_poller(poller->thread, poller);
 }
 
 static inline bool
