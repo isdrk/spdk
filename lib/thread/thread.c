@@ -1634,7 +1634,7 @@ busy_poller_set_interrupt_mode(struct spdk_poller *poller, void *cb_arg, bool in
 
 	assert(busy_efd >= 0);
 
-	if (interrupt_mode) {
+	if (interrupt_mode && poller_is_active(poller)) {
 		/* Write without read on eventfd will get it repeatedly triggered. */
 		if (write(busy_efd, &notify, sizeof(notify)) < 0) {
 			SPDK_ERRLOG("Failed to set busy wait for Poller(%s).\n", poller->name);
