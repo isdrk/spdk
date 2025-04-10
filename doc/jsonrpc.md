@@ -14594,7 +14594,7 @@ Set the Recovery Memory configuration.
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
-backend_dir             | Required | string      | Path on the system directory to be used to store the memory files. Default: /tmp/rmem_PID
+backend_dir             | Required | string      | Path on the system directory to be used to store the memory files. Default: /dev/shm
 
 #### Example
 

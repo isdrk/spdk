@@ -78,7 +78,7 @@ void spdk_rmem_fini(void);
  *
  * \return Path to a dir where the underlying files will be stored.
  *
- * NOTE: default backend dir name is /tmp/rmem_<PID>
+ * NOTE: default backend dir name is /dev/shm
  */
 const char *spdk_rmem_get_backend_dir(void);
 

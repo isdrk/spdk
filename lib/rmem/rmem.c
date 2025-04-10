@@ -19,6 +19,7 @@
 #define NUM_RMEM_POOL_VERSION		1
 #define NUM_RMEM_POOL_BUCKETS		10
 #define MAX_RMEM_POOL_NAME_LEN		31
+#define RMEM_POOL_DEFAULT_BACKEND_DIR	"/dev/shm"
 
 #define RMEM_POOL_ALIGNMENT		8 /* bytes */
 
@@ -298,8 +299,6 @@ rmem_mkdir(const char *backend_dir)
 int
 spdk_rmem_init(void)
 {
-	char default_backend_dir_name[] = "/tmp/rmem_2147483647"; /* 2147483647 is INT_MAX */
-
 	TAILQ_INIT(&g_pools);
 	pthread_spin_init(&g_lock, PTHREAD_PROCESS_PRIVATE);
 
@@ -308,10 +307,7 @@ spdk_rmem_init(void)
 		return 0;
 	}
 
-	snprintf(default_backend_dir_name, sizeof(default_backend_dir_name), "/tmp/rmem_%d", getpid());
-	default_backend_dir_name[sizeof(default_backend_dir_name) - 1] = 0;
-
-	return spdk_rmem_set_backend_dir(default_backend_dir_name);
+	return spdk_rmem_set_backend_dir(RMEM_POOL_DEFAULT_BACKEND_DIR);
 }
 
 const char *
