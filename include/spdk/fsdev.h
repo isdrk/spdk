@@ -131,6 +131,10 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size")
  * SPDK_FSDEV_MOUNT_FLOCK_LOCKS: remote locking for BSD style file locks supported.
  *
  * SPDK_FSDEV_MOUNT_O_TRUNC: O_TRUNC open flag supported.
+ *
+ * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV: See FUSE_HANDLE_KILLPRIV.
+ *
+ * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2: See FUSE_HANDLE_KILLPRIV_V2.
  */
 #define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
 #define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
@@ -141,6 +145,8 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size")
 #define SPDK_FSDEV_MOUNT_FLOCK_LOCKS          (1 << 6)
 #define SPDK_FSDEV_MOUNT_O_TRUNC              (1 << 7)
 #define SPDK_FSDEV_MOUNT_NO_EXPORT_SUPPORT    (1 << 8)
+#define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV      (1 << 9)
+#define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2   (1 << 10)
 
 /**
  * Structure with optional fsdev IO parameters

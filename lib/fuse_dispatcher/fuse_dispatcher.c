@@ -2124,7 +2124,9 @@ fuse_dispatcher_mount_rollback(struct fuse_io *fuse_io)
 	MNT_FLAG(POSIX_LOCKS)		\
 	MNT_FLAG(FLOCK_LOCKS)		\
 	MNT_FLAG(O_TRUNC)		\
-	MNT_FLAG(NO_EXPORT_SUPPORT)
+	MNT_FLAG(NO_EXPORT_SUPPORT)	\
+	MNT_FLAG(HANDLE_KILLPRIV)	\
+	MNT_FLAG(HANDLE_KILLPRIV_V2)
 
 static uint64_t
 fuse_mount_flags_to_fsdev(uint64_t flags)
@@ -2208,11 +2210,9 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	SET_MOUNT_FLAG(true, supported, ASYNC_DIO);
 	SET_MOUNT_FLAG(true, supported, NO_OPEN_SUPPORT);
 	SET_MOUNT_FLAG(true, supported, PARALLEL_DIROPS);
-	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV);
 	SET_MOUNT_FLAG(true, supported, CACHE_SYMLINKS);
 	SET_MOUNT_FLAG(true, supported, NO_OPENDIR_SUPPORT);
 	SET_MOUNT_FLAG(true, supported, SUBMOUNTS);
-	SET_MOUNT_FLAG(true, supported, HANDLE_KILLPRIV_V2);
 	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
 	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
 	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
