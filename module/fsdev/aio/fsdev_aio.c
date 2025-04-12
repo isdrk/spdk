@@ -3339,7 +3339,6 @@ fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, saverr, fd;
-	char *buf;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	bool datasync = fsdev_io->u_in.fsync.datasync;
@@ -3353,16 +3352,8 @@ fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsync.fhandle);
 
 	if (!fhandle) {
-		res = asprintf(&buf, "%i", fobject->fd);
-		if (res == -1) {
-			res = -errno;
-			SPDK_ERRLOG("asprintf failed (errno=%d)\n", res);
-			goto fop_failed;
-		}
-
-		fd = openat(vfsdev->proc_self_fd, buf, O_RDWR);
+		fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 		res = -errno;
-		free(buf);
 		if (fd == -1) {
 			SPDK_ERRLOG("openat failed (errno=%d)\n", res);
 			goto fop_failed;
