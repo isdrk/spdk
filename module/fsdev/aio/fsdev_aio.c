@@ -2429,6 +2429,22 @@ fop_failed:
 }
 
 static int
+fsdev_fchmodat(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject, uint32_t mode)
+{
+	int res;
+
+	res = fchmodat(fobject->fd, "", mode, AT_EMPTY_PATH);
+	if (res == -1) {
+		if (errno == EINVAL) {
+			/* Linux only gained support for AT_EMPTY_PATH in fchmodat recently. We'll use a fallback option. */
+			res = fchmodat(vfsdev->proc_self_fd, fobject->fd_str, mode, 0);
+		}
+	}
+
+	return res;
+}
+
+static int
 fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
@@ -2452,7 +2468,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		if (fhandle) {
 			res = fchmod(fhandle->fd, attr->mode);
 		} else {
-			res = fchmodat(vfsdev->proc_self_fd, fobject->fd_str, attr->mode, 0);
+			res = fsdev_fchmodat(vfsdev, fobject, attr->mode);
 		}
 		if (res == -1) {
 			res = -errno;
@@ -2981,7 +2997,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io,
 	 * for POSIX compliance.
 	 */
 	if (!S_ISLNK(mode)) {
-		res = fchmodat(vfsdev->proc_self_fd, (*pfobject)->fd_str, (mode & ~umask), 0);
+		res = fsdev_fchmodat(vfsdev, *pfobject, (mode & ~umask));
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fsdev_aio_mknod_symlink mode fixup failed with %d\n", res);
