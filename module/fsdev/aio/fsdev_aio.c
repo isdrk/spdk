@@ -3259,25 +3259,6 @@ bad_new_parent_fobject:
 }
 
 static int
-linkat_empty_nofollow(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject, int dfd,
-		      const char *name)
-{
-	int res;
-
-	if (fobject->is_symlink) {
-		res = linkat(fobject->fd, "", dfd, name, AT_EMPTY_PATH);
-		if (res == -1 && (errno == ENOENT || errno == EINVAL)) {
-			/* Sorry, no race free way to hard-link a symlink. */
-			errno = EPERM;
-		}
-	} else {
-		res = linkat(vfsdev->proc_self_fd, fobject->fd_str, dfd, name, AT_SYMLINK_FOLLOW);
-	}
-
-	return res;
-}
-
-static int
 fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
@@ -3305,10 +3286,10 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto bad_new_parent_fobject;
 	}
 
-	res = linkat_empty_nofollow(vfsdev, fobject, new_parent_fobject->fd, name);
+	res = linkat(fobject->fd, "", new_parent_fobject->fd, name, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
-		SPDK_ERRLOG("linkat_empty_nofollow failed " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s (err=%d)\n",
+		SPDK_ERRLOG("linkat failed " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s (err=%d)\n",
 			    FOBJECT_ARGS(fobject), FOBJECT_ARGS(new_parent_fobject), name, res);
 		goto fop_failed;
 	}
