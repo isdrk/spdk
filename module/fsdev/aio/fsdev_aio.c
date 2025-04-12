@@ -764,7 +764,7 @@ file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_f
 	struct stat stbuf;
 	int res;
 
-	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("fstatat() failed with %d\n", res);
@@ -1252,7 +1252,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		return res;
 	}
 
-	res = fstatat(newfd, "", &stat, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+	res = fstatat(newfd, "", &stat, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("fstatat(%s) failed with %d\n", name, res);
@@ -2465,7 +2465,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		uid_t uid = (to_set & SPDK_FSDEV_ATTR_UID) ? attr->uid : (uid_t) -1;
 		gid_t gid = (to_set & SPDK_FSDEV_ATTR_GID) ? attr->gid : (gid_t) -1;
 
-		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH);
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fchownat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
@@ -4705,7 +4705,7 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
-	res = fstatat(fd, "", &stat, AT_EMPTY_PATH | AT_SYMLINK_NOFOLLOW);
+	res = fstatat(fd, "", &stat, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("Cannot get root fstatat of %s (err=%d)\n", vfsdev->root_path, res);
