@@ -2746,7 +2746,11 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 		goto fail;
 	}
 
-	new_mode = st.mode & ~(S_ISGID | S_ISUID);
+	new_mode = st.mode & ~S_ISUID;
+	if (st.mode & S_IXGRP) {
+		new_mode &= ~S_ISGID;
+	}
+
 	error = fchmod(fd, new_mode);
 	if (error == -1) {
 		error = -errno;
