@@ -1499,6 +1499,18 @@ interrupt_poller_process(void *arg)
 	return poller->fn(poller->arg);
 }
 
+static inline bool
+poller_is_active(struct spdk_poller *poller)
+{
+	switch (poller->state) {
+	case SPDK_POLLER_STATE_WAITING:
+	case SPDK_POLLER_STATE_RUNNING:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int
 period_poller_interrupt_init(struct spdk_poller *poller)
 {
