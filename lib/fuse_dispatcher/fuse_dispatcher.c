@@ -1052,7 +1052,7 @@ fuse_dispatcher_add_direntry(struct fuse_io *fuse_io, char *buf, size_t bufsize,
 	}
 
 	dirent = (struct fuse_dirent *) buf;
-	dirent->ino = file_ino(fuse_io->disp, fobject);
+	dirent->ino = fsdev_io_h2d_u64(fuse_io->disp, attr->ino);
 	dirent->off = fsdev_io_h2d_u64(fuse_io->disp, off);
 	dirent->namelen = fsdev_io_h2d_u32(fuse_io->disp, namelen);
 	dirent->type = fsdev_io_h2d_u32(fuse_io->disp, (attr->mode & 0170000) >> 12);
