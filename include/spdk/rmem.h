@@ -123,6 +123,19 @@ struct spdk_rmem_pool *spdk_rmem_pool_create(const char *name, uint32_t entry_si
 		uint32_t num_entries, uint32_t ext_num_entries);
 
 /**
+ * Check if rmem pool exists.
+ *
+ * \param name Pool name.
+ *
+ * \return True if pool exists, false otherwise.
+ *
+ * NOTE: This function checks for the existence of the underlying file, so it works for both
+ * newly created/restored pools and those pending restoration. For pools to be restored,
+ * it can be used to determine whether a restore attempt is possible.
+ */
+bool spdk_rmem_pool_exists(const char *name);
+
+/**
  * Restore rmem pool.
  *
  * \param name Pool name.

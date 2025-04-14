@@ -558,6 +558,20 @@ spdk_rmem_pool_create(const char *name, uint32_t entry_size, uint32_t num_entrie
 	return rmem_pool_create_or_restore(name, false, entry_size, num_entries, ext_num_entries);
 }
 
+bool
+spdk_rmem_pool_exists(const char *name)
+{
+	int rc;
+
+	if (!g_backend_dir) {
+		SPDK_ERRLOG("Can't check for %s existence: backend dir is not set\n", name);
+		return false;
+	}
+
+	rc = faccessat(g_backend_dir, name, F_OK, 0);
+	return rc == 0;
+}
+
 struct spdk_rmem_pool *
 spdk_rmem_pool_restore(const char *name, uint32_t entry_size, spdk_rmem_pool_restore_entry_cb cb_fn,
 		       void *ctx)

@@ -7,6 +7,7 @@
 	spdk_rmem_get_backend_dir;
 	spdk_rmem_set_backend_dir;
 	spdk_rmem_subsystem_config_json;
+	spdk_rmem_pool_exists;
 	spdk_rmem_pool_create;
 	spdk_rmem_pool_restore;
 	spdk_rmem_pool_destroy;
