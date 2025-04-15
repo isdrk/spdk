@@ -52,6 +52,7 @@ rpc_fuse_parse_mount_flag(struct rpc_fuse_mount_option *opt, uint64_t *flag)
 		{ "relatime",		"norelatime",		MS_RELATIME },
 		{ "strictatime",	"nostrictatime",	MS_STRICTATIME },
 		{ "lazytime",		"nolazytime",		MS_LAZYTIME },
+		{ "remount",		NULL,			MS_REMOUNT }
 	};
 	size_t i;
 
@@ -60,7 +61,7 @@ rpc_fuse_parse_mount_flag(struct rpc_fuse_mount_option *opt, uint64_t *flag)
 			*flag |= flags[i].flag;
 			return 0;
 		}
-		if (strcmp(flags[i].disable, opt->name) == 0) {
+		if (flags[i].disable && strcmp(flags[i].disable, opt->name) == 0) {
 			return 0;
 		}
 	}

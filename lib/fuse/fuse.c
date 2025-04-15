@@ -828,10 +828,13 @@ error:
 }
 
 struct fsdev_fuse_mount_ctx {
-	struct spdk_fuse_mount	*mount;
-	int			status;
-	spdk_fuse_mount_cb	cb_fn;
-	void			*cb_ctx;
+	struct spdk_fuse_mount		*mount;
+	struct spdk_fuse_mount_opts	opts;
+	const char			*name;
+	const char			*mountpoint;
+	int				status;
+	spdk_fuse_mount_cb		cb_fn;
+	void				*cb_ctx;
 };
 
 static void
@@ -925,34 +928,71 @@ fsdev_fuse_create_channels(struct spdk_io_channel_iter *i)
 	spdk_for_each_channel_continue(i, ctx->status);
 }
 
+static void
+fsdev_fuse_remount_umount_cb(void *_ctx)
+{
+	struct fsdev_fuse_mount_ctx *ctx = _ctx;
+	struct spdk_fuse_mount_opts *opts = &ctx->opts;
+	int rc;
+
+	opts->flags &= ~MS_REMOUNT;
+	rc = spdk_fuse_mount(ctx->name, ctx->mountpoint, opts, ctx->cb_fn, ctx->cb_ctx);
+	if (rc != 0) {
+		ctx->cb_fn(ctx->cb_ctx, ctx->mount, rc);
+	}
+	free(ctx);
+}
+
 int
 spdk_fuse_mount(const char *name, const char *mountpoint, struct spdk_fuse_mount_opts *opts,
 		spdk_fuse_mount_cb cb_fn, void *cb_ctx)
 {
 	struct spdk_fuse_mount *mount = NULL;
 	struct fsdev_fuse_mount_ctx *ctx = NULL;
-	int rc;
-
-	rc = fsdev_fuse_mount_init(&mount, name, mountpoint, opts);
-	if (rc != 0) {
-		return rc;
-	}
+	int rc = 0;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
-		rc = -ENOMEM;
-		goto error;
+		return -ENOMEM;
 	}
 
-	ctx->mount = mount;
 	ctx->cb_fn = cb_fn;
 	ctx->cb_ctx = cb_ctx;
+	ctx->name = name;
+	ctx->mountpoint = mountpoint;
+	memcpy(&ctx->opts, opts, opts->size);
 
-	spdk_for_each_channel(&g_fuse, fsdev_fuse_create_channels, ctx,
-			      fsdev_fuse_create_channels_done);
+	if (SPDK_GET_FIELD(opts, flags, 0) & MS_REMOUNT) {
+		pthread_mutex_lock(&g_fuse.mutex);
+		TAILQ_FOREACH(mount, &g_fuse.mounts, tailq) {
+			if (strcmp(mount->name, name) == 0 &&
+			    strcmp(mount->mountpoint, mountpoint) == 0) {
+				ctx->mount = mount;
+				break;
+			}
+		}
+		pthread_mutex_unlock(&g_fuse.mutex);
+		if (mount == NULL) {
+			goto error;
+		}
+
+		rc = spdk_fuse_umount(mount, fsdev_fuse_remount_umount_cb, ctx);
+		if (rc != 0) {
+			goto error;
+		}
+	} else {
+		rc = fsdev_fuse_mount_init(&mount, name, mountpoint, opts);
+		if (rc != 0) {
+			goto error;
+		}
+
+		ctx->mount = mount;
+		spdk_for_each_channel(&g_fuse, fsdev_fuse_create_channels, ctx,
+				      fsdev_fuse_create_channels_done);
+	}
+
 	return 0;
 error:
-	fsdev_fuse_mount_cleanup(mount);
 	free(ctx);
 	return rc;
 }
