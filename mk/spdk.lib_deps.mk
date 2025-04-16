@@ -21,7 +21,7 @@ DEPDIRS-env_dpdk := log util
 
 DEPDIRS-ioat := log
 DEPDIRS-idxd := log util
-DEPDIRS-sock := log $(JSON_LIBS) trace
+DEPDIRS-sock := log $(JSON_LIBS) trace util
 DEPDIRS-util := log
 DEPDIRS-vmd := log util
 DEPDIRS-dma := log thread
@@ -46,7 +46,7 @@ DEPDIRS-reduce := log util
 DEPDIRS-thread := log util trace
 DEPDIRS-keyring := log util $(JSON_LIBS)
 
-DEPDIRS-nvme := log keyring sock util trace dma thread
+DEPDIRS-nvme := log keyring sock util trace dma
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-nvme += vfio_user
 endif
@@ -82,9 +82,9 @@ DEPDIRS-nbd := log util thread $(JSON_LIBS) bdev
 ifeq ($(CONFIG_UBLK),y)
 DEPDIRS-ublk := log util thread $(JSON_LIBS) bdev
 endif
-DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev keyring dma
+DEPDIRS-nvmf := accel log sock util nvme thread $(JSON_LIBS) trace bdev keyring
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-nvmf += rdma_provider rdma_utils
+DEPDIRS-nvmf += rdma_provider rdma_utils dma
 endif
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
 DEPDIRS-mlx5 = log rdma_utils util
@@ -94,10 +94,10 @@ DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
-DEPDIRS-fsdev := log thread util $(JSON_LIBS) notify dma
+DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma
 DEPDIRS-fuse_dispatcher := log thread util fsdev rmem
 DEPDIRS-rmem := log $(JSON_LIBS)
-DEPDIRS-fuse := fuse_dispatcher log thread util
+DEPDIRS-fuse := fsdev fuse_dispatcher log thread util
 
 # ------------------------------------------------------------------------
 # Start module/ directory - This section extends the organizational pattern from
@@ -218,7 +218,7 @@ DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-event_rdma_provider := init rdma_provider
 endif
-DEPDIRS-event_fuse := event_fsdev fuse init rpc
+DEPDIRS-event_fuse := event_fsdev fsdev fuse init json jsonrpc log rpc util
 
 # module/vfu_device
 
