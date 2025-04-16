@@ -100,7 +100,7 @@ function get_release() {
 	fi
 
 	tag=$(git describe --tags --abbrev=0 --exclude=LTS --exclude="*-pre" "$version")
-	echo "${tag:0:6}"
+	echo "${tag:0:8}"
 }
 
 function confirm_abi_deps() {
@@ -115,7 +115,7 @@ function confirm_abi_deps() {
 	if [[ ! -d $source_abi_dir ]]; then
 		mkdir -p $source_abi_dir
 		echo "spdk-abi has not been found at $source_abi_dir, cloning"
-		git clone "https://github.com/spdk/spdk-abi.git" "$source_abi_dir"
+		git clone "git@gitlab.com:Mellanox/spdk_team/spdk-abi.git" "$source_abi_dir"
 	fi
 
 	if [[ ! -d "$source_abi_dir/$release" ]]; then
