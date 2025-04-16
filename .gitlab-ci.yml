@@ -192,6 +192,12 @@ code-style-job:
     - ./scripts/pkgdep.sh --developer-tools
     - ./scripts/check_format.sh
 
+check-so-deps-job:
+  extends: .test-job-vm-template
+  script:
+    - sudo git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git".insteadOf git@gitlab.com:Mellanox/spdk_team/spdk-abi.git test/make/abi
+    - sudo ./test/make/check_so_deps.sh
+
 external-code-test-job:
   extends: .test-job-vm-template
   tags: [not-crypto, vm, linux, x86_64, f39]
