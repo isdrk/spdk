@@ -8,7 +8,7 @@ rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 
-allowed_devices=${1:-"mlx5_0"}
+allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
 
 MALLOC_BDEV_SIZE=1
 MALLOC_BLOCK_SIZE=512

@@ -369,19 +369,15 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 	fi
 
 	if [[ $SPDK_TEST_ACCEL_MLX5 -eq 1 ]]; then
-		# TODO: Some tests below require rdma transport and dev name, dev name is the first parameter expected by the test,
-		# so we can't skip it.
 		if [ $SPDK_TEST_CRYPTO -eq 1 ]; then
-			# TODO: Use hardcoded names for a while, implement a method to fetch crypto property of mlx5 device
-			run_test "accel_mlx5_crypto" $rootdir/test/accel/mlx5/accel_mlx5_crypto.sh mlx5_0
-			run_test "accel_mlx5_driver_crypto" $rootdir/test/accel/mlx5/accel_mlx5_driver_crypto.sh mlx5_0 --transport=rdma
-			run_test "accel_mlx5_target_driver_crypto" $rootdir/test/accel/mlx5/accel_mlx5_target_driver_crypto.sh mlx5_0 --transport=rdma
+			run_test "accel_mlx5_crypto" $rootdir/test/accel/mlx5/accel_mlx5_crypto.sh
+			run_test "accel_mlx5_driver_crypto" $rootdir/test/accel/mlx5/accel_mlx5_driver_crypto.sh --transport=rdma
+			run_test "accel_mlx5_target_driver_crypto" $rootdir/test/accel/mlx5/accel_mlx5_target_driver_crypto.sh --transport=rdma
 		fi
 		run_test "accel_mlx5" $rootdir/test/accel/mlx5/accel_mlx5.sh
 		run_test "accel_mlx5_copy" $rootdir/test/accel/mlx5/accel_mlx5_copy.sh
 		run_test "accel_mlx5_crc32c" $rootdir/test/accel/mlx5/accel_mlx5_crc32c.sh --transport=tcp
-		# Use hardcoded name for a while since the test has no specific requirements to the HW
-		run_test "accel_mlx5_driver_mkey" $rootdir/test/accel/mlx5/accel_mlx5_driver_mkey.sh mlx5_0 --transport=rdma
+		run_test "accel_mlx5_driver_mkey" $rootdir/test/accel/mlx5/accel_mlx5_driver_mkey.sh --transport=rdma
 	fi
 fi
 

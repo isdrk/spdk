@@ -9,7 +9,7 @@ rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 
-allowed_devices=${1:-"mlx5_0"}
+allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
 
 function gen_accel_mlx5_crypto_json() {
 	crypto_split_blocks=${1:-0}
