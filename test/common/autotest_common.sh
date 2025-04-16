@@ -1708,6 +1708,32 @@ function is_pid_child() {
 	return 1
 }
 
+function get_ib_device() {
+	local ib_devices=()
+
+	if [ ! -d "/sys/class/infiniband" ]; then
+		echo "No InfiniBand devices found"
+		return 1
+	fi
+
+	# Get list of InfiniBand devices
+	for ib_device in /sys/class/infiniband/*; do
+		if [ -d "$ib_device" ]; then
+			ib_devices+=("$(basename "$ib_device")")
+		fi
+	done
+
+	# Check if any devices were found
+	if [ ${#ib_devices[@]} -eq 0 ]; then
+		echo "No InfiniBand devices found"
+		return 1
+	fi
+
+	# Return the first available device
+	echo "${ib_devices[0]}"
+
+}
+
 # Define temp storage for all the tests. Look for 2GB at minimum
 set_test_storage "${TEST_MIN_STORAGE_SIZE:-$((1 << 31))}"
 
