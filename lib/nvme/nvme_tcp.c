@@ -692,11 +692,11 @@ static int
 nvme_tcp_try_memory_translation(struct nvme_tcp_req *tcp_req, void **addr, uint32_t length)
 {
 	struct nvme_request *req = tcp_req->req;
-	struct spdk_memory_domain_translation_result translation = {
-		.iov_count = 0,
-		.size = sizeof(translation)
-	};
+	struct spdk_memory_domain_translation_result translation;
 	int rc;
+
+	memset(&translation, 0, sizeof(translation));
+	translation.size = sizeof(translation);
 
 	if (!tcp_req->ordering.bits.domain_in_use) {
 		return 0;
