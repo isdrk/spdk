@@ -1662,8 +1662,8 @@ static const struct fsdevperf_job_ops g_default_job_ops = {
 static int
 fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 {
-	struct fsdevperf_job *job, *main = g_app.main_job;
-	const char *filename = fsdevperf_get_filename(main->path);
+	struct fsdevperf_job *job, *main_job = g_app.main_job;
+	const char *filename = fsdevperf_get_filename(main_job->path);
 
 	job = fsdevperf_job_alloc(spdk_fsdev_get_name(fsdev), &g_default_job_ops, 0);
 	if (job == NULL) {
@@ -1678,13 +1678,13 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 		return -ENOMEM;
 	}
 
-	job->io_pattern = main->io_pattern;
-	job->io_size = main->io_size;
-	job->io_depth = main->io_depth;
-	job->filesize = main->filesize;
-	job->size = main->size;
-	job->num_files = main->num_files;
-	job->runtime = main->runtime;
+	job->io_pattern = main_job->io_pattern;
+	job->io_size = main_job->io_size;
+	job->io_depth = main_job->io_depth;
+	job->filesize = main_job->filesize;
+	job->size = main_job->size;
+	job->num_files = main_job->num_files;
+	job->runtime = main_job->runtime;
 
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
 
