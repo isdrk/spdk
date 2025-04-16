@@ -118,7 +118,11 @@ spdk_nvme_transport_id_populate_trstring(struct spdk_nvme_transport_id *trid, co
 	       |               ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 	 */
 #pragma GCC diagnostic push
+#if __GNUC__ >= 11
 #pragma GCC diagnostic ignored "-Wstringop-overread"
+#else
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 	len = strnlen(trstring, SPDK_NVMF_TRSTRING_MAX_LEN);
 	if (len == SPDK_NVMF_TRSTRING_MAX_LEN) {
 		return -EINVAL;
