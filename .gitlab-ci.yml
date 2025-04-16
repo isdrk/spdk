@@ -152,19 +152,41 @@ test-fsdev:
   after_script:
     - sudo chown -R $USER $CI_PROJECT_DIR
 
-test-autotest-job:
+.autotest-vm-job:
   extends: .test-job-vm-template
   tags: [not-crypto, vm, linux, x86_64, f39]
+  variables:
+    OUTPUT_DIR: $CI_PROJECT_DIR/../output/
   script:
+    - grep -i huge /proc/meminfo
     - tar xf .test.tar
-    # clean up output of autotest from previous runs
-    - sudo rm -rf $CI_PROJECT_DIR/../output/
+    # Clean up output from previous autotest runs
+    - sudo rm -rf $OUTPUT_DIR && mkdir -p $OUTPUT_DIR
+    - sudo ./autotest.sh .ci/autotest-${TEST_TYPE}.conf 2>&1 | tee $OUTPUT_DIR/build.log
+  after_script:
+    - sudo chown -R $USER $CI_PROJECT_DIR
+    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar $OUTPUT_DIR
+    - echo "Run $(wc -l < $OUTPUT_DIR/test_completions.txt) tests"
+  artifacts:
+    name: ${TEST_TYPE}_artifacts
+    paths:
+      - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar
+    expire_in: 3 days
+
+test-autotest-job:
+  extends: .autotest-vm-job
+  variables:
+    TEST_TYPE: vm
+  script:
+    - grep -i huge /proc/meminfo
+    - tar xf .test.tar
+    # Clean up output from previous autotest runs
+    - sudo rm -rf $OUTPUT_DIR && mkdir -p $OUTPUT_DIR
     - sudo HUGEMEM=8192 ./scripts/setup.sh
     - sudo ./test/accel/mlx5/accel_mlx5.sh
     - sudo ./test/accel/mlx5/accel_mlx5_crc32c.sh
     - sudo ./test/accel/mlx5/accel_mlx5_copy.sh
-    - sudo ./autotest.sh .ci/autotest-vm.conf
-    - sudo chown -R $USER $CI_PROJECT_DIR
+    - sudo ./autotest.sh .ci/autotest-${TEST_TYPE}.conf 2>&1 | tee $OUTPUT_DIR/build.log
 
 test-crypto-k8s-job:
   extends: .test-job-k8s-template
