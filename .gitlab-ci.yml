@@ -138,6 +138,17 @@ test-nvmf-k8s-job:
     # multipath.sh doesn't work in K8s container
     # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
 
+test-fsdev:
+  extends: .test-job-vm-template
+  tags: [not-crypto, vm, linux, x86_64, f39]
+  script:
+    - tar xf .test.tar
+    - sudo rm -rf $CI_PROJECT_DIR/../output/
+    - sudo scripts/setup.sh
+    - sudo ./autotest.sh .ci/autotest-fsdev.conf
+  after_script:
+    - sudo chown -R $USER $CI_PROJECT_DIR
+
 test-autotest-job:
   extends: .test-job-vm-template
   tags: [not-crypto, vm, linux, x86_64, f39]
