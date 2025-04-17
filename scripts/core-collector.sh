@@ -80,6 +80,8 @@ filter_process() {
 	# rmem_pool testers simulate crashes to test recovery, so ignore them
 	excl_binaries+=("rmem_pool_test")
 	excl_binaries+=("rmem_pool_write_crash_test*")
+	# FIXME: xfs_io segfaults on some fstests, so ignore it until it's fixed
+	excl_binaries+=("xfs_io")
 	# Add more if needed
 
 	for bin in "${excl_binaries[@]}"; do

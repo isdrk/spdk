@@ -63,6 +63,26 @@ packages=(
 	xxd
 )
 
+xfstests_packages=(
+	acl
+	attr
+	dbench
+	dump
+	e2fsprogs
+	gawk
+	gdbm-devel
+	indent
+	libacl-devel
+	libcap-devel
+	lvm2
+	psmisc
+	quota
+	sqlite
+	udftools
+	xfsprogs-devel
+)
+
+packages+=(${xfstests_packages[@]})
 if [[ $OSID != centos && $OSID != rocky && $OSID != rhel ]]; then
 	packages+=(btrfs-progs)
 	packages+=(avahi)

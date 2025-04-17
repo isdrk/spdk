@@ -71,6 +71,27 @@ packages=(
 	xxd
 )
 
+xfstests_packages=(
+	acl
+	attr
+	dbench
+	dump
+	e2fsprogs
+	gawk
+	indent
+	libacl1-dev
+	libgdbm-dev
+	libtool-bin
+	libuuid1
+	lvm2
+	psmisc
+	quota
+	uuid-runtime
+	sqlite3
+	libgdbm-compat-dev
+	xfslibs-dev
+)
+
 install_vagrant_dependencies() {
 	local vagrant_packages
 	vagrant_packages=(
@@ -88,6 +109,7 @@ install_vagrant_dependencies() {
 	install "${vagrant_packages[@]}"
 }
 
+packages+=(${xfstests_packages[@]})
 if [[ $OSID == debian ]]; then
 	packages+=("linux-headers-$kernel_ver-*")
 else
