@@ -1069,7 +1069,7 @@ test_nvme_tcp_qpair_connect_sock(void)
 	tqpair.qpair.active_free_req = &tqpair.qpair.free_req;
 	tqpair.qpair.trtype = SPDK_NVME_TRANSPORT_TCP;
 	tqpair.qpair.id = 1;
-	tqpair.qpair.poll_group = (void *)0xDEADBEEF;
+	tqpair.qpair.poll_group = NULL;
 	ctrlr->trid.priority = 1;
 	ctrlr->trid.adrfam = SPDK_NVMF_ADRFAM_IPV4;
 	memcpy(ctrlr->trid.traddr, "192.168.1.78", sizeof("192.168.1.78"));
@@ -1538,6 +1538,7 @@ test_nvme_tcp_ctrlr_disconnect_qpair(void)
 
 	/* Check that outstanding requests are aborted */
 	treq.state = NVME_TCP_REQ_ACTIVE;
+	qpair->poll_group = NULL;
 	qpair->num_outstanding_reqs = 1;
 	qpair->state = NVME_QPAIR_DISCONNECTING;
 	TAILQ_INSERT_TAIL(&tqpair.outstanding_reqs, &treq, link);
@@ -1677,7 +1678,7 @@ test_nvme_tcp_ctrlr_create_io_qpair(void)
 	CU_ASSERT(qpair->ctrlr == ctrlr);
 	CU_ASSERT(qpair->qprio == SPDK_NVME_QPRIO_URGENT);
 	CU_ASSERT(qpair->trtype == SPDK_NVME_TRANSPORT_TCP);
-	CU_ASSERT(qpair->poll_group == (void *)0xDEADBEEF);
+	CU_ASSERT(qpair->poll_group == NULL);
 	CU_ASSERT(tqpair->num_entries == 1);
 
 	free(tqpair->tcp_reqs);
