@@ -2123,7 +2123,8 @@ fuse_dispatcher_mount_rollback(struct fuse_io *fuse_io)
 	MNT_FLAG(POSIX_ACL)		\
 	MNT_FLAG(POSIX_LOCKS)		\
 	MNT_FLAG(FLOCK_LOCKS)		\
-	MNT_FLAG(O_TRUNC)
+	MNT_FLAG(O_TRUNC)		\
+	MNT_FLAG(NO_EXPORT_SUPPORT)
 
 static uint64_t
 fuse_mount_flags_to_fsdev(uint64_t flags)
@@ -2415,6 +2416,7 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 	SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
 	SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
 	SET_MOUNT_FLAG(true, flags, O_TRUNC);
+	SET_MOUNT_FLAG(true, flags, NO_EXPORT_SUPPORT);
 
 	fuse_io->u.init.thread = spdk_get_thread();
 

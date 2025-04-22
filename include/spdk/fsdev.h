@@ -136,6 +136,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size")
 #define SPDK_FSDEV_MOUNT_POSIX_LOCKS          (1 << 5)
 #define SPDK_FSDEV_MOUNT_FLOCK_LOCKS          (1 << 6)
 #define SPDK_FSDEV_MOUNT_O_TRUNC              (1 << 7)
+#define SPDK_FSDEV_MOUNT_NO_EXPORT_SUPPORT    (1 << 8)
 
 /**
  * Structure with optional fsdev IO parameters

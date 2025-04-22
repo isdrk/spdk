@@ -1014,6 +1014,7 @@ fsdev_aio_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts 
 	AIO_SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
 	AIO_SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
 	AIO_SET_MOUNT_FLAG(true, flags, O_TRUNC);
+	AIO_SET_MOUNT_FLAG(true, flags, NO_EXPORT_SUPPORT);
 
 	/* Based on the setting above. */
 	AIO_SET_MOUNT_FLAG(writeback_cache_enabled, flags, WRITEBACK_CACHE);
