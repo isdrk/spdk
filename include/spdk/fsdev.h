@@ -90,12 +90,15 @@ struct spdk_fsdev_mount_opts {
 	 */
 	uint32_t max_readahead;
 
+	/** Hole at bytes 12-15. */
+	uint8_t reserved[4];
+
 	/**
 	 * IN/OUT Contains requested and negotiated fsdev mount flags.
 	 */
-	uint32_t flags;
+	uint64_t flags;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 16, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size");
 
 /**
  * IN/OUT Mount flags. These control user behavior with regard to the fsdev API.

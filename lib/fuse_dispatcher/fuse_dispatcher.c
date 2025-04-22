@@ -274,7 +274,7 @@ struct spdk_fuse_dispatcher {
 	/**
 	 * Negotiated mount flags.
 	 */
-	uint32_t mount_flags;
+	uint64_t mount_flags;
 
 	/**
 	 * Recovery memory pool.
@@ -2125,8 +2125,8 @@ fuse_dispatcher_mount_rollback(struct fuse_io *fuse_io)
 	MNT_FLAG(FLOCK_LOCKS)          \
 	MNT_FLAG(O_TRUNC)
 
-static uint32_t
-fuse_mount_flags_to_fsdev(uint32_t flags)
+static uint64_t
+fuse_mount_flags_to_fsdev(uint64_t flags)
 {
 	uint64_t result = 0;
 
@@ -2143,10 +2143,10 @@ fuse_mount_flags_to_fsdev(uint32_t flags)
 	return result;
 }
 
-static uint32_t
-fsdev_mount_flags_to_fuse(uint32_t flags)
+static uint64_t
+fsdev_mount_flags_to_fuse(uint64_t flags)
 {
-	uint32_t result = 0;
+	uint64_t result = 0;
 
 #define MNT_FLAG(name) \
 	if (flags & SPDK_FSDEV_MOUNT_##name) { \
@@ -2172,11 +2172,11 @@ static int
 do_mount_prepare_completion(struct fuse_io *fuse_io,
 			    const struct spdk_fsdev_mount_opts *negotiated_opts)
 {
-	uint32_t requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
+	uint64_t requested_flags;
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct fuse_init_out outarg;
 	size_t outargsize = sizeof(outarg);
-	uint32_t supported = 0;
+	uint64_t supported = 0;
 	uint32_t max_xfer_size;
 	void *out_buf;
 
@@ -2190,6 +2190,12 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 		outargsize = FUSE_COMPAT_INIT_OUT_SIZE;
 	} else if (disp->proto_minor < 23) {
 		outargsize = FUSE_COMPAT_22_INIT_OUT_SIZE;
+	}
+
+	requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
+	if (requested_flags & FUSE_INIT_EXT) {
+		requested_flags |= (uint64_t)fsdev_io_d2h_u32(fuse_io->disp,
+				   fuse_io->u.init.in->flags2) << 32;
 	}
 
 	/* Always supported if requested by the FUSE. */
@@ -2209,10 +2215,14 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
 	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
 	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
+	SET_MOUNT_FLAG(true, supported, INIT_EXT);
 
 	/* Sending back the fsdev negotiated mount opts. */
 	supported |= fsdev_mount_flags_to_fuse(negotiated_opts->flags);
-	outarg.flags = fsdev_io_h2d_u32(fuse_io->disp, supported);
+	outarg.flags = fsdev_io_h2d_u32(fuse_io->disp, (uint32_t)supported);
+	if (requested_flags & FUSE_INIT_EXT) {
+		outarg.flags2 = fsdev_io_h2d_u32(fuse_io->disp, (uint32_t)(supported >> 32));
+	}
 	disp->mount_flags = supported;
 
 	outarg.max_readahead = fsdev_io_h2d_u32(fuse_io->disp, negotiated_opts->max_readahead);
@@ -2253,7 +2263,8 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 
 	SPDK_INFOLOG(fuse_dispatcher, "INIT: %" PRIu32 ".%" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io->disp, outarg.major), fsdev_io_d2h_u32(fuse_io->disp, outarg.minor));
-	SPDK_INFOLOG(fuse_dispatcher, "flags: 0x%08" PRIx32 "\n",
+	SPDK_INFOLOG(fuse_dispatcher, "flags: 0x%08" PRIx64 "\n",
+		     ((uint64_t)fsdev_io_d2h_u32(fuse_io->disp, outarg.flags2) << 32) |
 		     fsdev_io_d2h_u32(fuse_io->disp, outarg.flags));
 	SPDK_INFOLOG(fuse_dispatcher, "max_readahead: %" PRIu32 "\n",
 		     fsdev_io_d2h_u32(fuse_io->disp, outarg.max_readahead));
@@ -2330,8 +2341,8 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 	size_t compat_size = offsetof(struct fuse_init_in, max_readahead);
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	uint32_t max_readahead = DEFAULT_MAX_READAHEAD;
-	uint32_t requested_flags = 0;
-	uint32_t flags = 0;
+	uint64_t requested_flags = 0;
+	uint64_t flags = 0;
 
 	/* First try to read the legacy header */
 	fuse_io->u.init.in = _fsdev_io_in_arg_get_buf(fuse_io, compat_size);
@@ -2380,8 +2391,6 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 		compat_size += COMPAT_FUSE_INIT_IN_6_SIZE;
 		requested_flags = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->flags);
 		max_readahead = fsdev_io_d2h_u32(fuse_io->disp, fuse_io->u.init.in->max_readahead);
-		SPDK_INFOLOG(fuse_dispatcher, "requested: flags=0x%" PRIx32 " max_readahead=%" PRIu32 "\n",
-			     requested_flags, max_readahead);
 		/* Make sure we can safely read the extended portion */
 		if (requested_flags & FUSE_INIT_EXT) {
 			arg_extra = _fsdev_io_in_arg_get_buf(fuse_io, COMPAT_FUSE_INIT_IN_EXT_SIZE -
@@ -2390,7 +2399,11 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 				SPDK_ERRLOG("INIT: FUSE_INIT_EXT flag set but no INIT_EXT data found\n");
 				return -EINVAL;
 			}
+			requested_flags |= (uint64_t)fsdev_io_d2h_u32(fuse_io->disp,
+					   fuse_io->u.init.in->flags2) << 32;
 		}
+		SPDK_INFOLOG(fuse_dispatcher, "requested: flags=0x%" PRIx64 " max_readahead=%" PRIu32 "\n",
+			     requested_flags, max_readahead);
 	}
 
 	/* Negotiate the following options if requested by the FUSE. */
