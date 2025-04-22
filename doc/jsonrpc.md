@@ -4571,6 +4571,7 @@ dhchap_digests             | Optional | list        | List of allowed DH-HMAC-CH
 dhchap_dhgroups            | Optional | list        | List of allowed DH-HMAC-CHAP DH groups.
 poll_group_requests        | Optional | number      | The number of requests allocated for each NVMe poll group. Default: 0.
 rdma_umr_per_io            | Optional | boolean     | Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system
+tcp_connect_timeout_ms     | Optional | number      | Time to wait until TCP connection is done. Default: 0 (no timeout).
 
 #### Example
 

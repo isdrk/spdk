@@ -97,7 +97,7 @@ struct spdk_bdev_nvme_opts {
 	uint32_t rdma_srq_size;
 	uint32_t rdma_max_cq_size;
 	uint16_t rdma_cm_event_timeout_ms;
-	/* Hole at byte 110-111. */
+	/* Hole at bytes 110-111. */
 	uint8_t reserved110[2];
 	uint32_t dhchap_digests;
 	uint32_t dhchap_dhgroups;
@@ -105,8 +105,11 @@ struct spdk_bdev_nvme_opts {
 	uint32_t small_cache_size;
 	uint32_t large_cache_size;
 	bool rdma_umr_per_io;
+	/* Hole at bytes 133-135. */
+	uint8_t reserved133[3];
+	uint32_t tcp_connect_timeout_ms;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 136, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 144, "Incorrect size");
 
 /**
  * Connect to the NVMe controller and populate namespaces as bdevs.

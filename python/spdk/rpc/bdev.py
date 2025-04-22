@@ -648,6 +648,7 @@ def bdev_nvme_set_options(client, **params):
         small_cache_size: The number of small iobuf elements in cache. Default: 128
         large_cache_size: The number of large iobuf elements in cache. Default: 128
         rdma_umr_per_io: Enable/disable scatter-gather UMR per IO in RDMA transport if supported by system (optional).
+        tcp_connect_timeout_ms: Time to wait until TCP connection is done. Default: 0 (no timeout).
     """
 
     strip_globals(params)
