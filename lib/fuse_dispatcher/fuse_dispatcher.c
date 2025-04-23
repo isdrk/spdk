@@ -1329,14 +1329,14 @@ fuse_dispatcher_fill_getattr(struct fuse_io *fuse_io)
 }
 
 #define FATTR_FLAGS_MAP \
-	FATTR_FLAG(ATTR_MODE)       \
-	FATTR_FLAG(ATTR_UID)        \
-	FATTR_FLAG(ATTR_GID)        \
-	FATTR_FLAG(ATTR_SIZE)       \
-	FATTR_FLAG(ATTR_ATIME)      \
-	FATTR_FLAG(ATTR_MTIME)      \
-	FATTR_FLAG(ATTR_ATIME_NOW)  \
-	FATTR_FLAG(ATTR_MTIME_NOW)  \
+	FATTR_FLAG(ATTR_MODE)		\
+	FATTR_FLAG(ATTR_UID)		\
+	FATTR_FLAG(ATTR_GID)		\
+	FATTR_FLAG(ATTR_SIZE)		\
+	FATTR_FLAG(ATTR_ATIME)		\
+	FATTR_FLAG(ATTR_MTIME)		\
+	FATTR_FLAG(ATTR_ATIME_NOW)	\
+	FATTR_FLAG(ATTR_MTIME_NOW)	\
 	FATTR_FLAG(ATTR_CTIME)
 
 static uint32_t
@@ -1345,8 +1345,8 @@ fuse_fattr_flags_to_fsdev(uint32_t flags)
 	uint32_t result = 0;
 
 #define FATTR_FLAG(name) \
-	if (flags & F##name) {               \
-		result |= SPDK_FSDEV_##name; \
+	if (flags & F##name) {			\
+		result |= SPDK_FSDEV_##name;	\
 	}
 
 	FATTR_FLAGS_MAP;
@@ -1555,8 +1555,8 @@ fuse_dispatcher_fill_rmdir(struct fuse_io *fuse_io)
 }
 
 #define RENAME2_FLAGS_MAP \
-	RENAME2_FLAG(EXCHANGE)  \
-	RENAME2_FLAG(NOREPLACE) \
+	RENAME2_FLAG(EXCHANGE)	\
+	RENAME2_FLAG(NOREPLACE)	\
 	RENAME2_FLAG(WHITEOUT)
 
 static uint32_t
@@ -1565,8 +1565,8 @@ fuse_rename2_flags_to_fsdev(uint32_t flags)
 	uint32_t result = 0;
 
 #define RENAME2_FLAG(name) \
-	if (flags & RENAME_##name) {                \
-		result |= SPDK_FSDEV_RENAME_##name; \
+	if (flags & RENAME_##name) {			\
+		result |= SPDK_FSDEV_RENAME_##name;	\
 	}
 
 	RENAME2_FLAGS_MAP;
@@ -1867,8 +1867,8 @@ fuse_xattr_flags_to_fsdev(uint32_t flags)
 	uint64_t result = 0;
 
 #define XATTR_FLAG(name) \
-	if (flags & name) {                  \
-		result |= SPDK_FSDEV_##name; \
+	if (flags & name) {			\
+		result |= SPDK_FSDEV_##name;	\
 	}
 
 	XATTR_FLAGS_MAP;
@@ -1887,8 +1887,8 @@ fuse_xattr_ext_flags_to_fsdev(uint32_t flags)
 	uint64_t result = 0;
 
 #define XATTR_EXT_FLAG(name) \
-	if (flags & FUSE_##name) {           \
-		result |= SPDK_FSDEV_##name; \
+	if (flags & FUSE_##name) {		\
+		result |= SPDK_FSDEV_##name;	\
 	}
 
 	XATTR_EXT_FLAGS_MAP;
@@ -2116,13 +2116,13 @@ fuse_dispatcher_mount_rollback(struct fuse_io *fuse_io)
 #define FUSE_O_TRUNC FUSE_ATOMIC_O_TRUNC
 
 #define MNT_FLAGS_MAP \
-	MNT_FLAG(DOT_PATH_LOOKUP)      \
-	MNT_FLAG(AUTO_INVAL_DATA)      \
-	MNT_FLAG(EXPLICIT_INVAL_DATA)  \
-	MNT_FLAG(WRITEBACK_CACHE)      \
-	MNT_FLAG(POSIX_ACL)            \
-	MNT_FLAG(POSIX_LOCKS)          \
-	MNT_FLAG(FLOCK_LOCKS)          \
+	MNT_FLAG(DOT_PATH_LOOKUP)	\
+	MNT_FLAG(AUTO_INVAL_DATA)	\
+	MNT_FLAG(EXPLICIT_INVAL_DATA)	\
+	MNT_FLAG(WRITEBACK_CACHE)	\
+	MNT_FLAG(POSIX_ACL)		\
+	MNT_FLAG(POSIX_LOCKS)		\
+	MNT_FLAG(FLOCK_LOCKS)		\
 	MNT_FLAG(O_TRUNC)
 
 static uint64_t
@@ -2132,8 +2132,8 @@ fuse_mount_flags_to_fsdev(uint64_t flags)
 
 
 #define MNT_FLAG(name) \
-	if (flags & FUSE_##name) {                 \
-		result |= SPDK_FSDEV_MOUNT_##name; \
+	if (flags & FUSE_##name) {			\
+		result |= SPDK_FSDEV_MOUNT_##name;	\
 	}
 
 	MNT_FLAGS_MAP;
@@ -2149,8 +2149,8 @@ fsdev_mount_flags_to_fuse(uint64_t flags)
 	uint64_t result = 0;
 
 #define MNT_FLAG(name) \
-	if (flags & SPDK_FSDEV_MOUNT_##name) { \
-		result |= FUSE_##name;   \
+	if (flags & SPDK_FSDEV_MOUNT_##name) {	\
+		result |= FUSE_##name;		\
 	}
 
 	MNT_FLAGS_MAP;
@@ -2161,8 +2161,8 @@ fsdev_mount_flags_to_fuse(uint64_t flags)
 }
 
 #define SET_MOUNT_FLAG(cond, stage, flag) \
-	if ((cond) && (requested_flags & (FUSE_##flag))) { \
-		stage |= (FUSE_##flag);			   \
+	if ((cond) && (requested_flags & (FUSE_##flag))) {	\
+		stage |= (FUSE_##flag);				\
 	}
 
 /* Maximal number of pages for unlimited max_xfer_size. Using FUSE page limit value. */
@@ -3171,12 +3171,12 @@ fuse_dispatcher_fill_poll(struct fuse_io *fuse_io)
 }
 
 #define FALLOC_FLAGS_MAP \
-	FALLOC_FLAG(FL_KEEP_SIZE)      \
-	FALLOC_FLAG(FL_PUNCH_HOLE)     \
-	FALLOC_FLAG(FL_NO_HIDE_STALE)  \
-	FALLOC_FLAG(FL_COLLAPSE_RANGE) \
-	FALLOC_FLAG(FL_ZERO_RANGE)     \
-	FALLOC_FLAG(FL_INSERT_RANGE)   \
+	FALLOC_FLAG(FL_KEEP_SIZE)	\
+	FALLOC_FLAG(FL_PUNCH_HOLE)	\
+	FALLOC_FLAG(FL_NO_HIDE_STALE)	\
+	FALLOC_FLAG(FL_COLLAPSE_RANGE)	\
+	FALLOC_FLAG(FL_ZERO_RANGE)	\
+	FALLOC_FLAG(FL_INSERT_RANGE)	\
 	FALLOC_FLAG(FL_UNSHARE_RANGE)
 
 static uint32_t
@@ -3185,8 +3185,8 @@ fuse_falloc_flags_to_fsdev(uint32_t flags)
 	uint32_t result = 0;
 
 #define FALLOC_FLAG(name) \
-	if (flags & FALLOC_##name) {                \
-		result |= SPDK_FSDEV_FALLOC_##name; \
+	if (flags & FALLOC_##name) {			\
+		result |= SPDK_FSDEV_FALLOC_##name;	\
 	}
 
 	FALLOC_FLAGS_MAP;
