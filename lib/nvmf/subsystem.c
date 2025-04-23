@@ -1958,7 +1958,6 @@ nvmf_ns_event(enum spdk_bdev_event_type type,
 		nvmf_ns_resize(event_ctx);
 		break;
 	default:
-		SPDK_NOTICELOG("Unsupported bdev event: type %d\n", type);
 		break;
 	}
 }
