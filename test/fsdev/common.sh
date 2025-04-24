@@ -39,12 +39,32 @@ _uninstall_xfstests() {
 	return 0
 }
 
+_setup_nvme() {
+	local bdf srcdir
+	local -g _nvme_fsdev
+
+	bdf=$(get_first_nvme_bdf)
+	PCI_ALLOWED="$bdf" "$rootdir/scripts/setup.sh" reset
+
+	_nvme_fsdev="/dev/$(get_block_dev_from_nvme "$bdf")"
+	mkfs.ext4 "$_nvme_fsdev"
+	mount "$_nvme_fsdev" "$_srcdir"
+}
+
+_cleanup_nvme() {
+	umount "$_nvme_fsdev" || :
+	wipefs --all "$_nvme_fsdev"
+	"$rootdir/scripts/setup.sh"
+}
+
 fstests_init() {
 	local xfsdir="$1"
-	local -g _mountdir="$2" _testdev="$3" _scratchdev="$4"
+	local -g _srcdir="$2" _mountdir="$3" _testdev="$4" _scratchdev="$5"
 
 	_install_xfstests "$xfsdir"
-	mkdir -p "$_mountdir/$_testdev" "$_mountdir/$_scratchdev"
+	mkdir -p "$_mountdir/$_testdev" "$_mountdir/$_scratchdev" "$_srcdir"
+	[[ "$_fstests_with_nvme" == true ]] && _setup_nvme
+	return 0
 }
 
 fstests_cleanup() {
@@ -54,4 +74,14 @@ fstests_cleanup() {
 		umount "$_mountdir/$_scratchdev" || :
 		rm -rf "$_mountdir"
 	fi
+	[[ -n "$_nvme_fsdev" ]] && _cleanup_nvme
+	rm -rf "$_srcdir"
 }
+
+for opt in "$@"; do
+	case "$opt" in
+		--with-nvme)
+			_fstests_with_nvme=true
+			;;
+	esac
+done

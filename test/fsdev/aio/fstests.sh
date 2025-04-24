@@ -15,12 +15,11 @@ fusepid=
 
 cleanup() {
 	[[ -n "$fusepid" ]] && killprocess "$fusepid" || :
-	[[ -n "$srcdir" ]] && rm -rf "$srcdir"
 	fstests_cleanup
 }
 
 trap cleanup EXIT
-fstests_init "$xfsdir" "$mountdir" aio0 aio1
+fstests_init "$xfsdir" "$srcdir" "$mountdir" aio0 aio1
 mkdir -p "$srcdir/aio0" "$srcdir/aio1"
 
 "$rootdir/build/examples/fuse" -D &
