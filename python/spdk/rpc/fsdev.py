@@ -14,17 +14,21 @@ def fsdev_get_opts(client):
     return client.call('fsdev_get_opts')
 
 
-def fsdev_set_opts(client,  max_source_id: int = None):
+def fsdev_set_opts(client,  max_source_id: int = None, disable_recovery: bool = None):
     """Set fsdev subsystem opts.
 
     Args:
         max_source_id: max source ID
+        disable_recovery: disable recovery
     """
     params = {
     }
 
     if max_source_id is not None:
         params['max_source_id'] = max_source_id
+
+    if disable_recovery is not None:
+        params['disable_recovery'] = disable_recovery
 
     return client.call('fsdev_set_opts', params)
 

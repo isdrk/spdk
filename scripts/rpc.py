@@ -3740,11 +3740,17 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=fsdev_get_opts)
 
     def fsdev_set_opts(args):
-        print(rpc.fsdev.fsdev_set_opts(args.client, max_source_id=args.max_source_id))
+        print(rpc.fsdev.fsdev_set_opts(args.client, max_source_id=args.max_source_id,
+                                       disable_recovery=args.disable_recovery))
 
     p = subparsers.add_parser('fsdev_set_opts', help='Set the fsdev subsystem options')
     p.add_argument('-s', '--max-source-id', help='Max source ID (1-4096)',
                    type=int, choices=range(1, 4096), metavar="[1-4096]")
+    recovery_parser = p.add_mutually_exclusive_group(required=False)
+    recovery_parser.add_argument('--disable-recovery', help='Disable recovery', action='store_true',
+                                 default=None)
+    recovery_parser.add_argument('--enable-recovery', help='Enable recovery',
+                                 dest='disable_recovery', action='store_false')
     p.set_defaults(func=fsdev_set_opts)
 
     def fsdev_get_fsdevs(args):
