@@ -40,29 +40,17 @@ rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 }
 SPDK_RPC_REGISTER("fsdev_get_opts", rpc_fsdev_get_opts, SPDK_RPC_STARTUP | SPDK_RPC_RUNTIME)
 
-struct rpc_fsdev_set_opts {
-	uint16_t max_source_id;
-};
-
 static const struct spdk_json_object_decoder rpc_fsdev_set_opts_decoders[] = {
-	{"max_source_id", offsetof(struct rpc_fsdev_set_opts, max_source_id), spdk_json_decode_uint16, true},
+	{"max_source_id", offsetof(struct spdk_fsdev_opts, max_source_id), spdk_json_decode_uint16, true},
 };
 
 static void
 rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
 {
-	struct rpc_fsdev_set_opts ctx = {};
 	int rc;
-	struct spdk_fsdev_opts opts = {};
-
-	if (spdk_json_decode_object(params, rpc_fsdev_set_opts_decoders,
-				    SPDK_COUNTOF(rpc_fsdev_set_opts_decoders),
-				    &ctx)) {
-		SPDK_ERRLOG("spdk_json_decode_object failed\n");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "spdk_json_decode_object failed");
-		return;
-	}
+	struct spdk_fsdev_opts opts = {
+		.opts_size = sizeof(opts),
+	};
 
 	rc = spdk_fsdev_get_opts(&opts, sizeof(opts));
 	if (rc) {
@@ -71,7 +59,15 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 		return;
 	}
 
-	opts.max_source_id = ctx.max_source_id;
+	if (spdk_json_decode_object(params, rpc_fsdev_set_opts_decoders,
+				    SPDK_COUNTOF(rpc_fsdev_set_opts_decoders),
+				    &opts)) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "spdk_json_decode_object failed");
+		return;
+	}
+
 
 	rc = spdk_fsdev_set_opts(&opts);
 	if (rc) {
