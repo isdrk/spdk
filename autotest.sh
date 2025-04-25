@@ -381,6 +381,7 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 	fi
 	if [[ $SPDK_TEST_FSDEV -eq 1 ]]; then
 		run_test "fstests_aio" "$rootdir/test/fsdev/aio/fstests.sh" --with-nvme
+		run_test "pjd_aio" "$rootdir/test/fsdev/aio/pjd.sh" --with-nvme
 	fi
 fi
 

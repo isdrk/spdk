@@ -2,6 +2,7 @@
 # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 SPDK_XFSTESTS_VERSION=${SPDK_XFSTESTS_VERSION:-v2025.04.13}
+SPDK_PJDFSTESTS_VERSION=${SPDK_PJDFSTESTS_VERSION:-c711b5f6b666579846afba399a998f74f60c488b}
 
 _get_pkgmgr() {
 	local pkgdir pkgmgr
@@ -23,6 +24,12 @@ _install_xfstests_deps() {
 	install "${xfstests_packages[@]}"
 }
 
+# TODO: remove this once the image is provision with these dependencies
+_install_pjd_deps() {
+	source "$rootdir/test/common/config/pkgdep/$(_get_pkgmgr)"
+	install "${pjdfstest_packages[@]}"
+}
+
 _install_xfstests() {
 	local -g _xfsdir
 
@@ -36,6 +43,27 @@ _install_xfstests() {
 
 _uninstall_xfstests() {
 	[[ -n "$_xfsdir" ]] && rm -rf "$_xfsdir"
+	return 0
+}
+
+_install_pjdfstests() {
+	local -g _pjddir
+
+	[[ "$1" == "$SPDK_PJDFSTESTS_DIR" ]] && return 0
+	_pjddir="$1"
+	_install_pjd_deps
+	git clone https://github.com/pjd/pjdfstest.git "$_pjddir"
+	git -C "$_pjddir" checkout "$SPDK_PJDFSTESTS_VERSION"
+	(
+		cd "$_pjddir"
+		autoreconf -ifs
+		./configure
+		make -j$(nproc)
+	)
+}
+
+_uninstall_pjdfstests() {
+	[[ -n "$_pjddir" ]] && rm -rf "$_pjddir"
 	return 0
 }
 
@@ -85,6 +113,16 @@ fstests_init() {
 
 fstests_cleanup() {
 	_uninstall_xfstests
+	_fstests_cleanup
+}
+
+pjd_init() {
+	_install_pjdfstests "$1"
+	_fstests_init "${@:2}"
+}
+
+pjd_cleanup() {
+	_uninstall_pjdfstests
 	_fstests_cleanup
 }
 

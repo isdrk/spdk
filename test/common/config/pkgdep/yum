@@ -82,7 +82,12 @@ xfstests_packages=(
 	xfsprogs-devel
 )
 
+pjdfstest_packages=(
+	perl-Test-Harness
+)
+
 packages+=(${xfstests_packages[@]})
+packages+=(${pjdfstest_packages[@]})
 if [[ $OSID != centos && $OSID != rocky && $OSID != rhel ]]; then
 	packages+=(btrfs-progs)
 	packages+=(avahi)

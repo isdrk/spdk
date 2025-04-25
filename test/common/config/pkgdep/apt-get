@@ -92,6 +92,10 @@ xfstests_packages=(
 	xfslibs-dev
 )
 
+pjdfstest_packages=(
+	perl
+)
+
 install_vagrant_dependencies() {
 	local vagrant_packages
 	vagrant_packages=(
@@ -110,6 +114,7 @@ install_vagrant_dependencies() {
 }
 
 packages+=(${xfstests_packages[@]})
+packages+=(${pjdfstest_packages[@]})
 if [[ $OSID == debian ]]; then
 	packages+=("linux-headers-$kernel_ver-*")
 else
