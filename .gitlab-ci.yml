@@ -167,6 +167,11 @@ test-fsdev:
     - sudo chown -R $USER $CI_PROJECT_DIR
     - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar $OUTPUT_DIR
     - echo "Run $(wc -l < $OUTPUT_DIR/test_completions.txt) tests"
+    - |
+      if [ $CI_JOB_STATUS == "failed" ]; then
+        echo "Tests failed, rebooting VM..."
+        sudo reboot
+      fi
   artifacts:
     name: ${TEST_TYPE}_artifacts
     paths:
