@@ -18,7 +18,7 @@ _get_pkgmgr() {
 }
 
 # TODO: remove this once the image is provision with these dependencies
-_install_deps() {
+_install_xfstests_deps() {
 	source "$rootdir/test/common/config/pkgdep/$(_get_pkgmgr)"
 	install "${xfstests_packages[@]}"
 }
@@ -28,7 +28,7 @@ _install_xfstests() {
 
 	[[ "$1" == "$SPDK_XFSTESTS_DIR" ]] && return 0
 	_xfsdir="$1"
-	_install_deps
+	_install_xfstests_deps
 	git clone https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git "$_xfsdir"
 	git -C "$_xfsdir" checkout "$SPDK_XFSTESTS_VERSION"
 	make -j$(nproc) -C "$_xfsdir"
@@ -57,31 +57,41 @@ _cleanup_nvme() {
 	"$rootdir/scripts/setup.sh"
 }
 
-fstests_init() {
-	local xfsdir="$1"
-	local -g _srcdir="$2" _mountdir="$3" _testdev="$4" _scratchdev="$5"
+_fstests_init() {
+	local -g _srcdir="$1" _mountdir="$2" _devices=("${@:3}")
 
-	_install_xfstests "$xfsdir"
-	mkdir -p "$_mountdir/$_testdev" "$_mountdir/$_scratchdev" "$_srcdir"
-	[[ "$_fstests_with_nvme" == true ]] && _setup_nvme
+	mkdir -p "$_srcdir" "${_devices[@]/#/$_mountdir/}"
+	[[ "$_with_nvme" == true ]] && _setup_nvme
 	return 0
 }
 
-fstests_cleanup() {
-	_uninstall_xfstests
+_fstests_cleanup() {
+	local dev
+
 	if [[ -n "$_mountdir" ]]; then
-		umount "$_mountdir/$_testdev" || :
-		umount "$_mountdir/$_scratchdev" || :
+		for dev in "${_devices[@]}"; do
+			umount "$_mountdir/$dev" || :
+		done
 		rm -rf "$_mountdir"
 	fi
 	[[ -n "$_nvme_fsdev" ]] && _cleanup_nvme
 	rm -rf "$_srcdir"
 }
 
+fstests_init() {
+	_install_xfstests "$1"
+	_fstests_init "${@:2}"
+}
+
+fstests_cleanup() {
+	_uninstall_xfstests
+	_fstests_cleanup
+}
+
 for opt in "$@"; do
 	case "$opt" in
 		--with-nvme)
-			_fstests_with_nvme=true
+			_with_nvme=true
 			;;
 	esac
 done
