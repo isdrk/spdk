@@ -1696,7 +1696,7 @@ fsdevperf_create_jobs(void)
 {
 	int rc;
 
-	if (!fsdevperf_job_is_wildcard(g_app.main_job)) {
+	if (g_app.main_job == NULL || !fsdevperf_job_is_wildcard(g_app.main_job)) {
 		return 0;
 	}
 
