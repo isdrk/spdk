@@ -1664,7 +1664,7 @@ fsdev_aio_ioctl_retry(struct spdk_fsdev_io *fsdev_io,
  * - AIO_IOCTL_ACT_CMD - no data, just a command.
  */
 static int
-fsdev_aio_do_ioctl(struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 {
 	uint32_t request = fsdev_io->u_in.ioctl.request;
 	struct iovec *in_iovec = fsdev_io->u_in.ioctl.in_iov;
@@ -1820,8 +1820,6 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject;
 	uint32_t request =  fsdev_io->u_in.ioctl.request;
 
-	UNUSED(request);
-
 	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.ioctl.fobject);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
@@ -1836,8 +1834,20 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 * can hold the return code of the ioctl() function.
 	 */
 	fsdev_io->u_out.ioctl.result = 0;
-
-	res = fsdev_aio_do_ioctl(fsdev_io);
+	switch (request) {
+	case AIO_IOCTL_GET_UNREST_DATA_CMD:
+	case AIO_IOCTL_SET_UNREST_DATA_CMD:
+	case AIO_IOCTL_GET_REST_DATA_CMD:
+	case AIO_IOCTL_SET_REST_DATA_CMD:
+	case AIO_IOCTL_REST_DATA_CMD:
+	case AIO_IOCTL_ACT_CMD:
+		res = fsdev_aio_do_aio_ioctl(fsdev_io);
+		break;
+	default:
+		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
+		res = -ENOTTY;
+		break;
+	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "IOCTL(%u) for " FOBJECT_FMT " handled with result=%d\n",
 		      request, FOBJECT_ARGS(fobject), res);
