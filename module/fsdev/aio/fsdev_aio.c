@@ -13,6 +13,8 @@
 
 #include "fsdev_aio.h"
 #include <libaio.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
 
 #define FILE_PTR_LUT_INIT_SIZE 1000
 #define FILE_PTR_LUT_BITS 63
@@ -1813,6 +1815,29 @@ fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 }
 
 static int
+fsdev_aio_do_fsioc_ioctl(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
+			 uint32_t request, void *ioctl_arg)
+{
+	int fd;
+	int res;
+
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("Failed to open fd %d\n", fobject->fd);
+		return res;
+	}
+
+	res = ioctl(fd, request, ioctl_arg);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("ioctl failed for fd %d\n", fd);
+	}
+	close(fd);
+	return res;
+}
+
+static int
 fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	int res;
@@ -1842,6 +1867,13 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case AIO_IOCTL_REST_DATA_CMD:
 	case AIO_IOCTL_ACT_CMD:
 		res = fsdev_aio_do_aio_ioctl(fsdev_io);
+		break;
+	case FS_IOC_GETFLAGS:
+	case FS_IOC_FSGETXATTR:
+		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, request, fsdev_io->u_in.ioctl.out_iov->iov_base);
+		break;
+	case FS_IOC_SETFLAGS:
+		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, request, fsdev_io->u_in.ioctl.in_iov->iov_base);
 		break;
 	default:
 		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
