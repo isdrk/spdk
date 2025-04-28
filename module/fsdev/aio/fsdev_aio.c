@@ -3391,12 +3391,6 @@ fop_failed:
 	return res;
 }
 
-static inline char *
-fobject_procname(struct aio_fsdev_file_object *fobject)
-{
-	return spdk_sprintf_alloc("/proc/self/fd/%d", fobject->fd);
-}
-
 #define XATTR_FLAGS_MAP \
 	XATTR_FLAG(XATTR_CREATE) \
 	XATTR_FLAG(XATTR_REPLACE)
@@ -3422,13 +3416,12 @@ static int
 fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
+	int res, fd;
 	struct aio_fsdev_file_object *fobject;
 	const char *name = fsdev_io->u_in.setxattr.name;
 	const char *value = fsdev_io->u_in.setxattr.value;
 	uint32_t size = fsdev_io->u_in.setxattr.size;
 	uint64_t flags = fsdev_io->u_in.setxattr.flags;
-	char *procname = NULL;
 	static const char *acl_access_name = "system.posix_acl_access";
 
 	if (!vfsdev->opts.xattr_enabled) {
@@ -3442,21 +3435,14 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	if (fobject->is_symlink) {
-		/* Sorry, no race free way to removexattr on symlink. */
-		SPDK_ERRLOG("cannot set xattr for symlink\n");
-		res = -EPERM;
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
 		goto fop_failed;
 	}
 
-	procname = fobject_procname(fobject);
-	if (!procname) {
-		SPDK_ERRLOG("cannot format procname\n");
-		res = -ENOMEM;
-		goto fop_failed;
-	}
-
-	res = setxattr(procname, name, value, size, fsdev_xattr_flags_to_posix(flags));
+	res = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
 	if (res == -1) {
 		res = -errno;
 		if (res == -ENOTSUP) {
@@ -3494,7 +3480,9 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		      FOBJECT_ARGS(fobject), name, value, size, flags);
 
 fop_failed:
-	free(procname);
+	if (fd != -1) {
+		close(fd);
+	}
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3503,8 +3491,7 @@ static int
 fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
-	char *procname = NULL;
+	int res, fd;
 	struct aio_fsdev_file_object *fobject;
 	const char *name = fsdev_io->u_in.getxattr.name;
 	void *buffer = fsdev_io->u_in.getxattr.buffer;
@@ -3522,21 +3509,14 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	if (fobject->is_symlink) {
-		/* Sorry, no race free way to getxattr on symlink. */
-		SPDK_ERRLOG("cannot get xattr for symlink\n");
-		res = -EPERM;
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
 		goto fop_failed;
 	}
 
-	procname = fobject_procname(fobject);
-	if (!procname) {
-		SPDK_ERRLOG("cannot format procname\n");
-		res = -ENOMEM;
-		goto fop_failed;
-	}
-
-	value_size = getxattr(procname, name, buffer, size);
+	value_size = fgetxattr(fd, name, buffer, size);
 	if (value_size == -1) {
 		res = -errno;
 		if (res == -ENODATA) {
@@ -3558,7 +3538,9 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
 
 fop_failed:
-	free(procname);
+	if (fd != -1) {
+		close(fd);
+	}
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3568,8 +3550,7 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	ssize_t data_size;
-	int res;
-	char *procname = NULL;
+	int res, fd;
 	struct aio_fsdev_file_object *fobject;
 	char *buffer = fsdev_io->u_in.listxattr.buffer;
 	size_t size = fsdev_io->u_in.listxattr.size;
@@ -3585,21 +3566,14 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		return -EINVAL;
 	}
 
-	if (fobject->is_symlink) {
-		/* Sorry, no race free way to listxattr on symlink. */
-		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		res = -EPERM;
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
 		goto fop_failed;
 	}
 
-	procname = fobject_procname(fobject);
-	if (!procname) {
-		SPDK_ERRLOG("cannot format procname\n");
-		res = -ENOMEM;
-		goto fop_failed;
-	}
-
-	data_size = listxattr(procname, buffer, size);
+	data_size = flistxattr(fd, buffer, size);
 	if (data_size == -1) {
 		res = -errno;
 		if (res == -ENOTSUP) {
@@ -3618,7 +3592,9 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		      FOBJECT_ARGS(fobject), data_size);
 
 fop_failed:
-	free(procname);
+	if (fd != -1) {
+		close(fd);
+	}
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -3627,8 +3603,7 @@ static int
 fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
-	char *procname = NULL;
+	int res, fd;
 	struct aio_fsdev_file_object *fobject;
 	const char *name = fsdev_io->u_in.removexattr.name;
 
@@ -3643,21 +3618,14 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		return -EINVAL;
 	}
 
-	if (fobject->is_symlink) {
-		/* Sorry, no race free way to setxattr on symlink. */
-		SPDK_ERRLOG("cannot list xattr for symlink\n");
-		res = -EPERM;
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		res = -errno;
+		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
 		goto fop_failed;
 	}
 
-	procname = fobject_procname(fobject);
-	if (!procname) {
-		SPDK_ERRLOG("cannot format procname\n");
-		res = -ENOMEM;
-		goto fop_failed;
-	}
-
-	res = removexattr(procname, name);
+	res = fremovexattr(fd, name);
 	if (res == -1) {
 		res = -errno;
 		if (res == -ENODATA) {
@@ -3675,7 +3643,9 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		      FOBJECT_ARGS(fobject), name);
 
 fop_failed:
-	free(procname);
+	if (fd != -1) {
+		close(fd);
+	}
 	file_object_unref(fobject, 1);
 	return res;
 }
