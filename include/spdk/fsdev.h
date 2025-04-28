@@ -232,8 +232,6 @@ struct spdk_fsdev_io_stat {
 	uint64_t bytes_read;
 	/** Number of bytes written */
 	uint64_t bytes_written;
-	/** Number of IOs completed with an error */
-	uint64_t num_io_errors;
 	/** Notifications statistics by type */
 	struct {
 		/** Number of emitted notifications */

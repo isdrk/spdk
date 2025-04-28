@@ -274,7 +274,6 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 		spdk_json_write_named_uint64(w, "total_ticks", stat->io[i].total_ticks);
 		spdk_json_write_object_end(w);
 	}
-	spdk_json_write_named_uint64(w, "num_io_errors", stat->num_io_errors);
 	spdk_json_write_named_object_begin(w, "notifications");
 	for (i = 0; i < SPDK_COUNTOF(stat->notify); i++) {
 		const char *name = fsdev_notify_type_get_name(i);

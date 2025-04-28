@@ -590,7 +590,6 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 
 	to_stat->bytes_read += from_stat->bytes_read;
 	to_stat->bytes_written += from_stat->bytes_written;
-	to_stat->num_io_errors += from_stat->num_io_errors;
 	for (i = 0; i < SPDK_COUNTOF(from_stat->notify); i++) {
 		to_stat->notify[i].count += from_stat->notify[i].count;
 		to_stat->notify[i].replies += from_stat->notify[i].replies;
@@ -1273,10 +1272,6 @@ fsdev_io_complete(void *ctx)
 	submit_tsc = fsdev_io->internal.submit_tsc;
 	cleanup_cb_fn = fsdev_io->internal.cleanup_cb_fn;
 	cleanup_cb_arg = fsdev_io->internal.cleanup_cb_arg;
-
-	if (fsdev_io->internal.status) {
-		fsdev_ch->stat->num_io_errors++;
-	}
 
 	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
 				     fsdev_io->internal.status, fsdev_io);

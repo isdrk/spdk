@@ -14405,7 +14405,6 @@ Example response:
           "min_ticks": 78834,
           "total_ticks": 3831084
         },
-        "num_io_errors": 10,
         "notifications": {
           "inval_data": {
             "count": 0,
