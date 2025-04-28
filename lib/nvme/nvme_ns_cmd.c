@@ -1544,10 +1544,9 @@ spdk_nvme_ns_cmd_reservation_report(struct spdk_nvme_ns *ns,
 	num_dwords = (len >> 2);
 	cmd->cdw10 = num_dwords - 1; /* 0-based */
 
-	if (spdk_nvme_ctrlr_get_data(ns->ctrlr)->ctratt.bits.host_id_exhid_supported) {
-		/* Extended Data Strcutre bit should be set to true if 128
-		 * bit format is supported */
-		cmd->cdw11_bits.resv_report.eds = true;
+	/* Reservation Status Extended Data Structure is expected if a 128-bit Host Identifier was selected. */
+	if (qpair->ctrlr->cdata.ctratt.bits.host_id_exhid_supported) {
+		cmd->cdw11_bits.resv_report.eds = 1;
 	}
 
 	return nvme_qpair_submit_request(qpair, req);
