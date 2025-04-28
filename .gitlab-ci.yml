@@ -193,9 +193,13 @@ code-style-job:
     - ./scripts/check_format.sh
 
 check-so-deps-job:
-  extends: .test-job-vm-template
+  extends: .test-job-k8s-template
   script:
-    - sudo git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git".insteadOf git@gitlab.com:Mellanox/spdk_team/spdk-abi.git test/make/abi
+    - tar xf .test.tar
+    - ./scripts/pkgdep.sh --developer-tools
+    - ./configure --with-rdma=mlx5_dv --enable-debug --enable-werror --with-shared
+    - make -j4
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
     - sudo ./test/make/check_so_deps.sh
 
 external-code-test-job:
