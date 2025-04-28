@@ -590,7 +590,6 @@ fsdev_add_io_stat(struct spdk_fsdev_io_stat *to_stat, const struct spdk_fsdev_io
 
 	to_stat->bytes_read += from_stat->bytes_read;
 	to_stat->bytes_written += from_stat->bytes_written;
-	to_stat->num_out_of_io += from_stat->num_out_of_io;
 	to_stat->num_io_errors += from_stat->num_io_errors;
 	for (i = 0; i < SPDK_COUNTOF(from_stat->notify); i++) {
 		to_stat->notify[i].count += from_stat->notify[i].count;
