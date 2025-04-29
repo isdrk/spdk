@@ -4996,20 +4996,6 @@ nvme_tcp_ctrlr_create_qpair(struct spdk_nvme_ctrlr *ctrlr,
 		return NULL;
 	}
 
-	/* FIXME: xlio group must be set while creating xlio socket,
-	 *        but group for IO qpair will be created later,
-	 *        so skip connect socket for IO qpair now.
-	 */
-	if (nvme_qpair_is_admin_queue(qpair)) {
-		/* spdk_nvme_qpair_get_optimal_poll_group needs socket information.
-		 * So create the socket first when creating a qpair. */
-		rc = nvme_tcp_qpair_connect_sock(ctrlr, qpair);
-		if (rc) {
-			nvme_tcp_ctrlr_delete_io_qpair(ctrlr, qpair);
-			return NULL;
-		}
-	}
-
 	return qpair;
 }
 
