@@ -8,8 +8,8 @@
  * TCP network implementation abstraction layer
  */
 
-#ifndef SPDK_INTERNAL_SOCK_H
-#define SPDK_INTERNAL_SOCK_H
+#ifndef SPDK_INTERNAL_SOCK_MODULE_H
+#define SPDK_INTERNAL_SOCK_MODULE_H
 
 #include "spdk/stdinc.h"
 #include "spdk/sock.h"
@@ -434,4 +434,4 @@ void spdk_sock_map_cleanup(struct spdk_sock_map *map);
 }
 #endif
 
-#endif /* SPDK_INTERNAL_SOCK_H */
+#endif /* SPDK_INTERNAL_SOCK_MODULE_H */

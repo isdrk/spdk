@@ -24,7 +24,7 @@
 #include "spdk_internal/rdma_provider.h"
 #include "spdk_internal/rdma_utils.h"
 #include "spdk_internal/xlio.h"
-#include "spdk_internal/sock.h"
+#include "spdk_internal/sock_module.h"
 
 #define MAX_TMPBUF 1024
 #define PORTNUMLEN 32

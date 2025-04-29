@@ -17,7 +17,7 @@
 #include "spdk/util.h"
 #include "spdk/string.h"
 #include "spdk/net.h"
-#include "spdk_internal/sock.h"
+#include "spdk_internal/sock_module.h"
 #include "spdk_internal/event.h"
 #include "spdk_internal/xlio.h"
 

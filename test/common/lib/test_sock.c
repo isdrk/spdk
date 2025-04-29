@@ -5,7 +5,7 @@
 
 #include "spdk/stdinc.h"
 
-#include "spdk_internal/sock.h"
+#include "spdk_internal/sock_module.h"
 #include "spdk_internal/mock.h"
 
 struct test_sock_group_entry {
