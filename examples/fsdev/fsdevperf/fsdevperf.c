@@ -1980,7 +1980,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			return -EINVAL;
 		}
 		job->io_pattern = ival;
-		job->flags |= FSDEVPERF_JOB_RANDOM;
+		job->flags |= random ? FSDEVPERF_JOB_RANDOM : 0;
 		break;
 	case FSDEVPERF_OPT_JOBS:
 		if (job->path != NULL) {
