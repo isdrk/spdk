@@ -46,8 +46,8 @@ clean:
 	$(Q)rm -f spdk/version.py
 
 spdk/version.py: $(SPDK_ROOT_DIR)/VERSION
-	$(Q)printf "__version__ = '%d.%d%s'\n" \
-		$(version_major) $(version_minor) \
+	$(Q)printf "__version__ = '%d.%d.%d-%s'\n" \
+		$(version_major) $(version_minor) $(version_patch) \
 		$(shell echo -n \"$(version_suffix)\" | sed 's/-pre/rc0/g' | tr -d -) > spdk/version.py
 
 install: rpc spdkcli
