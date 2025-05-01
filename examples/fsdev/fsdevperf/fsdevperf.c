@@ -726,6 +726,7 @@ fsdevperf_dump_stats(void)
 	double task_mbps, job_mbps, total_mbps;
 	double runtime;
 	char path[PATH_MAX];
+	size_t num_jobs = 0;
 
 	total_iops = 0;
 	total_mbps = 0;
@@ -760,6 +761,12 @@ fsdevperf_dump_stats(void)
 
 		total_iops += job_iops;
 		total_mbps += job_mbps;
+		num_jobs++;
+	}
+
+	if (num_jobs > 1) {
+		printf("total\n");
+		printf("  %30s %4s %10s %10.2f %10.2f\n", "", "", "", total_iops, total_mbps);
 	}
 }
 
