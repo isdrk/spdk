@@ -14257,12 +14257,12 @@ Set fsdev module options.
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 max_source_id           | Optional | int         | Max source ID.
-recovery_enabled        | Optional | int         | Recovery is enabled.
+disable_recovery        | Optional | boolean     | `true` to disable recovery.
 
-NOTE: Recovery is enabled by default, so `recovery_enabled` is set to `true`.
+NOTE: Recovery is enabled by default.
 When recovery is enabled, fsdev modules that support recovery will first attempt to recover during
 the creation of an fsdev, and will fall back to from-scratch creation if recovery fails.
-Normally, recovery should remain enabled. However, one may choose to set recovery_enabled to `false`
+Normally, recovery should remain enabled. However, one may choose to set disable_recovery to `true`
 for debugging purposes or as a workaround if there are issues with SHMEM.
 
 #### Example
@@ -14275,7 +14275,7 @@ Example request:
   "id": 1,
   "params": {
     "max_source_id": 256,
-    "recovery_enabled": false
+    "disable_recovery": false
   }
 }
 ~~~
