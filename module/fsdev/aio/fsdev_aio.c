@@ -151,6 +151,7 @@ typedef uint64_t spdk_ino_t;
 struct fsdev_aio_key {
 	ino_t ino;
 	dev_t dev;
+	RB_ENTRY(fsdev_aio_key) link;
 };
 
 struct aio_fsdev_fhdr {
@@ -207,11 +208,29 @@ struct aio_fsdev_file_object {
 	};
 	struct aio_fsdev_linux_fh linux_fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
-	TAILQ_ENTRY(aio_fsdev_file_object) link;
-	TAILQ_HEAD(, aio_fsdev_file_object) leafs;
+	RB_HEAD(aio_fsdev_file_object_tree, fsdev_aio_key) leafs;
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
 	struct aio_fsdev *vfsdev;
 };
+
+static int
+aio_fsdev_file_object_cmp(struct fsdev_aio_key *fo1, struct fsdev_aio_key *fo2)
+{
+	if (fo1->dev != fo2->dev) {
+		assert(false);
+		return -1;
+	}
+
+	if (fo1->ino < fo2->ino) {
+		return -1;
+	} else if (fo1->ino > fo2->ino) {
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+RB_GENERATE_STATIC(aio_fsdev_file_object_tree, fsdev_aio_key, link, aio_fsdev_file_object_cmp);
 
 struct aio_fsdev {
 	struct spdk_fsdev fsdev;
@@ -415,12 +434,14 @@ is_safe_path_component(const char *path)
 static struct aio_fsdev_file_object *
 find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 {
-	struct aio_fsdev_file_object *leaf_fobject;
+	struct fsdev_aio_key tmp, *key;
 
-	TAILQ_FOREACH(leaf_fobject, &fobject->leafs, link) {
-		if (leaf_fobject->key.ino == ino && leaf_fobject->key.dev == dev) {
-			return leaf_fobject;
-		}
+	tmp.ino = ino;
+	tmp.dev = dev;
+	key = RB_FIND(aio_fsdev_file_object_tree, &fobject->leafs, &tmp);
+
+	if (key != NULL) {
+		return SPDK_CONTAINEROF(key, struct aio_fsdev_file_object, key);
 	}
 
 	return NULL;
@@ -558,7 +579,7 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
 		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
-		TAILQ_REMOVE(&parent_fobject->leafs, fobject, link);
+		RB_REMOVE(aio_fsdev_file_object_tree, &parent_fobject->leafs, &fobject->key);
 	}
 
 	spdk_spin_unlock(&vfsdev->lock);
@@ -621,7 +642,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->vfsdev = vfsdev;
 
 	TAILQ_INIT(&fobject->handles);
-	TAILQ_INIT(&fobject->leafs);
+	RB_INIT(&fobject->leafs);
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* Root is marked on mount */
@@ -635,7 +656,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
-		TAILQ_INSERT_TAIL(&parent_fobject->leafs, fobject, link);
+		RB_INSERT(aio_fsdev_file_object_tree, &parent_fobject->leafs, &fobject->key);
 		file_object_ref(parent_fobject); /* ref by leaf */
 	}
 
@@ -819,7 +840,7 @@ static void
 fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 {
 	uint64_t refcount;
-
+	struct fsdev_aio_key *key, *tmp;
 	/* ref to make sure it's not deleted when the last reference by a handle or a leaf removed */
 	file_object_ref(fobject);
 
@@ -842,8 +863,9 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 #endif
 	}
 
-	while (!TAILQ_EMPTY(&fobject->leafs)) {
-		struct aio_fsdev_file_object *leaf_fobject = TAILQ_FIRST(&fobject->leafs);
+	RB_FOREACH_SAFE(key, aio_fsdev_file_object_tree, &fobject->leafs, tmp) {
+		struct aio_fsdev_file_object *leaf_fobject = SPDK_CONTAINEROF(key, struct aio_fsdev_file_object,
+				key);
 		/* We free (unref) the fobject's leafs in any case as the unref_fobject is only related to the fobject */
 		fsdev_free_leafs(leaf_fobject, true);
 	}
