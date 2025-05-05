@@ -45,7 +45,7 @@ test_skip_rpc_with_json() {
 
 	$SPDK_BIN_DIR/spdk_tgt --no-rpc-server -m 0x1 --json $CONFIG_PATH &> $LOG_PATH &
 	local spdk_pid=$!
-	sleep 5
+	sleep 10
 
 	killprocess $spdk_pid
 	grep -q "TCP Transport Init" $LOG_PATH
