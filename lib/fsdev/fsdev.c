@@ -225,7 +225,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_string(w, "method", "fsdev_set_opts");
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_uint32(w, "max_source_id", g_fsdev_opts.max_source_id);
-	spdk_json_write_named_bool(w, "recovery_enabled", g_fsdev_opts.recovery_enabled);
+	spdk_json_write_named_bool(w, "disable_recovery", !g_fsdev_opts.recovery_enabled);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 
