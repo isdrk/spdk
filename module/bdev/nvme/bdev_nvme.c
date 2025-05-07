@@ -2466,10 +2466,8 @@ bdev_nvme_check_op_after_reset(struct nvme_ctrlr *nvme_ctrlr, bool success,
 		/* Complete pending destruct after reset completes. */
 		return OP_COMPLETE_PENDING_DESTRUCT;
 	} else if (pending_failover) {
-		nvme_ctrlr->reset_start_tsc = 0;
 		return OP_FAILOVER;
 	} else if (success || nvme_ctrlr->opts.reconnect_delay_sec == 0) {
-		nvme_ctrlr->reset_start_tsc = 0;
 		return OP_NONE;
 	} else if (bdev_nvme_check_ctrlr_loss_timeout(nvme_ctrlr)) {
 		return OP_DESTRUCT;
@@ -2584,6 +2582,7 @@ bdev_nvme_reset_ctrlr_complete(struct nvme_ctrlr *nvme_ctrlr, bool success)
 		}
 	} else {
 		NVME_CTRLR_NOTICELOG(nvme_ctrlr, "Resetting controller successful.\n");
+		nvme_ctrlr->reset_start_tsc = 0;
 	}
 
 	nvme_ctrlr->resetting = false;
@@ -2918,10 +2917,11 @@ bdev_nvme_reset_ctrlr_unsafe(struct nvme_ctrlr *nvme_ctrlr, spdk_msg_fn *msg_fn)
 		nvme_ctrlr->reconnect_is_delayed = false;
 	} else {
 		*msg_fn = _bdev_nvme_reset_ctrlr;
-		assert(nvme_ctrlr->reset_start_tsc == 0);
 	}
 
-	nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
+	if (nvme_ctrlr->reset_start_tsc == 0) {
+		nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
+	}
 
 	return 0;
 }
@@ -3502,8 +3502,9 @@ bdev_nvme_failover_ctrlr_unsafe(struct nvme_ctrlr *nvme_ctrlr, bool remove)
 	nvme_ctrlr->resetting = true;
 	nvme_ctrlr->in_failover = true;
 
-	assert(nvme_ctrlr->reset_start_tsc == 0);
-	nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
+	if (nvme_ctrlr->reset_start_tsc == 0) {
+		nvme_ctrlr->reset_start_tsc = spdk_get_ticks();
+	}
 
 	return 0;
 }
