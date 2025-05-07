@@ -119,6 +119,11 @@ unittest-mlx5_dv-release:
   image: "$FEDORA_IMAGE"
   hooks:
     pre_get_sources_script: []
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    GIT_SUBMODULE_DEPTH: 1
+    GIT_DEPTH: 0
+    GIT_FETCH_EXTRA_FLAGS: "--tags"
 
 test-nvmf-k8s-job:
   extends: .test-job-k8s-template
