@@ -45,3 +45,5 @@ test/common/build_config.sh
 .run_test_name
 .spdk-isal.log
 .spdk-isal-crypto.log
+.cache
+compile_commands.json
