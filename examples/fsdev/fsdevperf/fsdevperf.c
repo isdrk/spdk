@@ -125,6 +125,7 @@ struct fsdevperf_job_ops {
 #define FSDEVPERF_JOB_RANDOM		(1 << 0)
 #define FSDEVPERF_JOB_SINGLE_BUFFER	(1 << 1)
 #define FSDEVPERF_JOB_UNIQUE_DATA	(1 << 2)
+#define FSDEVPERF_JOB_INTERNAL		(1 << 3)
 
 struct fsdevperf_job {
 	int				io_pattern;
@@ -252,6 +253,12 @@ static bool
 fsdevperf_job_is_random(struct fsdevperf_job *job)
 {
 	return job->flags & FSDEVPERF_JOB_RANDOM;
+}
+
+static bool
+fsdevperf_job_is_internal(struct fsdevperf_job *job)
+{
+	return job->flags & FSDEVPERF_JOB_INTERNAL;
 }
 
 static const char *
@@ -1032,7 +1039,8 @@ fsdevperf_cleanup_files(void)
 
 	assert(g_app.cleanup_job == NULL);
 	if (do_cleanup) {
-		job = fsdevperf_job_alloc("cleanup", &ops, FSDEVPERF_JOB_SINGLE_BUFFER);
+		job = fsdevperf_job_alloc("cleanup", &ops,
+					  FSDEVPERF_JOB_SINGLE_BUFFER | FSDEVPERF_JOB_INTERNAL);
 		if (job == NULL) {
 			fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 			goto out;
@@ -1467,12 +1475,16 @@ fsdevperf_task_start(void *ctx)
 		return;
 	}
 
-	id = fsdevperf_task_next_id(task);
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-			   SPDK_FSDEV_IO_STATFS, task->source_id, id,
-			   fsdevperf_task_stafs_done, task);
-	fsdev_io->u_in.statfs.fobject = fs->root;
-	spdk_fsdev_io_submit(fsdev_io);
+	if (fsdevperf_job_is_internal(task->job)) {
+		fsdevperf_task_do_start(task);
+	} else {
+		id = fsdevperf_task_next_id(task);
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
+				   SPDK_FSDEV_IO_STATFS, task->source_id, id,
+				   fsdevperf_task_stafs_done, task);
+		fsdev_io->u_in.statfs.fobject = fs->root;
+		spdk_fsdev_io_submit(fsdev_io);
+	}
 }
 
 static void
@@ -1534,7 +1546,8 @@ fsdevperf_setup_files(void)
 	struct fsdevperf_file *file;
 	int rc;
 
-	job = fsdevperf_job_alloc("setup", &ops, FSDEVPERF_JOB_SINGLE_BUFFER);
+	job = fsdevperf_job_alloc("setup", &ops,
+				  FSDEVPERF_JOB_SINGLE_BUFFER | FSDEVPERF_JOB_INTERNAL);
 	if (job == NULL) {
 		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 		rc = -ENOMEM;
