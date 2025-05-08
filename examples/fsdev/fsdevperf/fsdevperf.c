@@ -1681,15 +1681,17 @@ static const struct fsdevperf_job_ops g_default_job_ops = {
 static int
 fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 {
-	struct fsdevperf_job *job, *main_job = g_app.main_job;
-	const char *filename = fsdevperf_get_filename(main_job->path);
+	struct fsdevperf_job *job, *orig_job = ctx;
+	const char *filename = fsdevperf_get_filename(orig_job->path);
+	char name[256];
 
-	job = fsdevperf_job_alloc(spdk_fsdev_get_name(fsdev), &g_default_job_ops, 0);
+	snprintf(name, sizeof(name), "%s-%s", orig_job->name, spdk_fsdev_get_name(fsdev));
+	job = fsdevperf_job_alloc(name, &g_default_job_ops, 0);
 	if (job == NULL) {
 		return -ENOMEM;
 	}
 
-	job->path = spdk_sprintf_alloc("/%s%s%s", job->name,
+	job->path = spdk_sprintf_alloc("/%s%s%s", spdk_fsdev_get_name(fsdev),
 				       filename != NULL ? "/" : "",
 				       filename != NULL ? filename : "");
 	if (job->path == NULL) {
@@ -1697,13 +1699,13 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 		return -ENOMEM;
 	}
 
-	job->io_pattern = main_job->io_pattern;
-	job->io_size = main_job->io_size;
-	job->io_depth = main_job->io_depth;
-	job->filesize = main_job->filesize;
-	job->size = main_job->size;
-	job->num_files = main_job->num_files;
-	job->runtime = main_job->runtime;
+	job->io_pattern = orig_job->io_pattern;
+	job->io_size = orig_job->io_size;
+	job->io_depth = orig_job->io_depth;
+	job->filesize = orig_job->filesize;
+	job->size = orig_job->size;
+	job->num_files = orig_job->num_files;
+	job->runtime = orig_job->runtime;
 
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
 
@@ -1713,18 +1715,23 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 static int
 fsdevperf_create_jobs(void)
 {
+	struct fsdevperf_job *job, *tjob;
 	int rc;
 
-	if (g_app.main_job == NULL || !fsdevperf_job_is_wildcard(g_app.main_job)) {
-		return 0;
+	TAILQ_FOREACH_SAFE(job, &g_app.jobs, tailq, tjob) {
+		if (!fsdevperf_job_is_wildcard(job)) {
+			continue;
+		}
+
+		rc = spdk_for_each_fsdev(job, fsdevperf_for_each_fsdev_create_job);
+		if (rc != 0) {
+			return rc;
+		}
+
+		TAILQ_REMOVE(&g_app.jobs, job, tailq);
+		fsdevperf_job_free(job);
 	}
 
-	rc = spdk_for_each_fsdev(NULL, fsdevperf_for_each_fsdev_create_job);
-	if (rc != 0) {
-		return rc;
-	}
-
-	TAILQ_REMOVE(&g_app.jobs, g_app.main_job, tailq);
 	if (TAILQ_EMPTY(&g_app.jobs)) {
 		fsdevperf_errmsg("no fsdev(s) were found\n");
 		return -ENODEV;
