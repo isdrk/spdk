@@ -1443,10 +1443,20 @@ fsdevperf_task_sync_job(void *ctx)
 {
 	struct fsdevperf_task *task = ctx;
 	struct fsdevperf_job *job = task->job;
+	size_t num_ready = 0, num_tasks = 0;
 
-	if (++job->num_ready == job->num_tasks) {
-		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
-			spdk_thread_send_msg(task->thread->thread, fsdevperf_task_do_start, task);
+	job->num_ready++;
+	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+		num_ready += job->num_ready;
+		num_tasks += job->num_tasks;
+	}
+
+	if (num_ready == num_tasks) {
+		TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+			TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+				spdk_thread_send_msg(task->thread->thread,
+						     fsdevperf_task_do_start, task);
+			}
 		}
 	}
 }
