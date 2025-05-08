@@ -91,6 +91,8 @@ struct fsdevperf_task {
 #define FSDEVPERF_TASK_SIZE(fs)		(ALIGNED_TYPE_SIZE(fsdevperf_task) + (fs)->io_ctx_size)
 #define FSDEVPERF_REQUEST_SIZE(task)	(ALIGNED_TYPE_SIZE(fsdevperf_request) + (task)->fs->io_ctx_size)
 
+#define FSDEVPERF_POLLER_PERIOD 1ull
+
 #define fsdevperf_task_request(task, i) \
 	((struct fsdevperf_request *)((task)->requests_buf + (i) * FSDEVPERF_REQUEST_SIZE(task)))
 
@@ -152,9 +154,9 @@ struct fsdevperf_app {
 	size_t					num_active;
 	int					status;
 	struct {
-		struct fsdevperf_stats		stats;
+		struct fsdevperf_stats		current_stats;
+		struct fsdevperf_stats		prev_stats;
 		struct spdk_poller		*poller;
-		uint64_t			tsc_start;
 	} poller;
 	mode_t					umask;
 	size_t					num_threads_per_core;
@@ -1621,8 +1623,9 @@ fsdevperf_filesystem_mount(struct fsdevperf_filesystem *fs)
 static void
 fsdevperf_poller_update_done(void *ctx)
 {
-	struct fsdevperf_stats *stats = &g_app.poller.stats;
-	double runtime, iops, mbps;
+	struct fsdevperf_stats *curr = &g_app.poller.current_stats;
+	struct fsdevperf_stats *prev = &g_app.poller.prev_stats;
+	double iops, mbps;
 	static int lastlen;
 	int len;
 
@@ -1630,9 +1633,9 @@ fsdevperf_poller_update_done(void *ctx)
 		return;
 	}
 
-	runtime = (double)(spdk_get_ticks() - g_app.poller.tsc_start) / spdk_get_ticks_hz();
-	iops = (double)stats->num_ios / runtime;
-	mbps = (double)stats->num_bytes / (1024 * 1024 * runtime);
+	iops = (double)(curr->num_ios - prev->num_ios) / FSDEVPERF_POLLER_PERIOD;
+	mbps = (double)(curr->num_bytes - prev->num_bytes) / (1024 * 1024 * FSDEVPERF_POLLER_PERIOD);
+	*prev = *curr;
 
 	spdk_poller_resume(g_app.poller.poller);
 
@@ -1647,7 +1650,7 @@ fsdevperf_poller_update(void *ctx)
 {
 	struct fsdevperf_thread *thread;
 	struct fsdevperf_task *task;
-	struct fsdevperf_stats *stats = &g_app.poller.stats;
+	struct fsdevperf_stats *stats = &g_app.poller.current_stats;
 
 	if (g_app.poller.poller == NULL) {
 		return;
@@ -1669,7 +1672,7 @@ fsdevperf_poller(void *ctx)
 {
 	spdk_poller_pause(g_app.poller.poller);
 
-	memset(&g_app.poller.stats, 0, sizeof(g_app.poller.stats));
+	memset(&g_app.poller.current_stats, 0, sizeof(g_app.poller.current_stats));
 	spdk_for_each_thread(fsdevperf_poller_update, NULL, fsdevperf_poller_update_done);
 
 	return SPDK_POLLER_BUSY;
@@ -1767,8 +1770,8 @@ fsdevperf_run(void)
 		goto error;
 	}
 
-	g_app.poller.tsc_start = spdk_get_ticks();
-	g_app.poller.poller = SPDK_POLLER_REGISTER(fsdevperf_poller, NULL, 1000 * 1000);
+	g_app.poller.poller = SPDK_POLLER_REGISTER(fsdevperf_poller, NULL,
+			      FSDEVPERF_POLLER_PERIOD * SPDK_SEC_TO_USEC);
 	if (g_app.poller.poller == NULL) {
 		goto error;
 	}
