@@ -151,9 +151,11 @@ struct fsdevperf_app {
 	struct fsdevperf_job			*cleanup_job;
 	size_t					num_active;
 	int					status;
-	struct fsdevperf_stats			stats;
-	struct spdk_poller			*poller;
-	uint64_t				tsc_start;
+	struct {
+		struct fsdevperf_stats		stats;
+		struct spdk_poller		*poller;
+		uint64_t			tsc_start;
+	} poller;
 	mode_t					umask;
 	size_t					num_threads_per_core;
 	TAILQ_HEAD(, fsdevperf_job)		jobs;
@@ -885,7 +887,7 @@ fsdevperf_done(void)
 		}
 	}
 
-	spdk_poller_unregister(&g_app.poller);
+	spdk_poller_unregister(&g_app.poller.poller);
 	spdk_app_stop(g_app.status);
 }
 
@@ -1619,20 +1621,20 @@ fsdevperf_filesystem_mount(struct fsdevperf_filesystem *fs)
 static void
 fsdevperf_poller_update_done(void *ctx)
 {
-	struct fsdevperf_stats *stats = &g_app.stats;
+	struct fsdevperf_stats *stats = &g_app.poller.stats;
 	double runtime, iops, mbps;
 	static int lastlen;
 	int len;
 
-	if (g_app.poller == NULL) {
+	if (g_app.poller.poller == NULL) {
 		return;
 	}
 
-	runtime = (double)(spdk_get_ticks() - g_app.tsc_start) / spdk_get_ticks_hz();
+	runtime = (double)(spdk_get_ticks() - g_app.poller.tsc_start) / spdk_get_ticks_hz();
 	iops = (double)stats->num_ios / runtime;
 	mbps = (double)stats->num_bytes / (1024 * 1024 * runtime);
 
-	spdk_poller_resume(g_app.poller);
+	spdk_poller_resume(g_app.poller.poller);
 
 	len = printf("IOPS: %.2f, %.2fMiB/s", iops, mbps);
 	printf("%*s\r", lastlen - spdk_min(len, lastlen), "");
@@ -1645,9 +1647,9 @@ fsdevperf_poller_update(void *ctx)
 {
 	struct fsdevperf_thread *thread;
 	struct fsdevperf_task *task;
-	struct fsdevperf_stats *stats = &g_app.stats;
+	struct fsdevperf_stats *stats = &g_app.poller.stats;
 
-	if (g_app.poller == NULL) {
+	if (g_app.poller.poller == NULL) {
 		return;
 	}
 
@@ -1665,9 +1667,9 @@ fsdevperf_poller_update(void *ctx)
 static int
 fsdevperf_poller(void *ctx)
 {
-	spdk_poller_pause(g_app.poller);
+	spdk_poller_pause(g_app.poller.poller);
 
-	memset(&g_app.stats, 0, sizeof(g_app.stats));
+	memset(&g_app.poller.stats, 0, sizeof(g_app.poller.stats));
 	spdk_for_each_thread(fsdevperf_poller_update, NULL, fsdevperf_poller_update_done);
 
 	return SPDK_POLLER_BUSY;
@@ -1765,9 +1767,9 @@ fsdevperf_run(void)
 		goto error;
 	}
 
-	g_app.tsc_start = spdk_get_ticks();
-	g_app.poller = SPDK_POLLER_REGISTER(fsdevperf_poller, NULL, 1000 * 1000);
-	if (g_app.poller == NULL) {
+	g_app.poller.tsc_start = spdk_get_ticks();
+	g_app.poller.poller = SPDK_POLLER_REGISTER(fsdevperf_poller, NULL, 1000 * 1000);
+	if (g_app.poller.poller == NULL) {
 		goto error;
 	}
 
