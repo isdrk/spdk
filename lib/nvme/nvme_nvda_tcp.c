@@ -1652,6 +1652,8 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		tqpair->flags.pending_events = false;
 	}
 
+	tqpair->stats = &g_dummy_stats;
+
 	nvme_tcp_qpair_print_reqs_info(tqpair);
 	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	xlio_sock_release_packets(tqpair);
@@ -4910,6 +4912,19 @@ nvme_tcp_ctrlr_connect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpa
 
 	tqpair = nvme_tcp_qpair(qpair);
 
+	if (qpair->poll_group) {
+		struct nvme_tcp_poll_group *tgroup = nvme_tcp_poll_group(qpair->poll_group);
+
+		tqpair->recv_pdu = NULL;
+		tqpair->stats = &tgroup->stats;
+		tqpair->flags.shared_stats = true;
+
+		if (tgroup->tcp_reqs != NULL) {
+			tqpair->flags.use_poll_group_req_pool = 1;
+			qpair->active_free_req = &qpair->poll_group->free_req;
+		}
+	}
+
 	if (!tqpair->xlio_sock) {
 		rc = nvme_tcp_qpair_connect_sock(ctrlr, qpair);
 		if (rc < 0) {
@@ -5211,18 +5226,6 @@ static int
 nvme_tcp_poll_group_add(struct spdk_nvme_transport_poll_group *tgroup,
 			struct spdk_nvme_qpair *qpair)
 {
-	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(qpair);
-	struct nvme_tcp_poll_group *group = nvme_tcp_poll_group(tgroup);
-
-	tqpair->recv_pdu = NULL;
-	tqpair->stats = &group->stats;
-	tqpair->flags.shared_stats = true;
-
-	if (group->tcp_reqs != NULL) {
-		tqpair->flags.use_poll_group_req_pool = 1;
-		qpair->active_free_req = &tgroup->free_req;
-	}
-
 	return 0;
 }
 
@@ -5230,24 +5233,6 @@ static int
 nvme_tcp_poll_group_remove(struct spdk_nvme_transport_poll_group *tgroup,
 			   struct spdk_nvme_qpair *qpair)
 {
-	struct nvme_tcp_qpair *tqpair;
-	struct nvme_tcp_poll_group *group;
-
-	assert(qpair->poll_group_tailq_head == &tgroup->disconnected_qpairs);
-
-	tqpair = nvme_tcp_qpair(qpair);
-	group = nvme_tcp_poll_group(tgroup);
-
-	assert(tqpair->flags.shared_stats == true);
-	tqpair->stats = &g_dummy_stats;
-
-	if (tqpair->flags.pending_events) {
-		TAILQ_REMOVE(&group->pending_events, tqpair, link);
-		tqpair->flags.pending_events = false;
-	}
-
-	assert(tqpair->flags.closed);
-
 	return 0;
 }
 
