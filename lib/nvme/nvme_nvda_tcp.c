@@ -5032,6 +5032,11 @@ nvme_tcp_ctrlr_construct(const struct spdk_nvme_transport_id *trid,
 	struct nvme_tcp_ctrlr *tctrlr;
 	int rc;
 
+	if (!spdk_xlio_is_initialized()) {
+		SPDK_ERRLOG("XLIO is not initialized\n");
+		return NULL;
+	}
+
 	tctrlr = calloc(1, sizeof(*tctrlr));
 	if (tctrlr == NULL) {
 		SPDK_ERRLOG("could not allocate ctrlr\n");
@@ -5143,13 +5148,19 @@ nvme_tcp_admin_qpair_abort_aers(struct spdk_nvme_qpair *qpair)
 static struct spdk_nvme_transport_poll_group *
 nvme_tcp_poll_group_create(void)
 {
-	struct nvme_tcp_poll_group *group = calloc(1, sizeof(*group));
+	struct nvme_tcp_poll_group *group;
 	struct nvme_tcp_req	*tcp_req;
 	struct nvme_tcp_pdu	*pdu;
 	size_t req_size_padded, pdu_size_padded;
 	uint16_t num_requests, i;
 	int rc;
 
+	if (!spdk_xlio_is_initialized()) {
+		SPDK_ERRLOG("XLIO is not initialized\n");
+		return NULL;
+	}
+
+	group = calloc(1, sizeof(*group));
 	if (group == NULL) {
 		SPDK_ERRLOG("Unable to allocate poll group.\n");
 		return NULL;
