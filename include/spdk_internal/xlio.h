@@ -20,6 +20,7 @@ extern "C" {
 
 int spdk_xlio_init(void);
 void spdk_xlio_fini(void);
+bool spdk_xlio_is_initialized(void);
 
 #ifdef SPDK_CONFIG_STATIC_XLIO
 

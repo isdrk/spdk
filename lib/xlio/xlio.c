@@ -163,6 +163,7 @@ spdk_xlio_init(void)
 	if (g_xlio_api->magic != XLIO_MAGIC_NUMBER) {
 		SPDK_ERRLOG("Unexpected XLIO API magic number: expected %" PRIx64 ", got %" PRIx64 "\n",
 			    (uint64_t)XLIO_MAGIC_NUMBER, g_xlio_api->magic);
+		g_xlio_api = NULL;
 		return -1;
 	}
 
@@ -170,12 +171,14 @@ spdk_xlio_init(void)
 	if ((g_xlio_api->cap_mask & required_caps) != required_caps) {
 		SPDK_ERRLOG("Required XLIO caps are missing: required %" PRIx64 ", got %" PRIx64 "\n",
 			    required_caps, g_xlio_api->cap_mask);
+		g_xlio_api = NULL;
 		return -1;
 	}
 #endif
 	rc = xlio_init_ex(&iattr);
 	if (rc) {
 		SPDK_ERRLOG("xlio_init_ex rc %d (errno=%d)\n", rc, errno);
+		g_xlio_api = NULL;
 	}
 
 	return rc;
@@ -191,4 +194,10 @@ spdk_xlio_fini(void)
 	/* FIXME: call xlio_exit may cause memory corruption */
 	/** xlio_exit(); */
 #endif
+}
+
+bool
+spdk_xlio_is_initialized(void)
+{
+	return g_xlio_api != NULL;
 }
