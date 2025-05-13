@@ -4937,6 +4937,9 @@ struct spdk_nvme_transport_ops {
 	int (*ctrlr_scan_attached)(struct spdk_nvme_probe_ctx *probe_ctx);
 
 	int (*qpair_free_request)(struct spdk_nvme_qpair *qpair, struct nvme_request *req);
+
+	/* Optional callback for transports to process transport-specific events. E.g. poll RDMA_CM event channel */
+	int (*ctrlr_process_transport_events)(struct spdk_nvme_ctrlr *ctrlr);
 };
 
 /**
