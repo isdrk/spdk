@@ -3036,7 +3036,6 @@ nvme_rdma_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 				    uint32_t max_completions)
 {
 	struct nvme_rdma_qpair		*rqpair = nvme_rdma_qpair(qpair);
-	struct nvme_rdma_ctrlr		*rctrlr = nvme_rdma_ctrlr(qpair->ctrlr);
 	int				rc = 0, batch_size;
 	struct spdk_rdma_provider_cq	*cq;
 	uint64_t			rdma_completions = 0;
@@ -3076,9 +3075,6 @@ nvme_rdma_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 		return -ENXIO;
 
 	default:
-		if (nvme_qpair_is_admin_queue(qpair)) {
-			nvme_rdma_poll_events(rctrlr);
-		}
 		nvme_rdma_qpair_process_cm_event(rqpair);
 		break;
 	}
@@ -3742,6 +3738,12 @@ nvme_rdma_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,
 	return 1;
 }
 
+static int
+nvme_rdma_ctrlr_process_transport_events(struct spdk_nvme_ctrlr *ctrlr)
+{
+	return nvme_rdma_poll_events(nvme_rdma_ctrlr(ctrlr));
+}
+
 void
 spdk_nvme_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
 {
@@ -3774,6 +3776,7 @@ const struct spdk_nvme_transport_ops rdma_ops = {
 	.ctrlr_disconnect_qpair = nvme_rdma_ctrlr_disconnect_qpair,
 
 	.ctrlr_get_memory_domains = nvme_rdma_ctrlr_get_memory_domains,
+	.ctrlr_process_transport_events = nvme_rdma_ctrlr_process_transport_events,
 
 	.qpair_abort_reqs = nvme_rdma_qpair_abort_reqs,
 	.qpair_reset = nvme_rdma_qpair_reset,
