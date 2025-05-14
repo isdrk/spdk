@@ -181,9 +181,17 @@ iscsi_portal_open(struct spdk_iscsi_portal *p)
 static void
 iscsi_portal_close(struct spdk_iscsi_portal *p)
 {
+	int rc;
+
 	if (p->sock) {
 		SPDK_DEBUGLOG(iscsi, "close portal (%s, %s)\n",
 			      p->host, p->port);
+
+		rc = spdk_sock_group_remove_sock(p->group->sock_group, p->sock);
+		if (rc) {
+			SPDK_ERRLOG("Unable to remove listen socket from poll group\n");
+		}
+
 		spdk_sock_close(&p->sock);
 	}
 }
