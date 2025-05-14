@@ -361,6 +361,7 @@ rpc_fsdev_get_iostat_next(struct rpc_fsdev_get_iostat_ctx *ctx)
 {
 	int rc;
 	struct rpc_fsdev_get_iostat_node *node;
+	bool fsdev_specified = ctx->name != NULL;
 
 do_retry:
 	if (TAILQ_EMPTY(&ctx->nodes)) {
@@ -375,11 +376,21 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
+	assert(!fsdev_specified || TAILQ_EMPTY(&ctx->nodes));
+
 	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);
-		goto do_retry;
+
+		if (!fsdev_specified) {
+			/* Skip to next fsdev */
+			goto do_retry;
+		}
+
+		spdk_jsonrpc_send_error_response(ctx->request, rc, spdk_strerror(-rc));
+		fsdev_free_get_iostat_ctx(ctx);
+		return;
 	}
 
 
@@ -530,6 +541,7 @@ rpc_fsdev_reset_iostat_next(struct rpc_fsdev_reset_iostat_ctx *ctx)
 {
 	int rc;
 	struct rpc_fsdev_reset_iostat_node *node;
+	bool fsdev_specified = ctx->name != NULL;
 
 do_retry:
 	if (TAILQ_EMPTY(&ctx->nodes)) {
@@ -542,13 +554,22 @@ do_retry:
 	node = TAILQ_FIRST(&ctx->nodes);
 	TAILQ_REMOVE(&ctx->nodes, node, link);
 
+	assert(!fsdev_specified || TAILQ_EMPTY(&ctx->nodes));
+
 	rc = spdk_fsdev_open(node->fsdev_name, _rpc_fsdev_event_cb, NULL, &node->fsdev_desc);
 	if (rc) {
 		SPDK_ERRLOG("spdk_fsdev_open(%s) failed with %d\n", node->fsdev_name, rc);
 		free(node);
-		goto do_retry;
-	}
 
+		if (!fsdev_specified) {
+			/* Skip to next fsdev */
+			goto do_retry;
+		}
+
+		spdk_jsonrpc_send_error_response(ctx->request, rc, spdk_strerror(-rc));
+		fsdev_free_reset_iostat_ctx(ctx);
+		return;
+	}
 	spdk_fsdev_reset_device_stat(spdk_fsdev_desc_get_fsdev(node->fsdev_desc),
 				     rpc_fsdev_reset_iostat_cpl, node);
 }
