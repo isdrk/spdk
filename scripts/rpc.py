@@ -3668,6 +3668,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
 
     # blobfs
     def blobfs_detect(args):
+        print("blobfs_detect RPC is deprecated", file=sys.stderr)
         print(rpc.blobfs.blobfs_detect(args.client,
                                        bdev_name=args.bdev_name))
 
@@ -3676,6 +3677,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=blobfs_detect)
 
     def blobfs_create(args):
+        print("blobfs_create RPC is deprecated", file=sys.stderr)
         print(rpc.blobfs.blobfs_create(args.client,
                                        bdev_name=args.bdev_name,
                                        cluster_sz=args.cluster_sz))
@@ -3687,6 +3689,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=blobfs_create)
 
     def blobfs_mount(args):
+        print("blobfs_mount RPC is deprecated", file=sys.stderr)
         print(rpc.blobfs.blobfs_mount(args.client,
                                       bdev_name=args.bdev_name,
                                       mountpoint=args.mountpoint))
@@ -3697,6 +3700,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=blobfs_mount)
 
     def blobfs_set_cache_size(args):
+        print("blobfs_set_cache_size RPC is deprecated", file=sys.stderr)
         print(rpc.blobfs.blobfs_set_cache_size(args.client,
                                                size_in_mb=args.size_in_mb))
 
