@@ -67,6 +67,13 @@ struct spdk_fsdev_module {
 	int (*get_ctx_size)(void);
 
 	/**
+	 * Denotes if the module_fini function may complete asynchronously.
+	 * If set to true finishing has to be explicitly completed by calling
+	 * spdk_fsdev_module_fini_done();
+	 */
+	bool async_fini;
+
+	/**
 	 * Fields that are used by the internal fsdev subsystem. Fsdev modules
 	 *  must not read or write to these fields.
 	 */
@@ -295,6 +302,13 @@ void spdk_fsdev_destruct_done(struct spdk_fsdev *fsdev, int fsdeverrno);
  * \param module Pointer to the module completing the initialization.
  */
 void spdk_fsdev_module_init_done(struct spdk_fsdev_module *module);
+
+/**
+ * Indicate that the fsdev module finish has completed.
+ *
+ * To be called in response to the module_fini, only if async_fini is set.
+ */
+void spdk_fsdev_module_fini_done(void);
 
 /**
  * Complete a fsdev_io

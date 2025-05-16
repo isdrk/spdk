@@ -126,6 +126,8 @@ static const char *fsdev_notify_type_names[] = {
 SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NUM_TYPES,
 		   "Incorrect size");
 
+static struct spdk_fsdev_module *g_resume_fsdev_module = NULL;
+
 struct spdk_fsdev_mgmt_channel {
 	TAILQ_HEAD(, spdk_fsdev_shared_resource) shared_resources;
 };
@@ -361,17 +363,44 @@ fsdev_module_fini_iter(void *arg)
 	}
 
 	/* Start iterating from the last touched module */
-	fsdev_module = TAILQ_LAST(&g_fsdev_mgr.fsdev_modules, fsdev_module_list);
+	if (!g_resume_fsdev_module) {
+		fsdev_module = TAILQ_LAST(&g_fsdev_mgr.fsdev_modules, fsdev_module_list);
+	} else {
+		fsdev_module = TAILQ_PREV(g_resume_fsdev_module, fsdev_module_list,
+					  internal.tailq);
+	}
+
 	while (fsdev_module) {
+		if (fsdev_module->async_fini) {
+			/* Save our place so we can resume later. We must
+			 * save the variable here, before calling module_fini()
+			 * below, because in some cases the module may
+			 * immediately call spdk_fsdev_module_fini_done() and
+			 * re-enter this function to continue iterating.
+			 */
+			g_resume_fsdev_module = fsdev_module;
+		}
+
 		if (fsdev_module->module_fini) {
 			fsdev_module->module_fini();
+		}
+
+		if (fsdev_module->async_fini) {
+			return;
 		}
 
 		fsdev_module = TAILQ_PREV(fsdev_module, fsdev_module_list,
 					  internal.tailq);
 	}
 
+	g_resume_fsdev_module = NULL;
 	spdk_io_device_unregister(&g_fsdev_mgr, fsdev_mgr_unregister_cb);
+}
+
+void
+spdk_fsdev_module_fini_done(void)
+{
+	spdk_thread_exec_msg(g_fini_thread, fsdev_module_fini_iter, NULL);
 }
 
 static void
