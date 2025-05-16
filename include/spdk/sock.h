@@ -74,6 +74,8 @@ struct spdk_sock_request {
 	/* struct iovec			iov[]; */
 };
 
+SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_request) == 64, "Incorrect size.");
+
 #define SPDK_SOCK_REQUEST_IOV(req, i) ((struct iovec *)(((uint8_t *)req + sizeof(struct spdk_sock_request)) + (sizeof(struct iovec) * i)))
 
 enum spdk_placement_mode {
