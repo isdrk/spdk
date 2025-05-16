@@ -380,11 +380,27 @@ accel_mlx5_dev_nomem_task_qdepth(struct accel_mlx5_dev *dev, struct accel_mlx5_t
 }
 
 static inline void
+accel_mlx5_dev_nomem_task_qdepth_repeat(struct accel_mlx5_dev *dev, struct accel_mlx5_task *task)
+{
+	SPDK_DEBUGLOG(accel_mlx5, "queue task %p, dev %p\n", task, dev);
+	dev->stats.nomem_qdepth++;
+	STAILQ_INSERT_HEAD(&dev->nomem, task, link);
+}
+
+static inline void
 accel_mlx5_dev_nomem_task_mkey(struct accel_mlx5_dev *dev, struct accel_mlx5_task *task)
 {
 	SPDK_DEBUGLOG(accel_mlx5, "queue task %p, dev %p\n", task, dev);
 	dev->stats.nomem_mkey++;
 	STAILQ_INSERT_TAIL(&dev->nomem, task, link);
+}
+
+static inline void
+accel_mlx5_dev_nomem_task_mkey_repeat(struct accel_mlx5_dev *dev, struct accel_mlx5_task *task)
+{
+	SPDK_DEBUGLOG(accel_mlx5, "queue task %p, dev %p\n", task, dev);
+	dev->stats.nomem_mkey++;
+	STAILQ_INSERT_HEAD(&dev->nomem, task, link);
 }
 
 static inline void
@@ -913,7 +929,7 @@ accel_mlx5_crypto_task_continue(struct accel_mlx5_task *task)
 	}
 	/* We need to post at least 1 UMR and 1 RDMA operation */
 	if (spdk_unlikely(qp_slot < 2)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 
@@ -1150,7 +1166,7 @@ accel_mlx5_copy_task_continue(struct accel_mlx5_task *task)
 
 	task->num_ops = spdk_min(qp_slot, task->num_reqs - task->num_completed_reqs);
 	if (spdk_unlikely(task->num_ops == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 	return accel_mlx5_copy_task_process(task);
@@ -2267,7 +2283,7 @@ accel_mlx5_crc_task_continue(struct accel_mlx5_task *task)
 	}
 	/* Check that we have enough slots in QP */
 	if (spdk_unlikely(qp_slot < 2)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 
@@ -2276,7 +2292,7 @@ accel_mlx5_crc_task_continue(struct accel_mlx5_task *task)
 		uint32_t n_slots = task->num_ops * 2 + 1;
 
 		if (qp_slot < n_slots) {
-			accel_mlx5_dev_nomem_task_qdepth(qp->dev, task);
+			accel_mlx5_dev_nomem_task_qdepth_repeat(qp->dev, task);
 			return -ENOMEM;
 		}
 	}
@@ -2417,7 +2433,7 @@ accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 		return rc;
 	}
 	if (spdk_unlikely(qp_slot < 2)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, mlx5_task);
 		return -ENOMEM;
 	}
 	/* One extra slot is needed for SET_PSV WQE to reset the error state in PSV. */
@@ -2447,7 +2463,7 @@ accel_mlx5_crypto_crc_task_continue_init(struct accel_mlx5_task *task)
 		}
 	}
 	if (spdk_unlikely(qp_slot < 2)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 
@@ -2456,7 +2472,7 @@ accel_mlx5_crypto_crc_task_continue_init(struct accel_mlx5_task *task)
 		uint32_t n_slots = task->num_ops * 2 + 1;
 
 		if (qp_slot < n_slots) {
-			accel_mlx5_dev_nomem_task_qdepth(dev, task);
+			accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 			return -ENOMEM;
 		}
 	}
@@ -2532,13 +2548,13 @@ accel_mlx5_crypto_mkey_task_continue(struct accel_mlx5_task *task)
 	if (task->num_ops == 0) {
 		task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
 		if (spdk_unlikely(task->mkeys[0] == NULL)) {
-			accel_mlx5_dev_nomem_task_mkey(qp->dev, task);
+			accel_mlx5_dev_nomem_task_mkey_repeat(qp->dev, task);
 			return -ENOMEM;
 		}
 		task->num_ops = 1;
 	}
 	if (spdk_unlikely(qp_slot == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 	return accel_mlx5_crypto_mkey_task_process(task);
@@ -2657,13 +2673,13 @@ accel_mlx5_mkey_task_continue(struct accel_mlx5_task *task)
 	if (task->num_ops == 0) {
 		task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->mkeys);
 		if (spdk_unlikely(!task->mkeys[0])) {
-			accel_mlx5_dev_nomem_task_mkey(dev, task);
+			accel_mlx5_dev_nomem_task_mkey_repeat(dev, task);
 			return -ENOMEM;
 		}
 		task->num_ops = 1;
 	}
 	if (spdk_unlikely(qp_slot == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 	return accel_mlx5_mkey_task_process(task);
@@ -2878,7 +2894,7 @@ accel_mlx5_crypto_mkey_ext_qp_task_continue(struct accel_mlx5_task *mlx5_task)
 	assert(mlx5_task->num_ops == 0);
 	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
 	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
-		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		accel_mlx5_dev_nomem_task_mkey_repeat(dev, mlx5_task);
 		return -ENOMEM;
 	}
 	mlx5_task->num_ops = 1;
@@ -3342,13 +3358,13 @@ accel_mlx5_dif_task_continue(struct accel_mlx5_task *task)
 		/* No mkeys allocated, try to allocate now. */
 		rc = accel_mlx5_task_alloc_sig_ctx(task, dev->sig_mkeys);
 		if (spdk_unlikely(rc)) {
-			accel_mlx5_dev_nomem_task_qdepth(dev, task);
+			accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 			return -ENOMEM;
 		}
 	}
 	/* We need to post at least 1 UMR and 1 RDMA operation */
 	if (spdk_unlikely(qp_slot < 2)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 
@@ -3410,7 +3426,7 @@ accel_mlx5_dif_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 
 	rc = accel_mlx5_task_alloc_dif_mkey_ctx(mlx5_task);
 	if (spdk_unlikely(rc)) {
-		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		accel_mlx5_dev_nomem_task_mkey_repeat(dev, mlx5_task);
 		return rc;
 	}
 
@@ -3505,13 +3521,13 @@ accel_mlx5_dif_mkey_task_continue(struct accel_mlx5_task *task)
 		/* No mkeys allocated, try to allocate now. */
 		rc = accel_mlx5_task_alloc_dif_mkey_ctx(task);
 		if (spdk_unlikely(rc)) {
-			accel_mlx5_dev_nomem_task_mkey(dev, task);
+			accel_mlx5_dev_nomem_task_mkey_repeat(dev, task);
 			return -ENOMEM;
 		}
 	}
 
 	if (spdk_unlikely(qp_slot == 0)) {
-		accel_mlx5_dev_nomem_task_qdepth(dev, task);
+		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
 		return -ENOMEM;
 	}
 
