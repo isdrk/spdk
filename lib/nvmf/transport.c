@@ -183,10 +183,12 @@ nvmf_transport_opts_copy(struct spdk_nvmf_transport_opts *opts,
 	SET_FIELD(ack_timeout);
 	SET_FIELD(msdbd);
 	SET_FIELD(data_wr_pool_size);
+	SET_FIELD(min_kato);
+	SET_FIELD(kas);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 73, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 82, "Incorrect size");
 
 #undef SET_FIELD
 #undef FILED_CHECK
@@ -260,6 +262,7 @@ nvmf_transport_create(const char *transport_name, struct spdk_nvmf_transport_opt
 	struct spdk_iobuf_opts opts_iobuf = {};
 	int rc;
 	uint64_t count;
+	uint32_t kas_in_ms;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (!ctx) {
@@ -295,6 +298,19 @@ nvmf_transport_create(const char *transport_name, struct spdk_nvmf_transport_opt
 			    ctx->opts.max_aq_depth);
 		ctx->opts.max_aq_depth = SPDK_NVMF_MIN_ADMIN_MAX_SQ_SIZE;
 	}
+
+	if (ctx->opts.kas == 0) {
+		SPDK_ERRLOG("kas cannot be 0\n");
+		goto err;
+	}
+
+	if (ctx->opts.min_kato == 0) {
+		SPDK_ERRLOG("min_kato cannot be 0\n");
+		goto err;
+	}
+
+	kas_in_ms = ctx->opts.kas * NVMF_KAS_TIME_UNIT_IN_MS;
+	ctx->opts.min_kato = kas_in_ms * spdk_divide_round_up(ctx->opts.min_kato, kas_in_ms);
 
 	spdk_iobuf_get_opts(&opts_iobuf, sizeof(opts_iobuf));
 	if (ctx->opts.io_unit_size == 0) {
@@ -878,6 +894,8 @@ spdk_nvmf_transport_opts_init(const char *transport_name,
 	opts_local.association_timeout = NVMF_TRANSPORT_DEFAULT_ASSOCIATION_TIMEOUT_IN_MS;
 	opts_local.acceptor_poll_rate = SPDK_NVMF_DEFAULT_ACCEPT_POLL_RATE_US;
 	opts_local.disable_command_passthru = false;
+	opts_local.kas = NVMF_DEFAULT_KAS;
+	opts_local.min_kato = NVMF_DEFAULT_MIN_KATO;
 	ops->opts_init(&opts_local);
 
 	nvmf_transport_opts_copy(opts, &opts_local, opts_size);

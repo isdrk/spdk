@@ -114,8 +114,14 @@ struct spdk_nvmf_transport_opts {
 	 * Value 0 means use default transport-specific value, unlimited value is not supported. The transport may
 	 * limit the configured msdbd by implementation-specific maximum value or ignore this parameter */
 	uint8_t msdbd;
+	/* Hole at bytes 73-75. */
+	uint8_t reserved73[3];
+	/* The minimum Keep Alive Timeout value in milliseconds */
+	uint32_t min_kato;
+	/* kas indicates the granularity of the Keep Alive Timer in 100ms units. */
+	uint16_t kas;
 } __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 73, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_transport_opts) == 82, "Incorrect size");
 
 struct spdk_nvmf_listen_opts {
 	/**

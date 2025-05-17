@@ -2534,6 +2534,14 @@ static const struct spdk_json_object_decoder nvmf_rpc_create_transport_decoder[]
 		"msdbd", offsetof(struct nvmf_rpc_create_transport_ctx, opts.msdbd),
 		spdk_json_decode_uint8, true
 	},
+	{
+		"kas", offsetof(struct nvmf_rpc_create_transport_ctx, opts.kas),
+		spdk_json_decode_uint16, true
+	},
+	{
+		"min_kato", offsetof(struct nvmf_rpc_create_transport_ctx, opts.min_kato),
+		spdk_json_decode_uint32, true
+	}
 };
 
 static void
