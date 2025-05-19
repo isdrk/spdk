@@ -2770,13 +2770,6 @@ accel_mlx5_crypto_mkey_task_init_common(struct accel_mlx5_task *mlx5_task,
 	mlx5_task->num_reqs = 1;
 	mlx5_task->blocks_per_req = num_blocks;
 
-	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
-	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
-		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
-		return -ENOMEM;
-	}
-	mlx5_task->num_ops = 1;
-
 	return 0;
 }
 
@@ -2791,6 +2784,12 @@ accel_mlx5_crypto_mkey_ext_qp_task_init(struct accel_mlx5_task *mlx5_task)
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
+	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
+	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		return -ENOMEM;
+	}
+	mlx5_task->num_ops = 1;
 
 	SPDK_DEBUGLOG(accel_mlx5, "crypto_mkey_ext_qp task num_blocks %u, src_len %zu\n",
 		      mlx5_task->num_reqs, mlx5_task->base.nbytes);
@@ -2810,6 +2809,12 @@ accel_mlx5_crypto_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 	if (spdk_unlikely(rc)) {
 		return rc;
 	}
+	mlx5_task->mkeys[0] = spdk_mlx5_mkey_pool_get(dev->crypto_mkeys);
+	if (spdk_unlikely(mlx5_task->mkeys[0] == NULL)) {
+		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+		return -ENOMEM;
+	}
+	mlx5_task->num_ops = 1;
 
 	if (spdk_unlikely(qp_slot == 0)) {
 		accel_mlx5_dev_nomem_task_qdepth(dev, mlx5_task);
