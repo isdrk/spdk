@@ -4838,6 +4838,13 @@ accel_mlx5_mkeys_create(struct ibv_pd *pd, uint32_t num_mkeys, uint32_t flags)
 
 	pool_param.mkey_count = num_mkeys;
 	pool_param.cache_per_thread = num_mkeys * 3 / 4 / spdk_env_get_core_count();
+	if (!spdk_u32_is_pow2(pool_param.cache_per_thread)) {
+		pool_param.cache_per_thread = spdk_align32pow2(pool_param.cache_per_thread);
+		if (pool_param.cache_per_thread) {
+			pool_param.cache_per_thread >>= 1;
+		}
+	}
+
 	pool_param.flags = flags;
 
 	return spdk_mlx5_mkey_pool_init(&pool_param, pd);
