@@ -44,6 +44,7 @@
 	spdk_fsdev_unregister_by_name;
 	spdk_fsdev_destruct_done;
 	spdk_fsdev_module_init_done;
+	spdk_fsdev_module_fini_done;
 	spdk_fsdev_io_complete;
 	spdk_fsdev_io_get_thread;
 	spdk_fsdev_io_get_io_channel;
