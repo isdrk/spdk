@@ -13,6 +13,7 @@ struct spdk_sock_xlio_ops g_xlio_ops;
 struct xlio_api_t *g_xlio_api;
 static void *g_xlio_handle;
 #endif
+static bool g_xlio_is_initialized = false;
 
 #ifndef SPDK_CONFIG_STATIC_XLIO
 static int
@@ -178,7 +179,9 @@ spdk_xlio_init(void)
 	rc = xlio_init_ex(&iattr);
 	if (rc) {
 		SPDK_ERRLOG("xlio_init_ex rc %d (errno=%d)\n", rc, errno);
-		g_xlio_api = NULL;
+		g_xlio_is_initialized = false;
+	} else {
+		g_xlio_is_initialized = true;
 	}
 
 	return rc;
@@ -194,10 +197,11 @@ spdk_xlio_fini(void)
 	/* FIXME: call xlio_exit may cause memory corruption */
 	/** xlio_exit(); */
 #endif
+	g_xlio_is_initialized = false;
 }
 
 bool
 spdk_xlio_is_initialized(void)
 {
-	return g_xlio_api != NULL;
+	return g_xlio_is_initialized;
 }
