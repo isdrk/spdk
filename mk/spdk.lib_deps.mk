@@ -36,9 +36,9 @@ endif
 DEPDIRS-conf := log util
 DEPDIRS-json := log util
 DEPDIRS-rdma_utils := dma log util
-DEPDIRS-rdma_provider := log util
+DEPDIRS-rdma_provider := log util $(JSON_LIBS)
 ifeq ($(CONFIG_RDMA_PROV),mlx5_dv)
-DEPDIRS-rdma_provider += dma mlx5 $(JSON_LIBS)
+DEPDIRS-rdma_provider += dma mlx5
 else ifeq ($(CONFIG_RDMA_PROV),verbs)
 DEPDIRS-rdma_provider += rdma_utils
 endif
