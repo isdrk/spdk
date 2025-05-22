@@ -85,7 +85,7 @@ _cleanup_nvme() {
 	"$rootdir/scripts/setup.sh"
 }
 
-_fstests_init() {
+fstests_init() {
 	local -g _srcdir="$1" _mountdir="$2" _devices=("${@:3}")
 
 	mkdir -p "$_srcdir" "${_devices[@]/#/$_mountdir/}"
@@ -93,7 +93,7 @@ _fstests_init() {
 	return 0
 }
 
-_fstests_cleanup() {
+fstests_cleanup() {
 	local dev
 
 	if [[ -n "$_mountdir" ]]; then
@@ -106,30 +106,31 @@ _fstests_cleanup() {
 	rm -rf "$_srcdir"
 }
 
-fstests_init() {
+xfstests_init() {
 	_install_xfstests "$1"
-	_fstests_init "${@:2}"
+	fstests_init "${@:2}"
 }
 
-fstests_cleanup() {
+xfstests_cleanup() {
 	_uninstall_xfstests
-	_fstests_cleanup
+	fstests_cleanup
 }
 
 pjd_init() {
 	_install_pjdfstests "$1"
-	_fstests_init "${@:2}"
+	fstests_init "${@:2}"
 }
 
 pjd_cleanup() {
 	_uninstall_pjdfstests
-	_fstests_cleanup
+	fstests_cleanup
 }
 
 for opt in "$@"; do
 	case "$opt" in
 		--with-nvme)
 			_with_nvme=true
+			shift
 			;;
 	esac
 done
