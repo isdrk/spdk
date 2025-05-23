@@ -175,10 +175,16 @@ static int
 hello_sock_close_timeout_poll(void *arg)
 {
 	struct hello_context_t *ctx = arg;
+	int rc;
+
 	SPDK_NOTICELOG("Connection closed\n");
 
 	spdk_poller_unregister(&ctx->time_out);
 	spdk_poller_unregister(&ctx->poller_in);
+	rc = spdk_sock_group_remove_sock(ctx->group, ctx->sock);
+	if (rc) {
+		SPDK_ERRLOG("Unable to remove sock from poll group\n");
+	}
 	spdk_sock_close(&ctx->sock);
 	spdk_sock_group_close(&ctx->group);
 
