@@ -1228,6 +1228,22 @@ accel_mlx5_copy_task_init(struct accel_mlx5_task *mlx5_task)
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(qp->dev, qp);
+#ifdef DEBUG
+	uint64_t src_len = 0;
+	uint64_t dst_len = 0;
+	uint16_t i;
+
+	for (i = 0; i < task->s.iovcnt; i++) {
+		src_len += task->s.iovs[i].iov_len;
+	}
+	for (i = 0; i < task->d.iovcnt; i++) {
+		dst_len += task->d.iovs[i].iov_len;
+	}
+	if (src_len != dst_len) {
+		SPDK_ERRLOG("src len %"PRIu64" doesn't match dst len %"PRIu64"\n", src_len, dst_len);
+		return -EINVAL;
+	}
+#endif
 
 	if (spdk_likely(task->s.iovcnt <= ACCEL_MLX5_MAX_SGE)) {
 		mlx5_task->num_reqs = task->d.iovcnt;
