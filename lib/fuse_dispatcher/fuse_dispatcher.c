@@ -2195,26 +2195,26 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 				   fuse_io->u.init.in->flags2) << 32;
 	}
 
-#define SET_MOUNT_FLAG(cond, stage, flag) \
-	if ((cond) && (requested_flags & (FUSE_##flag))) {	\
-		stage |= (FUSE_##flag);				\
+#define SET_MOUNT_FLAG(requested_flags, stage, flag)	\
+	if (requested_flags & (FUSE_##flag)) {		\
+		stage |= (FUSE_##flag);			\
 	}
 	/* Always supported if requested by the FUSE. */
-	SET_MOUNT_FLAG(true, supported, ASYNC_READ);
-	SET_MOUNT_FLAG(true, supported, BIG_WRITES);
-	SET_MOUNT_FLAG(true, supported, DONT_MASK);
-	SET_MOUNT_FLAG(true, supported, DO_READDIRPLUS);
-	SET_MOUNT_FLAG(true, supported, READDIRPLUS_AUTO);
-	SET_MOUNT_FLAG(true, supported, ASYNC_DIO);
-	SET_MOUNT_FLAG(true, supported, NO_OPEN_SUPPORT);
-	SET_MOUNT_FLAG(true, supported, PARALLEL_DIROPS);
-	SET_MOUNT_FLAG(true, supported, CACHE_SYMLINKS);
-	SET_MOUNT_FLAG(true, supported, NO_OPENDIR_SUPPORT);
-	SET_MOUNT_FLAG(true, supported, SUBMOUNTS);
-	SET_MOUNT_FLAG(true, supported, MAX_PAGES);
-	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
-	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
-	SET_MOUNT_FLAG(true, supported, INIT_EXT);
+	SET_MOUNT_FLAG(requested_flags, supported, ASYNC_READ);
+	SET_MOUNT_FLAG(requested_flags, supported, BIG_WRITES);
+	SET_MOUNT_FLAG(requested_flags, supported, DONT_MASK);
+	SET_MOUNT_FLAG(requested_flags, supported, DO_READDIRPLUS);
+	SET_MOUNT_FLAG(requested_flags, supported, READDIRPLUS_AUTO);
+	SET_MOUNT_FLAG(requested_flags, supported, ASYNC_DIO);
+	SET_MOUNT_FLAG(requested_flags, supported, NO_OPEN_SUPPORT);
+	SET_MOUNT_FLAG(requested_flags, supported, PARALLEL_DIROPS);
+	SET_MOUNT_FLAG(requested_flags, supported, CACHE_SYMLINKS);
+	SET_MOUNT_FLAG(requested_flags, supported, NO_OPENDIR_SUPPORT);
+	SET_MOUNT_FLAG(requested_flags, supported, SUBMOUNTS);
+	SET_MOUNT_FLAG(requested_flags, supported, MAX_PAGES);
+	SET_MOUNT_FLAG(requested_flags, supported, SETXATTR_EXT);
+	SET_MOUNT_FLAG(requested_flags, supported, HAS_IOCTL_DIR);
+	SET_MOUNT_FLAG(requested_flags, supported, INIT_EXT);
 
 #undef SET_MOUNT_FLAG
 
