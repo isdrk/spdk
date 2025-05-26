@@ -412,7 +412,7 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 	bool driver_seq;
 
 	assert(rc);
-	assert(task->num_reqs == task->num_completed_reqs);
+	assert(task->num_submitted_reqs == task->num_completed_reqs);
 
 	if (task->num_ops) {
 		switch (task->mlx5_opcode) {
