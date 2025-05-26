@@ -2133,7 +2133,6 @@ fuse_mount_flags_to_fsdev(uint64_t flags)
 {
 	uint64_t result = 0;
 
-
 #define MNT_FLAG(name) \
 	if (flags & FUSE_##name) {			\
 		result |= SPDK_FSDEV_MOUNT_##name;	\
@@ -2162,11 +2161,6 @@ fsdev_mount_flags_to_fuse(uint64_t flags)
 
 	return result;
 }
-
-#define SET_MOUNT_FLAG(cond, stage, flag) \
-	if ((cond) && (requested_flags & (FUSE_##flag))) {	\
-		stage |= (FUSE_##flag);				\
-	}
 
 /* Maximal number of pages for unlimited max_xfer_size. Using FUSE page limit value. */
 #define SPDK_FSDEV_PAGE_LIMIT 256
@@ -2201,6 +2195,10 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 				   fuse_io->u.init.in->flags2) << 32;
 	}
 
+#define SET_MOUNT_FLAG(cond, stage, flag) \
+	if ((cond) && (requested_flags & (FUSE_##flag))) {	\
+		stage |= (FUSE_##flag);				\
+	}
 	/* Always supported if requested by the FUSE. */
 	SET_MOUNT_FLAG(true, supported, ASYNC_READ);
 	SET_MOUNT_FLAG(true, supported, BIG_WRITES);
@@ -2217,6 +2215,8 @@ do_mount_prepare_completion(struct fuse_io *fuse_io,
 	SET_MOUNT_FLAG(true, supported, SETXATTR_EXT);
 	SET_MOUNT_FLAG(true, supported, HAS_IOCTL_DIR);
 	SET_MOUNT_FLAG(true, supported, INIT_EXT);
+
+#undef SET_MOUNT_FLAG
 
 	/* Sending back the fsdev negotiated mount opts. */
 	supported |= fsdev_mount_flags_to_fuse(negotiated_opts->flags);
@@ -2343,7 +2343,6 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	uint32_t max_readahead = DEFAULT_MAX_READAHEAD;
 	uint64_t requested_flags = 0;
-	uint64_t flags = 0;
 
 	/* First try to read the legacy header */
 	fuse_io->u.init.in = _fsdev_io_in_arg_get_buf(fuse_io, compat_size);
@@ -2407,17 +2406,6 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 			     requested_flags, max_readahead);
 	}
 
-	/* Negotiate the following options if requested by the FUSE. */
-	SET_MOUNT_FLAG(true, flags, DOT_PATH_LOOKUP);
-	SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
-	SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
-	SET_MOUNT_FLAG(true, flags, WRITEBACK_CACHE);
-	SET_MOUNT_FLAG(true, flags, POSIX_ACL);
-	SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
-	SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
-	SET_MOUNT_FLAG(true, flags, O_TRUNC);
-	SET_MOUNT_FLAG(true, flags, NO_EXPORT_SUPPORT);
-
 	fuse_io->u.init.thread = spdk_get_thread();
 
 	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_MOUNT, fuse_dispatcher_mount_cpl_clb);
@@ -2426,13 +2414,11 @@ fuse_dispatcher_fill_init(struct fuse_io *fuse_io)
 	fsdev_io->u_in.mount.opts.opts_size = sizeof(fsdev_io->u_in.mount.opts);
 
 	/* Passing for negotiation only few flags. The rest are always supported. */
-	fsdev_io->u_in.mount.opts.flags = fuse_mount_flags_to_fsdev(flags);
+	fsdev_io->u_in.mount.opts.flags = fuse_mount_flags_to_fsdev(requested_flags);
 	fsdev_io->u_in.mount.opts.max_readahead = max_readahead;
 
 	return 0;
 }
-
-#undef SET_MOUNT_FLAG
 
 static int
 fuse_dispatcher_fill_opendir(struct fuse_io *fuse_io)
