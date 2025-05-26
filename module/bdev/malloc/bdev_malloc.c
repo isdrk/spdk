@@ -7,10 +7,8 @@
 #include "spdk/stdinc.h"
 
 #include "bdev_malloc.h"
-#include "spdk/endian.h"
 #include "spdk/env.h"
 #include "spdk/accel.h"
-#include "spdk/dma.h"
 #include "spdk/likely.h"
 #include "spdk/string.h"
 
@@ -678,23 +676,12 @@ static int
 bdev_malloc_get_memory_domains(void *ctx, struct spdk_memory_domain **domains, int array_size)
 {
 	struct malloc_disk *malloc_disk = ctx;
-	struct spdk_memory_domain *domain;
-	int num_domains = 0;
 
 	if (malloc_disk->disk.dif_type != SPDK_DIF_DISABLE) {
 		return 0;
 	}
 
-	/* Report support for every memory domain */
-	for (domain = spdk_memory_domain_get_first(NULL); domain != NULL;
-	     domain = spdk_memory_domain_get_next(domain, NULL)) {
-		if (domains != NULL && num_domains < array_size) {
-			domains[num_domains] = domain;
-		}
-		num_domains++;
-	}
-
-	return num_domains;
+	return spdk_accel_get_opc_memory_domains(SPDK_ACCEL_OPC_COPY, domains, array_size);
 }
 
 static bool
