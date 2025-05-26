@@ -2126,7 +2126,8 @@ fuse_dispatcher_mount_rollback(struct fuse_io *fuse_io)
 	MNT_FLAG(O_TRUNC)		\
 	MNT_FLAG(NO_EXPORT_SUPPORT)	\
 	MNT_FLAG(HANDLE_KILLPRIV)	\
-	MNT_FLAG(HANDLE_KILLPRIV_V2)
+	MNT_FLAG(HANDLE_KILLPRIV_V2)	\
+	MNT_FLAG(DIRECT_IO_ALLOW_MMAP)
 
 static uint64_t
 fuse_mount_flags_to_fsdev(uint64_t flags)

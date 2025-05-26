@@ -135,6 +135,8 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size")
  * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV: See FUSE_HANDLE_KILLPRIV.
  *
  * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2: See FUSE_HANDLE_KILLPRIV_V2.
+ *
+ * SPDK_FSDEV_MOUNT_DIRECT_IO_ALLOW_MMAP: Allow mmap on files opened with O_DIRECT.
  */
 #define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
 #define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
@@ -147,6 +149,7 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size")
 #define SPDK_FSDEV_MOUNT_NO_EXPORT_SUPPORT    (1 << 8)
 #define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV      (1 << 9)
 #define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2   (1 << 10)
+#define SPDK_FSDEV_MOUNT_DIRECT_IO_ALLOW_MMAP (1 << 11)
 
 /**
  * Structure with optional fsdev IO parameters
