@@ -683,6 +683,7 @@ fsdev_fuse_validate_mountpoint(const char *mountpoint)
 {
 	struct spdk_fuse_mount *mnt;
 	char normalized1[PATH_MAX], normalized2[PATH_MAX];
+	size_t n1len, n2len;
 	int rc;
 
 	rc = normalize_hard_path(normalized1, PATH_MAX, mountpoint);
@@ -691,6 +692,7 @@ fsdev_fuse_validate_mountpoint(const char *mountpoint)
 		return rc;
 	}
 
+	n1len = strlen(normalized1);
 	TAILQ_FOREACH(mnt, &g_fuse.mounts, tailq) {
 		rc = normalize_hard_path(normalized2, PATH_MAX, mnt->mountpoint);
 		if (rc != 0) {
@@ -698,7 +700,9 @@ fsdev_fuse_validate_mountpoint(const char *mountpoint)
 			return rc;
 		}
 
-		if (strstr(normalized1, normalized2) == normalized1) {
+		n2len = strlen(normalized2);
+		if (strstr(normalized1, normalized2) == normalized1 &&
+		    (n1len == n2len || (n1len > n2len && normalized1[n2len] == '/'))) {
 			SPDK_ERRLOG("Mounting %s in FUSE fsdev %s is not supported.\n",
 				    normalized1, normalized2);
 			return -ENOTSUP;
