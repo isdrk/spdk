@@ -3987,6 +3987,7 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
 			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+			return 0; /* we found the IO to abort, no need to continue */
 		}
 	}
 
@@ -4009,6 +4010,7 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 			} else {
 				SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", vfsdev_io, res);
 			}
+			return 0; /* we found the IO to abort, no need to continue */
 		}
 	}
 
