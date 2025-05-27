@@ -1511,8 +1511,13 @@ test_nvme_tcp_ctrlr_disconnect_qpair(void)
 	struct nvme_request req = { .qpair = &tqpair.qpair, .cb_fn = ut_disconnect_qpair_req_cb };
 	struct nvme_tcp_req treq = { .req = &req, .tqpair = &tqpair };
 	int rc, disconnected;
+	struct spdk_sock_group_opts opts = {
+		.size = sizeof(opts),
+		.ctx = &tgroup,
+		.interrupt = false
+	};
 
-	tgroup.sock_group = spdk_sock_group_create(&tgroup);
+	tgroup.sock_group = spdk_sock_group_create(&opts);
 	SPDK_CU_ASSERT_FATAL(tgroup.sock_group != NULL);
 
 	qpair = &tqpair.qpair;

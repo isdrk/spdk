@@ -1059,7 +1059,7 @@ nvmf_tcp_create(struct spdk_nvmf_transport_opts *opts)
 
 	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, interrupt);
 	sgroup_opts.interrupt = spdk_interrupt_mode_is_enabled();
-	ttransport->listen_sock_group = spdk_sock_group_create_ext(&sgroup_opts);
+	ttransport->listen_sock_group = spdk_sock_group_create(&sgroup_opts);
 	if (ttransport->listen_sock_group == NULL) {
 		SPDK_ERRLOG("Failed to create socket group for listen sockets\n");
 		spdk_poller_unregister(&ttransport->accept_poller);
@@ -1944,7 +1944,7 @@ nvmf_tcp_poll_group_create(struct spdk_nvmf_transport *transport,
 	sgroup_opts.size = SPDK_SIZEOF(&sgroup_opts, interrupt);
 	sgroup_opts.ctx = &tgroup->group;
 	sgroup_opts.interrupt = spdk_interrupt_mode_is_enabled();
-	tgroup->sock_group = spdk_sock_group_create_ext(&sgroup_opts);
+	tgroup->sock_group = spdk_sock_group_create(&sgroup_opts);
 	if (!tgroup->sock_group) {
 		goto cleanup;
 	}
