@@ -3980,6 +3980,10 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_for_submit, link, tmp) {
 		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
 
+		if (fsdev_io->fsdev != _fsdev_io->fsdev) {
+			continue;
+		}
+
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
 			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
@@ -3988,6 +3992,10 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	TAILQ_FOREACH_SAFE(vfsdev_io, &ch->ios_in_progress, link, tmp) {
 		struct spdk_fsdev_io *_fsdev_io = aio_to_fsdev_io(vfsdev_io);
+
+		if (fsdev_io->fsdev != _fsdev_io->fsdev) {
+			continue;
+		}
 
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			int res;
