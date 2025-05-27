@@ -4001,10 +4001,9 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 			int res;
 			struct io_event result;
 
-			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
-
 			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
 			if (res) {
+				TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
 				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
 				fsdev_aio_cb(vfsdev_io, ECANCELED, 0);
 			} else {
@@ -4575,10 +4574,9 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 			int res;
 			struct io_event result;
 
-			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
-
 			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
 			if (res) {
+				TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
 				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
 				fsdev_aio_cb(vfsdev_io, ECANCELED, 0);
 			} else {
