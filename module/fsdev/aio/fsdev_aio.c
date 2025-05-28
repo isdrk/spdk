@@ -324,12 +324,12 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 		default:
 			break;
 		}
+		aio->status = 0;
 	} else {
 		SPDK_ERRLOG("aio operation failed: %ld\n", res);
-		assert(false);
+		aio->status = res;
 	}
 
-	aio->status = -res2;
 	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, aio, link);
 }
 
