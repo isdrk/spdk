@@ -279,7 +279,9 @@ struct aio_io_channel {
 	TAILQ_HEAD(, aio_fsdev_io) ios_for_submit;
 	TAILQ_HEAD(, aio_fsdev_io) ios_in_progress;
 	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
-	io_context_t io_ctx;
+	union {
+		io_context_t io_ctx;
+	} u;
 };
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
@@ -4002,7 +4004,7 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 			int res;
 			struct io_event result;
 
-			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
+			res = io_cancel(ch->u.io_ctx, &vfsdev_io->io, &result);
 			if (res) {
 				TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
 				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
@@ -4032,7 +4034,7 @@ aio_io_poll(void *arg)
 	timeout.tv_sec = 0;
 	timeout.tv_nsec = 0;
 
-	rc = io_getevents(ch->io_ctx, 0, 32, events, &timeout);
+	rc = io_getevents(ch->u.io_ctx, 0, 32, events, &timeout);
 	if (rc < 0) {
 		SPDK_ERRLOG("%s\n", strerror(-rc));
 		rc = 0;
@@ -4082,7 +4084,7 @@ aio_io_poll(void *arg)
 	}
 
 	if (to_submit > 0) {
-		rc = io_submit(ch->io_ctx, to_submit, iocbs);
+		rc = io_submit(ch->u.io_ctx, to_submit, iocbs);
 		if (rc < 0) {
 			res = rc;
 			rc = 0; /* 0 were submitted. This will get them all queued back up. */
@@ -4143,7 +4145,7 @@ aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 
 	UNUSED(thread);
 
-	res = io_queue_init(g_opts.max_io_depth, &ch->io_ctx);
+	res = io_queue_init(g_opts.max_io_depth, &ch->u.io_ctx);
 	if (res) {
 		SPDK_ERRLOG("io_setup(%" PRIu32 ") failed with %d\n", g_opts.max_io_depth, res);
 		return -ENOMEM;
@@ -4174,7 +4176,7 @@ aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 	spdk_poller_unregister(&ch->poller);
 
 	assert(TAILQ_EMPTY(&ch->ios_in_progress));
-	io_queue_release(ch->io_ctx);
+	io_queue_release(ch->u.io_ctx);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Destroyed aio fsdev IO channel: thread %s, thread id %" PRIu64
 		      "\n",
@@ -4576,7 +4578,7 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 			int res;
 			struct io_event result;
 
-			res = io_cancel(ch->io_ctx, &vfsdev_io->io, &result);
+			res = io_cancel(ch->u.io_ctx, &vfsdev_io->io, &result);
 			if (res) {
 				TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
 				SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
