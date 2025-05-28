@@ -162,20 +162,15 @@ test-fsdev:
       - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar
     expire_in: 3 days
 
-test-autotest-job:
+autotest-nvme-job:
+  extends: .autotest-vm-job
+  script:
+    TEST_TYPE: nvme
+
+autotest-accel-job:
   extends: .autotest-vm-job
   variables:
-    TEST_TYPE: vm
-  script:
-    - grep -i huge /proc/meminfo
-    - tar xf .test.tar
-    # Clean up output from previous autotest runs
-    - sudo rm -rf $OUTPUT_DIR && mkdir -p $OUTPUT_DIR
-    - sudo HUGEMEM=8192 ./scripts/setup.sh
-    - sudo ./test/accel/mlx5/accel_mlx5.sh
-    - sudo ./test/accel/mlx5/accel_mlx5_crc32c.sh
-    - sudo ./test/accel/mlx5/accel_mlx5_copy.sh
-    - sudo ./autotest.sh .ci/autotest-${TEST_TYPE}.conf 2>&1 | tee $OUTPUT_DIR/build.log
+    TEST_TYPE: accel
 
 test-crypto-k8s-job:
   extends: .test-job-k8s-template
