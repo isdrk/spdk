@@ -11,6 +11,9 @@ SO_MINOR := 0
 C_SRCS = fsdev_aio.c fsdev_aio_rpc.c
 
 LOCAL_SYS_LIBS = -laio
+ifeq ($(CONFIG_URING),y)
+LOCAL_SYS_LIBS += -luring
+endif
 
 LIBNAME = fsdev_aio
 

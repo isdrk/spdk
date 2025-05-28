@@ -13,8 +13,13 @@
 
 #include "fsdev_aio.h"
 #include <libaio.h>
+#ifdef SPDK_CONFIG_URING
+#include <liburing.h>
+#endif
 #include <sys/ioctl.h>
 #include <linux/fs.h>
+
+#define SPDK_URING_QUEUE_DEPTH 512
 
 #define FILE_PTR_LUT_INIT_SIZE 1000
 #define FILE_PTR_LUT_BITS 63
@@ -144,6 +149,37 @@ struct aio_ioctl_rest {
  * No data exchange (action) command. Input and output buffers are zero.
  */
 #define AIO_IOCTL_ACT_CMD _IO('E', 47)
+
+#ifdef SPDK_CONFIG_URING
+static int g_io_uring_supported_ops[IORING_OP_LAST] = {0};
+
+static void
+fsdev_init_supported_uring_ops(void)
+{
+	size_t i = 0;
+	struct io_uring_probe *probe;
+
+	probe = io_uring_get_probe();
+	if (!probe) {
+		SPDK_WARNLOG("Failed to get io_uring probe\n");
+		return;
+	}
+
+	for (i = 0; i < SPDK_COUNTOF(g_io_uring_supported_ops); i++) {
+		g_io_uring_supported_ops[i] = io_uring_opcode_supported(probe, i);
+	}
+
+	assert(g_io_uring_supported_ops[IORING_OP_WRITEV] == g_io_uring_supported_ops[IORING_OP_READV]);
+}
+
+static inline bool
+aio_fsdev_use_io_uring_rdwr(void)
+{
+	return g_io_uring_supported_ops[IORING_OP_READV] && g_io_uring_supported_ops[IORING_OP_WRITEV];
+}
+#else
+#define aio_fsdev_use_io_uring_rdwr() false
+#endif
 
 struct fsdev_aio_cred {
 	uid_t euid;
@@ -281,6 +317,17 @@ struct aio_io_channel {
 	TAILQ_HEAD(, aio_fsdev_io) ios_to_complete;
 	union {
 		io_context_t io_ctx;
+#ifdef SPDK_CONFIG_URING
+		struct {
+			/* NOTE: once get_sqe fails for the 1st time, we must queue all the following IOs to
+			 * preserve the order until the queue is empty
+			 */
+			uint32_t queue_ios: 1;
+			uint32_t reserved: 31;
+			uint32_t io_count;
+			struct io_uring io_ring;
+		} uring;
+#endif
 	} u;
 };
 
@@ -2736,6 +2783,32 @@ fsdev_aio_prep_read_aio(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_i
 	TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 }
 
+#ifdef SPDK_CONFIG_URING
+static inline int
+fsdev_aio_prep_read_io_uring(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io,
+			     int fd, const struct iovec *iovs, uint32_t iovcnt, uint64_t offs)
+{
+	struct io_uring_sqe *sqe;
+
+	sqe = ch->u.uring.queue_ios ? NULL : io_uring_get_sqe(&ch->u.uring.io_ring);
+	if (!sqe) {
+		SPDK_DEBUGLOG(fsdev_aio, "No SQE available, IO queued for later\n");
+		ch->u.uring.queue_ios = 1;
+		return -EAGAIN;
+	}
+
+	io_uring_prep_readv(sqe, fd, iovs, iovcnt, offs);
+	io_uring_sqe_set_data(sqe, vfsdev_io);
+
+	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+	ch->u.uring.io_count++;
+
+	return 0;
+}
+#else
+#define fsdev_aio_prep_read_io_uring(...)  ({ assert(0); 0; })
+#endif
+
 static int
 fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2787,7 +2860,13 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	vfsdev_io->data_size = 0;
 
-	fsdev_aio_prep_read_aio(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+	if (aio_fsdev_use_io_uring_rdwr()) {
+		if (fsdev_aio_prep_read_io_uring(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs) == -EAGAIN) {
+			TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
+		}
+	} else {
+		fsdev_aio_prep_read_aio(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+	}
 
 	return IO_STATUS_ASYNC;
 }
@@ -2847,6 +2926,32 @@ fsdev_aio_prep_write_aio(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_
 	TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 }
 
+#ifdef SPDK_CONFIG_URING
+static inline int
+fsdev_aio_prep_write_io_uring(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io,
+			      int fd, const struct iovec *iovs, uint32_t iovcnt, uint64_t offs)
+{
+	struct io_uring_sqe *sqe;
+
+	sqe = ch->u.uring.queue_ios ? NULL : io_uring_get_sqe(&ch->u.uring.io_ring);
+	if (!sqe) {
+		SPDK_DEBUGLOG(fsdev_aio, "No SQE available, IO queued for later\n");
+		ch->u.uring.queue_ios = 1;
+		return -EAGAIN;
+	}
+
+	io_uring_prep_writev(sqe, fd, iovs, iovcnt, offs);
+	io_uring_sqe_set_data(sqe, vfsdev_io);
+
+	TAILQ_INSERT_TAIL(&ch->ios_in_progress, vfsdev_io, link);
+	ch->u.uring.io_count++;
+
+	return 0;
+}
+#else
+#define fsdev_aio_prep_write_io_uring(...) ({ assert(0); 0; })
+#endif
+
 static int
 fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -2898,7 +3003,13 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	vfsdev_io->data_size = 0;
 
-	fsdev_aio_prep_write_aio(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+	if (aio_fsdev_use_io_uring_rdwr()) {
+		if (fsdev_aio_prep_write_io_uring(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs) == -EAGAIN) {
+			TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
+		}
+	} else {
+		fsdev_aio_prep_write_aio(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+	}
 
 	return IO_STATUS_ASYNC;
 }
@@ -3994,6 +4105,53 @@ fsdev_aio_op_abort_aio(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io
 	}
 }
 
+#ifdef SPDK_CONFIG_URING
+static void
+fsdev_aio_op_abort_io_uring(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
+{
+	/* I/O abortion is optional - we do our best to abort the I/O when possible. */
+#ifdef IORING_ASYNC_CANCEL_USERDATA
+	int res;
+	struct io_uring_sqe *sqe;
+
+	if (!g_io_uring_supported_ops[IORING_OP_ASYNC_CANCEL]) {
+		SPDK_DEBUGLOG(fsdev_aio, "IORING_OP_ASYNC_CANCEL is not supported by kernel\n");
+		return;
+	}
+
+	sqe = io_uring_get_sqe(&ch->u.uring.io_ring);
+	if (sqe == NULL) {
+		SPDK_WARNLOG("No SQE available for cancellation\n");
+		return;
+	}
+
+	io_uring_prep_cancel(sqe, vfsdev_io, IORING_ASYNC_CANCEL_USERDATA);
+	io_uring_sqe_set_data(sqe, NULL);
+	res = io_uring_submit(&ch->u.uring.io_ring);
+	if (res > 0) {
+		SPDK_DEBUGLOG(fsdev_aio, "Cancellation submitted\n");
+	} else {
+		SPDK_WARNLOG("Cancellation submission failed with err=%d\n", res);
+	}
+#else
+	SPDK_INFOLOG(fsdev_aio, "IORING_OP_ASYNC_CANCEL is not supported\n");
+#endif
+}
+#else
+#define fsdev_aio_op_abort_io_uring(ch, vfsdev_io) assert(0)
+#endif
+
+static void
+fsdev_aio_op_abort_io(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
+{
+	if (aio_fsdev_use_io_uring_rdwr()) {
+		fsdev_aio_op_abort_io_uring(ch, vfsdev_io);
+	} else {
+		fsdev_aio_op_abort_aio(ch, vfsdev_io);
+	}
+}
+
+
 static int
 fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -4023,7 +4181,7 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		}
 
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
-			fsdev_aio_op_abort_aio(ch, vfsdev_io);
+			fsdev_aio_op_abort_io(ch, vfsdev_io);
 			return 0; /* we found the IO to abort, no need to continue */
 		}
 	}
@@ -4162,32 +4320,204 @@ aio_io_poll_aio(void *arg)
 	return res;
 }
 
+#ifdef SPDK_CONFIG_URING
+
+static int
+aio_retry_io_uring_read(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
+{
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct aio_fsdev_file_handle *fhandle;
+	size_t size = fsdev_io->u_in.read.size;
+	uint64_t offs = fsdev_io->u_in.read.offs;
+	struct iovec *iovs = fsdev_io->u_in.read.iov;
+	uint32_t iovcnt = fsdev_io->u_in.read.iovcnt;
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	UNUSED(size);
+
+	SPDK_DEBUGLOG(fsdev_aio, "read: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
+		      fhandle->fd, offs, size, iovcnt);
+
+	return fsdev_aio_prep_read_io_uring(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+}
+
+static int
+aio_retry_io_uring_write(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
+{
+	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct aio_fsdev_file_handle *fhandle;
+	size_t size = fsdev_io->u_in.write.size;
+	uint64_t offs = fsdev_io->u_in.write.offs;
+	const struct iovec *iovs = fsdev_io->u_in.write.iov;
+	uint32_t iovcnt =  fsdev_io->u_in.write.iovcnt;
+
+	UNUSED(size);
+
+	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+	if (!fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		return -EINVAL;
+	}
+
+	SPDK_DEBUGLOG(fsdev_aio, "write: fd=%d offs=%" PRIu64 " size=%" PRIu64 " iovcnt=%" PRIu32 "\n",
+		      fhandle->fd, offs, size, iovcnt);
+
+	return fsdev_aio_prep_write_io_uring(ch, vfsdev_io, fhandle->fd, iovs, iovcnt, offs);
+}
+
+static int
+aio_io_poll_io_uring(void *arg)
+{
+	struct aio_io_channel *ch = arg;
+	int res = SPDK_POLLER_IDLE;
+	unsigned cqes_count = 0;
+	struct io_uring_cqe *cqe;
+	unsigned head;
+	TAILQ_HEAD(aio_tmp_list, aio_fsdev_io) ios = TAILQ_HEAD_INITIALIZER(ios);
+
+	/* Handle completions */
+	io_uring_for_each_cqe(&ch->u.uring.io_ring, head, cqe) {
+		struct aio_fsdev_io *vfsdev_io = io_uring_cqe_get_data(cqe);
+
+#ifdef IORING_ASYNC_CANCEL_USERDATA
+		if (!vfsdev_io) {
+			/* This is a cancellation request */
+			continue;
+		}
+#endif
+
+		fsdev_aio_cb(vfsdev_io, cqe->res, (cqe->res < 0) ? cqe->res : 0);
+		res = SPDK_POLLER_BUSY;
+
+		cqes_count++;
+	}
+
+	io_uring_cq_advance(&ch->u.uring.io_ring, cqes_count);
+
+	/* Submit more I/O */
+	if (ch->u.uring.io_count) {
+		res = io_uring_submit(&ch->u.uring.io_ring);
+		if (res < 0) {
+			SPDK_ERRLOG("io_uring_submit failed with err=%d\n", res);
+		} else {
+			assert((uint32_t)res <= ch->u.uring.io_count);
+			ch->u.uring.io_count -= res;
+		}
+	}
+
+	/* Handle submit queue */
+	ch->u.uring.queue_ios = 0; /* reset the flag */
+	while (!TAILQ_EMPTY(&ch->ios_for_submit)) {
+		struct aio_fsdev_io *vfsdev_io = TAILQ_FIRST(&ch->ios_for_submit);
+		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
+		enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
+		int rc = IO_STATUS_ASYNC;
+
+		TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
+
+		res = SPDK_POLLER_BUSY;
+
+		switch (type) {
+		case SPDK_FSDEV_IO_READ:
+			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_read(ch, vfsdev_io) == -EAGAIN) {
+				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+			}
+			break;
+		case SPDK_FSDEV_IO_WRITE:
+			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_write(ch, vfsdev_io) == -EAGAIN) {
+				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+			}
+			break;
+		case SPDK_FSDEV_IO_POLL:
+			rc = fsdev_aio_do_poll(ch, fsdev_io);
+			break;
+		case SPDK_FSDEV_IO_SETLK:
+			rc = fsdev_aio_do_setlk(ch, fsdev_io);
+			break;
+		default:
+			SPDK_ERRLOG("Unsupported IO type: %d\n", type);
+			assert(0);
+			rc = -EINVAL;
+			break;
+		}
+
+		if (rc != IO_STATUS_ASYNC) {
+			vfsdev_io->status = rc;
+			TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
+		}
+	}
+
+	if (!TAILQ_EMPTY(&ios)) {
+		/* The queue is not empty, so add the remaining IOs to the submit queue */
+		assert(ch->u.uring.queue_ios); /* If this is the case, the flag has been set by the retry logic */
+		TAILQ_CONCAT(&ch->ios_for_submit, &ios, link);
+	} else {
+		/* The queue is empty, so we've successfully submitted all queued IOs */
+		assert(!ch->u.uring.queue_ios);
+	}
+
+	/* Handle common part of the poll */
+	if (aio_io_poll_common(ch) == SPDK_POLLER_BUSY) {
+		res = SPDK_POLLER_BUSY;
+	}
+
+	return res;
+}
+#endif
+
 static int
 aio_fsdev_create_cb(void *io_device, void *ctx_buf)
 {
 	struct aio_io_channel *ch = ctx_buf;
 	struct spdk_thread *thread = spdk_get_thread();
+	spdk_poller_fn poller_fn;
 	int res;
 
 	UNUSED(thread);
 
-	res = io_queue_init(g_opts.max_io_depth, &ch->u.io_ctx);
-	if (res) {
-		SPDK_ERRLOG("io_setup(%" PRIu32 ") failed with %d\n", g_opts.max_io_depth, res);
-		return -ENOMEM;
+	if (!aio_fsdev_use_io_uring_rdwr()) {
+		res = io_queue_init(g_opts.max_io_depth, &ch->u.io_ctx);
+		if (res) {
+			SPDK_ERRLOG("io_setup(%" PRIu32 ") failed with %d\n", g_opts.max_io_depth, res);
+			return -ENOMEM;
+		}
+
+		poller_fn = aio_io_poll_aio;
 	}
+#ifdef SPDK_CONFIG_URING
+	else {
+		res = io_uring_queue_init(g_opts.max_io_depth, &ch->u.uring.io_ring,
+					  IORING_SETUP_COOP_TASKRUN | IORING_SETUP_SINGLE_ISSUER);
+		if (res) {
+			SPDK_ERRLOG("io_uring_queue_init(%" PRIu32 ") failed with %d\n", g_opts.max_io_depth, res);
+			io_queue_release(ch->u.io_ctx);
+			return -res;
+		}
+
+		poller_fn = aio_io_poll_io_uring;
+	}
+#endif
 
 	TAILQ_INIT(&ch->ios_for_submit);
 	TAILQ_INIT(&ch->ios_in_progress);
 	TAILQ_INIT(&ch->ios_to_complete);
 
-	ch->poller = SPDK_POLLER_REGISTER(aio_io_poll_aio, ch, 0);
+	ch->poller = SPDK_POLLER_REGISTER(poller_fn, ch, 0);
 
 	UNUSED(thread);
 
-	SPDK_DEBUGLOG(fsdev_aio, "Created aio fsdev IO channel: thread %s, thread id %" PRIu64
-		      "\n",
-		      spdk_thread_get_name(thread), spdk_thread_get_id(thread));
+	SPDK_DEBUGLOG(fsdev_aio,
+		      "Created aio fsdev IO channel: thread %s, thread id %" PRIu64 " (io_uring=%d)\n",
+		      spdk_thread_get_name(thread), spdk_thread_get_id(thread), aio_fsdev_use_io_uring_rdwr());
 	return 0;
 }
 
@@ -4202,10 +4532,18 @@ aio_fsdev_destroy_cb(void *io_device, void *ctx_buf)
 	spdk_poller_unregister(&ch->poller);
 
 	assert(TAILQ_EMPTY(&ch->ios_in_progress));
-	io_queue_release(ch->u.io_ctx);
 
-	SPDK_DEBUGLOG(fsdev_aio, "Destroyed aio fsdev IO channel: thread %s, thread id %" PRIu64
-		      "\n",
+	if (!aio_fsdev_use_io_uring_rdwr()) {
+		io_queue_release(ch->u.io_ctx);
+	}
+#ifdef SPDK_CONFIG_URING
+	else {
+		io_uring_queue_exit(&ch->u.uring.io_ring);
+	}
+#endif
+
+	SPDK_DEBUGLOG(fsdev_aio,
+		      "Destroyed aio fsdev IO channel: thread %s, thread id %" PRIu64 "\n",
 		      spdk_thread_get_name(thread), spdk_thread_get_id(thread));
 }
 
@@ -4234,6 +4572,10 @@ fsdev_aio_initialize(void)
 	spdk_io_device_register(&g_aio_fsdev_head,
 				aio_fsdev_create_cb, aio_fsdev_destroy_cb,
 				sizeof(struct aio_io_channel), "aio_fsdev");
+
+#ifdef SPDK_CONFIG_URING
+	fsdev_init_supported_uring_ops();
+#endif
 
 	return 0;
 }
@@ -4601,7 +4943,7 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 
 		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
-			fsdev_aio_op_abort_aio(ch, vfsdev_io);
+			fsdev_aio_op_abort_io(ch, vfsdev_io);
 		}
 	}
 
@@ -4897,10 +5239,11 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 
 	*fsdev = &(vfsdev->fsdev);
 	TAILQ_INSERT_TAIL(&g_aio_fsdev_head, vfsdev, tailq);
-	SPDK_DEBUGLOG(fsdev_aio, "Created aio filesystem %s (xattr_enabled=%" PRIu8 " writeback_cache=%"
-		      PRIu8 " max_xfer_size=%" PRIu32 " max_readahead=%" PRIu32 " skip_rw=%" PRIu8 ")\n",
+	SPDK_DEBUGLOG(fsdev_aio, "Created aio filesystem %s: (xattr_enabled=%" PRIu8 " writeback_cache=%"
+		      PRIu8 " max_xfer_size=%" PRIu32 " max_readahead=%" PRIu32 " skip_rw=%" PRIu8 " io_uring=%d)\n",
 		      vfsdev->fsdev.name, vfsdev->opts.xattr_enabled, vfsdev->opts.writeback_cache_enabled,
-		      vfsdev->opts.max_xfer_size, vfsdev->opts.max_readahead, vfsdev->opts.skip_rw);
+		      vfsdev->opts.max_xfer_size, vfsdev->opts.max_readahead, vfsdev->opts.skip_rw,
+		      aio_fsdev_use_io_uring_rdwr());
 	return rc;
 }
 void
