@@ -96,6 +96,9 @@ unittest-mlx5_dv-release:
 .test-job-vm-template:
   stage: test
   tags: [vm, linux, x86_64, f39]
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    GIT_SUBMODULE_DEPTH: 1
   needs:
     - job: build-job
   rules:
