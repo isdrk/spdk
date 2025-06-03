@@ -14499,6 +14499,9 @@ max_readahead           | Optional | int         | The maximum size allowed for 
 skip_rw                 | Optional | bool        | Skip processing read and write requests and complete them successfully immediately. This is useful for benchmarking.
 enable_notifications    | Optional | bool        | Enable notifications
 attr_valid_ms           | Optional | int         | File attributes validity time in milliseconds. Used for entry cache
+disable_copy_file_range | Optional | bool        | Disable copy_file_range (see Note below)
+
+Note: copy_file_range is disabled if not supported by an underlying C runtime library.
 
 #### Example
 
@@ -14517,7 +14520,8 @@ Example request:
     "max_readahead": 65535,
     "skip_rw": true,
     "enable_notifications": true,
-    "attr_valid_ms": 30000
+    "attr_valid_ms": 30000,
+    "disable_copy_file_range": false
   }
 }
 ~~~

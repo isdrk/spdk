@@ -164,7 +164,8 @@ $ cat config.json
             "max_readahead": 131072,
             "skip_rw": false,
             "enable_notifications": false,
-            "attr_valid_ms": 0
+            "attr_valid_ms": 0,
+            "disable_copy_file_range": false
           }
         }
       ]

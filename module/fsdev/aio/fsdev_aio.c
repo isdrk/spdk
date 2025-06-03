@@ -40,6 +40,11 @@
 #define DEFAULT_NOTIFY_MAX_DATA_SIZE 4096
 #define DEFAULT_ENABLE_NOTIFICATIONS false
 #define FANOTIFY_POLLER_PERIOD_US 1000
+#ifdef SPDK_CONFIG_COPY_FILE_RANGE
+#define DEFAULT_DISABLE_COPY_FILE_RANGE false
+#else
+#define DEFAULT_DISABLE_COPY_FILE_RANGE true
+#endif
 
 #ifdef SPDK_CONFIG_HAVE_STRUCT_STAT_ST_ATIM
 /* Linux */
@@ -3887,6 +3892,11 @@ fsdev_aio_op_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *f
 	size_t len = fsdev_io->u_in.copy_file_range.len;
 	uint32_t flags = fsdev_io->u_in.copy_file_range.flags;
 
+	if (vfsdev->opts.disable_copy_file_range) {
+		SPDK_ERRLOG("copy_file_range is disabled by config\n");
+		return -ENOSYS;
+	}
+
 	fobject_in = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_in);
 	if (!fobject_in) {
 		SPDK_ERRLOG("Invalid fobject_in\n");
@@ -4400,6 +4410,7 @@ fsdev_aio_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
 	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
+	spdk_json_write_named_bool(w, "disable_copy_file_range", vfsdev->opts.disable_copy_file_range);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 }
@@ -4418,6 +4429,7 @@ fsdev_aio_dump_info_json(void *ctx, struct spdk_json_write_ctx *w)
 	spdk_json_write_named_bool(w, "skip_rw", vfsdev->opts.skip_rw);
 	spdk_json_write_named_bool(w, "enable_notifications", vfsdev->opts.enable_notifications);
 	spdk_json_write_named_uint32(w, "attr_valid_ms", vfsdev->opts.attr_valid_ms);
+	spdk_json_write_named_bool(w, "disable_copy_file_range", vfsdev->opts.disable_copy_file_range);
 
 	return 0;
 }
@@ -4738,6 +4750,7 @@ spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 	opts->skip_rw = DEFAULT_SKIP_RW;
 	opts->enable_notifications = DEFAULT_ENABLE_NOTIFICATIONS;
 	opts->attr_valid_ms = DEFAULT_ATTR_VALID_MS;
+	opts->disable_copy_file_range = DEFAULT_DISABLE_COPY_FILE_RANGE;
 }
 
 int

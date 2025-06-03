@@ -3766,7 +3766,8 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                                          max_xfer_size=args.max_xfer_size, skip_rw=args.skip_rw,
                                          max_readahead=args.max_readahead,
                                          enable_notifications=args.enable_notifications,
-                                         attr_valid_ms=args.attr_valid_ms))
+                                         attr_valid_ms=args.attr_valid_ms,
+                                         disable_copy_file_range=args.disable_copy_file_range))
 
     p = subparsers.add_parser('fsdev_aio_create', help='Create a aio filesystem')
     p.add_argument('name', help='Filesystem name. Example: aio0.')
@@ -3787,7 +3788,7 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
                    action='store_true', default=None)
     p.add_argument('--enable-notifications', help="Enable notifications.", action='store_true', default=None)
     p.add_argument('-a', '--attr-valid-ms', help='File attributes validity time in miliseconds. Used for entry cache.', type=int)
-
+    p.add_argument('--disable-copy-file-range', help='Disable copy_file_range', action='store_true', default=None)
     p.set_defaults(func=fsdev_aio_create)
 
     def fsdev_aio_delete(args):
