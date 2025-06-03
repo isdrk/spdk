@@ -3851,6 +3851,19 @@ submit:
 	return 0;
 }
 
+static void
+fuse_dispatcher_copy_inhdr(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io,
+			   struct fuse_in_header *hdr)
+{
+	fuse_io->hdr.opcode = fsdev_io_d2h_u32(fuse_io->disp, hdr->opcode);
+	fuse_io->hdr.unique = fsdev_io_d2h_u64(fuse_io->disp, hdr->unique);
+	fuse_io->hdr.len = fsdev_io_d2h_u32(fuse_io->disp, hdr->len);
+	fuse_io->hdr.nodeid = fsdev_io_d2h_u64(fuse_io->disp, hdr->nodeid);
+	fuse_io->hdr.uid = fsdev_io_d2h_u32(fuse_io->disp, hdr->uid);
+	fuse_io->hdr.gid = fsdev_io_d2h_u32(fuse_io->disp, hdr->gid);
+	fuse_io->hdr.pid = fsdev_io_d2h_u32(fuse_io->disp, hdr->pid);
+}
+
 static int
 fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {
@@ -3867,9 +3880,7 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 		goto exit;
 	}
 
-	fuse_io->hdr.opcode = fsdev_io_d2h_u32(fuse_io->disp, hdr->opcode);
-	fuse_io->hdr.unique = fsdev_io_d2h_u64(fuse_io->disp, hdr->unique);
-
+	fuse_dispatcher_copy_inhdr(disp, fuse_io, hdr);
 	if (spdk_unlikely(!fuse_io->ch)) {
 		/* The fsdev is not currently active. Complete this request. */
 		SPDK_ERRLOG("IO (%" PRIu32 ") arrived while there's no channel\n", fuse_io->hdr.opcode);
@@ -3885,12 +3896,6 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 
 		UNUSED(out_hdr); /* We don't need it here, we just made a check and a reservation */
 	}
-
-	fuse_io->hdr.len = fsdev_io_d2h_u32(fuse_io->disp, hdr->len);
-	fuse_io->hdr.nodeid = fsdev_io_d2h_u64(fuse_io->disp, hdr->nodeid);
-	fuse_io->hdr.uid = fsdev_io_d2h_u32(fuse_io->disp, hdr->uid);
-	fuse_io->hdr.gid = fsdev_io_d2h_u32(fuse_io->disp, hdr->gid);
-	fuse_io->hdr.pid = fsdev_io_d2h_u32(fuse_io->disp, hdr->pid);
 
 	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
 		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
