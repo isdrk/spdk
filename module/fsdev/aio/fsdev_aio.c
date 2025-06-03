@@ -3921,12 +3921,14 @@ fsdev_aio_op_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *f
 		goto fop_failed;
 	}
 
-	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
-		      "COPY_FILE_RANGE succeeded for " FOBJECT_FMT " fh=%p offset=%" PRIu64 " -> " FOBJECT_FMT
-		      " fh=%p offset=%" PRIu64 " (len-%zu flags=0x%" PRIx32 ")\n",
-		      FOBJECT_ARGS(fobject_in), fhandle_in, (uint64_t)off_in, FOBJECT_ARGS(fobject_out), fhandle_out,
+		      "COPY_FILE_RANGE returned %zd for " FOBJECT_FMT " fh=%p offset=%" PRIu64 " -> " FOBJECT_FMT
+		      " fh=%p offset=%" PRIu64 " (len=%zu flags=0x%" PRIx32 ")\n",
+		      res, FOBJECT_ARGS(fobject_in), fhandle_in, (uint64_t)off_in, FOBJECT_ARGS(fobject_out), fhandle_out,
 		      (uint64_t)off_out, len, flags);
+
+	fsdev_io->u_out.copy_file_range.data_size = res;
+	res = 0;
 
 fop_failed:
 	file_object_unref(fobject_out, 1);
