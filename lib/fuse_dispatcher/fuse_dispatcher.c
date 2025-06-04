@@ -4036,6 +4036,31 @@ spdk_fuse_dispatcher_get_io_ctx_size(void)
 	return ALIGNED_FUSE_IO_SIZE + spdk_fsdev_get_io_ctx_size();
 }
 
+static void
+fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io,
+			struct spdk_io_channel *ch, struct iovec *in_iov, int in_iovcnt,
+			struct iovec *out_iov, int out_iovcnt,
+			uint16_t source_id, uint64_t source_unique,
+			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
+{
+	fuse_io->disp = disp;
+	fuse_io->ch = ch;
+	fuse_io->in_iov = in_iov;
+	fuse_io->in_iovcnt = in_iovcnt;
+	fuse_io->out_iov = out_iov;
+	fuse_io->out_iovcnt = out_iovcnt;
+	fuse_io->cpl_cb = cb_fn;
+	fuse_io->cpl_cb_arg = cb_arg;
+
+	fuse_io->in_offs.iov_offs = 0;
+	fuse_io->in_offs.buf_offs = 0;
+	fuse_io->out_offs.iov_offs = 0;
+	fuse_io->out_offs.buf_offs = 0;
+
+	fuse_io->source_id = source_id;
+	fuse_io->source_unique = source_unique;
+}
+
 int
 spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    struct spdk_io_channel *ch,
@@ -4051,23 +4076,8 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 		return -ENOBUFS;
 	}
 
-	fuse_io->disp = disp;
-	fuse_io->ch = ch;
-	fuse_io->in_iov = in_iov;
-	fuse_io->in_iovcnt = in_iovcnt;
-	fuse_io->out_iov = out_iov;
-	fuse_io->out_iovcnt = out_iovcnt;
-	fuse_io->cpl_cb = clb;
-	fuse_io->cpl_cb_arg = cb_arg;
-
-	fuse_io->in_offs.iov_offs = 0;
-	fuse_io->in_offs.buf_offs = 0;
-	fuse_io->out_offs.iov_offs = 0;
-	fuse_io->out_offs.buf_offs = 0;
-
-	fuse_io->source_id = source_id;
-	fuse_io->source_unique = source_unique;
-
+	fuse_dispatcher_init_io(disp, fuse_io, ch, in_iov, in_iovcnt, out_iov, out_iovcnt,
+				source_id, source_unique, clb, cb_arg);
 	return fuse_dispatcher_handle_fuse_req(disp, fuse_io);
 }
 
