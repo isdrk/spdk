@@ -1756,14 +1756,34 @@ fuse_dispatcher_fill_open(struct fuse_io *fuse_io)
 	return 0;
 }
 
+static void
+fuse_dispatcher_fill_read_args(struct fuse_io *fuse_io, struct fuse_read_in *arg,
+			       struct iovec *iovs, int iovcnt, spdk_fsdev_cpl_cb cb_fn)
+{
+	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+	uint32_t flags = 0;
+
+	if (fsdev_io_proto_minor(fuse_io) >= 9) {
+		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
+	}
+
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READ, cb_fn);
+
+	fsdev_io->u_in.read.fobject = file_object(fuse_io);
+	fsdev_io->u_in.read.fhandle = file_handle(fsdev_io_d2h_u64(fuse_io->disp, arg->fh));
+	fsdev_io->u_in.read.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
+	fsdev_io->u_in.read.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.read.flags = flags;
+	fsdev_io->u_in.read.iov = iovs;
+	fsdev_io->u_in.read.iovcnt = iovcnt;
+	fsdev_io->u_in.read.opts = NULL;
+}
+
 static int
 fuse_dispatcher_fill_read(struct fuse_io *fuse_io)
 {
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	bool compat = fsdev_io_proto_minor(fuse_io) < 9;
 	struct fuse_read_in *arg;
-	uint64_t fh;
-	uint32_t flags = 0;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io,
 				       compat ? offsetof(struct fuse_read_in, lock_owner) : sizeof(*arg));
@@ -1772,23 +1792,8 @@ fuse_dispatcher_fill_read(struct fuse_io *fuse_io)
 		return -EINVAL;
 	}
 
-	if (!compat) {
-		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
-	}
-
-	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
-
-	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_READ);
-
-	fsdev_io->u_in.read.fobject = file_object(fuse_io);
-	fsdev_io->u_in.read.fhandle = file_handle(fh);
-	fsdev_io->u_in.read.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
-	fsdev_io->u_in.read.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
-	fsdev_io->u_in.read.flags = flags;
-	fsdev_io->u_in.read.iov = fuse_io->out_iov + 1;
-	fsdev_io->u_in.read.iovcnt = fuse_io->out_iovcnt - 1;
-	fsdev_io->u_in.read.opts = NULL;
-
+	fuse_dispatcher_fill_read_args(fuse_io, arg, fuse_io->out_iov + 1, fuse_io->out_iovcnt - 1,
+				       fuse_dispatcher_cpl_cb);
 	return 0;
 }
 
@@ -1808,14 +1813,36 @@ fuse_dispatcher_map_write_fuse_flags(struct spdk_fsdev_io *fsdev_io, uint32_t fu
 	}
 }
 
+static void
+fuse_dispatcher_fill_write_args(struct fuse_io *fuse_io, struct fuse_write_in *arg,
+				struct iovec *iovs, int iovcnt, spdk_fsdev_cpl_cb cb_fn)
+{
+	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+	uint64_t flags = 0, write_flags = 0;
+
+	if (fsdev_io_proto_minor(fuse_io) >= 9) {
+		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
+	}
+
+	write_flags = fsdev_io_d2h_u32(fuse_io->disp, arg->write_flags);
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_WRITE, cb_fn);
+
+	fsdev_io->u_in.write.fobject = file_object(fuse_io);
+	fsdev_io->u_in.write.fhandle = file_handle(fsdev_io_d2h_u64(fuse_io->disp, arg->fh));
+	fsdev_io->u_in.write.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
+	fsdev_io->u_in.write.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+	fsdev_io->u_in.write.flags = flags;
+	fuse_dispatcher_map_write_fuse_flags(fsdev_io, write_flags);
+	fsdev_io->u_in.write.iov = iovs;
+	fsdev_io->u_in.write.iovcnt = iovcnt;
+	fsdev_io->u_in.write.opts = NULL;
+}
+
 static int
 fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 {
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	bool compat = fsdev_io_proto_minor(fuse_io) < 9;
 	struct fuse_write_in *arg;
-	uint64_t fh;
-	uint64_t flags = 0, write_flags = 0;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io,
 				       compat ? FUSE_COMPAT_WRITE_IN_SIZE : sizeof(*arg));
@@ -1829,25 +1856,9 @@ fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 		return -EINVAL;
 	}
 
-	if (!compat) {
-		flags = fsdev_io_d2h_u32(fuse_io->disp, arg->flags);
-	}
-	write_flags = fsdev_io_d2h_u32(fuse_io->disp, arg->write_flags);
-
-	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
-
-	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_WRITE);
-
-	fsdev_io->u_in.write.fobject = file_object(fuse_io);
-	fsdev_io->u_in.write.fhandle = file_handle(fh);
-	fsdev_io->u_in.write.size = fsdev_io_d2h_u32(fuse_io->disp, arg->size);
-	fsdev_io->u_in.write.offs = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
-	fsdev_io->u_in.write.flags = flags;
-	fuse_dispatcher_map_write_fuse_flags(fsdev_io, write_flags);
-	fsdev_io->u_in.write.iov = fuse_io->in_iov + fuse_io->in_offs.iov_offs;
-	fsdev_io->u_in.write.iovcnt = fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs;
-	fsdev_io->u_in.write.opts = NULL;
-
+	fuse_dispatcher_fill_write_args(fuse_io, arg, fuse_io->in_iov + fuse_io->in_offs.iov_offs,
+					fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs,
+					fuse_dispatcher_cpl_cb);
 	return 0;
 }
 
