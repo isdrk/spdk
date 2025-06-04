@@ -92,6 +92,40 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
 /**
+ * Submit a zero-copy FUSE request.  Only FUSE_{READ,WRITE} requests can be submitted using
+ * zerocopy.  The in/out headers (both common and operation specific ones) must be in local memory.
+ * The operation specific headers must immediately follow the generic ones.  This function can be
+ * only used to send requests to fsdevs that support memory domains.
+ *
+ * \param disp FUSE dispatcher.
+ * \param ch I/O channel obtained via `spdk_fuse_dispatcher_get_io_channel()`.
+ * \param in_hdr FUSE input headers.
+ * \param in_iovs Input data IO vector array.
+ * \param in_iovcnt Size of the `in_iovs` array.
+ * \param out_hdr FUSE output headers.
+ * \param out_iovs Output data IO vector array.
+ * \param out_iovcnt Size of the `out_iovs` array.
+ * \param domain Memory domain describing the data buffers.
+ * \param domain_ctx Memory domain context.
+ * \param io_ctx IO context.
+ * \param source_id Source ID.
+ * \param source_unique Per-source ID unique value.
+ * \param cb_fn Completion callback.
+ * \param cb_ctx Completion callback's argument.
+ *
+ * \return 0 on success or negative errno on failure.
+ */
+int spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp,
+				      struct spdk_io_channel *ch,
+				      struct fuse_in_header *in_hdr,
+				      struct iovec *in_iovs, int in_iovcnt,
+				      struct fuse_out_header *out_hdr,
+				      struct iovec *out_iovs, int out_iovcnt,
+				      struct spdk_memory_domain *domain, void *domain_ctx,
+				      void *io_ctx, uint16_t source_id, uint64_t source_unique,
+				      spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_ctx);
+
+/**
  * Delete a FUSE fsdev dispatcher
  *
  * \param disp FUSE fsdev dispatcher object.

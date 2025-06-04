@@ -72,6 +72,7 @@ struct fuse_io {
 	struct spdk_fuse_dispatcher *disp;
 
 	struct fuse_in_header hdr;
+	struct fuse_out_header *outhdr;
 	bool in_hdr_with_data;
 
 	uint16_t source_id;
@@ -145,6 +146,12 @@ struct fuse_io {
 			uint32_t in_iovcnt;
 			uint32_t out_iovcnt;
 		} ioctl;
+		struct {
+			struct spdk_fsdev_io_opts opts;
+		} read;
+		struct {
+			struct spdk_fsdev_io_opts opts;
+		} write;
 	} u;
 };
 
@@ -1777,7 +1784,8 @@ fuse_dispatcher_fill_open(struct fuse_io *fuse_io)
 
 static void
 fuse_dispatcher_fill_read_args(struct fuse_io *fuse_io, struct fuse_read_in *arg,
-			       struct iovec *iovs, int iovcnt, spdk_fsdev_cpl_cb cb_fn)
+			       struct iovec *iovs, int iovcnt, struct spdk_memory_domain *domain,
+			       void *domain_ctx, spdk_fsdev_cpl_cb cb_fn)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	uint32_t flags = 0;
@@ -1795,7 +1803,14 @@ fuse_dispatcher_fill_read_args(struct fuse_io *fuse_io, struct fuse_read_in *arg
 	fsdev_io->u_in.read.flags = flags;
 	fsdev_io->u_in.read.iov = iovs;
 	fsdev_io->u_in.read.iovcnt = iovcnt;
-	fsdev_io->u_in.read.opts = NULL;
+	if (domain != NULL) {
+		fuse_io->u.read.opts.size = SPDK_SIZEOF(&fuse_io->u.read.opts, memory_domain_ctx);
+		fuse_io->u.read.opts.memory_domain = domain;
+		fuse_io->u.read.opts.memory_domain_ctx = domain_ctx;
+		fsdev_io->u_in.read.opts = &fuse_io->u.read.opts;
+	} else {
+		fsdev_io->u_in.read.opts = NULL;
+	}
 }
 
 static int
@@ -1812,7 +1827,7 @@ fuse_dispatcher_fill_read(struct fuse_io *fuse_io)
 	}
 
 	fuse_dispatcher_fill_read_args(fuse_io, arg, fuse_io->out_iov + 1, fuse_io->out_iovcnt - 1,
-				       fuse_dispatcher_cpl_cb);
+				       NULL, NULL, fuse_dispatcher_cpl_cb);
 	return 0;
 }
 
@@ -1834,7 +1849,8 @@ fuse_dispatcher_map_write_fuse_flags(struct spdk_fsdev_io *fsdev_io, uint32_t fu
 
 static void
 fuse_dispatcher_fill_write_args(struct fuse_io *fuse_io, struct fuse_write_in *arg,
-				struct iovec *iovs, int iovcnt, spdk_fsdev_cpl_cb cb_fn)
+				struct iovec *iovs, int iovcnt, struct spdk_memory_domain *domain,
+				void *domain_ctx, spdk_fsdev_cpl_cb cb_fn)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	uint64_t flags = 0, write_flags = 0;
@@ -1854,7 +1870,14 @@ fuse_dispatcher_fill_write_args(struct fuse_io *fuse_io, struct fuse_write_in *a
 	fuse_dispatcher_map_write_fuse_flags(fsdev_io, write_flags);
 	fsdev_io->u_in.write.iov = iovs;
 	fsdev_io->u_in.write.iovcnt = iovcnt;
-	fsdev_io->u_in.write.opts = NULL;
+	if (domain != NULL) {
+		fuse_io->u.write.opts.size = SPDK_SIZEOF(&fuse_io->u.write.opts, memory_domain_ctx);
+		fuse_io->u.write.opts.memory_domain = domain;
+		fuse_io->u.write.opts.memory_domain_ctx = domain_ctx;
+		fsdev_io->u_in.write.opts = &fuse_io->u.write.opts;
+	} else {
+		fsdev_io->u_in.write.opts = NULL;
+	}
 }
 
 static int
@@ -1877,7 +1900,7 @@ fuse_dispatcher_fill_write(struct fuse_io *fuse_io)
 
 	fuse_dispatcher_fill_write_args(fuse_io, arg, fuse_io->in_iov + fuse_io->in_offs.iov_offs,
 					fuse_io->in_iovcnt - fuse_io->in_offs.iov_offs,
-					fuse_dispatcher_cpl_cb);
+					NULL, NULL, fuse_dispatcher_cpl_cb);
 	return 0;
 }
 
@@ -4063,8 +4086,8 @@ spdk_fuse_dispatcher_get_io_ctx_size(void)
 
 static void
 fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io,
-			struct spdk_io_channel *ch, struct iovec *in_iov, int in_iovcnt,
-			struct iovec *out_iov, int out_iovcnt,
+			struct spdk_io_channel *ch, struct fuse_out_header *outhdr,
+			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
 			uint16_t source_id, uint64_t source_unique,
 			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
 {
@@ -4076,6 +4099,7 @@ fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_
 	fuse_io->out_iovcnt = out_iovcnt;
 	fuse_io->cpl_cb = cb_fn;
 	fuse_io->cpl_cb_arg = cb_arg;
+	fuse_io->outhdr = outhdr;
 
 	fuse_io->in_offs.iov_offs = 0;
 	fuse_io->in_offs.buf_offs = 0;
@@ -4101,9 +4125,69 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 		return -ENOBUFS;
 	}
 
-	fuse_dispatcher_init_io(disp, fuse_io, ch, in_iov, in_iovcnt, out_iov, out_iovcnt,
+	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
 				source_id, source_unique, clb, cb_arg);
 	return fuse_dispatcher_handle_fuse_req(disp, fuse_io);
+}
+
+static void
+fuse_dispatcher_zcopy_done(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_io *fuse_io = cb_arg;
+	struct fuse_out_header *outhdr = fuse_io->outhdr;
+
+	if (spdk_unlikely(status != 0)) {
+		fuse_dispatcher_io_complete_hdr(fuse_io, outhdr, 0, status);
+		return;
+	}
+
+	switch (spdk_fsdev_io_get_type(fsdev_io)) {
+	case SPDK_FSDEV_IO_READ:
+		fuse_dispatcher_io_complete_hdr(fuse_io, outhdr,
+						fsdev_io->u_out.read.data_size, 0);
+		break;
+	case SPDK_FSDEV_IO_WRITE:
+		fuse_dispatcher_io_complete_write_hdr(fuse_io, outhdr,
+						      fsdev_io->u_out.write.data_size, 0);
+		break;
+	default:
+		assert(0);
+	}
+}
+
+int
+spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp, struct spdk_io_channel *ch,
+				  struct fuse_in_header *in_hdr,
+				  struct iovec *in_iovs, int in_iovcnt,
+				  struct fuse_out_header *out_hdr,
+				  struct iovec *out_iovs, int out_iovcnt,
+				  struct spdk_memory_domain *domain, void *domain_ctx,
+				  void *io_ctx, uint16_t source_id, uint64_t source_unique,
+				  spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_ctx)
+{
+	struct fuse_io *fuse_io = io_ctx;
+
+	fuse_dispatcher_copy_inhdr(disp, fuse_io, in_hdr);
+	fuse_dispatcher_init_io(disp, fuse_io, ch, out_hdr, in_iovs, in_iovcnt,
+				out_iovs, out_iovcnt, source_id, source_unique, cb_fn, cb_ctx);
+
+	assert(!FUSE_OPCODE_SUPPORTED(fuse_io));
+	switch (fuse_io->hdr.opcode) {
+	case FUSE_READ:
+		fuse_dispatcher_fill_read_args(fuse_io, (void *)(in_hdr + 1), out_iovs, out_iovcnt,
+					       domain, domain_ctx, fuse_dispatcher_zcopy_done);
+		break;
+	case FUSE_WRITE:
+		fuse_dispatcher_fill_write_args(fuse_io, (void *)(in_hdr + 1), in_iovs, in_iovcnt,
+						domain, domain_ctx, fuse_dispatcher_zcopy_done);
+		break;
+	default:
+		assert(0 && "unsupported opcode");
+		return -EINVAL;
+	}
+
+	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	return 0;
 }
 
 void
