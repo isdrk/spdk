@@ -534,37 +534,37 @@ convert_statfs(struct fuse_io *fuse_io, const struct spdk_fsdev_file_statfs *sta
 	kstatfs->namelen = fsdev_io_h2d_u32(fuse_io->disp, statfs->namelen);
 }
 
-static struct fuse_out_header *
-fuse_dispatcher_fill_out_hdr(struct fuse_io *fuse_io, size_t out_len, int error)
+static void
+fuse_dispatcher_fill_outhdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
+			    size_t out_len, int error)
 {
-	struct fuse_out_header *hdr;
-	struct iovec *out;
 	uint32_t len;
 
-	assert(fuse_io->out_iovcnt >= 1);
 	assert(error > -1000 && error <= 0);
-
-	out = fuse_io->out_iov;
-
-	if (out->iov_len < sizeof(*hdr)) {
-		SPDK_ERRLOG("Bad out header len: %zu < %zu\n", out->iov_len, sizeof(*hdr));
-		return NULL;
-	}
-
 	len = sizeof(*hdr);
 	if (error == 0) {
 		len += out_len;
 	}
 
-	hdr = out->iov_base;
 	memset(hdr, 0, sizeof(*hdr));
-
-
 	hdr->unique = fsdev_io_h2d_u64(fuse_io->disp, fuse_io->hdr.unique);
 	hdr->error = fsdev_io_h2d_i32(fuse_io->disp, error);
 	hdr->len = fsdev_io_h2d_u32(fuse_io->disp, len);
+}
 
-	return hdr;
+static struct fuse_out_header *
+fuse_dispatcher_get_outhdr(struct fuse_io *fuse_io)
+{
+	struct iovec *out = fuse_io->out_iov;
+	size_t len = sizeof(struct fuse_out_header);
+
+	assert(fuse_io->out_iovcnt >= 1);
+	if (out->iov_len < len) {
+		SPDK_ERRLOG("Bad out header len: %zu < %zu\n", out->iov_len, len);
+		return NULL;
+	}
+
+	return out->iov_base;
 }
 
 static void
@@ -579,15 +579,15 @@ fuse_dispatcher_io_complete_final(struct fuse_io *fuse_io, int error)
 static void
 fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error)
 {
-	struct fuse_out_header *hdr = fuse_dispatcher_fill_out_hdr(fuse_io, out_len, error);
+	struct fuse_out_header *hdr = fuse_dispatcher_get_outhdr(fuse_io);
 
 	assert(_fuse_op_requires_reply(fuse_io->hdr.opcode));
-
 	if (!hdr) {
 		SPDK_ERRLOG("Completion failed: cannot fill out header\n");
 		return;
 	}
 
+	fuse_dispatcher_fill_outhdr(fuse_io, hdr, out_len, error);
 	SPDK_DEBUGLOG(fuse_dispatcher,
 		      "Completing IO#%" PRIu64 " (err=%d, out_len=%" PRIu32 ")\n",
 		      fuse_io->hdr.unique, error, out_len);
