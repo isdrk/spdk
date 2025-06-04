@@ -542,17 +542,12 @@ fuse_dispatcher_fill_out_hdr(struct fuse_io *fuse_io, size_t out_len, int error)
 	uint32_t len;
 
 	assert(fuse_io->out_iovcnt >= 1);
-	assert(error <= 0);
+	assert(error > -1000 && error <= 0);
 
 	out = fuse_io->out_iov;
 
 	if (out->iov_len < sizeof(*hdr)) {
 		SPDK_ERRLOG("Bad out header len: %zu < %zu\n", out->iov_len, sizeof(*hdr));
-		return NULL;
-	}
-
-	if (error < -1000) {
-		SPDK_ERRLOG("Bad completion error value: %" PRIu32 "\n", error);
 		return NULL;
 	}
 
