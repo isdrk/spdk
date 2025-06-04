@@ -577,22 +577,31 @@ fuse_dispatcher_io_complete_final(struct fuse_io *fuse_io, int error)
 }
 
 static void
-fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error)
+fuse_dispatcher_io_complete_hdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
+				uint32_t out_len, int error)
 {
-	struct fuse_out_header *hdr = fuse_dispatcher_get_outhdr(fuse_io);
-
 	assert(_fuse_op_requires_reply(fuse_io->hdr.opcode));
-	if (!hdr) {
-		SPDK_ERRLOG("Completion failed: cannot fill out header\n");
-		return;
-	}
-
 	fuse_dispatcher_fill_outhdr(fuse_io, hdr, out_len, error);
+
 	SPDK_DEBUGLOG(fuse_dispatcher,
 		      "Completing IO#%" PRIu64 " (err=%d, out_len=%" PRIu32 ")\n",
 		      fuse_io->hdr.unique, error, out_len);
 
 	fuse_dispatcher_io_complete_final(fuse_io, error);
+}
+
+static void
+fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error)
+{
+	struct fuse_out_header *hdr;
+
+	hdr = fuse_dispatcher_get_outhdr(fuse_io);
+	if (!hdr) {
+		SPDK_ERRLOG("Completion failed: cannot fill out header\n");
+		return;
+	}
+
+	fuse_dispatcher_io_complete_hdr(fuse_io, hdr, out_len, error);
 }
 
 static void
@@ -715,6 +724,16 @@ fuse_dispatcher_io_complete_write(struct fuse_io *fuse_io, uint32_t data_size, i
 	arg->size = fsdev_io_d2h_u32(fuse_io->disp, data_size);
 
 	fuse_dispatcher_io_complete(fuse_io, sizeof(*arg), error);
+}
+
+static inline void
+fuse_dispatcher_io_complete_write_hdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
+				      uint32_t data_size, int error)
+{
+	struct fuse_write_out *arg = (void *)(hdr + 1);
+
+	arg->size = fsdev_io_d2h_u32(fuse_io->disp, data_size);
+	fuse_dispatcher_io_complete_hdr(fuse_io, hdr, sizeof(*arg), error);
 }
 
 static void
