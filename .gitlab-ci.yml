@@ -240,6 +240,7 @@ code-style-job:
 
 check-so-deps-job:
   extends: .test-job-k8s-template
+  tags: [k8s, linux, x86_64]
   script:
     - tar xf .test.tar
     - ./scripts/pkgdep.sh --developer-tools
