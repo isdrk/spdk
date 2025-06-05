@@ -1160,7 +1160,8 @@ nvme_pcie_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	/* Now that the submission queue is deleted, the device is supposed to have
 	 * completed any outstanding I/O. Try to complete them. If they don't complete,
 	 * they'll be marked as aborted and completed below. */
-	if (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr)) {
+	if (qpair->active_proc == nvme_ctrlr_get_current_process(ctrlr) &&
+	    !qpair->no_process_completions) {
 		nvme_pcie_qpair_process_completions(qpair, 0);
 	}
 
