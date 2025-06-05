@@ -9066,6 +9066,7 @@ spdk_nvmf_rdma_ns_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 	}
 	rns->ns = ns;
 	rns->fe_ns_id = ns->nsid;
+	rns->rsubsystem = rsubsystem;
 
 	SPDK_NOTICELOG("NVMf namespace %u, bdev %s, module %s\n",
 		       ns->nsid, spdk_bdev_get_name(bdev), module_name);
@@ -9102,7 +9103,6 @@ spdk_nvmf_rdma_ns_create(struct spdk_nvmf_rdma_subsystem *rsubsystem,
 		spdk_nvmf_rdma_ns_destroy(rns);
 		return NULL;
 	}
-	rns->rsubsystem = rsubsystem;
 
 	return rns;
 }
