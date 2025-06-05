@@ -103,6 +103,7 @@ static const struct spdk_json_object_decoder rpc_fuse_mount_opts_decoders[] = {
 	{ "max_io_depth", opts_offsetof(max_io_depth), spdk_json_decode_uint64, true },
 	{ "max_xfer_size", opts_offsetof(max_xfer_size), spdk_json_decode_uint64, true },
 	{ "clone_fd", opts_offsetof(clone_fd), spdk_json_decode_bool, true },
+	{ "fake_memory_domain", opts_offsetof(fake_memory_domain), spdk_json_decode_bool, true },
 	{ "options", 0, rpc_fuse_decode_mount_options, true },
 	{ "fstype", offsetof(struct rpc_fuse_mount, fstype), spdk_json_decode_string, true },
 };

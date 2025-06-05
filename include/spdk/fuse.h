@@ -25,6 +25,8 @@ struct spdk_fuse_mount_opts {
 	const char	*fstype;
 	/** Flags passed to mount(2) */
 	uint64_t	flags;
+	/** Enable fake memory dmain */
+	bool		fake_memory_domain;
 };
 
 /**

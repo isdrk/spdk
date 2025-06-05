@@ -97,7 +97,10 @@ DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma
 DEPDIRS-fuse_dispatcher := log thread util fsdev rmem
 DEPDIRS-rmem := log $(JSON_LIBS)
-DEPDIRS-fuse := fsdev fuse_dispatcher log thread util
+DEPDIRS-fuse := dma fsdev fuse_dispatcher log thread util
+ifeq ($(CONFIG_RDMA),y)
+DEPDIRS-fuse += rdma_utils
+endif
 
 # ------------------------------------------------------------------------
 # Start module/ directory - This section extends the organizational pattern from

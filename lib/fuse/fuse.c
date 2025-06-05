@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
+#include "spdk/config.h"
+#include "spdk/dma.h"
 #include "spdk/fuse.h"
 #include "spdk/fuse_dispatcher.h"
 #include "spdk/log.h"
@@ -9,11 +11,16 @@
 #include "spdk/thread.h"
 #include "spdk/util.h"
 
+#ifdef SPDK_CONFIG_RDMA
+#include "spdk_internal/rdma_utils.h"
+#endif
+
 #include "spdk/linux/fuse.h"
 
 struct spdk_fuse_mount {
 	struct spdk_fsdev_desc		*fsdev_desc;
 	struct spdk_fuse_dispatcher	*dispatcher;
+	struct spdk_memory_domain	*domain;
 	int				fd;
 	bool				mounted;
 	bool				clone_fd;
@@ -62,6 +69,9 @@ struct fsdev_fuse_channel {
 	struct spdk_fuse_poll_group		*poll_group;
 	uint16_t				source_id;
 	uint64_t				source_unique;
+#ifdef SPDK_CONFIG_RDMA
+	struct spdk_rdma_utils_mem_map		*map;
+#endif
 };
 
 struct spdk_fuse_poll_group {
@@ -328,6 +338,9 @@ fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 	if (ch->poll_group != NULL) {
 		spdk_put_io_channel(spdk_io_channel_from_ctx(ch->poll_group));
 	}
+#ifdef SPDK_CONFIG_RDMA
+	spdk_rdma_utils_free_mem_map(&ch->map);
+#endif
 	free(ch->request_pool);
 	free(ch);
 }
@@ -438,6 +451,64 @@ fsdev_fuse_request_submit_cb(void *ctx, int status)
 	}
 }
 
+static bool
+fsdev_fuse_request_check_zcopy(struct fsdev_fuse_request *req,
+			       struct fuse_in_header **inhdr,
+			       struct iovec **in_iovs, int *in_iovcnt,
+			       struct fuse_out_header **outhdr,
+			       struct iovec **out_iovs, int *out_iovcnt)
+{
+	struct spdk_fuse_mount *mount = req->ch->mount;
+
+	if (mount->domain == NULL) {
+		return false;
+	}
+
+	*inhdr = fsdev_fuse_request_get_inhdr(req);
+	*outhdr = fsdev_fuse_request_get_outhdr(req);
+	switch ((*inhdr)->opcode) {
+	case FUSE_READ:
+		/* We prepare the req in a way that the payload always starts at out_iovs[1] */
+		*out_iovs = &req->out_iovs[1];
+		*out_iovcnt = req->out_iovcnt - 1;
+		*in_iovs = NULL;
+		*in_iovcnt = 0;
+		return true;
+	case FUSE_WRITE:
+		/* We prepare the req in a way that the payload always starts at in_iovs[1] */
+		*in_iovs = &req->in_iovs[1];
+		*in_iovcnt = req->in_iovcnt - 1;
+		*out_iovs = NULL;
+		*out_iovcnt = 0;
+		return true;
+	default:
+		return false;
+	}
+}
+
+static int
+fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fuse_request *req)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct fuse_in_header *in_hdr;
+	struct fuse_out_header *out_hdr;
+	struct iovec *in_iovs, *out_iovs;
+	int in_iovcnt, out_iovcnt;
+
+	if (fsdev_fuse_request_check_zcopy(req, &in_hdr, &in_iovs, &in_iovcnt,
+					   &out_hdr, &out_iovs, &out_iovcnt)) {
+		return spdk_fuse_dispatcher_submit_zcopy(ch->dispatcher, ch->ioch,
+				in_hdr, in_iovs, in_iovcnt, out_hdr, out_iovs, out_iovcnt,
+				mount->domain, ch, req->ctx, ch->source_id,
+				ch->source_unique, fsdev_fuse_request_submit_cb, req);
+	} else {
+		return spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
+				req->in_iovs, req->in_iovcnt, req->out_iovs, req->out_iovcnt,
+				req->ctx, ch->source_id, ch->source_unique,
+				fsdev_fuse_request_submit_cb, req);
+	}
+}
+
 static int
 fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 {
@@ -485,9 +556,7 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 		SPDK_DEBUGLOG(fuse, "%s: processing %s\n", mount->name,
 			      fsdev_fuse_request_get_name(req));
 
-		rc = spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
-				req->in_iovs, req->in_iovcnt, req->out_iovs, req->out_iovcnt, req->ctx,
-				ch->source_id, ch->source_unique, fsdev_fuse_request_submit_cb, req);
+		rc = fsdev_fuse_channel_submit_request(ch, req);
 		if (rc != 0) {
 			ch->num_outstanding--;
 			if (rc == -ENOBUFS) {
@@ -538,6 +607,7 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 		spdk_fsdev_close(mount->fsdev_desc);
 	}
 
+	spdk_memory_domain_destroy(mount->domain);
 	pthread_mutex_destroy(&mount->mutex);
 	free(mount->name);
 	free(mount->mountpoint);
@@ -697,6 +767,61 @@ normalize_hard_path(char *dst, size_t dst_size, const char *path)
 	return 0;
 }
 
+#ifdef SPDK_CONFIG_RDMA
+static int
+fsdev_fuse_translate_addr(struct spdk_memory_domain *src_domain,
+			  void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			  struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			  void *addr, size_t len,
+			  struct spdk_memory_domain_translation_result *result)
+{
+	struct fsdev_fuse_channel *ch = src_domain_ctx;
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct spdk_rdma_utils_memory_translation tr;
+	struct ibv_qp *qp;
+	uint64_t flags;
+	int rc;
+
+	assert(spdk_memory_domain_get_dma_device_type(dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA);
+	if (spdk_unlikely(ch->map == NULL)) {
+		qp = SPDK_GET_FIELD(dst_domain_ctx, rdma.ibv_qp, NULL);
+		flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+		ch->map = spdk_rdma_utils_create_mem_map(qp->pd, NULL, flags);
+		if (ch->map == NULL) {
+			SPDK_ERRLOG("%s: failed to create memory map\n", mount->name);
+			return -ENOMEM;
+		}
+	}
+
+	rc = spdk_rdma_utils_get_translation(ch->map, addr, len, &tr);
+	if (spdk_unlikely(rc != 0)) {
+		SPDK_ERRLOG("%s: failed to translate addr=%p: %s\n", mount->name, addr,
+			    spdk_strerror(-rc));
+		return rc;
+	}
+
+	assert(result->size >= SPDK_SIZEOF(result, rdma));
+	result->iov_count = 1;
+	result->iov.iov_base = addr;
+	result->iov.iov_len = len;
+	result->dst_domain = dst_domain;
+	result->rdma.lkey = spdk_rdma_utils_memory_translation_get_lkey(&tr);
+	result->rdma.rkey = spdk_rdma_utils_memory_translation_get_rkey(&tr);
+
+	return 0;
+}
+#else
+static int
+fsdev_fuse_translate_addr(struct spdk_memory_domain *src_domain,
+			  void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			  struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			  void *addr, size_t len,
+			  struct spdk_memory_domain_translation_result *result)
+{
+	return -ENOTSUP;
+}
+#endif
+
 static int
 fsdev_fuse_validate_mountpoint(const char *mountpoint)
 {
@@ -736,6 +861,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		      struct spdk_fuse_mount_opts *opts)
 {
 	struct spdk_fuse_mount *mnt;
+	struct spdk_fsdev *fsdev;
 	struct stat st;
 	char mopts[128];
 	int rc;
@@ -797,6 +923,24 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to open fsdev: %s\n", mnt->name, spdk_strerror(-rc));
 		goto error;
+	}
+
+	fsdev = spdk_fsdev_desc_get_fsdev(mnt->fsdev_desc);
+	if (SPDK_GET_FIELD(opts, fake_memory_domain, false)) {
+		if (spdk_fsdev_get_memory_domains(fsdev, NULL, 0) <= 0) {
+			SPDK_ERRLOG("%s: fsdev doesn't support memory domains\n", name);
+			rc = -EINVAL;
+			goto error;
+		}
+		rc = spdk_memory_domain_create(&mnt->domain, SPDK_DMA_DEVICE_TYPE_DMA, NULL,
+					       "fuse");
+		if (rc != 0) {
+			SPDK_ERRLOG("%s: failed to create fuse memory domain: %s\n", name,
+				    spdk_strerror(-rc));
+			goto error;
+		}
+
+		spdk_memory_domain_set_translation(mnt->domain, fsdev_fuse_translate_addr);
 	}
 
 	mnt->dispatcher = spdk_fuse_dispatcher_create(mnt->fsdev_desc, false, NULL, NULL);
@@ -1196,6 +1340,7 @@ spdk_fuse_get_default_mount_opts(struct spdk_fuse_mount_opts *opts, size_t size)
 	local.max_xfer_size = g_fuse.opts.max_xfer_size;
 	local.clone_fd = g_fuse.opts.clone_fd;
 	local.fstype = g_fuse.opts.fstype;
+	local.fake_memory_domain = false;
 
 	memcpy(opts, &local, local.size);
 }

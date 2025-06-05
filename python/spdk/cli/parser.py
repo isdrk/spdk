@@ -743,7 +743,8 @@ def add_parser(subparsers):
     def fuse_mount(args):
         rpc.fuse.fuse_mount(args.client, fsdev=args.fsdev, mountpoint=args.mountpoint,
                             max_xfer_size=args.max_xfer_size, max_io_depth=args.max_io_depth,
-                            clone_fd=args.clone_fd, fstype=args.fstype, options=args.options)
+                            clone_fd=args.clone_fd, fstype=args.fstype, options=args.options,
+                            fake_memory_domain=args.fake_memory_domain)
     p = subparsers.add_parser('fuse_mount', help='Mount fsdev via FUSE')
     p.add_argument('fsdev', metavar='FSDEV', help='Name of the fsdev to mount')
     p.add_argument('mountpoint', metavar='MOUNTPOINT', help='Directory where to mount the fsdev')
@@ -753,6 +754,8 @@ def add_parser(subparsers):
                    dest='clone_fd', action='store_false')
     p.add_argument('--fstype', help='Override filesystem type passed to mount(2)')
     p.add_argument('-o', '--options', help='Comma-separated list of mount(2) options')
+    p.add_argument('--fake-memory-domain', help='Pass fake memory domain in READ/WRITE requests',
+                   action='store_true')
     p.set_defaults(func=fuse_mount)
 
     def fuse_umount(args):

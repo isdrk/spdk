@@ -14876,6 +14876,7 @@ max_xfer_size           | Optional | number  | Maximum transfer size
 clone_fd                | Optional | boolean | Clone the /dev/fuse fd on each core
 fstype                  | Optional | string  | Override filesystem type passed to mount(2)
 options                 | Optional | array   | Array of @ref rpc_fuse_mount_options
+fake_memory_domain      | Optional | boolean | Pass fake memory domain in READ/WRITE requests
 
 #### Mount options {#rpc_fuse_mount_options}
 
