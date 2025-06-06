@@ -3710,6 +3710,22 @@ spdk_fuse_dispatcher_get_operation_name(uint32_t opcode)
 	return fuse_op_names[opcode].name;
 }
 
+static void
+fuse_dispatcher_submit_fsdev_io(struct fuse_io *fuse_io)
+{
+	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+
+	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
+		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
+		      " core_id=%" PRIu32 " source_id=%" PRIu16 " source_unique=%" PRIu64 "\n",
+		      fuse_io->hdr.opcode, spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
+		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
+		      fuse_io->hdr.gid, fuse_io->hdr.pid, spdk_env_get_current_core(),
+		      fuse_io->source_id, fuse_io->source_unique);
+
+	spdk_fsdev_io_submit(fsdev_io);
+}
+
 #define FUSE_OPCODE_SUPPORTED(fuse_io) \
 	(fuse_io->disp->supported_fuse_opcodes & (1ULL << fuse_io->hdr.opcode))
 
@@ -3895,7 +3911,7 @@ submit:
 		return 0;
 	}
 
-	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	fuse_dispatcher_submit_fsdev_io(fuse_io);
 	return 0;
 }
 
@@ -3944,14 +3960,6 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 
 		UNUSED(out_hdr); /* We don't need it here, we just made a check and a reservation */
 	}
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
-		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
-		      " core_id=%" PRIu32 " source_id=%" PRIu16 " source_unique=%" PRIu64 "\n",
-		      fuse_io->hdr.opcode, spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
-		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
-		      fuse_io->hdr.gid, fuse_io->hdr.pid, spdk_env_get_current_core(),
-		      fuse_io->source_id, fuse_io->source_unique);
 
 	return fuse_dispatcher_submit_io(fuse_io);
 
@@ -4231,7 +4239,7 @@ spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp, struct spdk
 		return -EINVAL;
 	}
 submit:
-	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	fuse_dispatcher_submit_fsdev_io(fuse_io);
 	return 0;
 }
 
