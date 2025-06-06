@@ -134,6 +134,8 @@ test-nvmf-k8s-job:
     - grep -i huge /proc/meminfo
     - mount
     - tar xf .test.tar
+    # Set RPC_PIPE_TIMEOUT to 60 seconds to avoid timeout errors in K8S tests
+    - export RPC_PIPE_TIMEOUT=60
     # Run NVMf/RDMA tests in the container
     - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
     - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
