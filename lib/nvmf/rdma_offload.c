@@ -5023,6 +5023,8 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 		nvmf_rdma_subsystem_destroy(rsubsystem);
 	}
 
+	nvmf_rdma_sta_destroy(rtransport);
+
 	TAILQ_FOREACH_SAFE(device, &rtransport->devices, link, device_tmp) {
 		destroy_ib_device(rtransport, device);
 	}
@@ -5036,9 +5038,8 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 	}
 
 	spdk_mempool_free(rtransport->data_wr_pool);
-
 	spdk_poller_unregister(&rtransport->accept_poller);
-	nvmf_rdma_sta_destroy(rtransport);
+
 	if (rtransport->rdma_opts.doca_log_level) {
 		free(rtransport->rdma_opts.doca_log_level);
 	}
