@@ -111,3 +111,17 @@ def tgt_ofld_get_bdev_stat(client, name=None):
     if name:
         params['name'] = name
     return client.call('tgt_ofld_get_bdev_stat', params)
+
+def tgt_ofld_get_bdev_queue_mapping(client, name=None):
+    """Display a mapping of the backend queue to an event handler for all the offload bdevs or specified bdev.
+
+    Args:
+        name: bdev name to query (optional; if omitted, query all bdevs)
+
+    Returns:
+        Mapping for requested bdevs.
+    """
+    params = {}
+    if name:
+        params['name'] = name
+    return client.call('tgt_ofld_get_bdev_queue_mapping', params)

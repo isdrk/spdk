@@ -10243,3 +10243,125 @@ cleanup:
 	free_tgt_ofld_get_bdev_stat(&req);
 }
 SPDK_RPC_REGISTER("tgt_ofld_get_bdev_stat", rpc_tgt_ofld_get_bdev_stat, SPDK_RPC_RUNTIME)
+
+struct rpc_tgt_ofld_get_bdev_queue_mapping {
+	char *name;
+};
+
+static void
+free_tgt_ofld_get_bdev_queue_mapping(struct rpc_tgt_ofld_get_bdev_queue_mapping *s)
+{
+	if (s->name) {
+		free(s->name);
+	}
+}
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_get_bdev_queue_mapping_decoders[] = {
+	{"name", offsetof(struct rpc_tgt_ofld_get_bdev_queue_mapping, name), spdk_json_decode_string, true},
+};
+
+static void
+rpc_tgt_ofld_get_bdev_queue_mapping_dump(struct spdk_json_write_ctx *w,
+					 struct spdk_nvmf_rdma_ns *rns,
+					 uint32_t max_io_queues)
+{
+	struct spdk_nvmf_rdma_bdev *rbdev = rns->rbdev;
+	struct doca_sta_be_map_entry *map_entries;
+	uint32_t i;
+	doca_error_t drc;
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "name", spdk_bdev_get_name(rns->ns->bdev));
+	spdk_json_write_named_array_begin(w, "queues");
+
+	map_entries = calloc(max_io_queues, sizeof(*map_entries));
+	if (!map_entries) {
+		SPDK_ERRLOG("Failed to allocate memory for queue mapping\n");
+	} else {
+		drc = doca_sta_get_be_mapping_info(rbdev->handle, map_entries, max_io_queues);
+		if (DOCA_IS_ERROR(drc)) {
+			SPDK_ERRLOG("Failed to get queue mapping for bdev %s: %s\n", spdk_bdev_get_name(rns->ns->bdev),
+				    doca_error_get_descr(drc));
+		} else {
+			/*
+			 * The doca_sta_get_be_mapping_info function requires max_io_queues,
+			 * but only the active queues are dumped here.
+			 */
+			for (i = 0; i < rbdev->num_queues; ++i) {
+				spdk_json_write_object_begin(w);
+				spdk_json_write_named_uint64(w, "be_idx", map_entries[i].be_qid.hidx);
+				spdk_json_write_named_uint64(w, "be_queue_idx", map_entries[i].be_qid.qidx);
+				spdk_json_write_named_uint64(w, "be_hdlr_idx", map_entries[i].be_hdlr_qid.hidx);
+				spdk_json_write_named_uint64(w, "be_hdlr_queue_idx", map_entries[i].be_hdlr_qid.qidx);
+				spdk_json_write_object_end(w);
+			}
+		}
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_json_write_object_end(w);
+
+	if (map_entries) {
+		free(map_entries);
+	}
+}
+
+static void
+rpc_tgt_ofld_get_bdev_queue_mapping(struct spdk_jsonrpc_request *request,
+				    const struct spdk_json_val *params)
+{
+	struct rpc_tgt_ofld_get_bdev_queue_mapping req = {};
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	struct spdk_nvmf_rdma_ns *rns = NULL;
+	struct spdk_json_write_ctx *w;
+	int rc;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_tgt_ofld_get_bdev_queue_mapping_decoders,
+					    SPDK_COUNTOF(rpc_tgt_ofld_get_bdev_queue_mapping_decoders), &req)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			goto cleanup;
+		}
+	}
+
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	if (req.name) {
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			TAILQ_FOREACH(rns, &rsubsystem->namespaces, link) {
+				if (strcmp(spdk_bdev_get_name(rns->ns->bdev), req.name) == 0) {
+					goto bdev_is_found;
+				}
+			}
+		}
+		SPDK_ERRLOG("bdev is not found (%s)\n", req.name);
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 spdk_strerror(ENODEV));
+		goto cleanup;
+	}
+bdev_is_found:
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	if (rns) {
+		rpc_tgt_ofld_get_bdev_queue_mapping_dump(w, rns, rtransport->sta.caps.max_qs_per_be);
+	} else {
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			TAILQ_FOREACH(rns, &rsubsystem->namespaces, link) {
+				rpc_tgt_ofld_get_bdev_queue_mapping_dump(w, rns, rtransport->sta.caps.max_qs_per_be);
+			}
+		}
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+cleanup:
+	free_tgt_ofld_get_bdev_queue_mapping(&req);
+}
+SPDK_RPC_REGISTER("tgt_ofld_get_bdev_queue_mapping", rpc_tgt_ofld_get_bdev_queue_mapping, SPDK_RPC_RUNTIME)
