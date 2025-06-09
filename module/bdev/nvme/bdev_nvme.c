@@ -4437,6 +4437,7 @@ nvme_ctrlr_info_json(struct spdk_json_write_ctx *w, struct nvme_ctrlr *nvme_ctrl
 		spdk_json_write_named_uint32(w, "numa_id", numa_id);
 	}
 	spdk_json_write_named_uint32(w, "num_io_queues", opts->num_io_queues);
+	spdk_json_write_named_uint32(w, "max_p2p_io_queues", opts->max_p2p_io_queues);
 
 	spdk_json_write_object_end(w);
 }

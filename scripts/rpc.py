@@ -786,7 +786,8 @@ if __name__ == "__main__":
                                                          max_bdevs=args.max_bdevs,
                                                          dhchap_key=args.dhchap_key,
                                                          dhchap_ctrlr_key=args.dhchap_ctrlr_key,
-                                                         allow_unrecognized_csi=args.allow_unrecognized_csi))
+                                                         allow_unrecognized_csi=args.allow_unrecognized_csi,
+                                                         max_p2p_io_queues=args.max_p2p_io_queues))
 
     p = subparsers.add_parser('bdev_nvme_attach_controller', help='Add bdevs with nvme backend')
     p.add_argument('-b', '--name', help="Name of the NVMe controller, prefix for each bdev name", required=True)
@@ -818,6 +819,7 @@ if __name__ == "__main__":
                    dest="fabrics_connect_timeout_us")
     p.add_argument('-x', '--multipath', help='Set multipath behavior (disable, failover, multipath)')
     p.add_argument('--num-io-queues', type=int, help='Set the number of IO queues to request during initialization.')
+    p.add_argument('--max-p2p-io-queues', type=int, help='Set the maximum number of P2P IO queues to use for offload operations.')
     p.add_argument('-l', '--ctrlr-loss-timeout-sec',
                    help="""Time to wait until ctrlr is reconnected before deleting ctrlr.
                    -1 means infinite reconnect retries. 0 means no reconnect retry.

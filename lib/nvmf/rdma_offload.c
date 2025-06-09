@@ -727,7 +727,7 @@ struct spdk_nvmf_rdma_bdev {
 	int							refs;
 	struct doca_sta_be_handle				*handle;
 	enum spdk_nvmf_rdma_bdev_type				type;
-	int							num_queues;
+	uint32_t						num_queues;
 	union {
 		struct {
 			struct spdk_nvme_ctrlr			*ctrlr;
@@ -8738,8 +8738,9 @@ nvmf_rdma_bdev_null_queue_init(struct spdk_nvmf_rdma_sta *sta,
 static int
 nvmf_rdma_bdev_destroy(struct spdk_nvmf_rdma_bdev *rbdev)
 {
+	uint32_t i;
 	doca_error_t drc;
-	int rc, i;
+	int rc;
 
 	if (rbdev->type == SPDK_NVMF_RDMA_BDEV_TYPE_NVME) {
 		if (rbdev->nvme.queues) {
@@ -8804,11 +8805,10 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		      struct spdk_nvme_ctrlr *nvme_ctrlr,
 		      struct spdk_bdev *bdev)
 {
-	// TODO: Make num_bdev_queues configurable
-	const int num_bdev_queues = 1;
 	struct spdk_nvmf_rdma_bdev *rbdev;
+	uint32_t i;
 	doca_error_t drc;
-	int rc, i;
+	int rc;
 
 	rbdev = calloc(1, sizeof(*rbdev));
 	if (!rbdev) {
@@ -8816,7 +8816,6 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		return NULL;
 	}
 	rbdev->sta = &rtransport->sta;
-	rbdev->num_queues = num_bdev_queues;
 	rbdev->name = strdup(rbdev_name);
 	if (!rbdev->name) {
 		SPDK_ERRLOG("Failed to allocate memory for device name\n");
@@ -8830,13 +8829,22 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 		nvmf_rdma_bdev_destroy(rbdev);
 		return NULL;
 	}
-	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, name %s, handle %p, num_queues %d\n",
-		      rbdev, rbdev->name, rbdev->handle, rbdev->num_queues);
+	SPDK_DEBUGLOG(rdma_offload, "Created DOCA STA backend %p, name %s, handle %p\n",
+		      rbdev, rbdev->name, rbdev->handle);
 
 	if (nvme_ctrlr) {
 		rbdev->type = SPDK_NVMF_RDMA_BDEV_TYPE_NVME;
 		rbdev->nvme.ctrlr = nvme_ctrlr;
+		rbdev->num_queues = spdk_min(nvme_ctrlr->opts.max_p2p_io_queues, rtransport->sta.caps.max_qs_per_be);
 
+		if (rbdev->num_queues == 0) {
+			SPDK_ERRLOG("The number of P2P IO queues cannot be zero\n");
+			return NULL;
+		}
+		if (rbdev->num_queues < nvme_ctrlr->opts.max_p2p_io_queues) {
+			SPDK_NOTICELOG("The number of P2P IO queues is reduced from %u to %u\n",
+				       nvme_ctrlr->opts.max_p2p_io_queues, rbdev->num_queues);
+		}
 		rbdev->nvme.pci_dev = spdk_nvme_ctrlr_get_pci_device(rbdev->nvme.ctrlr);
 		if (!rbdev->nvme.pci_dev) {
 			SPDK_ERRLOG("Failed to get PCI device for NVMe controller\n");
@@ -8883,6 +8891,7 @@ nvmf_rdma_bdev_create(struct spdk_nvmf_rdma_transport *rtransport,
 	} else {
 		rbdev->type = SPDK_NVMF_RDMA_BDEV_TYPE_NULL;
 		rbdev->null.ns_id = 1;
+		rbdev->num_queues = 1;
 
 		rbdev->null.queues = calloc(rbdev->num_queues, sizeof(struct spdk_nvmf_rdma_bdev_null_queue));
 		if (!rbdev->null.queues) {
@@ -10045,7 +10054,7 @@ static void
 rpc_tgt_ofld_be_ctrlr_stats_dump(struct spdk_json_write_ctx *w,
 				 struct spdk_nvmf_rdma_bdev *rbdev)
 {
-	int i;
+	uint32_t i;
 	doca_error_t drc;
 	struct doca_sta_be_q_handle *q_handle;
 	const struct doca_sta_eu_ctr_entry *ctr_entries;
