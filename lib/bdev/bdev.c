@@ -164,9 +164,9 @@ struct spdk_bdev_qos_desc {
 struct spdk_bdev_channel;
 
 /*
- * Per-module (or per-io_device) data. Multiple bdevs built on the same io_device
- * will queue here their IO that awaits retry. It makes it possible to retry sending
- * IO to one bdev after IO from other bdev completes.
+ * The data is shared per thread.
+ * Failed IO due to nomem will queue here for retrying. It makes it possible
+ * to retry sending IO to one bdev after IO from other bdev completes.
  */
 struct spdk_bdev_shared_resource {
 	/* The bdev management channel */
@@ -195,15 +195,10 @@ struct spdk_bdev_shared_resource {
 	 */
 	bool			nomem_abort_in_progress;
 
-	/* I/O channel allocated by a bdev module */
-	struct spdk_io_channel	*shared_ch;
-
 	struct spdk_poller	*nomem_poller;
 
 	/* Refcount of bdev channels using this resource */
 	uint32_t		ref;
-
-	TAILQ_ENTRY(spdk_bdev_shared_resource) link;
 };
 
 struct spdk_bdev_mgmt_channel {
@@ -220,7 +215,9 @@ struct spdk_bdev_mgmt_channel {
 
 	struct spdk_iobuf_channel iobuf;
 
-	TAILQ_HEAD(, spdk_bdev_shared_resource)	shared_resources;
+	/** Per thread shared resource */
+	struct spdk_bdev_shared_resource shared_resource;
+
 	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
 
 };
@@ -2236,7 +2233,6 @@ bdev_mgmt_channel_create(void *io_device, void *ctx_buf)
 		STAILQ_INSERT_HEAD(&ch->per_thread_cache, bdev_io, internal.buf_link);
 	}
 
-	TAILQ_INIT(&ch->shared_resources);
 	TAILQ_INIT(&ch->io_wait_queue);
 
 	return 0;
@@ -4416,10 +4412,8 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	shared_resource->ref--;
 	if (shared_resource->ref == 0) {
 		assert(shared_resource->io_outstanding == 0);
-		TAILQ_REMOVE(&shared_resource->mgmt_ch->shared_resources, shared_resource, link);
 		spdk_put_io_channel(spdk_io_channel_from_ctx(shared_resource->mgmt_ch));
 		spdk_poller_unregister(&shared_resource->nomem_poller);
-		free(shared_resource);
 	}
 }
 
@@ -4613,31 +4607,17 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	}
 
 	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
-	TAILQ_FOREACH(shared_resource, &mgmt_ch->shared_resources, link) {
-		if (shared_resource->shared_ch == ch->channel) {
-			spdk_put_io_channel(mgmt_io_ch);
-			shared_resource->ref++;
-			break;
-		}
-	}
-
-	if (shared_resource == NULL) {
-		shared_resource = calloc(1, sizeof(*shared_resource));
-		if (shared_resource == NULL) {
-			spdk_put_io_channel(ch->channel);
-			spdk_put_io_channel(ch->accel_channel);
-			spdk_put_io_channel(mgmt_io_ch);
-			return -1;
-		}
-
+	shared_resource = &mgmt_ch->shared_resource;
+	if (shared_resource->ref == 0) {
 		shared_resource->mgmt_ch = mgmt_ch;
 		shared_resource->io_outstanding = 0;
 		TAILQ_INIT(&shared_resource->nomem_io);
 		shared_resource->nomem_threshold = 0;
-		shared_resource->shared_ch = ch->channel;
-		shared_resource->ref = 1;
-		TAILQ_INSERT_TAIL(&mgmt_ch->shared_resources, shared_resource, link);
+	} else {
+		spdk_put_io_channel(mgmt_io_ch);
 	}
+
+	shared_resource->ref++;
 
 	ch->io_outstanding = 0;
 	TAILQ_INIT(&ch->locked_ranges);

@@ -1524,10 +1524,10 @@ enomem_multi_io_target(void)
 	ut_ch = spdk_io_channel_get_ctx(bdev_ch->channel);
 	ut_ch->avail_cnt = AVAIL;
 
-	/* Different io_target should imply a different shared_resource */
+	/* Different io_target will share per-thread shared_resource */
 	io_ch2 = spdk_bdev_get_io_channel(g_desc2);
 	bdev_ch2 = spdk_io_channel_get_ctx(io_ch2);
-	SPDK_CU_ASSERT_FATAL(bdev_ch->shared_resource != bdev_ch2->shared_resource);
+	SPDK_CU_ASSERT_FATAL(bdev_ch->shared_resource == bdev_ch2->shared_resource);
 
 	/* Saturate io_target through bdev A. */
 	for (i = 0; i < AVAIL; i++) {
@@ -1544,20 +1544,20 @@ enomem_multi_io_target(void)
 	SPDK_CU_ASSERT_FATAL(!TAILQ_EMPTY(&bdev_ch->shared_resource->nomem_io));
 
 	/*
-	 * Now submit I/O through the second bdev. This should go through and complete
-	 * successfully because we're using a different io_device underneath.
+	 * Now submit I/O through the second bdev. The IO should be queued due to
+	 * per-thread shared_resource is used.
 	 */
 	status[AVAIL] = SPDK_BDEV_IO_STATUS_PENDING;
 	rc = spdk_bdev_read_blocks(g_desc2, io_ch2, NULL, 0, 1, enomem_done, &status[AVAIL]);
 	CU_ASSERT(rc == 0);
-	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&bdev_ch2->shared_resource->nomem_io));
-	stub_complete_io(g_bdev2->io_target, 1);
+	SPDK_CU_ASSERT_FATAL(!TAILQ_EMPTY(&bdev_ch2->shared_resource->nomem_io));
 
 	/* Cleanup; Complete outstanding I/O. */
 	stub_complete_io(g_bdev.io_target, AVAIL);
 	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&bdev_ch->shared_resource->nomem_io));
 	/* Complete the ENOMEM I/O */
 	stub_complete_io(g_bdev.io_target, 1);
+	stub_complete_io(g_bdev2->io_target, 1);
 	CU_ASSERT(bdev_ch->shared_resource->io_outstanding == 0);
 
 	SPDK_CU_ASSERT_FATAL(TAILQ_EMPTY(&bdev_ch->shared_resource->nomem_io));
