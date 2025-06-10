@@ -161,25 +161,6 @@ struct spdk_bdev_qos_desc {
 	TAILQ_ENTRY(spdk_bdev_qos_desc) link;
 };
 
-struct spdk_bdev_mgmt_channel {
-	/*
-	 * Each thread keeps a cache of bdev_io - this allows
-	 *  bdev threads which are *not* DPDK threads to still
-	 *  benefit from a per-thread bdev_io cache.  Without
-	 *  this, non-DPDK threads fetching from the mempool
-	 *  incur a cmpxchg on get and put.
-	 */
-	bdev_io_stailq_t per_thread_cache;
-	uint32_t	per_thread_cache_count;
-	uint32_t	bdev_io_cache_size;
-
-	struct spdk_iobuf_channel iobuf;
-
-	TAILQ_HEAD(, spdk_bdev_shared_resource)	shared_resources;
-	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
-
-};
-
 struct spdk_bdev_channel;
 
 /*
@@ -223,6 +204,25 @@ struct spdk_bdev_shared_resource {
 	uint32_t		ref;
 
 	TAILQ_ENTRY(spdk_bdev_shared_resource) link;
+};
+
+struct spdk_bdev_mgmt_channel {
+	/*
+	 * Each thread keeps a cache of bdev_io - this allows
+	 *  bdev threads which are *not* DPDK threads to still
+	 *  benefit from a per-thread bdev_io cache.  Without
+	 *  this, non-DPDK threads fetching from the mempool
+	 *  incur a cmpxchg on get and put.
+	 */
+	bdev_io_stailq_t per_thread_cache;
+	uint32_t	per_thread_cache_count;
+	uint32_t	bdev_io_cache_size;
+
+	struct spdk_iobuf_channel iobuf;
+
+	TAILQ_HEAD(, spdk_bdev_shared_resource)	shared_resources;
+	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
+
 };
 
 #define BDEV_CH_RESET_IN_PROGRESS	(1 << 0)
