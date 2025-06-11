@@ -10261,49 +10261,47 @@ static const struct spdk_json_object_decoder rpc_tgt_ofld_get_bdev_queue_mapping
 };
 
 static void
-rpc_tgt_ofld_get_bdev_queue_mapping_dump(struct spdk_json_write_ctx *w,
-					 struct spdk_nvmf_rdma_ns *rns,
-					 uint32_t max_io_queues)
+rpc_tgt_ofld_be_queue_mapping_dump(struct spdk_json_write_ctx *w,
+				   const struct doca_sta_be_q_handle *queue_handle)
+{
+	const struct doca_sta_eu_ctr_entry *map_entries;
+	uint16_t num_entries;
+	doca_error_t drc;
+
+	drc = doca_sta_get_be_queue_mapping_info(queue_handle, &map_entries, &num_entries);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get queue mapping: %s\n", doca_error_get_descr(drc));
+	} else {
+		spdk_json_write_object_begin(w);
+		rpc_tgt_ofld_ctr_entries_dump(w, map_entries, num_entries);
+		spdk_json_write_object_end(w);
+	}
+}
+
+static void
+rpc_tgt_ofld_bdev_queues_mapping_dump(struct spdk_json_write_ctx *w,
+				      struct spdk_nvmf_rdma_ns *rns)
 {
 	struct spdk_nvmf_rdma_bdev *rbdev = rns->rbdev;
-	struct doca_sta_be_map_entry *map_entries;
+	struct doca_sta_be_q_handle *queue_handle;
 	uint32_t i;
-	doca_error_t drc;
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "name", spdk_bdev_get_name(rns->ns->bdev));
 	spdk_json_write_named_array_begin(w, "queues");
 
-	map_entries = calloc(max_io_queues, sizeof(*map_entries));
-	if (!map_entries) {
-		SPDK_ERRLOG("Failed to allocate memory for queue mapping\n");
-	} else {
-		drc = doca_sta_get_be_mapping_info(rbdev->handle, map_entries, max_io_queues);
-		if (DOCA_IS_ERROR(drc)) {
-			SPDK_ERRLOG("Failed to get queue mapping for bdev %s: %s\n", spdk_bdev_get_name(rns->ns->bdev),
-				    doca_error_get_descr(drc));
+	for (i = 0; i < rbdev->num_queues; i++) {
+		if (rbdev->type == SPDK_NVMF_RDMA_BDEV_TYPE_NVME) {
+			queue_handle = rbdev->nvme.queues[i].handle;
 		} else {
-			/*
-			 * The doca_sta_get_be_mapping_info function requires max_io_queues,
-			 * but only the active queues are dumped here.
-			 */
-			for (i = 0; i < rbdev->num_queues; ++i) {
-				spdk_json_write_object_begin(w);
-				spdk_json_write_named_uint64(w, "be_idx", map_entries[i].be_qid.hidx);
-				spdk_json_write_named_uint64(w, "be_queue_idx", map_entries[i].be_qid.qidx);
-				spdk_json_write_named_uint64(w, "be_hdlr_idx", map_entries[i].be_hdlr_qid.hidx);
-				spdk_json_write_named_uint64(w, "be_hdlr_queue_idx", map_entries[i].be_hdlr_qid.qidx);
-				spdk_json_write_object_end(w);
-			}
+			queue_handle = rbdev->null.queues[i].handle;
 		}
+
+		rpc_tgt_ofld_be_queue_mapping_dump(w, queue_handle);
 	}
 
 	spdk_json_write_array_end(w);
 	spdk_json_write_object_end(w);
-
-	if (map_entries) {
-		free(map_entries);
-	}
 }
 
 static void
@@ -10350,11 +10348,11 @@ bdev_is_found:
 	spdk_json_write_array_begin(w);
 
 	if (rns) {
-		rpc_tgt_ofld_get_bdev_queue_mapping_dump(w, rns, rtransport->sta.caps.max_qs_per_be);
+		rpc_tgt_ofld_bdev_queues_mapping_dump(w, rns);
 	} else {
 		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
 			TAILQ_FOREACH(rns, &rsubsystem->namespaces, link) {
-				rpc_tgt_ofld_get_bdev_queue_mapping_dump(w, rns, rtransport->sta.caps.max_qs_per_be);
+				rpc_tgt_ofld_bdev_queues_mapping_dump(w, rns);
 			}
 		}
 	}
