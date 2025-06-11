@@ -2816,12 +2816,12 @@ err:
 }
 
 static int
-nvme_tcp_read_data(struct spdk_sock *sock, int bytes,
+nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 		   void *buf)
 {
 	int ret;
 
-	ret = spdk_sock_recv(sock, buf, bytes);
+	ret = spdk_sock_recv(tqpair->sock, buf, bytes);
 
 	if (ret > 0) {
 		return ret;
@@ -2844,7 +2844,7 @@ nvme_tcp_read_data(struct spdk_sock *sock, int bytes,
 }
 
 static int
-nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
+nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct iovec iov[NVME_TCP_MAX_SGL_DESCRIPTORS + 1];
 	int iovcnt;
@@ -2852,7 +2852,8 @@ nvme_tcp_read_payload_data(struct spdk_sock *sock, struct nvme_tcp_pdu *pdu)
 	int i;
 	int ret, rc;
 
-	assert(sock != NULL);
+	assert(tqpair != NULL);
+	assert(tqpair->sock != NULL);
 
 	spdk_iov_sgl_init(&sgl, iov, NVME_TCP_MAX_SGL_DESCRIPTORS + 1, pdu->rw_offset);
 
@@ -2873,7 +2874,7 @@ end:
 
 	ret = 0;
 	for (i = 0; i < iovcnt; i++) {
-		rc = nvme_tcp_read_data(sock, iov[i].iov_len, iov[i].iov_base);
+		rc = nvme_tcp_read_data(tqpair, iov[i].iov_len, iov[i].iov_base);
 		if (rc < 0) {
 			return NVME_TCP_CONNECTION_FATAL;
 		}
@@ -2929,7 +2930,7 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 				return rc;
 			}
 
-			rc = nvme_tcp_read_data(tqpair->sock,
+			rc = nvme_tcp_read_data(tqpair,
 						sizeof(struct spdk_nvme_tcp_common_pdu_hdr) - pdu->ch_valid_bytes,
 						(void *)&pdu->hdr.common + pdu->ch_valid_bytes);
 			if (rc < 0) {
@@ -2950,7 +2951,7 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			break;
 		/* Wait for the pdu specific header  */
 		case NVME_TCP_PDU_RECV_STATE_AWAIT_PDU_PSH:
-			rc = nvme_tcp_read_data(tqpair->sock,
+			rc = nvme_tcp_read_data(tqpair,
 						pdu->psh_len - pdu->psh_valid_bytes,
 						(void *)&pdu->hdr.raw + sizeof(struct spdk_nvme_tcp_common_pdu_hdr) + pdu->psh_valid_bytes);
 			if (rc < 0) {
@@ -2989,7 +2990,7 @@ nvmf_tcp_sock_process(struct spdk_nvmf_tcp_qpair *tqpair)
 				pdu->ddgst_enable = true;
 			}
 
-			rc = nvme_tcp_read_payload_data(tqpair->sock, pdu);
+			rc = nvme_tcp_read_payload_data(tqpair, pdu);
 			if (rc < 0) {
 				nvmf_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_QUIESCING);
 				break;
