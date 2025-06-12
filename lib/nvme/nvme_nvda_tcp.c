@@ -1652,7 +1652,9 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		tqpair->flags.pending_events = false;
 	}
 
-	tqpair->stats = &g_dummy_stats;
+	if (tqpair->flags.shared_stats) {
+		tqpair->stats = &g_dummy_stats;
+	}
 
 	nvme_tcp_qpair_print_reqs_info(tqpair);
 	nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
