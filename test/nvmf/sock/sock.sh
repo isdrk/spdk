@@ -95,7 +95,7 @@ fi
 
 # send message using hello_sock client bound to specific address
 message="**MESSAGE:This is a test message from the client**"
-response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -a $TARGET_IP)
+response=$(echo "$message" | $HELLO_SOCK_APP -H $NVMF_INITIATOR_IP -P $NVMF_PORT -N "posix" -a $NVMF_FIRST_TARGET_IP)
 
 if ! echo "$response" | grep -q "$message"; then
 	exit 1
@@ -103,7 +103,7 @@ fi
 
 # send message using hello_sock client bound to specific port
 message="**MESSAGE:This is a test message from the client**"
-response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -b $((ISCSI_PORT + 1)))
+response=$(echo "$message" | $HELLO_SOCK_APP -H $NVMF_INITIATOR_IP -P $NVMF_PORT -N "posix" -b $((NVMF_PORT + 1)))
 
 if ! echo "$response" | grep -q "$message"; then
 	exit 1
@@ -111,7 +111,7 @@ fi
 
 # send message using hello_sock client bound to specific address and port
 message="**MESSAGE:This is a test message from the client**"
-response=$(echo "$message" | $HELLO_SOCK_APP -H $INITIATOR_IP -P $ISCSI_PORT -N "posix" -a $TARGET_IP -b $((ISCSI_PORT + 1)))
+response=$(echo "$message" | $HELLO_SOCK_APP -H $NVMF_INITIATOR_IP -P $NVMF_PORT -N "posix" -a $NVMF_FIRST_TARGET_IP -b $((NVMF_PORT + 1)))
 
 if ! echo "$response" | grep -q "$message"; then
 	exit 1
