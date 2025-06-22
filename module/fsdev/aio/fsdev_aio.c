@@ -971,6 +971,11 @@ do_return:
 	return error;
 }
 
+struct fsdev_aio_release_ctx {
+	struct aio_fsdev_file_handle *fhandle;
+	struct spdk_fsdev_io *fsdev_io;
+};
+
 static void
 fsdev_aio_thread_barrier(void *ctx)
 {
@@ -978,29 +983,47 @@ fsdev_aio_thread_barrier(void *ctx)
 }
 
 static void
-fsdev_aio_destroy_fhandle_cpl(void *ctx)
+fsdev_aio_destroy_fhandle_cpl(void *_ctx)
 {
-	struct aio_fsdev_file_handle *fhandle = (struct aio_fsdev_file_handle *)ctx;
+	struct fsdev_aio_release_ctx *ctx = _ctx;
+	struct spdk_fsdev_io *fsdev_io = ctx->fsdev_io;
+	struct aio_fsdev_file_handle *fhandle = ctx->fhandle;
 
 	file_handle_destroy(fhandle);
+	spdk_fsdev_io_complete(fsdev_io, 0);
+
+	free(ctx);
+}
+
+static int
+fsdev_aio_do_release(struct spdk_fsdev_file_handle *fhandle, struct spdk_fsdev_io *fsdev_io)
+{
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct fsdev_aio_release_ctx *ctx;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		SPDK_ERRLOG("Cannot allocate release context\n");
+		return -ENOMEM;
+	}
+	ctx->fhandle = fsdev_aio_get_fhandle(vfsdev, fhandle);
+	if (!ctx->fhandle) {
+		SPDK_ERRLOG("Invalid fhandle: %p\n", ctx->fhandle);
+		free(ctx);
+		return -EINVAL;
+	}
+	ctx->fsdev_io = fsdev_io;
+
+	file_handle_invalidate(ctx->fhandle);
+	spdk_for_each_thread(fsdev_aio_thread_barrier, ctx, fsdev_aio_destroy_fhandle_cpl);
+
+	return IO_STATUS_ASYNC;
 }
 
 static int
 fsdev_aio_op_releasedir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_handle *fhandle;
-
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.releasedir.fhandle);
-	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
-	}
-
-	file_handle_invalidate(fhandle);
-	spdk_for_each_thread(fsdev_aio_thread_barrier, fhandle, fsdev_aio_destroy_fhandle_cpl);
-
-	return 0;
+	return fsdev_aio_do_release(fsdev_io->u_in.releasedir.fhandle, fsdev_io);
 }
 
 static int
@@ -2689,19 +2712,7 @@ fop_failed:
 static int
 fsdev_aio_op_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_handle *fhandle;
-
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.release.fhandle);
-	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		return -EINVAL;
-	}
-
-	file_handle_invalidate(fhandle);
-	spdk_for_each_thread(fsdev_aio_thread_barrier, fhandle, fsdev_aio_destroy_fhandle_cpl);
-
-	return 0;
+	return fsdev_aio_do_release(fsdev_io->u_in.release.fhandle, fsdev_io);
 }
 
 static int
