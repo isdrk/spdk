@@ -150,7 +150,8 @@ $ cat config.json
         {
           "method": "fsdev_aio_set_options",
           "params": {
-            "max_io_depth": 1024
+            "max_io_depth": 1024,
+            "enable_io_uring": false
           }
         },
         {

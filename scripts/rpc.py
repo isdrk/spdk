@@ -3761,10 +3761,11 @@ Format: 'user:u1 secret:s1 muser:mu1 msecret:ms1,user:u2 secret:s2 muser:mu2 mse
     p.set_defaults(func=fsdev_reset_iostat)
 
     def fsdev_aio_set_options(args):
-        print(rpc.fsdev.fsdev_aio_set_options(args.client, max_io_depth=args.max_io_depth))
+        print(rpc.fsdev.fsdev_aio_set_options(args.client, max_io_depth=args.max_io_depth, enable_io_uring=args.enable_io_uring))
 
     p = subparsers.add_parser('fsdev_aio_set_options', help='Set the aio filesystem options')
     p.add_argument('-m', '--max-io-depth', help='Max IO depth', type=int)
+    p.add_argument('-e', '--enable-io-uring', help='Enable IO uring', action='store_true', default=None)
     p.set_defaults(func=fsdev_aio_set_options)
 
     def fsdev_aio_get_options(args):

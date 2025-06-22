@@ -14,6 +14,7 @@
 
 struct fsdev_aio_module_opts {
 	uint32_t max_io_depth;
+	bool enable_io_uring;
 };
 
 struct spdk_fsdev_aio_opts {

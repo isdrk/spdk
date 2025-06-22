@@ -150,6 +150,11 @@ struct aio_ioctl_rest {
  */
 #define AIO_IOCTL_ACT_CMD _IO('E', 47)
 
+static struct fsdev_aio_module_opts g_opts = {
+	.enable_io_uring = false,
+	.max_io_depth = 256,
+};
+
 #ifdef SPDK_CONFIG_URING
 static int g_io_uring_supported_ops[IORING_OP_LAST] = {0};
 
@@ -175,7 +180,8 @@ fsdev_init_supported_uring_ops(void)
 static inline bool
 aio_fsdev_use_io_uring_rdwr(void)
 {
-	return g_io_uring_supported_ops[IORING_OP_READV] && g_io_uring_supported_ops[IORING_OP_WRITEV];
+	return g_opts.enable_io_uring &&
+	       g_io_uring_supported_ops[IORING_OP_READV] && g_io_uring_supported_ops[IORING_OP_WRITEV];
 }
 #else
 #define aio_fsdev_use_io_uring_rdwr() false
@@ -333,9 +339,7 @@ struct aio_io_channel {
 
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
 			g_aio_fsdev_head);
-static struct fsdev_aio_module_opts g_opts = {
-	.max_io_depth = 256,
-};
+
 
 static inline struct aio_fsdev *
 fsdev_to_aio_fsdev(struct spdk_fsdev *fsdev)
@@ -4555,6 +4559,7 @@ fsdev_aio_config_json(struct spdk_json_write_ctx *w)
 
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_uint32(w, "max_io_depth", g_opts.max_io_depth);
+	spdk_json_write_named_bool(w, "enable_io_uring", g_opts.enable_io_uring);
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);

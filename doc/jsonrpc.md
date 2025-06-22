@@ -14579,6 +14579,7 @@ Set options global to all AIO fsdevs.
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 max_io_depth            | Optional | number      | Maximum I/O depth per channel
+enable_io_uring         | Optional | bool        | Enable IO uring
 
 #### Example
 
@@ -14589,7 +14590,8 @@ Example request:
   "method": "fsdev_aio_set_options",
   "id": 1,
   "params": {
-    "max_io_depth": 1024
+    "max_io_depth": 1024,
+    "enable_io_uring": false
   }
 }
 ~~~

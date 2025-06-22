@@ -115,7 +115,8 @@ rpc_aio_delete(struct spdk_jsonrpc_request *request, const struct spdk_json_val 
 SPDK_RPC_REGISTER("fsdev_aio_delete", rpc_aio_delete, SPDK_RPC_RUNTIME)
 
 static const struct spdk_json_object_decoder rpc_aio_set_options_decoders[] = {
-	{"max_io_depth", offsetof(struct fsdev_aio_module_opts, max_io_depth), spdk_json_decode_uint32, true}
+	{"max_io_depth", offsetof(struct fsdev_aio_module_opts, max_io_depth), spdk_json_decode_uint32, true},
+	{"enable_io_uring", offsetof(struct fsdev_aio_module_opts, enable_io_uring), spdk_json_decode_bool, true},
 };
 
 static void
