@@ -131,3 +131,21 @@ def fsdev_reset_iostat(client, name: str = None):
         params['name'] = name
 
     return client.call('fsdev_reset_iostat', params)
+
+
+def fsdev_aio_set_options(client, max_io_depth: int = None):
+    """Set aio filesystem options.
+
+    Args:
+        max_io_depth: max io depth
+    """
+    params = {}
+    if max_io_depth is not None:
+        params['max_io_depth'] = max_io_depth
+    return client.call('fsdev_aio_set_options', params)
+
+
+def fsdev_aio_get_options(client):
+    """Get aio filesystem options.
+    """
+    return client.call('fsdev_aio_get_options')
