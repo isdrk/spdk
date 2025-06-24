@@ -545,9 +545,28 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 }
 
 static void
+fsdev_fuse_remove_umount_cb(void *_ctx)
+{
+}
+
+static void
 fsdev_fuse_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fsdev, void *ctx)
 {
-	SPDK_ERRLOG("%s: unhandled event %d\n", spdk_fsdev_get_name(fsdev), type);
+	struct spdk_fuse_mount *mount = ctx;
+	int rc;
+
+	switch (type) {
+	case SPDK_FSDEV_EVENT_REMOVE:
+		rc = spdk_fuse_umount(mount, fsdev_fuse_remove_umount_cb, NULL);
+		if (rc != 0) {
+			SPDK_ERRLOG("%s: failed to umount %s: %s\n", mount->name,
+				    mount->mountpoint, spdk_strerror(-rc));
+		}
+		break;
+	default:
+		SPDK_ERRLOG("%s: unhandled event %d\n", spdk_fsdev_get_name(fsdev), type);
+		break;
+	}
 }
 
 static int
@@ -774,7 +793,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	rc = spdk_fsdev_open(name, fsdev_fuse_fsdev_event_cb, NULL, &mnt->fsdev_desc);
+	rc = spdk_fsdev_open(name, fsdev_fuse_fsdev_event_cb, mnt, &mnt->fsdev_desc);
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to open fsdev: %s\n", mnt->name, spdk_strerror(-rc));
 		goto error;
