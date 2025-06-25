@@ -4445,6 +4445,7 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 	rc = spdk_mlx5_qp_connect_loopback(qp->qp);
 	if (rc) {
 		spdk_mlx5_qp_destroy(qp->qp);
+		qp->qp = NULL;
 		return rc;
 	}
 
@@ -4484,6 +4485,7 @@ accel_mlx5_dev_destroy_qps(struct accel_mlx5_dev *dev)
 
 	if (dev->qp.qp) {
 		spdk_mlx5_qp_destroy(dev->qp.qp);
+		dev->qp.qp = NULL;
 	}
 
 	RB_FOREACH_SAFE(qpair, accel_mlx5_qpairs_map, &dev->qpairs_map, tmp_qpair) {
