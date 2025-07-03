@@ -204,6 +204,7 @@ struct aio_fsdev_file_object {
 	uint32_t is_symlink : 1;
 	uint32_t is_dir : 1;
 	uint32_t reserved : 30;
+	mode_t mode;
 	int fd;
 	char *fd_str;
 	struct fsdev_aio_key key;
@@ -450,7 +451,6 @@ find_leaf_unsafe(struct aio_fsdev_file_object *fobject, ino_t ino, dev_t dev)
 	return NULL;
 }
 
-
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 static int
 fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
@@ -643,6 +643,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->is_symlink = S_ISLNK(mode) ? 1 : 0;
 	fobject->is_dir = S_ISDIR(mode) ? 1 : 0;
 	fobject->vfsdev = vfsdev;
+	fobject->mode = mode;
 
 	TAILQ_INIT(&fobject->handles);
 	RB_INIT(&fobject->leafs);
@@ -798,6 +799,7 @@ file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_f
 		return res;
 	}
 
+	fobject->mode = stbuf.st_mode;
 	memset(attr, 0, sizeof(*attr));
 
 	attr->ino = stbuf.st_ino;
@@ -2527,6 +2529,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
 			goto fop_failed;
 		}
+		fobject->mode = attr->mode;
 	}
 
 	if (to_set & (SPDK_FSDEV_ATTR_UID | SPDK_FSDEV_ATTR_GID)) {
@@ -2782,7 +2785,6 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct spdk_fsdev_file_attr st = {};
 	mode_t new_mode;
 	int fd, error;
 
@@ -2791,19 +2793,14 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 		return 0;
 	}
 
-	error = file_object_fill_attr(fobject, &st);
-	if (error) {
-		goto fail;
-	}
-
 	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
 	if (fd == -1) {
 		error = -errno;
 		goto fail;
 	}
 
-	new_mode = st.mode & ~S_ISUID;
-	if (st.mode & S_IXGRP) {
+	new_mode = fobject->mode & ~S_ISUID;
+	if (fobject->mode & S_IXGRP) {
 		new_mode &= ~S_ISGID;
 	}
 
