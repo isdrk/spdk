@@ -320,7 +320,7 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 			/* Even though we don't report support for handling this flag, the kernel
 			 * will send us on files opened with O_DIRECT, so we still handle it.
 			 */
-			if (res2 >= 0 && (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID)) {
+			if (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID) {
 				/* We do not check the return value because
 				* failure is not fatal. */
 				clear_suid_sgid(aio);
