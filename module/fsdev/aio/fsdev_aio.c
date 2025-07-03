@@ -2793,15 +2793,20 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 		return 0;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
-	if (fd == -1) {
-		error = -errno;
-		goto fail;
-	}
-
 	new_mode = fobject->mode & ~S_ISUID;
 	if (fobject->mode & S_IXGRP) {
 		new_mode &= ~S_ISGID;
+	}
+
+	if (fobject->mode == new_mode) {
+		error = 0;
+		goto out;
+	}
+
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	if (fd == -1) {
+		error = -errno;
+		goto out;
 	}
 
 	error = fchmod(fd, new_mode);
@@ -2811,7 +2816,7 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 	}
 	close(fd);
 
-fail:
+out:
 	file_object_unref(fobject, 1);
 	if (error != 0) {
 		SPDK_ERRLOG("Failed to clear suid/sgid on successfull "
