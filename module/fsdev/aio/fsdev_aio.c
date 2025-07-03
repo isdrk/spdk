@@ -296,8 +296,6 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 	return (struct aio_fsdev_io *)fsdev_io->driver_ctx;
 }
 
-#define MAX_EVENTS 1024
-
 static int clear_suid_sgid(struct aio_fsdev_io *vfsdev_io);
 
 static void
