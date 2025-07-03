@@ -201,9 +201,6 @@ RB_GENERATE_STATIC(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh, node, aio_fsdev_
 #define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
 struct aio_fsdev_file_object {
 	struct aio_fsdev_fhdr hdr;
-	uint32_t is_symlink : 1;
-	uint32_t is_dir : 1;
-	uint32_t reserved : 30;
 	mode_t mode;
 	int fd;
 	char *fd_str;
@@ -218,6 +215,18 @@ struct aio_fsdev_file_object {
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
 	struct aio_fsdev *vfsdev;
 };
+
+static inline bool
+fsdev_aio_fobject_is_symlink(struct aio_fsdev_file_object *fobject)
+{
+	return S_ISLNK(fobject->mode);
+}
+
+static inline bool
+fsdev_aio_fobject_is_dir(struct aio_fsdev_file_object *fobject)
+{
+	return S_ISDIR(fobject->mode);
+}
 
 static int
 aio_fsdev_file_object_cmp(struct fsdev_aio_key *fo1, struct fsdev_aio_key *fo2)
@@ -523,7 +532,8 @@ file_object_destroy(struct aio_fsdev_file_object *fobject)
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* root is handled on umount */
-	if (fobject->vfsdev->fanotify_fd != -1 && fobject->is_dir && fobject->parent_fobject) {
+	if (fobject->vfsdev->fanotify_fd != -1 &&
+	    fsdev_aio_fobject_is_dir(fobject) && fobject->parent_fobject) {
 		fsdev_aio_fanotify_remove(fobject);
 	}
 #endif
@@ -640,8 +650,6 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->fd = fd;
 	fobject->key.ino = ino;
 	fobject->key.dev = dev;
-	fobject->is_symlink = S_ISLNK(mode) ? 1 : 0;
-	fobject->is_dir = S_ISDIR(mode) ? 1 : 0;
 	fobject->vfsdev = vfsdev;
 	fobject->mode = mode;
 
@@ -650,7 +658,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* Root is marked on mount */
-	if (vfsdev->fanotify_fd != -1 && fobject->is_dir && parent_fobject) {
+	if (vfsdev->fanotify_fd != -1 && fsdev_aio_fobject_is_dir(fobject) && parent_fobject) {
 		int rc = fsdev_aio_fanotify_add(fobject, parent_fobject->fd, name);
 		if (rc) {
 			goto err;
@@ -828,7 +836,7 @@ utimensat_empty(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
 {
 	int res;
 
-	if (fobject->is_symlink) {
+	if (fsdev_aio_fobject_is_symlink(fobject)) {
 		res = utimensat(fobject->fd, "", tv, AT_EMPTY_PATH);
 		if (res == -1 && errno == EINVAL) {
 			/* Sorry, no race free way to set times on symlink. */
