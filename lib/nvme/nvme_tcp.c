@@ -2891,6 +2891,9 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 		 * want to free it from disconnect_qpair_cb, while it's not fully disconnected (and
 		 * might still have outstanding requests) */
 		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED) {
+			if (TAILQ_ENTRY_ENQUEUED(tqpair, link_poll)) {
+				TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
+			}
 			disconnected_qpair_cb(qpair, tgroup->group->ctx);
 		}
 	}
