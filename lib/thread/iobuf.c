@@ -24,6 +24,7 @@
  * for the default. */
 #define IOBUF_DEFAULT_LARGE_BUFSIZE	(132 * 1024)
 #define IOBUF_MAX_CHANNELS		64
+#define IOBUF_ENQUEUE_BATCH_SIZE	64
 
 SPDK_STATIC_ASSERT(sizeof(struct spdk_iobuf_buffer) <= IOBUF_MIN_SMALL_BUFSIZE,
 		   "Invalid data offset");
@@ -511,6 +512,8 @@ iobuf_channel_node_fini(struct spdk_iobuf_channel *ch, int32_t numa_id)
 	struct iobuf_node *node = &g_iobuf.node[numa_id];
 	struct spdk_iobuf_entry *entry __attribute__((unused));
 	struct spdk_iobuf_buffer *buf;
+	void *bufs[IOBUF_ENQUEUE_BATCH_SIZE];
+	uint32_t i = 0;
 
 	/* Make sure none of the wait queue entries are coming from this module */
 	STAILQ_FOREACH(entry, cache->small.queue, stailq) {
@@ -524,14 +527,32 @@ iobuf_channel_node_fini(struct spdk_iobuf_channel *ch, int32_t numa_id)
 	while (!STAILQ_EMPTY(&cache->small.cache)) {
 		buf = STAILQ_FIRST(&cache->small.cache);
 		STAILQ_REMOVE_HEAD(&cache->small.cache, stailq);
-		spdk_ring_enqueue(node->small_pool, (void **)&buf, 1, NULL);
+
+		bufs[i] = buf;
+		i++;
+		if (i == IOBUF_ENQUEUE_BATCH_SIZE) {
+			spdk_ring_enqueue(node->small_pool, (void **)bufs, i, NULL);
+			i = 0;
+		}
 		cache->small.cache_count--;
+	}
+	if (i > 0) {
+		spdk_ring_enqueue(node->small_pool, (void **)bufs, i, NULL);
+		i = 0;
 	}
 	while (!STAILQ_EMPTY(&cache->large.cache)) {
 		buf = STAILQ_FIRST(&cache->large.cache);
 		STAILQ_REMOVE_HEAD(&cache->large.cache, stailq);
-		spdk_ring_enqueue(node->large_pool, (void **)&buf, 1, NULL);
+		bufs[i] = buf;
+		i++;
+		if (i == IOBUF_ENQUEUE_BATCH_SIZE) {
+			spdk_ring_enqueue(node->large_pool, (void **)bufs, i, NULL);
+			i = 0;
+		}
 		cache->large.cache_count--;
+	}
+	if (i > 0) {
+		spdk_ring_enqueue(node->large_pool, (void **)bufs, i, NULL);
 	}
 
 	assert(cache->small.cache_count == 0);
