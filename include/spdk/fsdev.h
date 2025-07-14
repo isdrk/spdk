@@ -214,6 +214,7 @@ enum spdk_fsdev_io_type {
 	SPDK_FSDEV_IO_IOCTL,
 	SPDK_FSDEV_IO_GETLK,
 	SPDK_FSDEV_IO_SETLK,
+	SPDK_FSDEV_IO_READDIR_SIMPLE,
 	__SPDK_FSDEV_IO_LAST
 };
 
@@ -829,6 +830,21 @@ typedef int (spdk_fsdev_readdir_entry_cb)(void *cb_arg, struct spdk_fsdev_io *fs
 		off_t offset, bool *forget);
 
 /**
+ * Read directory simple per-entry callback
+ *
+ * \param cb_arg Context passed to the corresponding spdk_fsdev_io_submit API
+ * \param fsdev_io Filesystem device I/O.
+ * \param name Name of the entry
+ * \param ino inode number
+ * \param type Type of the entry
+ * \param offset Offset of the next entry
+ *
+ * \return 0 to continue the enumeration, an error code otherwise.
+ */
+typedef int (spdk_fsdev_readdir_simple_entry_cb)(void *cb_arg, struct spdk_fsdev_io *fsdev_io,
+		const char *name, uint64_t ino, uint32_t type, off_t offset);
+
+/**
  * Filesystem device IO completion callback.
  *
  * \param fsdev_io Filesystem device I/O that has completed.
@@ -1072,6 +1088,13 @@ struct spdk_fsdev_io {
 			uint64_t owner;
 			bool wait;
 		} setlk;
+		struct {
+			struct spdk_fsdev_file_object *fobject;
+			struct spdk_fsdev_file_handle *fhandle;
+			uint64_t offset;
+			spdk_fsdev_readdir_simple_entry_cb *entry_cb_fn;
+		} readdir_simple;
+
 	} u_in;
 
 	union {
