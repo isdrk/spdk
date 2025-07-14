@@ -1034,9 +1034,8 @@ fuse_dispatcher_io_complete_getlk(struct fuse_io *fuse_io,
 /* `buf` is allowed to be empty so that the proper size may be
    allocated by the caller */
 static size_t
-fuse_dispatcher_add_direntry(struct fuse_io *fuse_io, char *buf, size_t bufsize,
-			     const char *name, struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			     off_t off)
+fuse_dispatcher_add_direntry(struct fuse_io *fuse_io, char *buf, size_t bufsize, const char *name,
+			     uint64_t ino, uint32_t type, off_t off)
 {
 	size_t namelen;
 	size_t entlen;
@@ -1052,10 +1051,10 @@ fuse_dispatcher_add_direntry(struct fuse_io *fuse_io, char *buf, size_t bufsize,
 	}
 
 	dirent = (struct fuse_dirent *) buf;
-	dirent->ino = fsdev_io_h2d_u64(fuse_io->disp, attr->ino);
+	dirent->ino = fsdev_io_h2d_u64(fuse_io->disp, ino);
 	dirent->off = fsdev_io_h2d_u64(fuse_io->disp, off);
 	dirent->namelen = fsdev_io_h2d_u32(fuse_io->disp, namelen);
-	dirent->type = fsdev_io_h2d_u32(fuse_io->disp, (attr->mode & 0170000) >> 12);
+	dirent->type = fsdev_io_h2d_u32(fuse_io->disp, type);
 	memcpy(dirent->name, name, namelen);
 	memset(dirent->name + namelen, 0, entlen_padded - entlen);
 
@@ -2455,7 +2454,7 @@ fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, struct spdk_fsdev_io *fsdev_
 			 fuse_dispatcher_add_direntry_plus(fuse_io, fuse_io->u.readdir.writep, bytes_remained,
 					 name, fobject, attr, offset) :
 			 fuse_dispatcher_add_direntry(fuse_io, fuse_io->u.readdir.writep, bytes_remained,
-					 name, fobject, attr, offset);
+					 name, attr->ino, (attr->mode & 0170000) >> 12, offset);
 
 	if (direntry_bytes > bytes_remained) {
 		return -EAGAIN;
