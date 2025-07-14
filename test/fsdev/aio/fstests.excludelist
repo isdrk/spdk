@@ -4,7 +4,8 @@ generic/069
 generic/003
 generic/075
 generic/079
-generic/091
+# Fails on kernels older than v6.9
+generic/095
 generic/112
 generic/120
 generic/131
