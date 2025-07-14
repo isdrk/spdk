@@ -247,6 +247,16 @@ struct fuse_disp_recovery_data {
 
 struct spdk_fuse_dispatcher {
 	/**
+	 * Try to use readdir_simple.
+	 */
+	uint64_t use_readdir_simple : 1;
+
+	/**
+	 * Reserved
+	 */
+	uint64_t reserved : 63;
+
+	/**
 	 * fsdev descriptor
 	 */
 	struct spdk_fsdev_desc *desc;
@@ -1113,12 +1123,28 @@ fuse_dispatcher_no_resp_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *f
 	}
 }
 
+static void fuse_dispatcher_readdir_fallback_and_retry(struct spdk_fsdev_io *fsdev_io);
+
 static void
 fuse_dispatcher_readdir_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
+	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 
-	if (spdk_fsdev_io_get_type(fsdev_io) != SPDK_FSDEV_IO_READDIR) {
+	switch (type) {
+	case SPDK_FSDEV_IO_READDIR:
+		break;
+	case SPDK_FSDEV_IO_READDIR_SIMPLE:
+		if (disp->use_readdir_simple && status == -ENOSYS) {
+			/* if SPDK_FSDEV_IO_READDIR_SIMPLE is not supported by the underlying fsdev,
+			 * we fallback to SPDK_FSDEV_IO_READDIR and retry.
+			 */
+			fuse_dispatcher_readdir_fallback_and_retry(fsdev_io);
+			return;
+		}
+		break;
+	default:
 		assert(false);
 		fuse_dispatcher_io_complete_err(fuse_io, -EINVAL);
 		return;
@@ -2469,6 +2495,61 @@ fuse_dispatcher_readdir_usr_entry_clb(void *cb_arg, struct spdk_fsdev_io *fsdev_
 }
 
 static int
+fuse_dispatcher_readdir_simple_usr_entry_clb(void *cb_arg, struct spdk_fsdev_io *fsdev_io,
+		const char *name, uint64_t ino, uint32_t type, off_t offset)
+{
+	struct fuse_io *fuse_io = cb_arg;
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	size_t bytes_remained = fuse_io->u.readdir.size - fuse_io->u.readdir.bytes_written;
+	size_t direntry_bytes;
+
+	UNUSED(disp);
+	assert(disp->use_readdir_simple);
+	assert(!fuse_io->u.readdir.plus);
+
+	direntry_bytes = fuse_dispatcher_add_direntry(fuse_io, fuse_io->u.readdir.writep, bytes_remained,
+			 name, ino, type, offset);
+
+	if (direntry_bytes > bytes_remained) {
+		return -EAGAIN;
+	}
+
+	fuse_io->u.readdir.writep += direntry_bytes;
+	fuse_io->u.readdir.bytes_written += direntry_bytes;
+
+	return 0;
+}
+
+static void
+fuse_dispatcher_readdir_fallback_and_retry(struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_io *fuse_io = fsdev_to_fuse_io(fsdev_io);
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
+	/* We copy the data fields aside first as fsdev_io->u_in is a union. */
+	struct spdk_fsdev_file_object *fobject = fsdev_io->u_in.readdir_simple.fobject;
+	struct spdk_fsdev_file_handle *fhandle = fsdev_io->u_in.readdir_simple.fhandle;
+	uint64_t offset = fsdev_io->u_in.readdir_simple.offset;
+
+	/* The underlying fsdev does not support SPDK_FSDEV_IO_READDIR_SIMPLE simple, so we fallback to SPDK_FSDEV_IO_READDIR. */
+	disp->use_readdir_simple = 0;
+
+	SPDK_NOTICELOG("%s: READDIR_SIMPLE not supported, falling back to READDIR\n",
+		       fuse_dispatcher_name(disp));
+
+	/* Re-init the fsdev_io with SPDK_FSDEV_IO_READDIR. */
+	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READDIR, fuse_dispatcher_readdir_cpl_cb);
+
+	/* All the relevant data fields are already set to readdir_simple, so all we need is to copy the them to readdir. */
+	fsdev_io->u_in.readdir.fobject = fobject;
+	fsdev_io->u_in.readdir.fhandle = fhandle;
+	fsdev_io->u_in.readdir.offset = offset;
+	fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
+
+	/* Submit the fsdev_io again. */
+	spdk_fsdev_io_submit(fsdev_io);
+}
+
+static int
 fuse_dispatcher_fill_readdir_common(struct fuse_io *fuse_io, bool plus)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
@@ -2496,12 +2577,23 @@ fuse_dispatcher_fill_readdir_common(struct fuse_io *fuse_io, bool plus)
 
 	fh = fsdev_io_d2h_u64(fuse_io->disp, arg->fh);
 
-	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READDIR, fuse_dispatcher_readdir_cpl_cb);
+	if (plus || !fuse_io->disp->use_readdir_simple) {
+		/* For READDIRPLUS or if SPDK_FSDEV_IO_READDIR_SIMPLE is not supported by the underlying fsdev, we use SPDK_FSDEV_IO_READDIR. */
+		fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READDIR, fuse_dispatcher_readdir_cpl_cb);
 
-	fsdev_io->u_in.readdir.fobject = file_object(fuse_io);
-	fsdev_io->u_in.readdir.fhandle = file_handle(fh);
-	fsdev_io->u_in.readdir.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
-	fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
+		fsdev_io->u_in.readdir.fobject = file_object(fuse_io);
+		fsdev_io->u_in.readdir.fhandle = file_handle(fh);
+		fsdev_io->u_in.readdir.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+		fsdev_io->u_in.readdir.entry_cb_fn = fuse_dispatcher_readdir_usr_entry_clb;
+	} else {
+		/* For READDIR, we first try SPDK_FSDEV_IO_READDIR_SIMPLE. */
+		fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_READDIR_SIMPLE, fuse_dispatcher_readdir_cpl_cb);
+
+		fsdev_io->u_in.readdir_simple.fobject = file_object(fuse_io);
+		fsdev_io->u_in.readdir_simple.fhandle = file_handle(fh);
+		fsdev_io->u_in.readdir_simple.offset = fsdev_io_d2h_u64(fuse_io->disp, arg->offset);
+		fsdev_io->u_in.readdir_simple.entry_cb_fn = fuse_dispatcher_readdir_simple_usr_entry_clb;
+	}
 
 	return 0;
 }
@@ -3880,6 +3972,7 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
 	disp->desc = desc;
 	disp->notify_reply_cb = notify_reply_cb;
 	disp->notify_reply_cb_arg = notify_reply_cb_arg;
+	disp->use_readdir_simple = 1;
 
 	if (!fuse_dispatcher_init_rmem(disp, recovery_mode)) {
 		SPDK_ERRLOG("could not create or restore rmem pool for %s\n", fuse_dispatcher_name(disp));
