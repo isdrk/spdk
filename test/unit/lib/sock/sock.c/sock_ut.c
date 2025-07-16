@@ -666,7 +666,7 @@ posix_sock_group_fairness(void)
 	 *  is the peer of the first client sock that we wrote to.
 	 */
 	g_server_sock_read = NULL;
-	rc = sock_group_poll_count(group, 1);
+	rc = spdk_sock_group_poll_count(group, 1);
 	CU_ASSERT(rc == 1);
 	CU_ASSERT(g_server_sock_read == server_sock[0]);
 
@@ -681,17 +681,17 @@ posix_sock_group_fairness(void)
 	usleep(1000);
 
 	g_server_sock_read = NULL;
-	rc = sock_group_poll_count(group, 1);
+	rc = spdk_sock_group_poll_count(group, 1);
 	CU_ASSERT(rc == 1);
 	CU_ASSERT(g_server_sock_read == server_sock[1]);
 
 	g_server_sock_read = NULL;
-	rc = sock_group_poll_count(group, 1);
+	rc = spdk_sock_group_poll_count(group, 1);
 	CU_ASSERT(rc == 1);
 	CU_ASSERT(g_server_sock_read == server_sock[2]);
 
 	g_server_sock_read = NULL;
-	rc = sock_group_poll_count(group, 1);
+	rc = spdk_sock_group_poll_count(group, 1);
 	CU_ASSERT(rc == 1);
 	CU_ASSERT(g_server_sock_read == server_sock[0]);
 
