@@ -799,19 +799,42 @@ test_nvmf_tcp_in_capsule_data_handle(void)
 }
 
 static void
+test_nvmf_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
+{
+
+}
+
+static void
 test_nvmf_tcp_qpair_init_mem_resource(void)
 {
 	int rc;
 	struct spdk_nvmf_tcp_qpair *tqpair = NULL;
+	struct spdk_sock_group *sock_group;
 	struct spdk_nvmf_transport transport = {};
 	struct spdk_thread *thread;
+	struct spdk_sock_opts sock_opts;
+	struct spdk_sock_group_opts sgroup_opts = {
+		.size = sizeof(sgroup_opts),
+		.interrupt = false,
+		.ctx = NULL,
+		.rx_cb = test_nvmf_sock_cb
+	};
 
 	thread = spdk_thread_create(NULL, NULL);
 	SPDK_CU_ASSERT_FATAL(thread != NULL);
 	spdk_set_thread(thread);
 
+	sock_group = spdk_sock_group_create(&sgroup_opts);
+	SPDK_CU_ASSERT_FATAL(sock_group != NULL);
+
+	sock_opts.opts_size = sizeof(sock_opts);
+	spdk_sock_get_default_opts(&sock_opts);
+	sock_opts.group = sock_group;
+	sock_opts.user_ctx = NULL;
+
 	tqpair = calloc(1, sizeof(*tqpair));
 	tqpair->qpair.transport = &transport;
+	tqpair->sock = spdk_sock_connect("192.168.1.78", 23, &sock_opts);
 
 	nvmf_tcp_opts_init(&transport.opts);
 	CU_ASSERT(transport.opts.max_queue_depth == SPDK_NVMF_TCP_DEFAULT_MAX_IO_QUEUE_DEPTH);
@@ -870,6 +893,8 @@ test_nvmf_tcp_qpair_init_mem_resource(void)
 		spdk_thread_poll(thread, 0, 0);
 	}
 	spdk_thread_destroy(thread);
+
+	spdk_sock_group_close(&sock_group);
 }
 
 static void

@@ -555,6 +555,7 @@ struct spdk_sock *
 spdk_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 {
 	struct spdk_net_impl *impl = NULL;
+	struct spdk_sock_group_impl *group_impl;
 	struct spdk_sock *sock;
 	struct spdk_sock_opts opts_local;
 	const char *impl_name = NULL;
@@ -570,9 +571,25 @@ spdk_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 		impl_name = g_default_impl->name;
 	}
 
+	if (opts->group == NULL) {
+		SPDK_ERRLOG("the group should not be NULL pointer\n");
+		return NULL;
+	}
+
 	STAILQ_FOREACH_FROM(impl, &g_net_impls, link) {
 		if (impl_name && strncmp(impl_name, impl->name, strlen(impl->name) + 1)) {
 			continue;
+		}
+
+		STAILQ_FOREACH(group_impl, &opts->group->group_impls, link) {
+			if (impl == group_impl->net_impl) {
+				break;
+			}
+		}
+
+		if (group_impl == NULL) {
+			SPDK_ERRLOG("Unable to find group impl!\n");
+			return NULL;
 		}
 
 		SPDK_DEBUGLOG(sock, "Creating a client socket using impl %s\n", impl->name);
@@ -582,7 +599,7 @@ spdk_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 			return NULL;
 		}
 
-		sock = impl->connect(ip, port, &opts_local);
+		sock = impl->connect(ip, port, group_impl, &opts_local);
 		if (sock != NULL) {
 			/* Copy the contents, both the two structures are the same ABI version */
 			memcpy(&sock->opts, &opts_local, sizeof(sock->opts));
@@ -590,6 +607,9 @@ spdk_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 			 * pointer */
 			sock->opts.impl_opts = NULL;
 			sock->net_impl = impl;
+			sock->cb_arg = opts->user_ctx;
+			sock->group_impl = group_impl;
+			TAILQ_INSERT_TAIL(&group_impl->socks, sock, link);
 			TAILQ_INIT(&sock->queued_reqs);
 			TAILQ_INIT(&sock->pending_reqs);
 
@@ -604,6 +624,7 @@ struct spdk_sock *
 spdk_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 {
 	struct spdk_net_impl *impl = NULL;
+	struct spdk_sock_group_impl *group_impl;
 	struct spdk_sock *sock;
 	struct spdk_sock_opts opts_local;
 	const char *impl_name = NULL;
@@ -619,14 +640,30 @@ spdk_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 		impl_name = g_default_impl->name;
 	}
 
-	STAILQ_FOREACH_FROM(impl, &g_net_impls, link) {
+	if (opts->group == NULL) {
+		SPDK_ERRLOG("the group should not be NULL pointer\n");
+		return NULL;
+	}
+
+	STAILQ_FOREACH(impl, &g_net_impls, link) {
 		if (impl_name && strncmp(impl_name, impl->name, strlen(impl->name) + 1)) {
 			continue;
 		}
 
+		STAILQ_FOREACH(group_impl, &opts->group->group_impls, link) {
+			if (impl == group_impl->net_impl) {
+				break;
+			}
+		}
+
+		if (group_impl == NULL) {
+			SPDK_ERRLOG("Unable to find group impl!\n");
+			return NULL;
+		}
+
 		SPDK_DEBUGLOG(sock, "Creating a listening socket using impl %s\n", impl->name);
 		sock_init_opts(&opts_local, opts);
-		sock = impl->listen(ip, port, &opts_local);
+		sock = impl->listen(ip, port, group_impl, &opts_local);
 		if (sock != NULL) {
 			/* Copy the contents, both the two structures are the same ABI version */
 			memcpy(&sock->opts, &opts_local, sizeof(sock->opts));
@@ -634,6 +671,9 @@ spdk_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 			 * pointer */
 			sock->opts.impl_opts = NULL;
 			sock->net_impl = impl;
+			sock->cb_arg = opts->user_ctx;
+			sock->group_impl = group_impl;
+			TAILQ_INSERT_TAIL(&group_impl->socks, sock, link);
 			/* Don't need to initialize the request queues for listen
 			 * sockets. */
 			return sock;
@@ -654,6 +694,8 @@ spdk_sock_accept(struct spdk_sock *sock)
 		new_sock->opts = sock->opts;
 		memcpy(&new_sock->opts, &sock->opts, sizeof(new_sock->opts));
 		new_sock->net_impl = sock->net_impl;
+		new_sock->group_impl = sock->group_impl;
+		TAILQ_INSERT_TAIL(&sock->group_impl->socks, new_sock, link);
 		TAILQ_INIT(&new_sock->queued_reqs);
 		TAILQ_INIT(&new_sock->pending_reqs);
 	}
@@ -671,17 +713,14 @@ int
 spdk_sock_close(struct spdk_sock **_sock)
 {
 	struct spdk_sock *sock = *_sock;
+	struct spdk_sock_group_impl *group_impl;
 
 	if (sock == NULL) {
 		errno = EBADF;
 		return -1;
 	}
 
-	if (sock->group_impl != NULL) {
-		/* This sock is still part of a sock_group. */
-		errno = EBUSY;
-		return -1;
-	}
+	group_impl = sock->group_impl;
 
 	/* Beyond this point the socket is considered closed. */
 	*_sock = NULL;
@@ -695,7 +734,12 @@ spdk_sock_close(struct spdk_sock **_sock)
 
 	spdk_sock_abort_requests(sock);
 
-	return sock->net_impl->close(sock);
+	if (group_impl) {
+		TAILQ_REMOVE(&group_impl->socks, sock, link);
+		sock->group_impl = NULL;
+	}
+
+	return sock->net_impl->close(group_impl, sock);
 }
 
 ssize_t
@@ -919,8 +963,7 @@ spdk_sock_group_get_ctx(struct spdk_sock_group *group)
 }
 
 int
-spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
-			 void *cb_arg)
+spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock)
 {
 	struct spdk_sock_group_impl *group_impl = NULL;
 	int rc;
@@ -946,7 +989,6 @@ spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
 
 	TAILQ_INSERT_TAIL(&group_impl->socks, sock, link);
 	sock->group_impl = group_impl;
-	sock->cb_arg = cb_arg;
 
 	return 0;
 }
@@ -969,7 +1011,6 @@ spdk_sock_group_remove_sock(struct spdk_sock_group *group, struct spdk_sock *soc
 	if (rc == 0) {
 		TAILQ_REMOVE(&group_impl->socks, sock, link);
 		sock->group_impl = NULL;
-		sock->cb_arg = NULL;
 	}
 
 	return rc;

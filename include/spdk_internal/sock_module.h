@@ -78,10 +78,12 @@ struct spdk_net_impl {
 		       int clen, uint16_t *cport);
 	const char *(*get_interface_name)(struct spdk_sock *sock);
 	int32_t (*get_numa_id)(struct spdk_sock *sock);
-	struct spdk_sock *(*connect)(const char *ip, int port, struct spdk_sock_opts *opts);
-	struct spdk_sock *(*listen)(const char *ip, int port, struct spdk_sock_opts *opts);
+	struct spdk_sock *(*connect)(const char *ip, int port, struct spdk_sock_group_impl *group,
+				     struct spdk_sock_opts *opts);
+	struct spdk_sock *(*listen)(const char *ip, int port, struct spdk_sock_group_impl *group,
+				    struct spdk_sock_opts *opts);
 	struct spdk_sock *(*accept)(struct spdk_sock *sock);
-	int (*close)(struct spdk_sock *sock);
+	int (*close)(struct spdk_sock_group_impl *group, struct spdk_sock *sock);
 	ssize_t (*recv)(struct spdk_sock *sock, void *buf, size_t len);
 	ssize_t (*readv)(struct spdk_sock *sock, struct iovec *iov, int iovcnt);
 	ssize_t (*writev)(struct spdk_sock *sock, struct iovec *iov, int iovcnt);
