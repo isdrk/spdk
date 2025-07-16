@@ -340,12 +340,16 @@ _sock(const char *ip, int port, char *impl_name)
 	struct spdk_sock *listen_sock;
 	struct spdk_sock *server_sock;
 	struct spdk_sock *client_sock;
+	struct spdk_sock_opts opts;
 	char *test_string = "abcdef";
 	char buffer[64];
 	ssize_t bytes_read, bytes_written;
 	struct iovec iov;
 	int nbytes;
 	int rc;
+
+	opts.opts_size = sizeof(opts);
+	spdk_sock_get_default_opts(&opts);
 
 	listen_sock = spdk_sock_listen(ip, port, impl_name);
 	SPDK_CU_ASSERT_FATAL(listen_sock != NULL);
@@ -354,7 +358,7 @@ _sock(const char *ip, int port, char *impl_name)
 	CU_ASSERT(server_sock == NULL);
 	CU_ASSERT(errno == EAGAIN || errno == EWOULDBLOCK);
 
-	client_sock = spdk_sock_connect(ip, port, impl_name);
+	client_sock = spdk_sock_connect(ip, port, impl_name, &opts);
 	SPDK_CU_ASSERT_FATAL(client_sock != NULL);
 
 	/*
@@ -491,10 +495,14 @@ _sock_group(const char *ip, int port, char *impl_name)
 	struct spdk_sock *listen_sock;
 	struct spdk_sock *server_sock;
 	struct spdk_sock *client_sock;
+	struct spdk_sock_opts opts;
 	char *test_string = "abcdef";
 	ssize_t bytes_written;
 	struct iovec iov;
 	int rc;
+
+	opts.opts_size = sizeof(opts);
+	spdk_sock_get_default_opts(&opts);
 
 	listen_sock = spdk_sock_listen(ip, port, impl_name);
 	SPDK_CU_ASSERT_FATAL(listen_sock != NULL);
@@ -503,7 +511,7 @@ _sock_group(const char *ip, int port, char *impl_name)
 	CU_ASSERT(server_sock == NULL);
 	CU_ASSERT(errno == EAGAIN || errno == EWOULDBLOCK);
 
-	client_sock = spdk_sock_connect(ip, port, impl_name);
+	client_sock = spdk_sock_connect(ip, port, impl_name, &opts);
 	SPDK_CU_ASSERT_FATAL(client_sock != NULL);
 
 	usleep(1000);
@@ -626,10 +634,14 @@ posix_sock_group_fairness(void)
 	struct spdk_sock *listen_sock;
 	struct spdk_sock *server_sock[3];
 	struct spdk_sock *client_sock[3];
+	struct spdk_sock_opts opts;
 	char test_char = 'a';
 	ssize_t bytes_written;
 	struct iovec iov;
 	int i, rc;
+
+	opts.opts_size = sizeof(opts);
+	spdk_sock_get_default_opts(&opts);
 
 	listen_sock = spdk_sock_listen("127.0.0.1", UT_PORT, "posix");
 	SPDK_CU_ASSERT_FATAL(listen_sock != NULL);
@@ -638,7 +650,7 @@ posix_sock_group_fairness(void)
 	SPDK_CU_ASSERT_FATAL(group != NULL);
 
 	for (i = 0; i < 3; i++) {
-		client_sock[i] = spdk_sock_connect("127.0.0.1", UT_PORT, "posix");
+		client_sock[i] = spdk_sock_connect("127.0.0.1", UT_PORT, "posix", &opts);
 		SPDK_CU_ASSERT_FATAL(client_sock[i] != NULL);
 
 		usleep(1000);
@@ -753,16 +765,20 @@ _sock_close(const char *ip, int port, char *impl_name)
 	struct spdk_sock *listen_sock;
 	struct spdk_sock *server_sock;
 	struct spdk_sock *client_sock;
+	struct spdk_sock_opts opts;
 	uint8_t data_buf[64] = {};
 	struct spdk_sock_request *req1, *req2;
 	struct close_ctx ctx = {};
 	bool cb_arg2 = false;
 	int rc;
 
+	opts.opts_size = sizeof(opts);
+	spdk_sock_get_default_opts(&opts);
+
 	listen_sock = spdk_sock_listen(ip, port, impl_name);
 	SPDK_CU_ASSERT_FATAL(listen_sock != NULL);
 
-	client_sock = spdk_sock_connect(ip, port, impl_name);
+	client_sock = spdk_sock_connect(ip, port, impl_name, &opts);
 	SPDK_CU_ASSERT_FATAL(client_sock != NULL);
 
 	usleep(1000);
@@ -1167,7 +1183,7 @@ override_impl_opts(void)
 
 	impl_opts.send_buf_size = send_buf_size + 2;
 
-	csock = spdk_sock_connect_ext("127.0.0.1", UT_PORT, "posix", &opts);
+	csock = spdk_sock_connect("127.0.0.1", UT_PORT, "posix", &opts);
 	SPDK_CU_ASSERT_FATAL(csock != NULL);
 	CU_ASSERT_EQUAL(csock->impl_opts.send_buf_size, send_buf_size + 2);
 
@@ -1207,7 +1223,7 @@ override_impl_opts(void)
 
 	impl_opts.send_buf_size = send_buf_size + 2;
 
-	csock = spdk_sock_connect_ext("127.0.0.1", UT_PORT, "posix", &opts);
+	csock = spdk_sock_connect("127.0.0.1", UT_PORT, "posix", &opts);
 	SPDK_CU_ASSERT_FATAL(csock != NULL);
 	CU_ASSERT_EQUAL(csock->impl_opts.send_buf_size, send_buf_size);
 
@@ -1263,7 +1279,7 @@ posix_get_interface_name(void)
 	opts.impl_opts = &impl_opts;
 	opts.impl_opts_size = sizeof(impl_opts);
 
-	csock = spdk_sock_connect_ext("127.0.0.1", UT_PORT, "posix", &opts);
+	csock = spdk_sock_connect("127.0.0.1", UT_PORT, "posix", &opts);
 	SPDK_CU_ASSERT_FATAL(csock != NULL);
 
 	asock = spdk_sock_accept(lsock);
