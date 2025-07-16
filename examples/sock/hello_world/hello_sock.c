@@ -328,17 +328,11 @@ hello_sock_connect(struct hello_context_t *ctx)
 	struct spdk_sock_impl_opts impl_opts;
 	size_t impl_opts_size = sizeof(impl_opts);
 	struct spdk_sock_opts opts;
-	struct spdk_sock_group_opts sgroup_opts = {
-		.size = sizeof(sgroup_opts),
-		.ctx = NULL,
-		.interrupt = false,
-		.rx_cb = hello_sock_recv_poll
-	};
 
 	/*
 	 * Create sock group for client socket
 	 */
-	ctx->group = spdk_sock_group_create(&sgroup_opts);
+	ctx->group = spdk_sock_group_create(NULL);
 	if (ctx->group == NULL) {
 		SPDK_ERRLOG("Cannot create sock group\n");
 		return -1;
@@ -382,7 +376,7 @@ hello_sock_connect(struct hello_context_t *ctx)
 		goto err;
 	}
 
-	rc = spdk_sock_group_add_sock(ctx->group, ctx->sock, ctx);
+	rc = spdk_sock_group_add_sock(ctx->group, ctx->sock, hello_sock_recv_poll, ctx);
 	if (rc < 0) {
 		SPDK_ERRLOG("Cannot add socket to group\n");
 		goto err;
@@ -424,7 +418,8 @@ hello_sock_cb(void *arg, struct spdk_sock_group *group, struct spdk_sock *sock)
 				SPDK_NOTICELOG("Accepting a new connection from (%s, %hu) to (%s, %hu)\n",
 					       caddr, cport, saddr, sport);
 
-				rc = spdk_sock_group_add_sock(ctx->group, new_sock, ctx);
+				rc = spdk_sock_group_add_sock(ctx->group, new_sock,
+							      hello_sock_cb, ctx);
 
 				if (rc < 0) {
 					spdk_sock_close(&new_sock);
@@ -479,17 +474,11 @@ hello_sock_listen(struct hello_context_t *ctx)
 	struct spdk_sock_impl_opts impl_opts;
 	size_t impl_opts_size = sizeof(impl_opts);
 	struct spdk_sock_opts opts;
-	struct spdk_sock_group_opts sgroup_opts = {
-		.size = sizeof(sgroup_opts),
-		.ctx = NULL,
-		.interrupt = false,
-		.rx_cb = hello_sock_cb
-	};
 
 	/*
 	 * Create sock group for server socket
 	 */
-	ctx->group = spdk_sock_group_create(&sgroup_opts);
+	ctx->group = spdk_sock_group_create(NULL);
 	if (ctx->group == NULL) {
 		SPDK_ERRLOG("Cannot create sock group\n");
 		spdk_sock_close(&ctx->sock);
@@ -518,7 +507,7 @@ hello_sock_listen(struct hello_context_t *ctx)
 		return -1;
 	}
 
-	rc = spdk_sock_group_add_sock(ctx->group, ctx->sock, ctx);
+	rc = spdk_sock_group_add_sock(ctx->group, ctx->sock, hello_sock_cb, ctx);
 	if (rc < 0) {
 		SPDK_ERRLOG("Cannot add sock to group\n");
 		spdk_sock_group_close(&ctx->group);

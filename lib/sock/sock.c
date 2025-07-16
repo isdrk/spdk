@@ -671,7 +671,7 @@ spdk_sock_close(struct spdk_sock **_sock)
 		return -1;
 	}
 
-	if (sock->group_impl != NULL) {
+	if (sock->cb_fn != NULL) {
 		/* This sock is still part of a sock_group. */
 		errno = EBUSY;
 		return -1;
@@ -852,31 +852,23 @@ spdk_sock_group_create(struct spdk_sock_group_opts *opts)
 	struct spdk_sock_group_impl *group_impl;
 	int rc;
 
-	if (opts == NULL) {
-		errno = EINVAL;
-		return NULL;
-	}
-
-	if (opts->rx_cb == NULL) {
-		errno = EINVAL;
-		return NULL;
-	}
-
 	group = calloc(1, sizeof(*group));
 	if (group == NULL) {
 		return NULL;
 	}
 
-	if (SPDK_GET_FIELD(opts, interrupt, false)) {
-		rc = spdk_fd_group_create(&group->fgrp);
-		if (rc != 0) {
-			free(group);
-			return NULL;
+	if (opts) {
+		if (SPDK_GET_FIELD(opts, interrupt, false)) {
+			rc = spdk_fd_group_create(&group->fgrp);
+			if (rc != 0) {
+				free(group);
+				return NULL;
+			}
 		}
+
+		group->ctx = SPDK_GET_FIELD(opts, ctx, NULL);
 	}
 
-	group->ctx = SPDK_GET_FIELD(opts, ctx, NULL);
-	group->rx_cb = SPDK_GET_FIELD(opts, rx_cb, NULL);
 	STAILQ_INIT(&group->group_impls);
 
 	STAILQ_FOREACH_FROM(impl, &g_net_impls, link) {
@@ -914,10 +906,15 @@ spdk_sock_group_get_ctx(struct spdk_sock_group *group)
 
 int
 spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
-			 void *cb_arg)
+			 spdk_sock_cb cb_fn, void *cb_arg)
 {
 	struct spdk_sock_group_impl *group_impl = NULL;
 	int rc;
+
+	if (cb_fn == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
 
 	if (sock->group_impl != NULL) {
 		/*
@@ -940,6 +937,7 @@ spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock,
 
 	TAILQ_INSERT_TAIL(&group_impl->socks, sock, link);
 	sock->group_impl = group_impl;
+	sock->cb_fn = cb_fn;
 	sock->cb_arg = cb_arg;
 
 	return 0;
@@ -963,6 +961,7 @@ spdk_sock_group_remove_sock(struct spdk_sock_group *group, struct spdk_sock *soc
 	if (rc == 0) {
 		TAILQ_REMOVE(&group_impl->socks, sock, link);
 		sock->group_impl = NULL;
+		sock->cb_fn = NULL;
 		sock->cb_arg = NULL;
 	}
 
@@ -988,8 +987,8 @@ sock_group_impl_poll_count(struct spdk_sock_group_impl *group_impl,
 
 	for (i = 0; i < num_events; i++) {
 		struct spdk_sock *sock = socks[i];
-		assert(group->rx_cb != NULL);
-		group->rx_cb(sock->cb_arg, group, sock);
+		assert(sock->cb_fn != NULL);
+		sock->cb_fn(sock->cb_arg, group, sock);
 	}
 
 	return num_events;

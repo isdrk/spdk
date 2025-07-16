@@ -1756,7 +1756,7 @@ xlio_sock_poll_fd(int fd, uint32_t max_events_per_poll)
 			/* If the socket was closed or removed from
 			 * the group in response to a send ack, don't
 			 * add it to the array here. */
-			if (rc || sock->group_impl == NULL) {
+			if (rc || sock->cb_fn == NULL) {
 				continue;
 			}
 		}
@@ -1851,9 +1851,9 @@ xlio_sock_group_impl_poll(struct spdk_sock_group_impl *_group, int max_events,
 			break;
 		}
 
-		/* If the socket's group is NULL, just remove it from the
+		/* If the socket's cb_fn is NULL, just remove it from the
 		 * list and do not add it to socks array */
-		if (spdk_unlikely(vsock->base.group_impl == NULL)) {
+		if (spdk_unlikely(vsock->base.cb_fn == NULL)) {
 			vsock->flags.pending_recv = false;
 			TAILQ_REMOVE(&group->pending_recv, vsock, link);
 			continue;

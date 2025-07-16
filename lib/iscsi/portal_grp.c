@@ -170,7 +170,7 @@ iscsi_portal_open(struct spdk_iscsi_portal *p)
 		return -1;
 	}
 
-	rc = spdk_sock_group_add_sock(p->group->sock_group, sock, p);
+	rc = spdk_sock_group_add_sock(p->group->sock_group, sock, iscsi_portal_accept, p);
 	if (rc) {
 		SPDK_ERRLOG("Unable to add listen socket to poll group\n");
 		spdk_sock_close(&sock);
@@ -375,8 +375,7 @@ iscsi_portal_grp_open(struct spdk_iscsi_portal_grp *pg, bool pause)
 	struct spdk_sock_group_opts opts = {
 		.size = sizeof(opts),
 		.ctx = pg,
-		.interrupt = false,
-		.rx_cb = iscsi_portal_accept
+		.interrupt = false
 	};
 	struct spdk_iscsi_portal *p;
 	int rc;
