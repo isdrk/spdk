@@ -372,15 +372,10 @@ iscsi_portal_grps_destroy(void)
 int
 iscsi_portal_grp_open(struct spdk_iscsi_portal_grp *pg, bool pause)
 {
-	struct spdk_sock_group_opts opts = {
-		.size = sizeof(opts),
-		.ctx = pg,
-		.interrupt = false
-	};
 	struct spdk_iscsi_portal *p;
 	int rc;
 
-	pg->sock_group = spdk_sock_group_create(&opts);
+	pg->sock_group = spdk_sock_group_create(pg);
 	if (pg->sock_group == NULL) {
 		return -EAGAIN;
 	}

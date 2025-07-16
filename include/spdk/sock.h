@@ -568,7 +568,15 @@ struct spdk_sock_group_opts {
  *
  * \return a pointer to the created group on success, or NULL on failure.
  */
-struct spdk_sock_group *spdk_sock_group_create(struct spdk_sock_group_opts *opts);
+struct spdk_sock_group *spdk_sock_group_create_ext(struct spdk_sock_group_opts *opts);
+
+/**
+ * Create a new socket group with user provided pointer
+ *
+ * \param ctx the context provided by user.
+ * \return a pointer to the created group on success, or NULL on failure.
+ */
+struct spdk_sock_group *spdk_sock_group_create(void *ctx);
 
 /**
  * Get the ctx of the sock group

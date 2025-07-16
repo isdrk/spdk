@@ -845,7 +845,7 @@ sock_group_impl_register_interrupt(struct spdk_fd_group *fgrp,
 }
 
 struct spdk_sock_group *
-spdk_sock_group_create(struct spdk_sock_group_opts *opts)
+spdk_sock_group_create_ext(struct spdk_sock_group_opts *opts)
 {
 	struct spdk_net_impl *impl = NULL;
 	struct spdk_sock_group *group;
@@ -857,16 +857,12 @@ spdk_sock_group_create(struct spdk_sock_group_opts *opts)
 		return NULL;
 	}
 
-	if (opts) {
-		if (SPDK_GET_FIELD(opts, interrupt, false)) {
-			rc = spdk_fd_group_create(&group->fgrp);
-			if (rc != 0) {
-				free(group);
-				return NULL;
-			}
+	if (SPDK_GET_FIELD(opts, interrupt, false)) {
+		rc = spdk_fd_group_create(&group->fgrp);
+		if (rc != 0) {
+			free(group);
+			return NULL;
 		}
-
-		group->ctx = SPDK_GET_FIELD(opts, ctx, NULL);
 	}
 
 	STAILQ_INIT(&group->group_impls);
@@ -888,10 +884,23 @@ spdk_sock_group_create(struct spdk_sock_group_opts *opts)
 		}
 	}
 
+	group->ctx = SPDK_GET_FIELD(opts, ctx, NULL);
+
 	return group;
 error:
 	spdk_sock_group_close(&group);
 	return NULL;
+}
+
+struct spdk_sock_group *
+spdk_sock_group_create(void *ctx)
+{
+	struct spdk_sock_group_opts opts = {};
+
+	opts.size = SPDK_SIZEOF(&opts, ctx);
+	opts.ctx = ctx;
+
+	return spdk_sock_group_create_ext(&opts);
 }
 
 void *

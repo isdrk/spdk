@@ -44,7 +44,21 @@ DEFINE_STUB(spdk_sock_is_connected, bool, (struct spdk_sock *sock), true);
 
 DEFINE_RETURN_MOCK(spdk_sock_group_create, struct spdk_sock_group *);
 struct spdk_sock_group *
-spdk_sock_group_create(struct spdk_sock_group_opts *opts)
+spdk_sock_group_create(void *ctx)
+{
+	struct test_sock_group *group;
+
+	HANDLE_RETURN_MOCK(spdk_sock_group_create);
+
+	group = calloc(1, sizeof(*group));
+	SPDK_CU_ASSERT_FATAL(group != NULL);
+
+	return (struct spdk_sock_group *)group;
+}
+
+DEFINE_RETURN_MOCK(spdk_sock_group_create_ext, struct spdk_sock_group *);
+struct spdk_sock_group *
+spdk_sock_group_create_ext(struct spdk_sock_group_opts *opts)
 {
 	struct test_sock_group *group;
 
