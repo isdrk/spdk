@@ -2332,11 +2332,10 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 	opts.connect_timeout = g_spdk_nvme_transport_opts.tcp_connect_timeout_ms;
 
 	if (sock_impl_name) {
-		opts.impl_name = sock_impl_name;
 		opts.impl_opts = &impl_opts;
 		opts.impl_opts_size = sizeof(impl_opts);
 	}
-	tqpair->sock = spdk_sock_connect(ctrlr->trid.traddr, port, &opts);
+	tqpair->sock = spdk_sock_connect(ctrlr->trid.traddr, port, sock_impl_name, &opts);
 	if (!tqpair->sock) {
 		SPDK_ERRLOG("sock connection error of tqpair=%p with addr=%s, port=%ld\n",
 			    tqpair, ctrlr->trid.traddr, port);
