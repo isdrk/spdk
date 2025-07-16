@@ -762,15 +762,13 @@ retry:
 }
 
 static struct spdk_sock *
-xlio_sock_listen(const char *ip, int port, struct spdk_sock_group_impl *group,
-		 struct spdk_sock_opts *opts)
+xlio_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 {
 	return xlio_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts);
 }
 
 static struct spdk_sock *
-xlio_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *group,
-		  struct spdk_sock_opts *opts)
+xlio_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 {
 	return xlio_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts);
 }
@@ -830,7 +828,7 @@ xlio_sock_accept(struct spdk_sock *_sock)
 static void xlio_sock_free_packet(struct spdk_xlio_sock *sock, struct xlio_sock_packet *packet);
 
 static int
-xlio_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock)
+xlio_sock_close(struct spdk_sock *_sock)
 {
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 

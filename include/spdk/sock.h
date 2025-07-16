@@ -321,18 +321,8 @@ struct spdk_sock_opts {
 	 * can connect.
 	 */
 	const char *impl_name;
-
-	/**
-	 * The socket group this socket belongs to. This is required.
-	 */
-	struct spdk_sock_group *group;
-
-	/**
-	 * The user context for the socket.
-	 */
-	void *user_ctx;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 80, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 64, "Incorrect size");
 
 /**
  * Initialize the default value of opts.
@@ -400,9 +390,6 @@ struct spdk_sock *spdk_sock_listen(const char *ip, int port, struct spdk_sock_op
  * Accept a new connection from a client on the specified socket and return a
  * socket structure which holds the connection.
  *
- * The new socket will belong to the same spdk_sock_group that the listen socket belongs to.
- * The group can be changed using spdk_sock_group_remove_sock and spdk_sock_group_add_sock.
- *
  * \param sock Listening socket.
  *
  * \return a pointer to the accepted socket on success, or NULL on failure.
@@ -439,8 +426,6 @@ int32_t spdk_sock_get_numa_id(struct spdk_sock *sock);
 
 /**
  * Close a socket.
- *
- * This will automatically remove the socket from its group.
  *
  * \param sock Socket to close.
  *
@@ -609,16 +594,14 @@ void *spdk_sock_group_get_ctx(struct spdk_sock_group *sock_group);
  *
  * \param group Socket group.
  * \param sock Socket to add.
+ * \param cb_arg Argument passed to the callback function.
  *
  * \return 0 on success, -1 on failure with errno set.
  */
-int spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock);
+int spdk_sock_group_add_sock(struct spdk_sock_group *group, struct spdk_sock *sock, void *cb_arg);
 
 /**
  * Remove a socket from the group.
- *
- * While a socket is not in a group, it will not receive new packets. For some socket modules,
- * while not in a group all incoming packets may be dropped.
  *
  * \param group Socket group.
  * \param sock Socket to remove.

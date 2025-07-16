@@ -984,52 +984,16 @@ retry:
 	return &sock->base;
 }
 
-static int posix_sock_group_impl_add_sock(struct spdk_sock_group_impl *_group,
-		struct spdk_sock *_sock);
-static int posix_sock_group_impl_remove_sock(struct spdk_sock_group_impl *_group,
-		struct spdk_sock *_sock);
-static int posix_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock);
-
 static struct spdk_sock *
-posix_sock_listen(const char *ip, int port, struct spdk_sock_group_impl *group,
-		  struct spdk_sock_opts *opts)
+posix_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 {
-	struct spdk_sock *sock;
-	int rc;
-
-	sock = posix_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts, false);
-	if (sock == NULL) {
-		return sock;
-	}
-
-	rc = posix_sock_group_impl_add_sock(group, sock);
-	if (rc) {
-		posix_sock_close(NULL, sock);
-		return NULL;
-	}
-
-	return sock;
+	return posix_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts, false);
 }
 
 static struct spdk_sock *
-posix_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *group,
-		   struct spdk_sock_opts *opts)
+posix_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 {
-	struct spdk_sock *sock;
-	int rc;
-
-	sock = posix_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts, false);
-	if (sock == NULL) {
-		return sock;
-	}
-
-	rc = posix_sock_group_impl_add_sock(group, sock);
-	if (rc) {
-		posix_sock_close(NULL, sock);
-		return NULL;
-	}
-
-	return sock;
+	return posix_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts, false);
 }
 
 static struct spdk_sock *
@@ -1048,10 +1012,9 @@ _posix_sock_accept(struct spdk_sock *_sock, bool enable_ssl)
 	salen = sizeof(sa);
 
 	assert(sock != NULL);
-	assert(group != NULL);
 
 	/* epoll_wait will trigger again if there is more than one request */
-	if (sock->socket_has_data) {
+	if (group && sock->socket_has_data) {
 		sock->socket_has_data = false;
 		TAILQ_REMOVE(&group->socks_with_data, sock, link);
 	}
@@ -1115,14 +1078,6 @@ _posix_sock_accept(struct spdk_sock *_sock, bool enable_ssl)
 		SSL_set_app_data(ssl, &new_sock->base.impl_opts);
 	}
 
-	rc = posix_sock_group_impl_add_sock(&group->base, &new_sock->base);
-	if (rc) {
-		close(fd);
-		SSL_free(ssl);
-		SSL_CTX_free(ctx);
-		return NULL;
-	}
-
 	return &new_sock->base;
 }
 
@@ -1133,7 +1088,7 @@ posix_sock_accept(struct spdk_sock *_sock)
 }
 
 static int
-posix_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock)
+posix_sock_close(struct spdk_sock *_sock)
 {
 	struct spdk_posix_sock *sock = __posix_sock(_sock);
 	void *pipe_buf;
@@ -1142,10 +1097,6 @@ posix_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock)
 
 	if (sock->ssl != NULL) {
 		SSL_shutdown(sock->ssl);
-	}
-
-	if (group) {
-		posix_sock_group_impl_remove_sock(group, _sock);
 	}
 
 	/* If the socket fails to close, the best choice is to
@@ -2150,45 +2101,15 @@ static struct spdk_net_impl g_posix_net_impl = {
 SPDK_NET_IMPL_REGISTER_DEFAULT(posix, &g_posix_net_impl);
 
 static struct spdk_sock *
-ssl_sock_listen(const char *ip, int port, struct spdk_sock_group_impl *group,
-		struct spdk_sock_opts *opts)
+ssl_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts)
 {
-	struct spdk_sock *sock;
-	int rc;
-
-	sock = posix_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts, true);
-	if (sock == NULL) {
-		return sock;
-	}
-
-	rc = posix_sock_group_impl_add_sock(group, sock);
-	if (rc) {
-		posix_sock_close(NULL, sock);
-		return NULL;
-	}
-
-	return sock;
+	return posix_sock_create(ip, port, SPDK_SOCK_CREATE_LISTEN, opts, true);
 }
 
 static struct spdk_sock *
-ssl_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *group,
-		 struct spdk_sock_opts *opts)
+ssl_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts)
 {
-	struct spdk_sock *sock;
-	int rc;
-
-	sock = posix_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts, true);
-	if (sock == NULL) {
-		return sock;
-	}
-
-	rc = posix_sock_group_impl_add_sock(group, sock);
-	if (rc) {
-		posix_sock_close(NULL, sock);
-		return NULL;
-	}
-
-	return sock;
+	return posix_sock_create(ip, port, SPDK_SOCK_CREATE_CONNECT, opts, true);
 }
 
 static struct spdk_sock *
