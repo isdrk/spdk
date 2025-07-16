@@ -51,6 +51,14 @@ struct fsdev_fuse_request {
 
 typedef void (*fsdev_fuse_channel_drained_cb)(void *ctx, struct fsdev_fuse_channel *ch);
 
+struct fsdev_fuse_domain {
+	struct spdk_memory_domain		*domain;
+#ifdef SPDK_CONFIG_RDMA
+	struct spdk_rdma_utils_mem_map		*map;
+#endif
+	STAILQ_ENTRY(fsdev_fuse_domain)		stailq;
+};
+
 struct fsdev_fuse_channel {
 	struct spdk_fuse_mount			*mount;
 	struct spdk_io_channel			*ioch;
@@ -69,9 +77,7 @@ struct fsdev_fuse_channel {
 	struct spdk_fuse_poll_group		*poll_group;
 	uint16_t				source_id;
 	uint64_t				source_unique;
-#ifdef SPDK_CONFIG_RDMA
-	struct spdk_rdma_utils_mem_map		*map;
-#endif
+	STAILQ_HEAD(, fsdev_fuse_domain)	domains;
 };
 
 struct spdk_fuse_poll_group {
@@ -324,6 +330,7 @@ static void
 fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 {
 	struct fsdev_fuse_request *req;
+	struct fsdev_fuse_domain *domain;
 
 	assert(ch->num_outstanding == 0);
 	TAILQ_FOREACH(req, &ch->free_requests, tailq) {
@@ -338,9 +345,14 @@ fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 	if (ch->poll_group != NULL) {
 		spdk_put_io_channel(spdk_io_channel_from_ctx(ch->poll_group));
 	}
+	while (!STAILQ_EMPTY(&ch->domains)) {
+		domain = STAILQ_FIRST(&ch->domains);
+		STAILQ_REMOVE_HEAD(&ch->domains, stailq);
 #ifdef SPDK_CONFIG_RDMA
-	spdk_rdma_utils_free_mem_map(&ch->map);
+		spdk_rdma_utils_free_mem_map(&domain->map);
 #endif
+		free(domain);
+	}
 	free(ch->request_pool);
 	free(ch);
 }
@@ -392,6 +404,7 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 
 	TAILQ_INIT(&ch->free_requests);
 	TAILQ_INIT(&ch->pending_requests);
+	STAILQ_INIT(&ch->domains);
 
 	/* Bump poll group's refcount to make sure it doesn't disappear */
 	ch->poll_group = spdk_io_channel_get_ctx(spdk_get_io_channel(&g_fuse));
@@ -768,6 +781,41 @@ normalize_hard_path(char *dst, size_t dst_size, const char *path)
 }
 
 #ifdef SPDK_CONFIG_RDMA
+static struct fsdev_fuse_domain *
+fsdev_fuse_get_domain(struct fsdev_fuse_channel *ch, struct spdk_memory_domain *domain,
+		      struct spdk_memory_domain_translation_ctx *ctx)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct fsdev_fuse_domain *fd;
+	struct ibv_qp *qp;
+	uint64_t flags;
+
+	STAILQ_FOREACH(fd, &ch->domains, stailq) {
+		if (fd->domain == domain) {
+			return fd;
+		}
+	}
+
+	fd = calloc(1, sizeof(*fd));
+	if (fd == NULL) {
+		return NULL;
+	}
+
+	qp = SPDK_GET_FIELD(ctx, rdma.ibv_qp, NULL);
+	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+
+	fd->domain = domain;
+	fd->map = spdk_rdma_utils_create_mem_map(qp->pd, NULL, flags);
+	if (fd->map == NULL) {
+		SPDK_ERRLOG("%s: failed to create memory map\n", mount->name);
+		free(fd);
+		return NULL;
+	}
+
+	STAILQ_INSERT_TAIL(&ch->domains, fd, stailq);
+	return fd;
+}
+
 static int
 fsdev_fuse_translate_addr(struct spdk_memory_domain *src_domain,
 			  void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
@@ -778,22 +826,16 @@ fsdev_fuse_translate_addr(struct spdk_memory_domain *src_domain,
 	struct fsdev_fuse_channel *ch = src_domain_ctx;
 	struct spdk_fuse_mount *mount = ch->mount;
 	struct spdk_rdma_utils_memory_translation tr;
-	struct ibv_qp *qp;
-	uint64_t flags;
+	struct fsdev_fuse_domain *fd;
 	int rc;
 
 	assert(spdk_memory_domain_get_dma_device_type(dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA);
-	if (spdk_unlikely(ch->map == NULL)) {
-		qp = SPDK_GET_FIELD(dst_domain_ctx, rdma.ibv_qp, NULL);
-		flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
-		ch->map = spdk_rdma_utils_create_mem_map(qp->pd, NULL, flags);
-		if (ch->map == NULL) {
-			SPDK_ERRLOG("%s: failed to create memory map\n", mount->name);
-			return -ENOMEM;
-		}
+	fd = fsdev_fuse_get_domain(ch, dst_domain, dst_domain_ctx);
+	if (spdk_unlikely(fd == NULL)) {
+		return -ENOMEM;
 	}
 
-	rc = spdk_rdma_utils_get_translation(ch->map, addr, len, &tr);
+	rc = spdk_rdma_utils_get_translation(fd->map, addr, len, &tr);
 	if (spdk_unlikely(rc != 0)) {
 		SPDK_ERRLOG("%s: failed to translate addr=%p: %s\n", mount->name, addr,
 			    spdk_strerror(-rc));
