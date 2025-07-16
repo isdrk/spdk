@@ -314,8 +314,15 @@ struct spdk_sock_opts {
 	 * Time in msec to wait until connection is done (0 = no timeout).
 	 */
 	uint32_t connect_timeout;
+
+	/** The sock_implementation to use, such as "posix". If impl_name is
+	 * specified, it will *only* try to connect on that impl. If it is NULL, it will try
+	 * all the sock implementations in order and uses the first sock implementation which
+	 * can connect.
+	 */
+	const char *impl_name;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 56, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_sock_opts) == 64, "Incorrect size");
 
 /**
  * Initialize the default value of opts.
@@ -360,16 +367,11 @@ const char *spdk_sock_get_impl_name(struct spdk_sock *sock);
  *
  * \param ip IP address of the server.
  * \param port Port number of the server.
- * \param impl_name The sock_implementation to use, such as "posix". If impl_name is
- * specified, it will *only* try to connect on that impl. If it is NULL, it will try
- * all the sock implementations in order and uses the first sock implementation which
- * can connect.
  * \param opts The sock option pointer provided by the user which should not be NULL pointer.
  *
  * \return a pointer to the connected socket on success, or NULL on failure.
  */
-struct spdk_sock *spdk_sock_connect(const char *ip, int port, const char *impl_name,
-				    struct spdk_sock_opts *opts);
+struct spdk_sock *spdk_sock_connect(const char *ip, int port, struct spdk_sock_opts *opts);
 
 /**
  * Create a socket using the specific sock implementation, bind the socket to
@@ -378,16 +380,11 @@ struct spdk_sock *spdk_sock_connect(const char *ip, int port, const char *impl_n
  *
  * \param ip IP address to listen on.
  * \param port Port number.
- * \param impl_name The sock_implementation to use, such as "posix". If impl_name is
- * specified, it will *only* try to listen on that impl. If it is NULL, it will try
- * all the sock implementations in order and uses the first sock implementation which
- * can listen.
  * \param opts The sock option pointer provided by the user, which should not be NULL pointer.
  *
  * \return a pointer to the listened socket on success, or NULL on failure.
  */
-struct spdk_sock *spdk_sock_listen(const char *ip, int port, const char *impl_name,
-				   struct spdk_sock_opts *opts);
+struct spdk_sock *spdk_sock_listen(const char *ip, int port, struct spdk_sock_opts *opts);
 
 /**
  * Accept a new connection from a client on the specified socket and return a
