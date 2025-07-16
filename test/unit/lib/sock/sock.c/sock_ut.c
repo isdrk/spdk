@@ -501,6 +501,12 @@ _sock_group(const char *ip, int port, char *impl_name)
 	ssize_t bytes_written;
 	struct iovec iov;
 	int rc;
+	struct spdk_sock_group_opts sgroup_opts = {
+		.size = sizeof(sgroup_opts),
+		.ctx = NULL,
+		.interrupt = false,
+		.rx_cb = read_data
+	};
 
 	opts.opts_size = sizeof(opts);
 	spdk_sock_get_default_opts(&opts);
@@ -521,22 +527,17 @@ _sock_group(const char *ip, int port, char *impl_name)
 	server_sock = spdk_sock_accept(listen_sock);
 	SPDK_CU_ASSERT_FATAL(server_sock != NULL);
 
-	group = spdk_sock_group_create(NULL);
+	group = spdk_sock_group_create(&sgroup_opts);
 	SPDK_CU_ASSERT_FATAL(group != NULL);
 
-	hint = spdk_sock_group_create(NULL);
+	hint = spdk_sock_group_create(&sgroup_opts);
 	SPDK_CU_ASSERT_FATAL(hint != NULL);
 
-	/* pass null cb_fn */
-	rc = spdk_sock_group_add_sock(group, server_sock, NULL, NULL);
-	CU_ASSERT(rc == -1);
-	CU_ASSERT(errno == EINVAL);
-
-	rc = spdk_sock_group_add_sock(group, server_sock, read_data, server_sock);
+	rc = spdk_sock_group_add_sock(group, server_sock, server_sock);
 	CU_ASSERT(rc == 0);
 
 	/* try adding sock a second time */
-	rc = spdk_sock_group_add_sock(group, server_sock, read_data, server_sock);
+	rc = spdk_sock_group_add_sock(group, server_sock, server_sock);
 	CU_ASSERT(rc == -1);
 	CU_ASSERT(errno == EINVAL);
 
@@ -641,6 +642,12 @@ posix_sock_group_fairness(void)
 	ssize_t bytes_written;
 	struct iovec iov;
 	int i, rc;
+	struct spdk_sock_group_opts sgroup_opts = {
+		.size = sizeof(sgroup_opts),
+		.ctx = NULL,
+		.interrupt = false,
+		.rx_cb = read_data_fairness
+	};
 
 	opts.opts_size = sizeof(opts);
 	spdk_sock_get_default_opts(&opts);
@@ -649,7 +656,7 @@ posix_sock_group_fairness(void)
 	listen_sock = spdk_sock_listen("127.0.0.1", UT_PORT, &opts);
 	SPDK_CU_ASSERT_FATAL(listen_sock != NULL);
 
-	group = spdk_sock_group_create(NULL);
+	group = spdk_sock_group_create(&sgroup_opts);
 	SPDK_CU_ASSERT_FATAL(group != NULL);
 
 	for (i = 0; i < 3; i++) {
@@ -661,8 +668,7 @@ posix_sock_group_fairness(void)
 		server_sock[i] = spdk_sock_accept(listen_sock);
 		SPDK_CU_ASSERT_FATAL(server_sock[i] != NULL);
 
-		rc = spdk_sock_group_add_sock(group, server_sock[i],
-					      read_data_fairness, server_sock[i]);
+		rc = spdk_sock_group_add_sock(group, server_sock[i], server_sock[i]);
 		CU_ASSERT(rc == 0);
 	}
 
@@ -774,6 +780,12 @@ _sock_close(const char *ip, int port, char *impl_name)
 	struct close_ctx ctx = {};
 	bool cb_arg2 = false;
 	int rc;
+	struct spdk_sock_group_opts sgroup_opts = {
+		.size = sizeof(sgroup_opts),
+		.ctx = NULL,
+		.interrupt = false,
+		.rx_cb = read_data
+	};
 
 	opts.opts_size = sizeof(opts);
 	spdk_sock_get_default_opts(&opts);
@@ -790,10 +802,10 @@ _sock_close(const char *ip, int port, char *impl_name)
 	server_sock = spdk_sock_accept(listen_sock);
 	SPDK_CU_ASSERT_FATAL(server_sock != NULL);
 
-	group = spdk_sock_group_create(NULL);
+	group = spdk_sock_group_create(&sgroup_opts);
 	SPDK_CU_ASSERT_FATAL(group != NULL);
 
-	rc = spdk_sock_group_add_sock(group, server_sock, read_data, server_sock);
+	rc = spdk_sock_group_add_sock(group, server_sock, server_sock);
 	CU_ASSERT(rc == 0);
 
 	/* Submit multiple async writevs on the server sock */
