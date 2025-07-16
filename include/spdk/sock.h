@@ -253,7 +253,7 @@ struct spdk_sock_caps {
 /**
  * Spdk socket initialization options.
  *
- * A pointer to this structure will be used by spdk_sock_listen() or spdk_sock_connect() to
+ * A pointer to this structure will be used by spdk_sock_listen_ext() or spdk_sock_connect() to
  * allow the user to request non-default options on the socket.
  */
 struct spdk_sock_opts {
@@ -382,12 +382,28 @@ struct spdk_sock *spdk_sock_connect(const char *ip, int port, const char *impl_n
  * specified, it will *only* try to listen on that impl. If it is NULL, it will try
  * all the sock implementations in order and uses the first sock implementation which
  * can listen.
+ *
+ * \return a pointer to the listened socket on success, or NULL on failure.
+ */
+struct spdk_sock *spdk_sock_listen(const char *ip, int port, const char *impl_name);
+
+/**
+ * Create a socket using the specific sock implementation, bind the socket to
+ * the specified address and port and listen on the socket, and then return the socket.
+ * This function is used by server.
+ *
+ * \param ip IP address to listen on.
+ * \param port Port number.
+ * \param impl_name The sock_implementation to use, such as "posix". If impl_name is
+ * specified, it will *only* try to listen on that impl. If it is NULL, it will try
+ * all the sock implementations in order and uses the first sock implementation which
+ * can listen.
  * \param opts The sock option pointer provided by the user, which should not be NULL pointer.
  *
  * \return a pointer to the listened socket on success, or NULL on failure.
  */
-struct spdk_sock *spdk_sock_listen(const char *ip, int port, const char *impl_name,
-				   struct spdk_sock_opts *opts);
+struct spdk_sock *spdk_sock_listen_ext(const char *ip, int port, const char *impl_name,
+				       struct spdk_sock_opts *opts);
 
 /**
  * Accept a new connection from a client on the specified socket and return a
