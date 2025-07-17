@@ -65,6 +65,8 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 #define LOG_ALREADY_CLAIMED_DEBUG(detail, bdev) do {} while(0)
 #endif
 
+#define BDEV_IO_PUT_BATCH_SIZE 64
+
 static void log_already_claimed(enum spdk_log_level level, const int line, const char *func,
 				const char *detail, struct spdk_bdev *bdev);
 
@@ -2283,17 +2285,25 @@ static void
 bdev_mgmt_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev_mgmt_channel *ch = ctx_buf;
-	struct spdk_bdev_io *bdev_io;
+	void *bdev_ios[BDEV_IO_PUT_BATCH_SIZE];
+	uint32_t i = 0;
 
 	spdk_spin_destroy(&ch->spinlock);
 
 	spdk_iobuf_channel_fini(&ch->iobuf);
 
 	while (!STAILQ_EMPTY(&ch->per_thread_cache)) {
-		bdev_io = STAILQ_FIRST(&ch->per_thread_cache);
+		bdev_ios[i] = STAILQ_FIRST(&ch->per_thread_cache);
 		STAILQ_REMOVE_HEAD(&ch->per_thread_cache, internal.buf_link);
+		i++;
 		ch->per_thread_cache_count--;
-		spdk_mempool_put(g_bdev_mgr.bdev_io_pool, (void *)bdev_io);
+		if (i == BDEV_IO_PUT_BATCH_SIZE) {
+			spdk_mempool_put_bulk(g_bdev_mgr.bdev_io_pool, (void *)bdev_ios, BDEV_IO_PUT_BATCH_SIZE);
+			i = 0;
+		}
+	}
+	if (i > 0) {
+		spdk_mempool_put_bulk(g_bdev_mgr.bdev_io_pool, (void *)bdev_ios, i);
 	}
 
 	assert(ch->per_thread_cache_count == 0);
