@@ -2307,24 +2307,36 @@ fsdev_aio_restore_cred(struct fsdev_aio_cred *old)
 }
 
 static int
-fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io, bool simple)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct spdk_fsdev_file_object *_fobject;
+	struct spdk_fsdev_file_handle *_fhandle;
+	off_t offset;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	off_t offset = (off_t)fsdev_io->u_in.readdir.offset;
 	struct aio_fsdev_file_object *entry_fobject;
 	int res;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readdir.fobject);
+	if (!simple) {
+		_fobject = fsdev_io->u_in.readdir.fobject;
+		_fhandle = fsdev_io->u_in.readdir.fhandle;
+		offset = fsdev_io->u_in.readdir.offset;
+	} else {
+		_fobject = fsdev_io->u_in.readdir_simple.fobject;
+		_fhandle = fsdev_io->u_in.readdir_simple.fhandle;
+		offset = fsdev_io->u_in.readdir_simple.offset;
+	}
+
+	fobject = fsdev_aio_get_fobject(vfsdev, _fobject);
 	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
+		SPDK_ERRLOG("Invalid fobject: %p\n", _fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.readdir.fhandle);
+	fhandle = fsdev_aio_get_fhandle(vfsdev, _fhandle);
 	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		SPDK_ERRLOG("Invalid fhandle: %p\n", _fhandle);
 		res = -EINVAL;
 		goto fop_failed;
 	}
@@ -2360,9 +2372,22 @@ fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 		/* Hide root's parent directory */
 		if (fobject == vfsdev->root && strcmp(name, "..") == 0) {
-			goto skip_entry;
+			goto continue_readdir;
 		}
 
+		/* handle t simple readdir first as it doesn't need to lookup the entry */
+		if (simple) {
+			res = fsdev_io->u_in.readdir_simple.entry_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io, name,
+					fhandle->dir.entry->d_ino, fhandle->dir.entry->d_type, offset);
+			if (res) {
+				/* non-zero value returned -> stop the readdir */
+				goto fop_failed;
+			}
+
+			goto continue_readdir;
+		}
+
+		/* normal readdir case handling does lookup and works with fobjects */
 		if (is_dot_or_dotdot(name)) {
 			attr.ino = fhandle->dir.entry->d_ino;
 			attr.mode = DT_DIR << 12;
@@ -2386,18 +2411,31 @@ skip_lookup:
 			break;
 		}
 
-skip_entry:
+continue_readdir:
 		fhandle->dir.entry = NULL;
 		fhandle->dir.offset = offset;
 	}
 
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
-		      "READDIR succeeded for " FOBJECT_FMT " (fh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
-		      FOBJECT_ARGS(fobject), fhandle, offset, offset);
+		      "READDIR succeeded for " FOBJECT_FMT " (simple=%d, sfh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
+		      FOBJECT_ARGS(fobject), simple, fhandle, offset, offset);
 fop_failed:
 	file_object_unref(fobject, 1);
 	return res;
+}
+
+
+static int
+fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_aio_do_readdir(ch, fsdev_io, false);
+}
+
+static int
+fsdev_aio_op_readdir_simple(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_aio_do_readdir(ch, fsdev_io, true);
 }
 
 static int
@@ -4776,6 +4814,9 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		status = fsdev_aio_op_ioctl(ch, fsdev_io);
+		break;
+	case SPDK_FSDEV_IO_READDIR_SIMPLE:
+		status = fsdev_aio_op_readdir_simple(ch, fsdev_io);
 		break;
 	default:
 		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
