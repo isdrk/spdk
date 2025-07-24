@@ -3077,7 +3077,8 @@ test_nvme_ctrlr_ns_attr_changed(void)
 				changed_ns_list2, SPDK_COUNTOF(changed_ns_list2));
 	nvme_ctrlr_complete_queued_async_events(&ctrlr);
 	CU_ASSERT(g_aer_cb_counter == 1);
-	CU_ASSERT(g_nvme_ns_constructed == g_active_ns_list_length);
+	/* No NS constructed, NS 100 removal done by identify of active NS. */
+	CU_ASSERT(g_nvme_ns_constructed == 0);
 	check_active_ns(&ctrlr, active_ns_list2, SPDK_COUNTOF(active_ns_list2));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 100));
 
@@ -3088,7 +3089,8 @@ test_nvme_ctrlr_ns_attr_changed(void)
 				changed_ns_list3, SPDK_COUNTOF(changed_ns_list3));
 	nvme_ctrlr_complete_queued_async_events(&ctrlr);
 	CU_ASSERT(g_aer_cb_counter == 1);
-	CU_ASSERT(g_nvme_ns_constructed == g_active_ns_list_length);
+	/* NS 101 constructed. */
+	CU_ASSERT(g_nvme_ns_constructed == 1);
 	check_active_ns(&ctrlr, active_ns_list3, SPDK_COUNTOF(active_ns_list3));
 
 	/* Add NS 102, remove NS 101 */
@@ -3098,7 +3100,8 @@ test_nvme_ctrlr_ns_attr_changed(void)
 				changed_ns_list4, SPDK_COUNTOF(changed_ns_list4));
 	nvme_ctrlr_complete_queued_async_events(&ctrlr);
 	CU_ASSERT(g_aer_cb_counter == 1);
-	CU_ASSERT(g_nvme_ns_constructed == g_active_ns_list_length);
+	/* NS 102 constructed, NS 101 removal done by identify of active NS. */
+	CU_ASSERT(g_nvme_ns_constructed == 1);
 	check_active_ns(&ctrlr, active_ns_list4, SPDK_COUNTOF(active_ns_list4));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 101));
 
@@ -3123,7 +3126,8 @@ test_nvme_ctrlr_ns_attr_changed(void)
 	 * Note: Identify sent to the controller after reading the log
 	 * page will already get the current list of namespaces.
 	 */
-	CU_ASSERT(g_nvme_ns_constructed == (SPDK_COUNTOF(active_ns_list5_aer2) * 2));
+	/* NS 103 constructed, NS 102 removal done by identify of active NS. */
+	CU_ASSERT(g_nvme_ns_constructed == 1);
 	check_active_ns(&ctrlr, active_ns_list5_aer2, SPDK_COUNTOF(active_ns_list5_aer2));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 102));
 
@@ -3148,7 +3152,9 @@ test_nvme_ctrlr_ns_attr_changed(void)
 	 * Note: Identify sent to the controller after reading the log
 	 * page will already get the current list of namespaces.
 	 */
-	CU_ASSERT(g_nvme_ns_constructed == (SPDK_COUNTOF(active_ns_list6_aer2) * 2));
+	/* NS 105 constructed, NS 103 removal done by identify of active NS.
+	 * NS 104 was never created, nor removed. */
+	CU_ASSERT(g_nvme_ns_constructed == 1);
 	check_active_ns(&ctrlr, active_ns_list6_aer2, SPDK_COUNTOF(active_ns_list6_aer2));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 103));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 104));
@@ -3188,7 +3194,10 @@ test_nvme_ctrlr_ns_attr_changed(void)
 				changed_ns_list8, SPDK_COUNTOF(changed_ns_list8));
 	nvme_ctrlr_complete_queued_async_events(&ctrlr);
 	CU_ASSERT(g_aer_cb_counter == 1);
-	CU_ASSERT(g_nvme_ns_constructed == g_active_ns_list_length);
+	/* NS 107, 109, 110 constructed.
+	 * NS 105, 106 removal done by identify of active NS.
+	 * NS 108 was never created, nor removed. */
+	CU_ASSERT(g_nvme_ns_constructed == 3);
 	check_active_ns(&ctrlr, active_ns_list8, SPDK_COUNTOF(active_ns_list8));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 105));
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 106));
