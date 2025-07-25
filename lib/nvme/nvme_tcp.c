@@ -2163,7 +2163,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 			if (nvme_qpair_is_admin_queue(qpair)) {
 				pthread_mutex_lock(&g_admin_poll_group_mutex);
 			}
-			rc = spdk_sock_group_poll(tqpair->sock_group);
+			spdk_sock_group_poll(tqpair->sock_group);
 			if (nvme_qpair_is_admin_queue(qpair)) {
 				pthread_mutex_unlock(&g_admin_poll_group_mutex);
 			}
