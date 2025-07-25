@@ -977,6 +977,11 @@ sock_group_impl_register_interrupt(struct spdk_fd_group *fgrp,
 	struct spdk_net_impl *impl = group_impl->net_impl;
 	int fd;
 
+	if (impl == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+
 	fd = impl->group_impl_get_interruptfd(group_impl);
 	if (fd < 0) {
 		return 0;
