@@ -17,7 +17,10 @@
 #include "spdk_internal/sgl.h"
 
 #include <rte_bus_vdev.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <rte_crypto.h>
+#pragma GCC diagnostic pop
 #include <rte_cryptodev.h>
 #include <rte_mbuf_dyn.h>
 #include <rte_version.h>
