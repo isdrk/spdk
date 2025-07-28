@@ -162,11 +162,12 @@ struct fsdevperf_job_ops {
 	void (*job_done)(struct fsdevperf_job *job, int status);
 };
 
-#define FSDEVPERF_JOB_RANDOM		(1 << 0)
-#define FSDEVPERF_JOB_SINGLE_BUFFER	(1 << 1)
-#define FSDEVPERF_JOB_UNIQUE_DATA	(1 << 2)
-#define FSDEVPERF_JOB_INTERNAL		(1 << 3)
-#define FSDEVPERF_JOB_DIRECT		(1 << 4)
+#define FSDEVPERF_JOB_RANDOM			(1 << 0)
+#define FSDEVPERF_JOB_SINGLE_BUFFER		(1 << 1)
+#define FSDEVPERF_JOB_UNIQUE_DATA		(1 << 2)
+#define FSDEVPERF_JOB_INTERNAL			(1 << 3)
+#define FSDEVPERF_JOB_DIRECT			(1 << 4)
+#define FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN	(1 << 5)
 
 struct fsdevperf_job {
 	int				io_pattern;
@@ -212,6 +213,7 @@ struct fsdevperf_app {
 		bool				enabled;
 		struct spdk_jsonrpc_request	*request;
 	} rpc;
+	struct spdk_memory_domain		*domain;
 } g_app = {
 	.num_threads_per_core = 1,
 	.jobs = TAILQ_HEAD_INITIALIZER(g_app.jobs),
@@ -366,6 +368,12 @@ fsdevperf_get_thread(void)
 	}
 
 	return NULL;
+}
+
+static bool
+fsdevperf_filesystem_supports_opcode(struct fsdevperf_filesystem *fs, uint64_t opcode)
+{
+	return fs->supported_fuse_opcodes & SPDK_BIT(opcode);
 }
 
 static void
@@ -754,6 +762,16 @@ fsdevperf_job_init(struct fsdevperf_job *job)
 		}
 	}
 
+	if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
+		assert(file != NULL);
+		if (!fsdevperf_filesystem_supports_opcode(file->fs, FUSE_READ) ||
+		    !fsdevperf_filesystem_supports_opcode(file->fs, FUSE_WRITE)) {
+			fsdevperf_errmsg("%s: memory domains are only supported with FUSE "
+					 "passthrough\n", job->name);
+			return -EINVAL;
+		}
+	}
+
 	return 0;
 }
 
@@ -942,6 +960,7 @@ fsdevperf_done(void)
 		}
 	}
 
+	spdk_memory_domain_destroy(g_app.domain);
 	spdk_poller_unregister(&g_app.poller.poller);
 	spdk_app_stop(g_app.status);
 }
@@ -965,12 +984,6 @@ fsdevperf_filesystem_umount_cb(void *cb_arg, int status, struct spdk_fsdev_io *f
 
 	fs->root = NULL;
 	fsdevperf_done();
-}
-
-static bool
-fsdevperf_filesystem_supports_opcode(struct fsdevperf_filesystem *fs, uint64_t opcode)
-{
-	return fs->supported_fuse_opcodes & SPDK_BIT(opcode);
 }
 
 static void
@@ -1225,6 +1238,7 @@ fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
 			      spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_job *job = task->job;
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_io *io = &request->io;
 	struct fsdevperf_fuse_io *fuse_io = &io->fuse_io;
@@ -1235,6 +1249,9 @@ fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
 		fsdevperf_io_init(&request->io, fs->fsdev_desc, task->ioch, FUSE_READ, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*read), NULL, 0,
 				  iovs, iovcnt, cb_fn, cb_ctx);
+		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
+			fsdev_io->u_out.fuse.memory_domain = g_app.domain;
+		}
 		read->fh = (uint64_t) fhandle;
 		read->offset = offset;
 		read->size = size;
@@ -1263,6 +1280,7 @@ fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
 			       spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_job *job = task->job;
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_io *io = &request->io;
 	struct fsdevperf_fuse_io *fuse_io = &io->fuse_io;
@@ -1273,6 +1291,9 @@ fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
 		fsdevperf_io_init(&request->io, fs->fsdev_desc, task->ioch, FUSE_WRITE, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*write) + size,
 				  iovs, iovcnt, NULL, 0, cb_fn, cb_ctx);
+		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
+			fsdev_io->u_in.fuse.memory_domain = g_app.domain;
+		}
 		write->fh = (uint64_t)fhandle;
 		write->offset = offset;
 		write->size = size;
@@ -2116,10 +2137,51 @@ fsdevperf_create_jobs(void)
 	return 0;
 }
 
+static int
+fsdevperf_pull_data(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+		    struct iovec *src_iovs, uint32_t src_iovcnt, struct iovec *dst_iovs,
+		    uint32_t dst_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
+{
+	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	cpl_cb(cpl_ctx, 0);
+	return 0;
+}
+
+static int
+fsdevperf_push_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+		    struct iovec *dst_iovs, uint32_t dst_iovcnt, struct iovec *src_iovs,
+		    uint32_t src_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
+{
+	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	cpl_cb(cpl_ctx, 0);
+	return 0;
+}
+
+static int
+fsdevperf_init_memory_domain(void)
+{
+	int rc;
+
+	rc = spdk_memory_domain_create(&g_app.domain, SPDK_DMA_DEVICE_TYPE_DMA, NULL, "fsdevperf");
+	if (rc != 0) {
+		fsdevperf_errmsg("failed to create memory domain: %s\n", spdk_strerror(-rc));
+		return rc;
+	}
+
+	spdk_memory_domain_set_pull(g_app.domain, fsdevperf_pull_data);
+	spdk_memory_domain_set_push(g_app.domain, fsdevperf_push_data);
+	return 0;
+}
+
 static void
 fsdevperf_run(void)
 {
 	int rc;
+
+	rc = fsdevperf_init_memory_domain();
+	if (rc != 0) {
+		goto error;
+	}
 
 	rc = fsdevperf_create_jobs();
 	if (rc != 0) {
@@ -2253,6 +2315,8 @@ static struct option g_options[] = {
 	{ "uid", required_argument, NULL, FSDEVPERF_OPT_UID },
 #define FSDEVPERF_OPT_GID 0x1005
 	{ "gid", required_argument, NULL, FSDEVPERF_OPT_GID },
+#define FSDEVPERF_OPT_FAKE_MEMORY_DOMAIN 0x1006
+	{ "fake-memory-domain", optional_argument, NULL, FSDEVPERF_OPT_FAKE_MEMORY_DOMAIN },
 	{},
 };
 
@@ -2410,6 +2474,11 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			job->flags |= FSDEVPERF_JOB_DIRECT;
 		}
 		break;
+	case FSDEVPERF_OPT_FAKE_MEMORY_DOMAIN:
+		if (fsdevperf_parse_bool_option(arg)) {
+			job->flags |= FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN;
+		}
+		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
 	case FSDEVPERF_OPT_SIZE:
@@ -2492,6 +2561,7 @@ fsdevperf_usage(void)
 	printf("     --direct                         use direct I/O\n");
 	printf("     --uid                            uid to use in the fuse_in_header for FUSE-based fsdev modules (default: 0)\n");
 	printf("     --gid                            gid to use in the fuse_in_header for FUSE-based fsdev modules (default: 0)\n");
+	printf("     --fake-memory-domain             pass fake memory domain in all I/O requests\n");
 }
 
 int
