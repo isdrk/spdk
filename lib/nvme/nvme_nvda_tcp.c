@@ -235,6 +235,7 @@ static STAILQ_HEAD(, xlio_packets_pool) g_xlio_packets_pools = STAILQ_HEAD_INITI
 static struct spdk_mempool *g_xlio_nvme_buffers_pool;
 static pthread_mutex_t g_xlio_admin_group_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct spdk_spinlock g_xlio_admin_group_lock;
+static bool g_xlio_admin_group_lock_initialized = false;
 static struct xlio_shared_group g_xlio_admin_group;
 
 static int xlio_sock_close(struct nvme_tcp_qpair *qpair);
@@ -358,9 +359,6 @@ xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
 
 	STAILQ_INSERT_HEAD(&g_xlio_packets_pools, pool, link);
 	pool->core_id = shared ? NVDA_TCP_PACKET_POOL_SHARED : current_core;
-	if (shared) {
-		spdk_spin_init_recursive(&g_xlio_admin_group_lock);
-	}
 	pthread_mutex_unlock(&g_xlio_pool_mutex);
 	SPDK_NOTICELOG("Create xlio pool, packets_pool_size %u on core %u\n",
 		       packets_pool_size, current_core);
@@ -1135,6 +1133,10 @@ xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 		gattr.socket_event_cb = xlio_socket_event_cb_safe;
 		gattr.socket_comp_cb = xlio_socket_comp_cb_safe;
 		gattr.socket_rx_cb = xlio_socket_rx_cb_safe;
+		if (!g_xlio_admin_group_lock_initialized) {
+			spdk_spin_init_recursive(&g_xlio_admin_group_lock);
+			g_xlio_admin_group_lock_initialized = true;
+		}
 	} else {
 		gattr.socket_event_cb = xlio_socket_event_cb;
 		gattr.socket_comp_cb = xlio_socket_comp_cb;
