@@ -63,7 +63,8 @@ SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_io, fsdev_io) % 8 == 0, "misalignme
 
 struct fsdevperf_request {
 	struct fsdevperf_task	*task;
-	struct iovec		iov;
+	struct iovec		*iovs;
+	uint32_t		iovcnt;
 	struct fsdevperf_io	io;
 };
 SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_request, io) % 8 == 0, "misalignment");
@@ -174,6 +175,7 @@ struct fsdevperf_job {
 	int				status;
 	size_t				io_size;
 	size_t				io_depth;
+	size_t				io_segment_size;
 	size_t				filesize;
 	size_t				size;
 	size_t				num_files;
@@ -532,11 +534,17 @@ static void
 fsdevperf_task_free(struct fsdevperf_task *task)
 {
 	struct fsdevperf_job *job = task->job;
+	size_t i;
 
 	if (!(job->flags & FSDEVPERF_JOB_SINGLE_BUFFER)) {
 		spdk_free(task->buf);
 	}
-	free(task->requests_buf);
+	if (task->requests_buf != NULL) {
+		for (i = 0; i < task->io_depth; i++) {
+			free(fsdevperf_task_request(task, i)->iovs);
+		}
+		free(task->requests_buf);
+	}
 	free(task);
 }
 
@@ -546,7 +554,8 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 {
 	struct fsdevperf_task *task;
 	struct fsdevperf_request *request;
-	size_t i;
+	size_t i, j, len, curlen, iovcnt, io_segment_size;
+	char *buf;
 
 	task = calloc(1, FSDEVPERF_TASK_SIZE(file->fs));
 	if (task == NULL) {
@@ -577,11 +586,26 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 		}
 	}
 
+	io_segment_size = job->io_segment_size ? job->io_segment_size : task->io_size;
+	iovcnt = spdk_divide_round_up(task->io_size, io_segment_size);
 	for (i = 0; i < task->io_depth; i++) {
 		request = fsdevperf_task_request(task, i);
-		request->iov.iov_base = (char *)task->buf + i * task->io_size;
-		request->iov.iov_len = task->io_size;
+		request->iovcnt = iovcnt;
 		request->task = task;
+		request->iovs = calloc(iovcnt, sizeof(*request->iovs));
+		if (request->iovs == NULL) {
+			goto error;
+		}
+
+		buf = (char *)task->buf + i * task->io_size;
+		len = task->io_size;
+		for (j = 0; j < iovcnt; j++) {
+			curlen = spdk_min(io_segment_size, len);
+			request->iovs[j].iov_base = buf;
+			request->iovs[j].iov_len = curlen;
+			buf += curlen;
+			len -= curlen;
+		}
 	}
 
 	return task;
@@ -1600,7 +1624,7 @@ static void
 fsdevperf_request_generate_data(struct fsdevperf_request *request, uint64_t id)
 {
 	struct fsdevperf_task *task = request->task;
-	uint64_t *p = request->iov.iov_base;
+	uint64_t *p = request->iovs[0].iov_base;
 	size_t i;
 
 	if (!task->unique_data) {
@@ -1623,13 +1647,13 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	switch (task->io_pattern) {
 	case FUSE_READ:
 		fsdevperf_request_submit_read(request, id, task->fobj, task->fh, offset,
-					      task->io_size, &request->iov, 1,
+					      task->io_size, request->iovs, request->iovcnt,
 					      fsdevperf_request_complete_cb, request);
 		break;
 	case FUSE_WRITE:
 		fsdevperf_request_generate_data(request, id);
 		fsdevperf_request_submit_write(request, id, task->fobj, task->fh, offset,
-					       task->io_size, &request->iov, 1,
+					       task->io_size, request->iovs, request->iovcnt,
 					       fsdevperf_request_complete_cb, request);
 		break;
 	default:
@@ -2099,6 +2123,7 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 	job->io_pattern = orig_job->io_pattern;
 	job->io_size = orig_job->io_size;
 	job->io_depth = orig_job->io_depth;
+	job->io_segment_size = orig_job->io_segment_size;
 	job->filesize = orig_job->filesize;
 	job->size = orig_job->size;
 	job->num_files = orig_job->num_files;
@@ -2301,6 +2326,8 @@ static struct option g_options[] = {
 	{ "wait-for-start", no_argument, NULL, FSDEVPERF_OPT_WAIT_FOR_START },
 #define FSDEVPERF_OPT_FILESIZE 'f'
 	{ "filesize", required_argument, NULL, FSDEVPERF_OPT_FILESIZE },
+#define FSDEVPERF_OPT_IOSEGMENT_SIZE 'S'
+	{ "iosegment-size", required_argument, NULL, FSDEVPERF_OPT_IOSEGMENT_SIZE },
 #define FSDEVPERF_OPT_UNIQUE 'U'
 	{ "unique", optional_argument, NULL, FSDEVPERF_OPT_UNIQUE },
 #define FSDEVPERF_OPT_SIZE 0x1000
@@ -2481,6 +2508,7 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		break;
 	case FSDEVPERF_OPT_IOSIZE:
 	case FSDEVPERF_OPT_IODEPTH:
+	case FSDEVPERF_OPT_IOSEGMENT_SIZE:
 	case FSDEVPERF_OPT_SIZE:
 	case FSDEVPERF_OPT_RUNTIME:
 	case FSDEVPERF_OPT_FILESIZE:
@@ -2499,6 +2527,9 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			break;
 		case FSDEVPERF_OPT_IODEPTH:
 			job->io_depth = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_IOSEGMENT_SIZE:
+			job->io_segment_size = (size_t)u64;
 			break;
 		case FSDEVPERF_OPT_SIZE:
 			job->size = (size_t)u64;
@@ -2548,6 +2579,7 @@ fsdevperf_usage(void)
 	printf("                                      will be sent to files on all available fsdevs\n");
 	printf(" -o, --iosize=<iosize>                I/O size\n");
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
+	printf(" -S, --iosegment-size                 I/O segment size\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
 	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite)\n");
 	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
