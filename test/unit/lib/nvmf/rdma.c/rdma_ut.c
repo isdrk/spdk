@@ -187,6 +187,7 @@ reset_nvmf_rdma_request(struct spdk_nvmf_rdma_request *rdma_req)
 		free(rdma_req->req.stripped_data);
 		rdma_req->req.stripped_data = NULL;
 	}
+	nvmf_rdma_setup_request(rdma_req);
 }
 
 static void
@@ -347,6 +348,8 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		sgl_desc[i].keyed.key = 0x44;
 	}
 	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 
 	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
 
@@ -373,6 +376,8 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 		sgl_desc[i].keyed.key = 0x44;
 	}
 	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 
 	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
 
@@ -405,6 +410,8 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 			      rtransport.transport.opts.io_unit_size / 2;
 
 	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 
 	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
 
@@ -438,6 +445,9 @@ test_spdk_nvmf_rdma_request_parse_sgl(void)
 	}
 	rdma_req.num_wrs = 2;
 
+	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 	rc = nvmf_rdma_request_parse_sgl(&rtransport, &device, &rdma_req);
 
 	CU_ASSERT(rc == 0);
@@ -1227,6 +1237,9 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 	rdma_req.req.dif_enabled = true;
 	rtransport.transport.opts.io_unit_size = data_bs * 16;
 	sgl->keyed.length = data_bs * 16;
+	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 
 	rdma_req.num_wrs = 2;
 
@@ -1321,6 +1334,9 @@ test_spdk_nvmf_rdma_request_parse_sgl_with_md(void)
 		sgl_desc[i].address = 0x4000 + i * data_bs * 4;
 		sgl_desc[i].keyed.key = 0x44;
 	}
+	rdma_req.num_wrs = 2;
+	rc = nvmf_request_alloc_wrs(&rtransport, &rdma_req, rdma_req.num_wrs - 1);
+	CU_ASSERT(rc == 0);
 
 	rdma_req.num_wrs = 2;
 
