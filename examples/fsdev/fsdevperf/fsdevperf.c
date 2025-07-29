@@ -169,6 +169,7 @@ struct fsdevperf_job_ops {
 #define FSDEVPERF_JOB_INTERNAL			(1 << 3)
 #define FSDEVPERF_JOB_DIRECT			(1 << 4)
 #define FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN	(1 << 5)
+#define FSDEVPERF_JOB_SKIP_COPY			(1 << 6)
 
 struct fsdevperf_job {
 	int				io_pattern;
@@ -1275,6 +1276,7 @@ fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
 				  iovs, iovcnt, cb_fn, cb_ctx);
 		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
 			fsdev_io->u_out.fuse.memory_domain = g_app.domain;
+			fsdev_io->u_out.fuse.memory_domain_ctx = job;
 		}
 		read->fh = (uint64_t) fhandle;
 		read->offset = offset;
@@ -1317,6 +1319,7 @@ fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
 				  iovs, iovcnt, NULL, 0, cb_fn, cb_ctx);
 		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
 			fsdev_io->u_in.fuse.memory_domain = g_app.domain;
+			fsdev_io->u_in.fuse.memory_domain_ctx = job;
 		}
 		write->fh = (uint64_t)fhandle;
 		write->offset = offset;
@@ -2168,7 +2171,12 @@ fsdevperf_pull_data(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 		    struct iovec *src_iovs, uint32_t src_iovcnt, struct iovec *dst_iovs,
 		    uint32_t dst_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
 {
-	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	struct fsdevperf_job *job = src_domain_ctx;
+
+	if (!(job->flags & FSDEVPERF_JOB_SKIP_COPY)) {
+		spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	}
+
 	cpl_cb(cpl_ctx, 0);
 	return 0;
 }
@@ -2178,7 +2186,12 @@ fsdevperf_push_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 		    struct iovec *dst_iovs, uint32_t dst_iovcnt, struct iovec *src_iovs,
 		    uint32_t src_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
 {
-	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	struct fsdevperf_job *job = dst_domain_ctx;
+
+	if (!(job->flags & FSDEVPERF_JOB_SKIP_COPY)) {
+		spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	}
+
 	cpl_cb(cpl_ctx, 0);
 	return 0;
 }
@@ -2503,7 +2516,20 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		}
 		break;
 	case FSDEVPERF_OPT_FAKE_MEMORY_DOMAIN:
-		if (fsdevperf_parse_bool_option(arg)) {
+		if (arg != NULL) {
+			if (!strcmp(arg, "1") || !strcmp(arg, "true")) {
+				job->flags |= FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN;
+			} else if (!strcmp(arg, "0") || !strcmp(arg, "false")) {
+				job->flags &= ~FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN;
+			} else if (!strcmp(arg, "nocopy") || !strcmp(arg, "skip")) {
+				job->flags |= FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN |
+					      FSDEVPERF_JOB_SKIP_COPY;
+			} else {
+				fsdevperf_errmsg("%s: invalid option --fake-memory-domain=%s\n",
+						 job->name, arg);
+				return -EINVAL;
+			}
+		} else {
 			job->flags |= FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN;
 		}
 		break;
