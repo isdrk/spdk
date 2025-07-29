@@ -37,10 +37,6 @@
 #define SPDK_NVME_TCP_QPAIR_EXIT_TIMEOUT	30
 #define SPDK_NVMF_TCP_RECV_BUF_SIZE_FACTOR	8
 #define SPDK_NVME_TCP_IN_CAPSULE_DATA_MAX_SIZE	8192u
-/*
- * Maximum number of SGL elements.
- */
-#define NVME_TCP_MAX_SGL_DESCRIPTORS	(16)
 
 #define MAKE_DIGEST_WORD(BUF, CRC32C) \
         (   ((*((uint8_t *)(BUF)+0)) = (uint8_t)((uint32_t)(CRC32C) >> 0)), \
@@ -351,9 +347,9 @@ struct nvme_tcp_pdu {
 	 * after it. There is a static assert below to check if the compiler inserted
 	 * any unwanted padding */
 	struct spdk_sock_request			sock_req;
-	struct iovec					iov[NVME_TCP_MAX_SGL_DESCRIPTORS * 2];
+	struct iovec					iov[NVMF_REQ_MAX_BUFFERS];
 
-	struct iovec					data_iov[NVME_TCP_MAX_SGL_DESCRIPTORS];
+	struct iovec					data_iov[NVMF_REQ_MAX_BUFFERS];
 	uint32_t					data_iovcnt;
 	uint32_t					data_len;
 
@@ -607,7 +603,7 @@ nvme_tcp_pdu_set_data_buf(struct nvme_tcp_pdu *pdu,
 		pdu->data_iov[0].iov_len = buf_len;
 		pdu->data_iovcnt = 1;
 	} else {
-		spdk_iov_sgl_init(&pdu_sgl, pdu->data_iov, NVME_TCP_MAX_SGL_DESCRIPTORS, 0);
+		spdk_iov_sgl_init(&pdu_sgl, pdu->data_iov, NVMF_REQ_MAX_BUFFERS, 0);
 		spdk_iov_sgl_init(&buf_sgl, iov, iovcnt, 0);
 
 		spdk_iov_sgl_advance(&buf_sgl, buf_offset);
@@ -628,7 +624,7 @@ nvme_tcp_pdu_set_data_buf(struct nvme_tcp_pdu *pdu,
 		assert(remain_len == 0);
 		assert(pdu_sgl.total_size == buf_len);
 
-		pdu->data_iovcnt = NVME_TCP_MAX_SGL_DESCRIPTORS - pdu_sgl.iovcnt;
+		pdu->data_iovcnt = NVMF_REQ_MAX_BUFFERS - pdu_sgl.iovcnt;
 	}
 }
 
@@ -2945,7 +2941,7 @@ nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 static int
 nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
-	struct iovec iov[NVME_TCP_MAX_SGL_DESCRIPTORS + 1];
+	struct iovec iov[NVMF_REQ_MAX_BUFFERS + 1];
 	int iovcnt;
 	struct spdk_iov_sgl sgl;
 	int i;
@@ -2954,7 +2950,7 @@ nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_p
 	assert(tqpair != NULL);
 	assert(tqpair->sock != NULL);
 
-	spdk_iov_sgl_init(&sgl, iov, NVME_TCP_MAX_SGL_DESCRIPTORS + 1, pdu->rw_offset);
+	spdk_iov_sgl_init(&sgl, iov, NVMF_REQ_MAX_BUFFERS + 1, pdu->rw_offset);
 
 	for (i = 0; i < (int)pdu->data_iovcnt; i++) {
 		if (!spdk_iov_sgl_append(&sgl, pdu->data_iov[i].iov_base, pdu->data_iov[i].iov_len)) {
@@ -2968,7 +2964,7 @@ nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_p
 	}
 
 end:
-	iovcnt = NVME_TCP_MAX_SGL_DESCRIPTORS + 1 - sgl.iovcnt;
+	iovcnt = NVMF_REQ_MAX_BUFFERS + 1 - sgl.iovcnt;
 	assert(iovcnt >= 0);
 
 	ret = 0;
