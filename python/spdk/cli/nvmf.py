@@ -92,6 +92,7 @@ def add_parser(subparsers):
     p.add_argument('-R', '--rdma-device-list', help='Allowed list of RDMA devices. Relevant only for RDMA_OFFLOAD transport', type=str)
     p.add_argument('-L', '--doca-log-level', help="""Set DOCA log level (disable, critical, error, warning, info, debug, trace).
     Relevant only for RDMA_OFFLOAD transport""", type=str)
+    p.add_argument('--enable-pool-selection', action='store_true', help='Enable small/large pool selection depending on the IO size')
     p.set_defaults(func=nvmf_create_transport)
 
     def nvmf_get_transports(args):
