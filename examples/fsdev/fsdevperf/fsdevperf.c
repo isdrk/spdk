@@ -13,6 +13,10 @@
 #include "spdk/thread.h"
 #include "spdk/util.h"
 
+#ifdef SPDK_CONFIG_RDMA
+#include "spdk_internal/rdma_utils.h"
+#endif
+
 /*
  * fsdevperf_job describes a single job (i.e. pattern, io_size, etc.), spawned across multiple
  * threads, while fsdevperf_task represents part of that job responsible for submitting IOs to a
@@ -95,6 +99,14 @@ struct fsdevperf_file {
 	TAILQ_ENTRY(fsdevperf_file)		tailq;
 };
 
+struct fsdevperf_domain {
+	struct spdk_memory_domain	*domain;
+#ifdef SPDK_CONFIG_RDMA
+	struct spdk_rdma_utils_mem_map	*map;
+#endif
+	STAILQ_ENTRY(fsdevperf_domain)	stailq;
+};
+
 struct fsdevperf_task {
 	struct fsdevperf_filesystem		*fs;
 	struct fsdevperf_job			*job;
@@ -102,6 +114,7 @@ struct fsdevperf_task {
 	struct spdk_io_channel			*ioch;
 	struct spdk_fsdev_file_object		*fobj;
 	struct spdk_fsdev_file_handle		*fh;
+	STAILQ_HEAD(, fsdevperf_domain)		domains;
 	uint64_t				offset;
 	uint64_t				filesize;
 	uint64_t				size;
@@ -535,6 +548,7 @@ static void
 fsdevperf_task_free(struct fsdevperf_task *task)
 {
 	struct fsdevperf_job *job = task->job;
+	struct fsdevperf_domain *domain;
 	size_t i;
 
 	if (!(job->flags & FSDEVPERF_JOB_SINGLE_BUFFER)) {
@@ -545,6 +559,14 @@ fsdevperf_task_free(struct fsdevperf_task *task)
 			free(fsdevperf_task_request(task, i)->iovs);
 		}
 		free(task->requests_buf);
+	}
+	while (!STAILQ_EMPTY(&task->domains)) {
+		domain = STAILQ_FIRST(&task->domains);
+		STAILQ_REMOVE_HEAD(&task->domains, stailq);
+#ifdef SPDK_CONFIG_RDMA
+		spdk_rdma_utils_free_mem_map(&domain->map);
+#endif
+		free(domain);
 	}
 	free(task);
 }
@@ -563,6 +585,7 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 		return NULL;
 	}
 
+	STAILQ_INIT(&task->domains);
 	task->job = job;
 	task->thread = thread;
 	task->file = file;
@@ -1276,7 +1299,7 @@ fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
 				  iovs, iovcnt, cb_fn, cb_ctx);
 		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
 			fsdev_io->u_out.fuse.memory_domain = g_app.domain;
-			fsdev_io->u_out.fuse.memory_domain_ctx = job;
+			fsdev_io->u_out.fuse.memory_domain_ctx = task;
 		}
 		read->fh = (uint64_t) fhandle;
 		read->offset = offset;
@@ -1319,7 +1342,7 @@ fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
 				  iovs, iovcnt, NULL, 0, cb_fn, cb_ctx);
 		if (job->flags & FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN) {
 			fsdev_io->u_in.fuse.memory_domain = g_app.domain;
-			fsdev_io->u_in.fuse.memory_domain_ctx = job;
+			fsdev_io->u_in.fuse.memory_domain_ctx = task;
 		}
 		write->fh = (uint64_t)fhandle;
 		write->offset = offset;
@@ -2171,7 +2194,8 @@ fsdevperf_pull_data(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 		    struct iovec *src_iovs, uint32_t src_iovcnt, struct iovec *dst_iovs,
 		    uint32_t dst_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
 {
-	struct fsdevperf_job *job = src_domain_ctx;
+	struct fsdevperf_task *task = src_domain_ctx;
+	struct fsdevperf_job *job = task->job;
 
 	if (!(job->flags & FSDEVPERF_JOB_SKIP_COPY)) {
 		spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
@@ -2186,7 +2210,8 @@ fsdevperf_push_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 		    struct iovec *dst_iovs, uint32_t dst_iovcnt, struct iovec *src_iovs,
 		    uint32_t src_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
 {
-	struct fsdevperf_job *job = dst_domain_ctx;
+	struct fsdevperf_task *task = dst_domain_ctx;
+	struct fsdevperf_job *job = task->job;
 
 	if (!(job->flags & FSDEVPERF_JOB_SKIP_COPY)) {
 		spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
@@ -2195,6 +2220,90 @@ fsdevperf_push_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
 	cpl_cb(cpl_ctx, 0);
 	return 0;
 }
+
+#ifdef SPDK_CONFIG_RDMA
+static struct fsdevperf_domain *
+fsdevperf_get_domain(struct fsdevperf_task *task, struct spdk_memory_domain *domain,
+		     struct spdk_memory_domain_translation_ctx *ctx)
+{
+	struct fsdevperf_job *job = task->job;
+	struct fsdevperf_domain *fd;
+	struct ibv_qp *qp;
+	uint64_t flags;
+
+	STAILQ_FOREACH(fd, &task->domains, stailq) {
+		if (fd->domain == domain) {
+			return fd;
+		}
+	}
+
+	fd = calloc(1, sizeof(*fd));
+	if (fd == NULL) {
+		return NULL;
+	}
+
+	qp = SPDK_GET_FIELD(ctx, rdma.ibv_qp, NULL);
+	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+
+	fd->domain = domain;
+	fd->map = spdk_rdma_utils_create_mem_map(qp->pd, NULL, flags);
+	if (fd->map == NULL) {
+		fsdevperf_errmsg("%s: failed to create memory map\n", job->name);
+		free(fd);
+		return NULL;
+	}
+
+	STAILQ_INSERT_TAIL(&task->domains, fd, stailq);
+	return fd;
+}
+
+static int
+fsdevperf_translate_addr(struct spdk_memory_domain *src_domain,
+			 void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			 struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			 void *addr, size_t len,
+			 struct spdk_memory_domain_translation_result *result)
+{
+	struct fsdevperf_task *task = src_domain_ctx;
+	struct fsdevperf_job *job = task->job;
+	struct spdk_rdma_utils_memory_translation tr;
+	struct fsdevperf_domain *fd;
+	int rc;
+
+	assert(spdk_memory_domain_get_dma_device_type(dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA);
+	fd = fsdevperf_get_domain(task, dst_domain, dst_domain_ctx);
+	if (spdk_unlikely(fd == NULL)) {
+		return -ENOMEM;
+	}
+
+	rc = spdk_rdma_utils_get_translation(fd->map, addr, len, &tr);
+	if (spdk_unlikely(rc != 0)) {
+		fsdevperf_errmsg("%s: failed to translate addr=%p: %s\n", job->name, addr,
+				 spdk_strerror(-rc));
+		return rc;
+	}
+
+	assert(result->size >= SPDK_SIZEOF(result, rdma));
+	result->iov_count = 1;
+	result->iov.iov_base = addr;
+	result->iov.iov_len = len;
+	result->dst_domain = dst_domain;
+	result->rdma.lkey = spdk_rdma_utils_memory_translation_get_lkey(&tr);
+	result->rdma.rkey = spdk_rdma_utils_memory_translation_get_rkey(&tr);
+
+	return 0;
+}
+#else
+static int
+fsdevperf_translate_addr(struct spdk_memory_domain *src_domain,
+			 void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			 struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			 void *addr, size_t len,
+			 struct spdk_memory_domain_translation_result *result)
+{
+	return -ENOTSUP;
+}
+#endif
 
 static int
 fsdevperf_init_memory_domain(void)
@@ -2207,6 +2316,7 @@ fsdevperf_init_memory_domain(void)
 		return rc;
 	}
 
+	spdk_memory_domain_set_translation(g_app.domain, fsdevperf_translate_addr);
 	spdk_memory_domain_set_pull(g_app.domain, fsdevperf_pull_data);
 	spdk_memory_domain_set_push(g_app.domain, fsdevperf_push_data);
 	return 0;
