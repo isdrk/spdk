@@ -2128,6 +2128,7 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 	job->size = orig_job->size;
 	job->num_files = orig_job->num_files;
 	job->runtime = orig_job->runtime;
+	job->flags = orig_job->flags;
 
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
 
