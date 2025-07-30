@@ -2397,7 +2397,7 @@ fsdev_aio_do_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io,
 		res = fsdev_aio_do_lookup(vfsdev, fobject, name, &entry_fobject, &attr);
 		if (res) {
 			SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", name, res);
-			goto fop_failed;
+			goto continue_readdir;
 		}
 
 skip_lookup:
