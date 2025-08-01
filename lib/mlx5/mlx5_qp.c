@@ -693,51 +693,10 @@ spdk_mlx5_cq_destroy(struct spdk_mlx5_cq *cq)
 	return 0;
 }
 
-static inline void
-mlx5_cq_update_consumer_index(struct spdk_mlx5_cq *cq)
-{
-	*((uint32_t *)(uintptr_t)cq->hw.dbrec_addr) = htobe32(cq->hw.ci & 0xffffff);
-}
-
 int
 spdk_mlx5_cq_resize(struct spdk_mlx5_cq *cq, int cqe)
 {
-	struct mlx5dv_obj dv_obj;
-	struct mlx5dv_cq mlx5_cq;
-	int rc;
-
-	/*
-	 * The resize operation fails if the number of outstanding CQEs exceeds the new CQ size.
-	 * Since we do not update the consumer index in the poll function, we must update it here
-	 * to let the HW calculate the number of outstanding CQEs correctly.
-	 */
-	mlx5_cq_update_consumer_index(cq);
-
-	rc = ibv_resize_cq(cq->verbs_cq, cqe);
-	if (rc) {
-		SPDK_ERRLOG("ibv_resize_cq failed, rc %d\n", rc);
-		return rc;
-	}
-
-	dv_obj.cq.in = cq->verbs_cq;
-	dv_obj.cq.out = &mlx5_cq;
-
-	rc = mlx5dv_init_obj(&dv_obj, MLX5DV_OBJ_CQ);
-	if (rc) {
-		SPDK_ERRLOG("Failed to init DV CQ, rc %d\n", rc);
-		return rc;
-	}
-
-	cq->hw.cq_addr = (uintptr_t)mlx5_cq.buf;
-	cq->hw.cqe_cnt = mlx5_cq.cqe_cnt;
-	/*
-	 * The HW produces an extra CQE before switching to a new CQ buffer, and the CQ resize function
-	 * copies non-polled CQEs to the new CQ buffer, excluding the extra one. The index in the new
-	 * buffer is incremented to fill the gap made by the dropped CQE.
-	 */
-	cq->hw.ci++;
-
-	return 0;
+	return -ENOTSUP;
 }
 
 int
