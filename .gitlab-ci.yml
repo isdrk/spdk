@@ -1,4 +1,11 @@
 ---
+
+variables:
+  GIT_STRATEGY: clone
+  GIT_DEPTH: 0
+  GIT_SUBMODULE_STRATEGY: recursive
+  GIT_SUBMODULE_DEPTH: 1
+
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == 'merge_request_event'
@@ -19,9 +26,6 @@ stages:
     - when: on_success
   tags: [k8s, linux, x86_64]
   # tags: [k8s, mtr-rdma, x86_64]
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-    GIT_SUBMODULE_DEPTH: 1
 
 build-job:
   extends: .do_build
@@ -81,9 +85,6 @@ unittest-mlx5_dv-release:
 .test-job-vm-template:
   stage: test
   tags: [vm, linux, x86_64, f39]
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-    GIT_SUBMODULE_DEPTH: 1
   needs:
     - job: build-job
   rules:
@@ -105,9 +106,6 @@ unittest-mlx5_dv-release:
   hooks:
     pre_get_sources_script: []
   variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-    GIT_SUBMODULE_DEPTH: 1
-    GIT_DEPTH: 0
     GIT_FETCH_EXTRA_FLAGS: "--tags"
 
 test-nvmf-k8s-job:
@@ -179,7 +177,6 @@ coverity-job:
     - nr=$(cov-format-errors --dir cov_build |& awk '/Processing [0-9]+ errors?/ { print $2 }')
     - exit $nr
   variables:
-    GIT_SUBMODULE_STRATEGY: recursive
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/cov/bin
     CC: gcc-9
   allow_failure: true
