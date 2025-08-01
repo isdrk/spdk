@@ -5,6 +5,9 @@ variables:
   GIT_DEPTH: 0
   GIT_SUBMODULE_STRATEGY: recursive
   GIT_SUBMODULE_DEPTH: 1
+  # VM_HOST Pool:
+  VM_START_NUM: "001"
+  VM_END_NUM: "016"
 
 workflow:
   rules:
@@ -123,29 +126,18 @@ test-nvmf-k8s-job:
     # multipath.sh doesn't work in K8s container
     # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
 
-autotest-vm-matrix:
-  extends: .test-job-vm-template
-  tags: [not-crypto, vm, linux, x86_64, f39]
-  variables:
-    OUTPUT_DIR: $CI_PROJECT_DIR/../output/
+autotest-vm_host-matrix:
+  tags: [vm_host, x86_64]
+  stage: test
   parallel:
     matrix:
       - TEST_TYPE: [nvme, accel, fsdev]
+  before_script:
+    - .ci/prepare_vm.sh
   script:
-    - grep -i huge /proc/meminfo
-    - tar xf .test.tar
-    # Clean up output from previous autotest runs
-    - sudo rm -rf $OUTPUT_DIR && mkdir -p $OUTPUT_DIR
-    - sudo ./autotest.sh .ci/autotest-${TEST_TYPE}.conf 2>&1 | tee $OUTPUT_DIR/build.log
+    - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
   after_script:
-    - sudo chown -R $USER $CI_PROJECT_DIR
-    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar $OUTPUT_DIR
-    - echo "Run $(wc -l < $OUTPUT_DIR/test_completions.txt) tests"
-    - |
-      if [ $CI_JOB_STATUS == "failed" ]; then
-        echo "Tests failed, rebooting VM..."
-        sudo reboot
-      fi
+    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar -C $CI_PROJECT_DIR/.. output
   artifacts:
     name: ${TEST_TYPE}_artifacts
     paths:
