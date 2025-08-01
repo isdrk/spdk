@@ -2206,11 +2206,8 @@ test_spdk_nvme_ctrlr_update_firmware(void)
 	   If spdk_nvme_ctrlr_update_firmware changes its behaviour and frees the status
 	   itself, we'll get a double free here.. */
 	free(g_failed_status);
-	g_failed_status = NULL;
-	g_wait_for_completion_return_val = 0;
 
 	CU_ASSERT(pthread_mutex_destroy(&ctrlr.ctrlr_lock) == 0);
-	set_status_cpl = 0;
 }
 
 int
@@ -2326,9 +2323,6 @@ test_nvme_ctrlr_test_active_ns(void)
 
 		nvme_ctrlr_destruct(&ctrlr);
 	}
-
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
 }
 
 static void
@@ -2346,7 +2340,6 @@ test_nvme_ctrlr_test_active_ns_error_case(void)
 	set_status_code = SPDK_NVME_SC_INVALID_FIELD;
 	rc = nvme_ctrlr_identify_active_ns(&ctrlr);
 	CU_ASSERT(rc == -ENXIO);
-	set_status_code = SPDK_NVME_SC_SUCCESS;
 }
 
 static void
@@ -2621,8 +2614,6 @@ test_nvme_ctrlr_init_set_nvmf_ioccsz(void)
 	ctrlr.icdoff = 0;
 
 	nvme_ctrlr_destruct(&ctrlr);
-
-	g_cdata = NULL;
 }
 
 static void
@@ -2890,9 +2881,6 @@ test_nvme_ctrlr_active_ns_list_v2(void)
 	CU_ASSERT(spdk_nvme_ctrlr_get_next_active_ns(&ctrlr, 1025) == 0);
 
 	nvme_ctrlr_destruct(&ctrlr);
-
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
 }
 
 static void
@@ -2941,8 +2929,6 @@ test_nvme_ctrlr_ns_mgmt(void)
 	CU_ASSERT(spdk_nvme_ctrlr_delete_ns(&ctrlr, 3) == 0);
 	CU_ASSERT(!spdk_nvme_ctrlr_is_active_ns(&ctrlr, 3));
 	CU_ASSERT(spdk_nvme_ctrlr_get_ns(&ctrlr, 3) != NULL);
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
 
 	nvme_ctrlr_destruct(&ctrlr);
 }
@@ -2993,9 +2979,6 @@ test_nvme_ctrlr_reset(void)
 	CU_ASSERT(spdk_nvme_ctrlr_reset(&ctrlr) == 0);
 	g_set_reg_cb = NULL;
 	CU_ASSERT(ctrlr.state == NVME_CTRLR_STATE_READY);
-	g_cdata = NULL;
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
 
 	CU_ASSERT(spdk_nvme_ctrlr_get_num_ns(&ctrlr) == 4096);
 	CU_ASSERT(spdk_nvme_ctrlr_get_ns(&ctrlr, 2) != NULL);
@@ -3003,8 +2986,6 @@ test_nvme_ctrlr_reset(void)
 
 	g_ut_nvme_regs.csts.bits.shst = SPDK_NVME_SHST_COMPLETE;
 	nvme_ctrlr_destruct(&ctrlr);
-
-	g_wait_for_completion_return_val = 0;
 }
 
 static uint32_t g_aer_cb_counter;
@@ -3052,8 +3033,6 @@ test_nvme_ctrlr_aer_callback(void)
 	nvme_ctrlr_async_event_cb(&ctrlr.aer[0], &aer_cpl);
 	nvme_ctrlr_complete_queued_async_events(&ctrlr);
 	CU_ASSERT(g_aer_cb_counter == 1);
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
 
 	nvme_ctrlr_free_processes(&ctrlr);
 	nvme_ctrlr_destruct(&ctrlr);
@@ -3217,13 +3196,6 @@ test_nvme_ctrlr_ns_attr_changed(void)
 	check_active_ns(&ctrlr, active_ns_list7, SPDK_COUNTOF(active_ns_list7));
 	ctrlr.opts.disable_read_changed_ns_list_log_page = false;
 
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
-	g_changed_ns_list = NULL;
-	g_changed_ns_list_length = 0;
-	g_aer_cb_counter = 0;
-	g_nvme_ns_constructed = 0;
-	g_needs_setup_aer_for_ns_change = false;
 	nvme_ctrlr_free_processes(&ctrlr);
 	nvme_ctrlr_destruct(&ctrlr);
 }
@@ -3532,10 +3504,6 @@ test_nvme_ctrlr_ana_resize(void)
 		CU_ASSERT(ns->ana_state == SPDK_NVME_ANA_OPTIMIZED_STATE);
 	}
 
-	g_active_ns_list = NULL;
-	g_active_ns_list_length = 0;
-	g_ana_hdr = NULL;
-	g_ana_descs = NULL;
 	nvme_ctrlr_free_processes(&ctrlr);
 	nvme_ctrlr_destruct(&ctrlr);
 }
@@ -3620,6 +3588,40 @@ test_nvme_numa_id(void)
 	CU_ASSERT(spdk_nvme_ctrlr_get_numa_id(&ctrlr) == SPDK_ENV_NUMA_ID_ANY);
 }
 
+static void
+ut_setup(void)
+{
+	g_set_reg_cb = NULL;
+
+	set_size = 1;
+	set_status_cpl = 0;
+
+	memset(&fake_cpl, 0, sizeof(fake_cpl));
+	set_status_code = SPDK_NVME_SC_SUCCESS;
+
+	g_ut_cdw11 = 0;
+
+	g_wait_for_completion_return_val = 0;
+	g_failed_status = NULL;
+
+	g_active_ns_list = NULL;
+	g_active_ns_list_length = 0;
+	g_cdata = NULL;
+	g_fail_next_identify = false;
+
+	memset(&g_aer_ns_change, 0, sizeof(g_aer_ns_change));
+	g_changed_ns_list = NULL;
+	g_changed_ns_list_length = 0;
+
+	g_needs_setup_aer_for_ns_change = false;
+
+	g_ana_hdr = NULL;
+	g_ana_descs = NULL;
+
+	g_nvme_ns_constructed = 0;
+	g_aer_cb_counter = 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -3628,7 +3630,7 @@ main(int argc, char **argv)
 
 	CU_initialize_registry();
 
-	suite = CU_add_suite("nvme_ctrlr", NULL, NULL);
+	suite = CU_add_suite_with_setup_and_teardown("nvme_ctrlr", NULL, NULL, ut_setup, NULL);
 
 	CU_ADD_TEST(suite, test_nvme_ctrlr_init_en_1_rdy_0);
 	CU_ADD_TEST(suite, test_nvme_ctrlr_init_en_1_rdy_1);
