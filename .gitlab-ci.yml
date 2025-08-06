@@ -59,6 +59,18 @@ build-verbs-debug:
     - ./configure --with-rdma --target-arch=haswell --with-crypto --with-vfio-user --with-xlio --with-shared --enable-debug --enable-werror
     - make -j4
 
+build-custom-xlio:
+  extends: .do_build
+  stage: pre-test
+  image: "$FEDORA_IMAGE"
+  variables:
+    XLIO_SHA: 3.51.1
+  script:
+    - cd $CI_PROJECT_DIR
+    - .ci/install_xlio.sh $XLIO_SHA
+    - ./configure --enable-debug --enable-werror --with-rdma --with-xlio=/tmp/libxlio/install --with-shared
+    - make -j4
+
 unittest-mlx5_dv-debug:
   extends: .do_build
   stage: pre-test
