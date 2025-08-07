@@ -53,41 +53,23 @@ build-job:
       - ./include/spdk/version.h
       - ./python
 
-build-verbs-debug:
-  extends: .do_build
+unittests-build-job:
+  tags: [k8s, linux, x86_64]
   stage: pre-test
   image: "$FEDORA_IMAGE"
   variables:
     XLIO_SHA: 3.51.1
+  parallel:
+    matrix:
+      - BUILD_TYPE: verbs-debug
+        FLAGS: --with-rdma --enable-debug --enable-werror
+      - BUILD_TYPE: mlx5_dv-debug
+        FLAGS: --with-rdma=mlx5_dv --enable-debug --enable-werror
+      - BUILD_TYPE: mlx5_dv-release
+        FLAGS: --with-rdma=mlx5_dv --enable-werror
   script:
-    - cd $CI_PROJECT_DIR
     - .ci/install_xlio.sh $XLIO_SHA
-    - ./configure --with-rdma --target-arch=haswell --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared --enable-debug --enable-werror
-    - make -j4
-
-unittest-mlx5_dv-debug:
-  extends: .do_build
-  stage: pre-test
-  image: "$FEDORA_IMAGE"
-  variables:
-    XLIO_SHA: 3.51.1
-  script:
-    - cd $CI_PROJECT_DIR
-    - .ci/install_xlio.sh $XLIO_SHA
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared --enable-debug --enable-werror
-    - make -j4
-    - ./test/unit/unittest.sh
-
-unittest-mlx5_dv-release:
-  extends: .do_build
-  stage: pre-test
-  image: "$FEDORA_IMAGE"
-  variables:
-    XLIO_SHA: 3.51.1
-  script:
-    - cd $CI_PROJECT_DIR
-    - .ci/install_xlio.sh $XLIO_SHA
-    - ./configure --with-rdma=mlx5_dv --target-arch=haswell --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared --enable-werror
+    - ./configure ${FLAGS} --target-arch=haswell --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared
     - make -j4
     - ./test/unit/unittest.sh
 
