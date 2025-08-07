@@ -73,7 +73,7 @@ autotest-vm_host-matrix:
   stage: test
   parallel:
     matrix:
-      - TEST_TYPE: [nvme, accel, fsdev]
+      - TEST_TYPE: [nvme, accel, fsdev, nvmf-rdma]
   before_script:
     - .ci/prepare_vm.sh
   script:
