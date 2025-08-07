@@ -69,7 +69,7 @@ unittests-build-job:
         FLAGS: --with-rdma=mlx5_dv --enable-werror
   script:
     - .ci/install_xlio.sh $XLIO_SHA
-    - ./configure ${FLAGS} --target-arch=haswell --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared
+    - ./configure ${FLAGS} --with-crypto --with-vfio-user --with-xlio=/tmp/libxlio/install --with-shared
     - make -j4
     - ./test/unit/unittest.sh
 
