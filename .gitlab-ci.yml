@@ -137,6 +137,7 @@ autotest-vm_host-matrix:
     paths:
       - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar
     expire_in: 3 days
+    when: always
 
 test-crypto-k8s-job:
   extends: .test-job-k8s-template
