@@ -145,8 +145,8 @@ test-crypto-k8s-job:
     - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA} --transport=rdma
 
 coverity-job:
-  extends: .do_build
-  stage: pre-test
+  tags: [k8s, linux, x86_64]
+  stage: test
   image: "$COV_IMAGE"
   script:
     - apt-get -q update
