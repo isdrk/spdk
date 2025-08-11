@@ -90,15 +90,6 @@ unittests-build-job:
     pre_get_sources_script:
     - sudo rm -rf python/spdk/rpc/__pycache__
 
-.test-job-k8s-template:
-  extends: .test-job-vm-template
-  tags: [k8s, mtr-rdma, x86_64]
-  image: "$FEDORA_IMAGE"
-  hooks:
-    pre_get_sources_script: []
-  variables:
-    GIT_FETCH_EXTRA_FLAGS: "--tags"
-
 test-nvmf-job:
   tags: [vm_host, x86_64]
   stage: test
