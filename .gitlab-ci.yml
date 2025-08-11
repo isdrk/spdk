@@ -99,20 +99,18 @@ unittests-build-job:
   variables:
     GIT_FETCH_EXTRA_FLAGS: "--tags"
 
-test-nvmf-k8s-job:
-  extends: .test-job-k8s-template
+test-nvmf-job:
+  tags: [vm_host, x86_64]
+  stage: test
+  before_script:
+    - .ci/prepare_vm.sh
   script:
-    - grep -i huge /proc/meminfo
-    - mount
-    - tar xf .test.tar
-    # Set RPC_PIPE_TIMEOUT to 60 seconds to avoid timeout errors in K8S tests
-    - export RPC_PIPE_TIMEOUT=60
-    # Run NVMf/RDMA tests in the container
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
-    - sudo -E NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
-    # multipath.sh doesn't work in K8s container
-    # - sudo -E NET_TYPE=phy ./test/nvmf/host/multipath.sh --transport=rdma
+    - ./configure --enable-debug --with-rdma=mlx5_dv
+    - make -j${nproc}
+    - ./scripts/setup.sh
+    - NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
+    - NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
+    - NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
 
 autotest-vm_host-matrix:
   tags: [vm_host, x86_64]
