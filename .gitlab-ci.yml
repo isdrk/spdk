@@ -131,16 +131,31 @@ autotest-vm_host-matrix:
     expire_in: 3 days
     when: always
 
-test-crypto-k8s-job:
-  extends: .test-job-k8s-template
-  tags: [crypto, k8s, x86_64, oci-sriov]
+test-crypto-job:
+  tags: [vm_host, x86_64]
+  stage: test
+  variables:
+    # VMs 17-20 have BlueField3 vfs with crypto
+    VM_START_NUM: "017"
+    VM_END_NUM: "020"
+    CI_DUT_RDMA: "mlx5_0"
+  before_script:
+    - .ci/prepare_vm.sh
   script:
-    - export CI_DUT_RDMA=$(rdma link |grep "$CI_DUT_IFACE" |sed -e 's/^link //; s#/.*##')
-    - grep -i huge /proc/meminfo
-    - tar xf .test.tar
-    - sudo ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh --allowed-devs=${CI_DUT_RDMA}
-    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA}
-    - sudo ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA} --transport=rdma
+    - ./configure --enable-debug --with-rdma=mlx5_dv --with-crypto
+    - make -j${nproc}
+    - ./scripts/setup.sh
+    - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh --allowed-devs=${CI_DUT_RDMA}
+    - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA}
+    - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA} --transport=rdma
+  after_script:
+    - tar czf $CI_PROJECT_DIR/crypto_artifacts.tar -C $CI_PROJECT_DIR/.. output
+  artifacts:
+    name: crypto_artifacts
+    paths:
+      - $CI_PROJECT_DIR/crypto_artifacts.tar
+    expire_in: 3 days
+    when: always
 
 coverity-job:
   tags: [k8s, linux, x86_64]
