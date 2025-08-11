@@ -191,11 +191,11 @@ code-style-job:
     - ./scripts/check_format.sh
 
 check-so-deps-job:
-  extends: .test-job-k8s-template
-  tags: [k8s, linux, x86_64]
+  tags: [vm_host, x86_64]
+  stage: test
+  variables:
+    GIT_FETCH_EXTRA_FLAGS: "--tags"
   script:
-    - tar xf .test.tar
-    - ./scripts/pkgdep.sh --developer-tools
     - ./configure --with-rdma=mlx5_dv --enable-debug --enable-werror --with-shared
     - make -j4
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
