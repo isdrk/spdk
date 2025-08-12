@@ -73,23 +73,6 @@ unittests-build-job:
     - make -j4
     - ./test/unit/unittest.sh
 
-.test-job-vm-template:
-  stage: test
-  tags: [vm, linux, x86_64, f39]
-  needs:
-    - job: build-job
-  rules:
-    - changes:
-        - .ci/
-        - packaging/
-        - go/
-        - rpmbuild/
-      when: never
-    - when: on_success
-  hooks:
-    pre_get_sources_script:
-    - sudo rm -rf python/spdk/rpc/__pycache__
-
 test-nvmf-job:
   tags: [vm_host, x86_64]
   stage: test
