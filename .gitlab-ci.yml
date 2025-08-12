@@ -17,19 +17,6 @@ stages:
   - pre-test
   - test
 
-.do_build:
-  # https://stackoverflow.com/questions/62689235/gitlab-ci-how-to-ignore-directory-using-rules-syntax
-  rules:
-    - changes:
-        - .ci/
-        - packaging/
-        - go/
-        - rpmbuild/
-      when: never
-    - when: on_success
-  tags: [k8s, linux, x86_64]
-  # tags: [k8s, mtr-rdma, x86_64]
-
 unittests-build-job:
   tags: [k8s, linux, x86_64]
   stage: pre-test
