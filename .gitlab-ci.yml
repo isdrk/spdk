@@ -133,7 +133,7 @@ coverity-job:
     when: always
 
 code-style-job:
-  extends: .do_build
+  tags: [k8s, linux, x86_64]
   stage: pre-test
   image: "$COV_IMAGE"
   script:
