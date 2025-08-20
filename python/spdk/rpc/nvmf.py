@@ -318,6 +318,7 @@ def nvmf_subsystem_remove_listener(
     Returns:
             True or False
     """
+    # Note: code below is doing: group_as(params, 'listen_address', ['trtype', 'traddr', 'trsvcid', 'adrfam'])
     listen_address = {'trtype': trtype,
                       'traddr': traddr}
 
@@ -364,6 +365,7 @@ def nvmf_subsystem_listener_set_ana_state(
     Returns:
             True or False
     """
+    # Note: code below is doing: group_as(params, 'listen_address', ['trtype', 'traddr', 'trsvcid', 'adrfam'])
     listen_address = {'trtype': trtype,
                       'traddr': traddr,
                       'trsvcid': trsvcid}
@@ -434,6 +436,7 @@ def nvmf_discovery_remove_referral(
     Returns:
             True or False
     """
+    # Note: code below is doing: group_as(params, 'address', ['trtype', 'traddr', 'trsvcid', 'adrfam'])
     address = {'trtype': trtype,
                'traddr': traddr}
 
