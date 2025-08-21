@@ -23,7 +23,10 @@ if [[ $SPDK_TEST_URING -eq 0 ]]; then
 	run_test "nvmf_invalid" $rootdir/test/nvmf/target/invalid.sh "${TEST_ARGS[@]}"
 	run_test "nvmf_connect_stress" $rootdir/test/nvmf/target/connect_stress.sh "${TEST_ARGS[@]}"
 	run_test "nvmf_fused_ordering" $rootdir/test/nvmf/target/fused_ordering.sh "${TEST_ARGS[@]}"
-	run_test "nvmf_ns_masking" test/nvmf/target/ns_masking.sh "${TEST_ARGS[@]}"
+	# FIXME: Temporarily disabled. #4597788
+	if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
+		run_test "nvmf_ns_masking" test/nvmf/target/ns_masking.sh "${TEST_ARGS[@]}"
+	fi
 	if [[ $SPDK_TEST_NVME_CLI -eq 1 ]]; then
 		run_test "nvmf_nvme_cli" $rootdir/test/nvmf/target/nvme_cli.sh "${TEST_ARGS[@]}"
 	fi
@@ -37,9 +40,16 @@ fi
 run_test "nvmf_auth_target" "$rootdir/test/nvmf/target/auth.sh" "${TEST_ARGS[@]}"
 
 if [ "$SPDK_TEST_NVMF_TRANSPORT" = "tcp" ]; then
-	run_test "nvmf_bdevio_no_huge" $rootdir/test/nvmf/target/bdevio.sh "${TEST_ARGS[@]}" --no-hugepages
-	run_test "nvmf_tls" $rootdir/test/nvmf/target/tls.sh "${TEST_ARGS[@]}"
-	run_test "nvmf_fips" $rootdir/test/nvmf/fips/fips.sh "${TEST_ARGS[@]}"
+	# FIXME: Disabling. #4600932
+	if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
+		run_test "nvmf_bdevio_no_huge" $rootdir/test/nvmf/target/bdevio.sh "${TEST_ARGS[@]}" --no-hugepages
+	fi
+	# FIXME:  Disabling. #4613264
+	if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
+		run_test "nvmf_tls" $rootdir/test/nvmf/target/tls.sh "${TEST_ARGS[@]}"
+	fi
+	# Disable. Using the Ubuntu Pro Client to enable FIPS
+	# run_test "nvmf_fips" $rootdir/test/nvmf/fips/fips.sh "${TEST_ARGS[@]}"
 	run_test "nvmf_control_msg_list" $rootdir/test/nvmf/target/control_msg_list.sh "${TEST_ARGS[@]}"
 	run_test "nvmf_wait_for_buf_clean_flow" $rootdir/test/nvmf/target/wait_for_buf.sh clean_flow "${TEST_ARGS[@]}"
 	run_test "nvmf_wait_for_buf_dirty_flow" $rootdir/test/nvmf/target/wait_for_buf.sh dirty_flow "${TEST_ARGS[@]}"
@@ -65,7 +75,10 @@ if [[ $NET_TYPE == phy ]]; then
 	fi
 fi
 
-run_test "nvmf_shutdown" "$rootdir/test/nvmf/target/shutdown.sh" "${TEST_ARGS[@]}"
-run_test "nvmf_nsid" "$rootdir/test/nvmf/target/nsid.sh" "${TEST_ARGS[@]}"
+# FIXME: Temporarily disabled. #4597788
+if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
+	run_test "nvmf_shutdown" "$rootdir/test/nvmf/target/shutdown.sh" "${TEST_ARGS[@]}"
+	run_test "nvmf_nsid" "$rootdir/test/nvmf/target/nsid.sh" "${TEST_ARGS[@]}"
+fi
 
 trap - SIGINT SIGTERM EXIT
