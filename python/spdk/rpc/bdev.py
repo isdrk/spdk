@@ -643,11 +643,7 @@ def bdev_nvme_set_options(client, **params):
         rdma_initial_cq_size: The initial size of a rdma completion queue, must be greater than 0 (optional).
         detach_ctrlr_timeout_sec: Time to wait until NVMe controller is detached. Default: 10 seconds (optional).
     """
-
-    strip_globals(params)
-    remove_null(params)
-
-    return client.call('bdev_nvme_set_options', params)
+    return client.call('bdev_nvme_set_options', remove_null(strip_globals(params)))
 
 
 def bdev_nvme_set_hotplug(client, enable, period_us=None):
