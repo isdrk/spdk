@@ -515,7 +515,8 @@ struct spdk_nvme_qpair {
 	nvme_request_stailq_t			err_req_head;
 
 	void					*poll_group_tailq_head;
-	struct nvme_completion_poll_status	*poll_status;
+
+	struct nvme_completion_poll_status	*fabric_poll_status;
 
 	/* List entry for spdk_nvme_ctrlr::active_io_qpairs */
 	TAILQ_ENTRY(spdk_nvme_qpair)		tailq;
