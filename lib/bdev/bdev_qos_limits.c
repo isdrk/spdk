@@ -429,6 +429,11 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_t
 	uint32_t limit_set_complement;
 	uint64_t min_limit_per_sec;
 
+	if (value == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
+		return;
+	}
+
 	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
 		limit->limit = value;
 		min_limit_per_sec = SPDK_BDEV_QOS_MIN_IOS_PER_SEC;
@@ -446,6 +451,10 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_t
 			     min_limit_per_sec);
 		limit->limit += min_limit_per_sec - limit_set_complement;
 		SPDK_WARNLOG("Round up the rate limit to %" PRIu64 "\n", limit->limit);
+	}
+
+	if (limit->limit == 0) {
+		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
 	}
 }
 
@@ -605,7 +614,7 @@ bdev_qos_limits_check_disabled(const uint64_t *limits)
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		if (limits[i] != SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+		if (limits[i] != 0 && limits[i] != SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 			return false;
 		}
 	}
