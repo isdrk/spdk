@@ -92,7 +92,7 @@ bdev_qos_limit_cache_rw_queue_io(struct bdev_qos_limit_cache *cache,
 				 uint64_t delta)
 {
 	if (cache->remaining == INT64_MAX) {
-		/* The QoS is disabled */
+		/* The limit type is disabled */
 		return false;
 	}
 
@@ -123,6 +123,11 @@ bdev_qos_limit_cache_rw_rewind_io(struct bdev_qos_limit_cache *cache,
 				  struct spdk_bdev_io *io,
 				  uint64_t delta)
 {
+	if (cache->remaining == INT64_MAX) {
+		/* This limit type is disabled */
+		return;
+	}
+
 	cache->remaining += delta;
 
 	bdev_qos_limit_return_quota(limit, cache->remaining);
@@ -210,11 +215,6 @@ static void
 bdev_qos_limit_cache_set_ops(struct bdev_qos_limit_cache *cache,
 			     enum spdk_bdev_qos_rate_limit_type type)
 {
-	if (cache->remaining == INT64_MAX) {
-		cache->queue_io = NULL;
-		return;
-	}
-
 	switch (type) {
 	case SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT:
 		cache->queue_io = bdev_qos_limit_cache_rw_iops_queue;
@@ -285,6 +285,7 @@ bdev_qos_limit_rw_queue_io(struct bdev_qos_limit *limit, struct spdk_bdev_io *io
 	int64_t remaining;
 
 	if (!limit->max_per_timeslice) {
+		/* This limit type is disabled */
 		return false;
 	}
 
@@ -302,6 +303,11 @@ static inline void
 bdev_qos_limit_rw_rewind_io(struct bdev_qos_limit *limit, struct spdk_bdev_io *io,
 			    uint64_t delta)
 {
+	if (!limit->max_per_timeslice) {
+		/* This limit type is disabled */
+		return;
+	}
+
 	bdev_qos_limit_return_quota(limit, delta);
 }
 
@@ -369,11 +375,6 @@ static void
 bdev_qos_limit_set_ops(struct bdev_qos_limit *limit,
 		       enum spdk_bdev_qos_rate_limit_type type)
 {
-	if (limit->limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
-		limit->queue_io = NULL;
-		return;
-	}
-
 	switch (type) {
 	case SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT:
 		limit->queue_io = bdev_qos_limit_rw_iops_queue;
@@ -501,10 +502,6 @@ static inline void
 bdev_qos_limit_cache_rewind(struct bdev_qos_limit_cache *cache, struct bdev_qos_limit *limit,
 			    struct spdk_bdev_io *bdev_io)
 {
-	if (!cache->queue_io) {
-		return;
-	}
-
 	cache->rewind_quota(cache, limit, bdev_io);
 }
 
@@ -512,10 +509,6 @@ static inline bool
 bdev_qos_limit_cache_queue_io(struct bdev_qos_limit_cache *cache, struct bdev_qos_limit *limit,
 			      struct spdk_bdev_io *bdev_io)
 {
-	if (!cache->queue_io) {
-		return false;
-	}
-
 	return cache->queue_io(cache, limit, bdev_io);
 }
 
@@ -542,20 +535,12 @@ bdev_qos_limits_cache_queue_io(struct bdev_qos_limits_cache *caches, struct bdev
 static inline void
 bdev_qos_limit_rewind(struct bdev_qos_limit *limit, struct spdk_bdev_io *bdev_io)
 {
-	if (!limit->queue_io) {
-		return;
-	}
-
 	limit->rewind_quota(limit, bdev_io);
 }
 
 static inline bool
 bdev_qos_limit_queue_io(struct bdev_qos_limit *limit, struct spdk_bdev_io *bdev_io)
 {
-	if (!limit->queue_io) {
-		return false;
-	}
-
 	return limit->queue_io(limit, bdev_io);
 }
 
