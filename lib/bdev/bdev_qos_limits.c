@@ -212,9 +212,16 @@ bdev_qos_limit_cache_w_bps_rewind_quota(struct bdev_qos_limit_cache *cache,
 }
 
 static void
-bdev_qos_limit_cache_set_ops(struct bdev_qos_limit_cache *cache,
-			     enum spdk_bdev_qos_rate_limit_type type)
+bdev_qos_limit_cache_init(struct bdev_qos_limit_cache *cache,
+			  enum spdk_bdev_qos_rate_limit_type type,
+			  struct bdev_qos_limit *limit)
 {
+	if (!limit->max_per_timeslice) {
+		cache->remaining = INT64_MAX;
+	} else {
+		cache->remaining = 0;
+	}
+
 	switch (type) {
 	case SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT:
 		cache->queue_io = bdev_qos_limit_cache_rw_iops_queue;
@@ -237,17 +244,6 @@ bdev_qos_limit_cache_set_ops(struct bdev_qos_limit_cache *cache,
 	}
 }
 
-static void
-bdev_qos_limit_cache_init(struct bdev_qos_limit_cache *cache,
-			  struct bdev_qos_limit *limit)
-{
-	if (!limit->max_per_timeslice) {
-		cache->remaining = INT64_MAX;
-	} else {
-		cache->remaining = 0;
-	}
-}
-
 void
 bdev_qos_limits_cache_init(struct bdev_qos_limits_cache *caches,
 			   struct bdev_qos_limits *limits)
@@ -255,8 +251,7 @@ bdev_qos_limits_cache_init(struct bdev_qos_limits_cache *caches,
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		bdev_qos_limit_cache_init(&caches->rate_limits[i], &limits->rate_limits[i]);
-		bdev_qos_limit_cache_set_ops(&caches->rate_limits[i], i);
+		bdev_qos_limit_cache_init(&caches->rate_limits[i], i, &limits->rate_limits[i]);
 	}
 }
 
@@ -372,9 +367,19 @@ bdev_qos_limit_w_bps_queue(struct bdev_qos_limit *limit, struct spdk_bdev_io *io
 }
 
 static void
-bdev_qos_limit_set_ops(struct bdev_qos_limit *limit,
-		       enum spdk_bdev_qos_rate_limit_type type)
+bdev_qos_limit_init(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
+		    uint32_t io_slice, uint32_t byte_slice)
 {
+	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
+		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_IO_PER_TIMESLICE;
+		limit->slice_per_borrow = io_slice;
+	} else {
+		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_BYTE_PER_TIMESLICE;
+		limit->slice_per_borrow = byte_slice;
+	}
+
+	limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
+
 	switch (type) {
 	case SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT:
 		limit->queue_io = bdev_qos_limit_rw_iops_queue;
@@ -395,21 +400,6 @@ bdev_qos_limit_set_ops(struct bdev_qos_limit *limit,
 	default:
 		break;
 	}
-}
-
-static void
-bdev_qos_limit_init(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
-		    uint32_t io_slice, uint32_t byte_slice)
-{
-	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
-		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_IO_PER_TIMESLICE;
-		limit->slice_per_borrow = io_slice;
-	} else {
-		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_BYTE_PER_TIMESLICE;
-		limit->slice_per_borrow = byte_slice;
-	}
-
-	limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
 }
 
 void
@@ -465,7 +455,6 @@ bdev_qos_limits_set(struct bdev_qos_limits *limits, const uint64_t *values)
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		bdev_qos_limit_set(&limits->rate_limits[i], i, values[i]);
-		bdev_qos_limit_set_ops(&limits->rate_limits[i], i);
 	}
 }
 
