@@ -241,7 +241,7 @@ static void
 bdev_qos_limit_cache_init(struct bdev_qos_limit_cache *cache,
 			  struct bdev_qos_limit *limit)
 {
-	if (limit->limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+	if (!limit->max_per_timeslice) {
 		cache->remaining = INT64_MAX;
 	} else {
 		cache->remaining = 0;
@@ -284,7 +284,7 @@ bdev_qos_limit_rw_queue_io(struct bdev_qos_limit *limit, struct spdk_bdev_io *io
 {
 	int64_t remaining;
 
-	if (limit->limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+	if (!limit->max_per_timeslice) {
 		return false;
 	}
 
