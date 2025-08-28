@@ -681,9 +681,6 @@ struct spdk_bdev {
 	 *  must not read or write to these fields.
 	 */
 	struct __bdev_internal_fields {
-		/** Quality of service configuration */
-		uint64_t qos_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
-
 		/** Quality of service parameters */
 		struct spdk_bdev_qos *qos;
 

@@ -1786,6 +1786,7 @@ qos_dynamic_enable(void)
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status bdev_io_status[2];
 	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
+	uint64_t current_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
 	uint32_t qos_io_slice;
 	int status, second_status, rc, i;
 
@@ -1829,7 +1830,8 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == false);
+	bdev_qos_limits_get(&bdev->internal.qos->limits, current_limits);
+	CU_ASSERT(bdev_qos_limits_check_disabled(current_limits) == false);
 
 	/*
 	 * Submit and complete 10 I/O to fill the QoS allotment for this timeslice.
@@ -1878,8 +1880,8 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == false);
-
+	bdev_qos_limits_get(&bdev->internal.qos->limits, current_limits);
+	CU_ASSERT(bdev_qos_limits_check_disabled(current_limits) == false);
 
 	/* Disable QoS: Write only Byte per second rate limit */
 	status = -1;
@@ -1890,7 +1892,6 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == true);
 
 	/*
 	 * All I/O should have been resubmitted back on their original thread.  Complete
@@ -1918,7 +1919,6 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == true);
 
 	/* Enable QoS */
 	status = -1;
@@ -1929,7 +1929,6 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == false);
 
 	/* Disable QoS */
 	status = -1;
@@ -1941,7 +1940,8 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == true);
+	bdev_qos_limits_get(&bdev->internal.qos->limits, current_limits);
+	CU_ASSERT(bdev_qos_limits_check_disabled(current_limits) == true);
 
 	/* Enable QoS. This should immediately fail because the previous disable QoS hasn't completed. */
 	second_status = 0;
@@ -1953,7 +1953,6 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == true);
 
 	/* Enable QoS. This should succeed now that the disable has completed. */
 	status = -1;
@@ -1964,7 +1963,8 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev_qos_limits_check_disabled(bdev->internal.qos_limits) == false);
+	bdev_qos_limits_get(&bdev->internal.qos->limits, current_limits);
+	CU_ASSERT(bdev_qos_limits_check_disabled(current_limits) == false);
 
 	/* Tear down the channels */
 	set_thread(0);

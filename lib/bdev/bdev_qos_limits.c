@@ -413,6 +413,31 @@ bdev_qos_limits_init(struct bdev_qos_limits *limits, uint32_t io_slice, uint32_t
 }
 
 static void
+bdev_qos_limit_get(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
+		   uint64_t *value)
+{
+	if (limit->limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+		*value = 0;
+	} else {
+		*value = limit->limit;
+		if (!bdev_qos_limit_is_iops_rate_limit(type)) {
+			/* Change from Byte to Megabyte which is user visible. */
+			*value = *value / 1024 / 1024;
+		}
+	}
+}
+
+void
+bdev_qos_limits_get(struct bdev_qos_limits *limits, uint64_t *values)
+{
+	int i;
+
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		bdev_qos_limit_get(&limits->rate_limits[i], i, &values[i]);
+	}
+}
+
+static void
 bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
 		   uint64_t value)
 {

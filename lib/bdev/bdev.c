@@ -5228,8 +5228,12 @@ spdk_bdev_get_qos_rpc_type(enum spdk_bdev_qos_rate_limit_type type)
 void
 spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits)
 {
+	memset(limits, 0, sizeof(uint64_t) * SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES);
+
 	spdk_spin_lock(&bdev->internal.spinlock);
-	memcpy(limits, bdev->internal.qos_limits, sizeof(bdev->internal.qos_limits));
+	if (bdev->internal.qos != NULL) {
+		bdev_qos_limits_get(&bdev->internal.qos->limits, limits);
+	}
 	spdk_spin_unlock(&bdev->internal.spinlock);
 }
 
@@ -10130,8 +10134,6 @@ static void
 bdev_update_qos_rate_limits(struct spdk_bdev *bdev, const uint64_t *limits)
 {
 	assert(bdev->internal.qos != NULL);
-
-	memcpy(&bdev->internal.qos_limits, limits, sizeof(bdev->internal.qos_limits));
 
 	bdev_qos_limits_set(&bdev->internal.qos->limits, limits);
 }
