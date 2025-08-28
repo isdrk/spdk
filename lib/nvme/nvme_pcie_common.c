@@ -1157,7 +1157,8 @@ nvme_pcie_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		free(status);
 		goto free;
 	}
-	if (nvme_wait_for_completion_timeout(ctrlr->adminq, status, ctrlr->opts.admin_timeout_ms * 1000)) {
+	if (nvme_wait_for_completion_robust_lock_timeout(ctrlr->adminq, status, &ctrlr->ctrlr_lock,
+			ctrlr->opts.admin_timeout_ms * 1000)) {
 		if (!status->timed_out) {
 			free(status);
 		}
@@ -1179,7 +1180,8 @@ nvme_pcie_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		free(status);
 		goto free;
 	}
-	if (nvme_wait_for_completion_timeout(ctrlr->adminq, status, ctrlr->opts.admin_timeout_ms * 1000)) {
+	if (nvme_wait_for_completion_robust_lock_timeout(ctrlr->adminq, status, &ctrlr->ctrlr_lock,
+			ctrlr->opts.admin_timeout_ms * 1000)) {
 		if (!status->timed_out) {
 			free(status);
 		}
