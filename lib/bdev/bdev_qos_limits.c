@@ -416,8 +416,10 @@ static void
 bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
 		   uint64_t value)
 {
+	struct spdk_bdev_opts opts;
 	uint32_t limit_set_complement;
 	uint64_t min_limit_per_sec;
+	uint64_t max_per_timeslice;
 
 	if (value == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
@@ -446,24 +448,6 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_t
 	if (limit->limit == 0) {
 		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
 	}
-}
-
-void
-bdev_qos_limits_set(struct bdev_qos_limits *limits, const uint64_t *values)
-{
-	int i;
-
-	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		bdev_qos_limit_set(&limits->rate_limits[i], i, values[i]);
-	}
-}
-
-static void
-bdev_qos_limit_update_max_quota_per_timeslice(struct bdev_qos_limit *limit,
-		enum spdk_bdev_qos_rate_limit_type type)
-{
-	struct spdk_bdev_opts opts;
-	uint64_t max_per_timeslice;
 
 	spdk_bdev_get_opts(&opts, sizeof(opts));
 
@@ -487,12 +471,12 @@ bdev_qos_limit_update_max_quota_per_timeslice(struct bdev_qos_limit *limit,
 }
 
 void
-bdev_qos_limits_update_max_quota_per_timeslice(struct bdev_qos_limits *limits)
+bdev_qos_limits_set(struct bdev_qos_limits *limits, const uint64_t *values)
 {
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		bdev_qos_limit_update_max_quota_per_timeslice(&limits->rate_limits[i], i);
+		bdev_qos_limit_set(&limits->rate_limits[i], i, values[i]);
 	}
 }
 

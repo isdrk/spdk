@@ -4395,8 +4395,6 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 		if (!qos->started) {
 			SPDK_DEBUGLOG(bdev, "Start QoS %p for bdev %s\n", qos, bdev->name);
 
-			bdev_qos_limits_update_max_quota_per_timeslice(&qos->limits);
-
 			qos->started = true;
 
 			spdk_thread_send_msg(spdk_thread_get_app_thread(), bdev_qos_enable, qos);
@@ -10200,10 +10198,6 @@ static void
 bdev_update_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct set_qos_limit_ctx *ctx = _ctx;
-
-	spdk_spin_lock(&bdev->internal.spinlock);
-	bdev_qos_limits_update_max_quota_per_timeslice(&bdev->internal.qos->limits);
-	spdk_spin_unlock(&bdev->internal.spinlock);
 
 	bdev_set_qos_limit_done(ctx, 0);
 }

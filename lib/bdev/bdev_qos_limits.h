@@ -83,10 +83,7 @@ void bdev_qos_limits_cache_init(struct bdev_qos_limits_cache *caches,
 void bdev_qos_limits_cache_reset(struct bdev_qos_limits_cache *caches);
 
 void bdev_qos_limits_init(struct bdev_qos_limits *limits, uint32_t io_slice, uint32_t byte_slice);
-void bdev_qos_limits_set(struct bdev_qos_limits *limits,
-			 const uint64_t *values);
-void bdev_qos_limits_update_max_quota_per_timeslice(
-	struct bdev_qos_limits *limits);
+void bdev_qos_limits_set(struct bdev_qos_limits *limits, const uint64_t *values);
 bool bdev_qos_limits_cache_queue_io(struct bdev_qos_limits_cache *cache,
 				    struct bdev_qos_limits *limits,
 				    struct spdk_bdev_io *bdev_io);
