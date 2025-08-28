@@ -10242,6 +10242,11 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 	SPDK_DEBUGLOG(bdev, "Updating QoS limits for %s (new_limits=%p)\n",
 		      bdev->name, new_limits);
 
+	if (!spdk_thread_is_app_thread(NULL)) {
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);

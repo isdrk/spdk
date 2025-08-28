@@ -881,6 +881,8 @@ void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
 /**
  * Set the quality of service rate limits on a bdev.
  *
+ * This function must be called from the SPDK app thread.
+ *
  * \param bdev Block device.
  * \param limits Pointer to the QoS rate limits array which holding the limits.
  * \param cb_fn Callback function to be called when the QoS limit has been updated.
