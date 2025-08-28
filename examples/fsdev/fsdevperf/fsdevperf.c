@@ -923,15 +923,38 @@ fsdevperf_filesystem_umount_cb(void *cb_arg, int status, struct spdk_fsdev_io *f
 }
 
 static void
-fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
+fsdevperf_filesystem_submit_mount(struct fsdevperf_filesystem *fs,
+				  spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+{
+	struct spdk_fsdev_io *fsdev_io = fsdevperf_fs_get_fsdev_io(fs);
+	uint64_t id;
+
+	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
+	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id,
+			   SPDK_FSDEV_IO_MOUNT, spdk_env_get_current_core(), id, cb_fn, cb_ctx);
+	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
+	fsdev_io->u_in.mount.opts.opts_size = SPDK_SIZEOF(&fsdev_io->u_in.mount.opts, opts_size);
+
+	spdk_fsdev_io_submit(fsdev_io);
+}
+
+static void
+fsdevperf_filesystem_submit_umount(struct fsdevperf_filesystem *fs,
+				   spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_fs_get_fsdev_io(fs);
 	uint64_t id;
 
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
 	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id, SPDK_FSDEV_IO_UMOUNT,
-			   spdk_env_get_current_core(), id, fsdevperf_filesystem_umount_cb, fs);
+			   spdk_env_get_current_core(), id, cb_fn, cb_ctx);
 	spdk_fsdev_io_submit(fsdev_io);
+}
+
+static void
+fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
+{
+	fsdevperf_filesystem_submit_umount(fs, fsdevperf_filesystem_umount_cb, fs);
 }
 
 static void fsdevperf_task_cleanup(struct fsdevperf_task *task);
@@ -1634,18 +1657,7 @@ fsdevperf_filesystem_mount_cb(void *cb_arg, int status, struct spdk_fsdev_io *fs
 static void
 fsdevperf_filesystem_mount(struct fsdevperf_filesystem *fs)
 {
-	struct spdk_fsdev_io *fsdev_io = fsdevperf_fs_get_fsdev_io(fs);
-	uint64_t id;
-
-	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id,
-			   SPDK_FSDEV_IO_MOUNT, spdk_env_get_current_core(), id,
-			   fsdevperf_filesystem_mount_cb, fs);
-
-	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
-	fsdev_io->u_in.mount.opts.opts_size = SPDK_SIZEOF(&fsdev_io->u_in.mount.opts, opts_size);
-
-	spdk_fsdev_io_submit(fsdev_io);
+	fsdevperf_filesystem_submit_mount(fs, fsdevperf_filesystem_mount_cb, fs);
 }
 
 static void
