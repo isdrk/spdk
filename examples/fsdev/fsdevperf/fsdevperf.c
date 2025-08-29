@@ -1058,6 +1058,58 @@ fsdevperf_task_submit_statfs(struct fsdevperf_task *task, uint64_t id,
 }
 
 static void
+fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
+			      struct spdk_fsdev_file_object *fobject,
+			      struct spdk_fsdev_file_handle *fhandle, uint64_t offset,
+			      size_t size, struct iovec *iovs, int iovcnt,
+			      spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+{
+	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_filesystem *fs = task->fs;
+	struct spdk_fsdev_io *fsdev_io = fsdevperf_request_get_fsdev_io(request);
+
+	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_READ,
+			   task->source_id, id, cb_fn, cb_ctx);
+
+	fsdev_io->u_in.read.fobject = fobject;
+	fsdev_io->u_in.read.fhandle = fhandle;
+	fsdev_io->u_in.read.offs = offset;
+	fsdev_io->u_in.read.size = size;
+	fsdev_io->u_in.read.iov = iovs;
+	fsdev_io->u_in.read.iovcnt = iovcnt;
+	fsdev_io->u_in.read.flags = 0;
+	fsdev_io->u_in.read.opts = NULL;
+
+	spdk_fsdev_io_submit(fsdev_io);
+}
+
+static void
+fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
+			       struct spdk_fsdev_file_object *fobject,
+			       struct spdk_fsdev_file_handle *fhandle, uint64_t offset,
+			       size_t size, struct iovec *iovs, int iovcnt,
+			       spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+{
+	struct fsdevperf_task *task = request->task;
+	struct fsdevperf_filesystem *fs = task->fs;
+	struct spdk_fsdev_io *fsdev_io = fsdevperf_request_get_fsdev_io(request);
+
+	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_WRITE,
+			   task->source_id, id, cb_fn, cb_ctx);
+
+	fsdev_io->u_in.write.fobject = fobject;
+	fsdev_io->u_in.write.fhandle = fhandle;
+	fsdev_io->u_in.write.offs = offset;
+	fsdev_io->u_in.write.size = size;
+	fsdev_io->u_in.write.iov = iovs;
+	fsdev_io->u_in.write.iovcnt = iovcnt;
+	fsdev_io->u_in.write.flags = 0;
+	fsdev_io->u_in.write.opts = NULL;
+
+	spdk_fsdev_io_submit(fsdev_io);
+}
+
+static void
 fsdevperf_filesystem_umount(struct fsdevperf_filesystem *fs)
 {
 	fsdevperf_filesystem_submit_umount(fs, fsdevperf_filesystem_umount_cb, fs);
@@ -1337,48 +1389,26 @@ static void
 fsdevperf_request_submit(struct fsdevperf_request *request)
 {
 	struct fsdevperf_task *task = request->task;
-	struct fsdevperf_filesystem *fs = task->fs;
-	struct spdk_fsdev_io *fsdev_io = fsdevperf_request_get_fsdev_io(request);
 	uint64_t offset, id;
 
 	offset = fsdevperf_task_get_offset(task);
 	id = fsdevperf_task_next_id(task);
 	switch (task->io_pattern) {
 	case SPDK_FSDEV_IO_READ:
-		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-				   SPDK_FSDEV_IO_READ, task->source_id, id,
-				   fsdevperf_request_complete_cb, request);
-
-		fsdev_io->u_in.read.fobject = task->fobj;
-		fsdev_io->u_in.read.fhandle = task->fh;
-		fsdev_io->u_in.read.size = task->io_size;
-		fsdev_io->u_in.read.offs = offset;
-		fsdev_io->u_in.read.flags = 0;
-		fsdev_io->u_in.read.iov = &request->iov;
-		fsdev_io->u_in.read.iovcnt = 1;
-		fsdev_io->u_in.read.opts = NULL;
+		fsdevperf_request_submit_read(request, id, task->fobj, task->fh, offset,
+					      task->io_size, &request->iov, 1,
+					      fsdevperf_request_complete_cb, request);
 		break;
 	case SPDK_FSDEV_IO_WRITE:
 		fsdevperf_request_generate_data(request, id);
-		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-				   SPDK_FSDEV_IO_WRITE, task->source_id, id,
-				   fsdevperf_request_complete_cb, request);
-
-		fsdev_io->u_in.write.fobject = task->fobj;
-		fsdev_io->u_in.write.fhandle = task->fh;
-		fsdev_io->u_in.write.size = task->io_size;
-		fsdev_io->u_in.write.offs = offset;
-		fsdev_io->u_in.write.flags = 0;
-		fsdev_io->u_in.write.iov = &request->iov;
-		fsdev_io->u_in.write.iovcnt = 1;
-		fsdev_io->u_in.write.opts = NULL;
+		fsdevperf_request_submit_write(request, id, task->fobj, task->fh, offset,
+					       task->io_size, &request->iov, 1,
+					       fsdevperf_request_complete_cb, request);
 		break;
 	default:
 		assert(0);
 		break;
 	}
-
-	spdk_fsdev_io_submit(fsdev_io);
 
 	task->num_outstanding++;
 }
