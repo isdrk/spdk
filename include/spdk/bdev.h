@@ -974,6 +974,28 @@ void spdk_bdev_qos_close(struct spdk_bdev_qos_desc *desc);
 struct spdk_bdev_qos *spdk_bdev_qos_desc_get_qos(struct spdk_bdev_qos_desc *desc);
 
 /**
+ * Callback function for spdk_bdev_for_each_qos().
+ *
+ * \param ctx Context passed to the callback.
+ * \param qos QoS object the callback handles.
+ */
+typedef int (*spdk_bdev_for_each_qos_fn)(void *ctx, struct spdk_bdev_qos *qos);
+
+/**
+ * Call the provided callback function for every QoS object.
+ * If fn returns negated errno, spdk_bdev_for_each_qos() terminates iteration.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * \param ctx Context passed to the callback function.
+ * \param fn Callback function for each QoS object.
+ *
+ * \return 0 if operation is successful, or suitable errno value one of the
+ * callback returned otherwise.
+ */
+int spdk_bdev_for_each_qos(void *ctx, spdk_bdev_for_each_qos_fn fn);
+
+/**
  * Add a block device to a QoS object for rate limiting.
  *
  * This function adds a block device to the specified QoS object, enabling

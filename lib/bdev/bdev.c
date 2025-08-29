@@ -4997,6 +4997,26 @@ spdk_bdev_qos_close(struct spdk_bdev_qos_desc *desc)
 	}
 }
 
+int
+spdk_bdev_for_each_qos(void *ctx, spdk_bdev_for_each_qos_fn fn)
+{
+	struct spdk_bdev_qos *qos;
+	int rc = 0;
+
+	if (!spdk_thread_is_app_thread(NULL)) {
+		return -EINVAL;
+	}
+
+	TAILQ_FOREACH(qos, &g_bdev_mgr.qos_list, tailq) {
+		rc = fn(ctx, qos);
+		if (rc != 0) {
+			break;
+		}
+	}
+
+	return rc;
+}
+
 void
 spdk_bdev_add_io_stat(struct spdk_bdev_io_stat *total, struct spdk_bdev_io_stat *add)
 {
