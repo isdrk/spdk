@@ -438,54 +438,62 @@ bdev_qos_limits_get(struct bdev_qos_limits *limits, uint64_t *values)
 }
 
 static void
-bdev_qos_limit_set(struct bdev_qos_limit *limit, enum spdk_bdev_qos_rate_limit_type type,
-		   uint64_t value)
+bdev_qos_limit_value_adjust(uint64_t *value, enum spdk_bdev_qos_rate_limit_type type)
 {
-	struct spdk_bdev_opts opts;
 	uint32_t limit_set_complement;
 	uint64_t min_limit_per_sec;
-	uint64_t max_per_timeslice;
 
-	if (value == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
-		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
+	if (*value == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 		return;
 	}
 
 	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
-		limit->limit = value;
 		min_limit_per_sec = SPDK_BDEV_QOS_MIN_IOS_PER_SEC;
 	} else {
 		/* Change from mebibyte to byte rate limit */
-		limit->limit = value * 1024 * 1024;
+		*value = *value * 1024 * 1024;
 		min_limit_per_sec = SPDK_BDEV_QOS_MIN_BYTES_PER_SEC;
 	}
 
-	limit_set_complement = limit->limit % min_limit_per_sec;
+	limit_set_complement = *value % min_limit_per_sec;
 	if (limit_set_complement) {
 		SPDK_WARNLOG("Requested rate limit %" PRIu64
 			     " is not a multiple of %" PRIu64 "\n",
-			     value,
+			     *value,
 			     min_limit_per_sec);
-		limit->limit += min_limit_per_sec - limit_set_complement;
-		SPDK_WARNLOG("Round up the rate limit to %" PRIu64 "\n", limit->limit);
+		*value += min_limit_per_sec - limit_set_complement;
+		SPDK_WARNLOG("Round up the rate limit to %" PRIu64 "\n", *value);
 	}
+}
 
-	if (limit->limit == 0) {
+void
+bdev_qos_limit_values_adjust(uint64_t *values)
+{
+	int i;
+
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		bdev_qos_limit_value_adjust(&values[i], i);
+	}
+}
+
+static void
+bdev_qos_limit_set(struct bdev_qos_limit *limit, uint64_t value)
+{
+	struct spdk_bdev_opts opts;
+	uint64_t max_per_timeslice;
+
+	if (value == 0) {
 		limit->limit = SPDK_BDEV_QOS_LIMIT_NOT_DEFINED;
-	}
-
-	spdk_bdev_get_opts(&opts, sizeof(opts));
-
-	if (bdev_qos_limit_is_iops_rate_limit(type) == true) {
-		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_IO_PER_TIMESLICE;
 	} else {
-		limit->min_per_timeslice = SPDK_BDEV_QOS_MIN_BYTE_PER_TIMESLICE;
+		limit->limit = value;
 	}
 
 	if (limit->limit == SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 		limit->max_per_timeslice = 0;
 		return;
 	}
+
+	spdk_bdev_get_opts(&opts, sizeof(opts));
 
 	max_per_timeslice = limit->limit * opts.qos_timeslice_us / SPDK_SEC_TO_USEC;
 
@@ -501,7 +509,7 @@ bdev_qos_limits_set(struct bdev_qos_limits *limits, const uint64_t *values)
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		bdev_qos_limit_set(&limits->rate_limits[i], i, values[i]);
+		bdev_qos_limit_set(&limits->rate_limits[i], values[i]);
 	}
 }
 

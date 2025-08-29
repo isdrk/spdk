@@ -10228,6 +10228,8 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 		return;
 	}
 
+	bdev_qos_limit_values_adjust(new_limits);
+
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);
