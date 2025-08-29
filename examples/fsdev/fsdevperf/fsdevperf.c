@@ -33,12 +33,21 @@ struct fsdevperf_fuse_io {
 		struct fuse_in_header		hdr;
 		union {
 			struct fuse_init_in	init;
+			struct fuse_open_in	open;
+			struct fuse_create_in	create;
+			struct fuse_release_in	release;
+			struct fuse_forget_in	forget;
 		} op;
+		struct iovec			iovs[1];
 	} in;
 	struct {
-		struct fuse_out_header		hdr;
+		struct fuse_out_header			hdr;
 		union {
-			struct fuse_init_out	init;
+			struct fuse_init_out		init;
+			struct fuse_entry_out		entry;
+			struct fuse_open_out		open;
+			struct fuse_statfs_out		statfs;
+			struct spdk_fuse_create_out	create;
 		} op;
 	} out;
 };
@@ -962,7 +971,8 @@ fsdevperf_filesystem_supports_opcode(struct fsdevperf_filesystem *fs, uint64_t o
 static void
 fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
 		  struct spdk_io_channel *ioch, uint32_t opcode, uint64_t id, uint16_t source_id,
-		  uint64_t nodeid, uint32_t len, spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+		  uint64_t nodeid, uint32_t len, struct iovec *in_iovs, int in_iovcnt,
+		  spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	io->fuse_io.in.hdr.opcode = opcode;
 	io->fuse_io.in.hdr.unique = id;
@@ -973,6 +983,8 @@ fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
 			   source_id, id, cb_fn, cb_ctx);
 	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
 	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;
+	io->fsdev_io.u_in.fuse.iov = in_iovs;
+	io->fsdev_io.u_in.fuse.iovcnt = in_iovcnt;
 	io->fsdev_io.u_out.fuse.hdr = &io->fuse_io.out.hdr;
 	io->fsdev_io.u_out.fuse.op.raw = &io->fuse_io.out.op;
 }
@@ -988,7 +1000,7 @@ fsdevperf_filesystem_submit_mount(struct fsdevperf_filesystem *fs,
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_INIT)) {
 		fsdevperf_io_init(&fs->io, fs->fsdev_desc, fs->ioch, FUSE_INIT, id,
-				  spdk_env_get_current_core(), FUSE_ROOT_ID, sizeof(*init),
+				  spdk_env_get_current_core(), FUSE_ROOT_ID, sizeof(*init), NULL, 0,
 				  cb_fn, cb_ctx);
 		/*
 		 * We don't really care about any of this, just set the version to avoid tripping up
@@ -1018,7 +1030,8 @@ fsdevperf_filesystem_submit_umount(struct fsdevperf_filesystem *fs,
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_DESTROY)) {
 		fsdevperf_io_init(&fs->io, fs->fsdev_desc, fs->ioch, FUSE_DESTROY, id,
-				  spdk_env_get_current_core(), FUSE_ROOT_ID, 0, cb_fn, cb_ctx);
+				  spdk_env_get_current_core(), FUSE_ROOT_ID, 0, NULL, 0,
+				  cb_fn, cb_ctx);
 	} else {
 		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id, SPDK_FSDEV_IO_UMOUNT,
 				   spdk_env_get_current_core(), id, cb_fn, cb_ctx);
@@ -1035,12 +1048,21 @@ fsdevperf_task_submit_release(struct fsdevperf_task *task, uint64_t id,
 {
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
+	struct fuse_release_in *release = &task->io.fuse_io.in.op.release;
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_RELEASE,
-			   task->source_id, id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_RELEASE)) {
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_RELEASE, id,
+				  task->source_id, (uint64_t)fobject, sizeof(*release), NULL, 0,
+				  cb_fn, cb_ctx);
+		memset(release, 0, sizeof(*release));
+		release->fh = (uint64_t)fhandle;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_RELEASE,
+				   task->source_id, id, cb_fn, cb_ctx);
 
-	fsdev_io->u_in.release.fobject = fobject;
-	fsdev_io->u_in.release.fhandle = fhandle;
+		fsdev_io->u_in.release.fobject = fobject;
+		fsdev_io->u_in.release.fhandle = fhandle;
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -1052,12 +1074,20 @@ fsdevperf_task_submit_forget(struct fsdevperf_task *task, uint64_t id,
 {
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
+	struct fuse_forget_in *forget = &task->io.fuse_io.in.op.forget;
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_FORGET,
-			   task->source_id, id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_FORGET)) {
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_FORGET, id,
+				  task->source_id, (uint64_t)fobject, sizeof(*forget), NULL, 0,
+				  cb_fn, cb_ctx);
+		forget->nlookup = nlookup;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id, SPDK_FSDEV_IO_FORGET,
+				   task->source_id, id, cb_fn, cb_ctx);
 
-	fsdev_io->u_in.forget.fobject = fobject;
-	fsdev_io->u_in.forget.nlookup = nlookup;
+		fsdev_io->u_in.forget.fobject = fobject;
+		fsdev_io->u_in.forget.nlookup = nlookup;
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -1069,18 +1099,35 @@ fsdevperf_task_submit_create(struct fsdevperf_task *task, uint64_t id,
 			     spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct fsdevperf_filesystem *fs = task->fs;
-	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
+	struct fsdevperf_io *io = &task->io;
+	struct fsdevperf_fuse_io *fuse_io = &io->fuse_io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	struct fuse_create_in *create = &fuse_io->in.op.create;
+	size_t len;
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-			   SPDK_FSDEV_IO_CREATE, task->source_id, id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_CREATE)) {
+		len = strlen(name) + 1;
+		fsdevperf_io_init(io, fs->fsdev_desc, fs->ioch, FUSE_CREATE, id,
+				  task->source_id, (uint64_t)parent, sizeof(*create) + len,
+				  fuse_io->in.iovs, 1, cb_fn, cb_ctx);
+		create->flags = flags;
+		create->mode = mode;
+		create->umask = umask;
+		create->open_flags = 0;
+		fuse_io->in.iovs[0].iov_base = (char *)name;
+		fuse_io->in.iovs[0].iov_len = len;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
+				   SPDK_FSDEV_IO_CREATE, task->source_id, id, cb_fn, cb_ctx);
 
-	fsdev_io->u_in.create.parent_fobject = parent;
-	fsdev_io->u_in.create.name = name;
-	fsdev_io->u_in.create.flags = flags;
-	fsdev_io->u_in.create.mode = mode;
-	fsdev_io->u_in.create.umask = umask;
-	fsdev_io->u_in.create.euid = geteuid();
-	fsdev_io->u_in.create.egid = getegid();
+		fsdev_io->u_in.create.parent_fobject = parent;
+		fsdev_io->u_in.create.name = name;
+		fsdev_io->u_in.create.flags = flags;
+		fsdev_io->u_in.create.mode = mode;
+		fsdev_io->u_in.create.umask = umask;
+		fsdev_io->u_in.create.euid = geteuid();
+		fsdev_io->u_in.create.egid = getegid();
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -1092,12 +1139,21 @@ fsdevperf_task_submit_open(struct fsdevperf_task *task, uint64_t id,
 {
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
+	struct fuse_open_in *open = &task->io.fuse_io.in.op.open;
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-			   SPDK_FSDEV_IO_OPEN, task->source_id, id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_OPEN)) {
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_OPEN, id,
+				  task->source_id, (uint64_t)fobject, sizeof(*open),
+				  NULL, 0, cb_fn, cb_ctx);
+		open->flags = flags;
+		open->open_flags = 0;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
+				   SPDK_FSDEV_IO_OPEN, task->source_id, id, cb_fn, cb_ctx);
 
-	fsdev_io->u_in.open.fobject = fobject;
-	fsdev_io->u_in.open.flags = flags;
+		fsdev_io->u_in.open.fobject = fobject;
+		fsdev_io->u_in.open.flags = flags;
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -1108,13 +1164,25 @@ fsdevperf_task_submit_lookup(struct fsdevperf_task *task, uint64_t id,
 			     spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct fsdevperf_filesystem *fs = task->fs;
-	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
+	struct fsdevperf_io *io = &task->io;
+	struct fsdevperf_fuse_io *fuse_io = &io->fuse_io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	size_t len;
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-			   SPDK_FSDEV_IO_LOOKUP, task->source_id, id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_LOOKUP)) {
+		len = strlen(name) + 1;
+		fsdevperf_io_init(io, fs->fsdev_desc, fs->ioch, FUSE_LOOKUP, id,
+				  task->source_id, (uint64_t)parent, len, fuse_io->in.iovs, 1,
+				  cb_fn, cb_ctx);
+		fuse_io->in.iovs[0].iov_base = (char *)name;
+		fuse_io->in.iovs[0].iov_len = len;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
+				   SPDK_FSDEV_IO_LOOKUP, task->source_id, id, cb_fn, cb_ctx);
 
-	fsdev_io->u_in.lookup.parent_fobject = parent;
-	fsdev_io->u_in.lookup.name = name;
+		fsdev_io->u_in.lookup.parent_fobject = parent;
+		fsdev_io->u_in.lookup.name = name;
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -1127,9 +1195,15 @@ fsdevperf_task_submit_statfs(struct fsdevperf_task *task, uint64_t id,
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
 
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
-			   SPDK_FSDEV_IO_STATFS, task->source_id, id, cb_fn, cb_ctx);
-	fsdev_io->u_in.statfs.fobject = fs->root;
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_STATFS)) {
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_STATFS, id,
+				  task->source_id, FUSE_ROOT_ID, 0, NULL, 0, cb_fn, cb_ctx);
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, task->ioch, id,
+				   SPDK_FSDEV_IO_STATFS, task->source_id, id, cb_fn, cb_ctx);
+		fsdev_io->u_in.statfs.fobject = fs->root;
+	}
+
 	spdk_fsdev_io_submit(fsdev_io);
 }
 
@@ -1540,6 +1614,7 @@ fsdevperf_task_open_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 	struct fsdevperf_task *task = cb_arg;
 	struct fsdevperf_file *file = task->file;
 	struct fsdevperf_filesystem *fs = task->fs;
+	struct fuse_open_out *open;
 
 	if (status != 0) {
 		fsdevperf_errmsg("open /%s/%s failed: %s\n",
@@ -1549,7 +1624,13 @@ fsdevperf_task_open_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 		return;
 	}
 
-	file->fh = task->fh = fsdev_io->u_out.open.fhandle;
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_OPEN)) {
+		open = &task->io.fuse_io.out.op.open;
+		file->fh = task->fh = (void *)open->fh;
+	} else {
+		file->fh = task->fh = fsdev_io->u_out.open.fhandle;
+	}
+
 	fsdevperf_task_setup_file(task);
 }
 
@@ -1559,6 +1640,7 @@ fsdevperf_task_create_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 	struct fsdevperf_task *task = cb_arg;
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_file *file = task->file;
+	struct spdk_fuse_create_out *create;
 
 	if (status != 0) {
 		fsdevperf_errmsg("create /%s/%s failed: %s\n",
@@ -1568,9 +1650,17 @@ fsdevperf_task_create_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 		return;
 	}
 
-	file->size = fsdev_io->u_out.create.attr.size;
-	file->fobj = task->fobj = fsdev_io->u_out.create.fobject;
-	file->fh = task->fh = fsdev_io->u_out.create.fhandle;
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_CREATE)) {
+		create = &task->io.fuse_io.out.op.create;
+		file->size = create->entry.attr.size;
+		file->fobj = (void *)create->entry.nodeid;
+		file->fh = task->fh = (void *)create->open.fh;
+	} else {
+		file->size = fsdev_io->u_out.create.attr.size;
+		file->fobj = task->fobj = fsdev_io->u_out.create.fobject;
+		file->fh = task->fh = fsdev_io->u_out.create.fhandle;
+	}
+
 	fsdevperf_task_setup_file(task);
 }
 
@@ -1582,6 +1672,7 @@ fsdevperf_task_lookup_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 	struct fsdevperf_filesystem *fs = task->fs;
 	struct fsdevperf_file *file = task->file;
 	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(fs->fsdev_desc);
+	struct fuse_entry_out *entry;
 	uint32_t flags;
 	uint64_t id;
 
@@ -1607,8 +1698,14 @@ fsdevperf_task_lookup_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 		return;
 	}
 
-	file->size = fsdev_io->u_out.lookup.attr.size;
-	file->fobj = task->fobj = fsdev_io->u_out.lookup.fobject;
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_LOOKUP)) {
+		entry = &task->io.fuse_io.out.op.entry;
+		file->size = entry->attr.size;
+		file->fobj = task->fobj = (void *)entry->nodeid;
+	} else {
+		file->size = fsdev_io->u_out.lookup.attr.size;
+		file->fobj = task->fobj = fsdev_io->u_out.lookup.fobject;
+	}
 
 	id = fsdevperf_task_next_id(task);
 	flags = O_RDWR;
