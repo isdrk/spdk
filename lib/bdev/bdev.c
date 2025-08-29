@@ -2929,26 +2929,14 @@ _bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bde
 	}
 }
 
-static inline bool
-bdev_qos_queue_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bdev_io)
-{
-	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		assert(ch->qos_ch != NULL);
-
-		return _bdev_qos_channel_queue_io(ch->qos_ch, bdev_io);
-	}
-
-	return false;
-}
-
-static void
-bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
+static inline void
+bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev_io *bdev_io)
 {
 	if (!bdev_qos_io_to_limit(bdev_io)) {
 		goto submit;
 	}
 
-	if (bdev_qos_queue_io(bdev_ch, bdev_io)) {
+	if (_bdev_qos_channel_queue_io(qos_ch, bdev_io)) {
 		return;
 	}
 
@@ -2958,7 +2946,13 @@ bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_
 	 */
 
 submit:
-	bdev_io_do_submit(bdev_ch, bdev_io);
+	bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+}
+
+static void
+bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
+{
+	bdev_qos_channel_queue_io(bdev_ch->qos_ch, bdev_io);
 }
 
 static void
