@@ -10544,11 +10544,65 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 	}
 }
 
+struct rpc_bdev_set_qos_limit {
+	uint64_t	limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
+};
+
+static const struct spdk_json_object_decoder rpc_bdev_set_qos_limit_decoders[] = {
+	{
+		"rw_ios_per_sec", offsetof(struct rpc_bdev_set_qos_limit,
+					   limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT]),
+		spdk_json_decode_uint64, true
+	},
+	{
+		"rw_mbytes_per_sec", offsetof(struct rpc_bdev_set_qos_limit,
+					      limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT]),
+		spdk_json_decode_uint64, true
+	},
+	{
+		"r_mbytes_per_sec", offsetof(struct rpc_bdev_set_qos_limit,
+					     limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT]),
+		spdk_json_decode_uint64, true
+	},
+	{
+		"w_mbytes_per_sec", offsetof(struct rpc_bdev_set_qos_limit,
+					     limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT]),
+		spdk_json_decode_uint64, true
+	},
+};
+
 void
-spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
-			      void (*cb_fn)(void *cb_arg, int status), void *cb_arg)
+spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, const struct spdk_json_val *params,
+			      spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
-	bdev_set_qos_rate_limits(bdev, limits, cb_fn, cb_arg);
+	struct rpc_bdev_set_qos_limit req = {{
+			SPDK_BDEV_QOS_LIMIT_NOT_DEFINED,
+			SPDK_BDEV_QOS_LIMIT_NOT_DEFINED,
+			SPDK_BDEV_QOS_LIMIT_NOT_DEFINED,
+			SPDK_BDEV_QOS_LIMIT_NOT_DEFINED
+		}
+	};
+	int i;
+
+	if (spdk_json_decode_object_relaxed(params, rpc_bdev_set_qos_limit_decoders,
+					    SPDK_COUNTOF(rpc_bdev_set_qos_limit_decoders),
+					    &req)) {
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		if (req.limits[i] != SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+			break;
+		}
+	}
+	if (i == SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES) {
+		SPDK_ERRLOG("no rate limits specified\n");
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
+	bdev_set_qos_rate_limits(bdev, req.limits, cb_fn, cb_arg);
 }
 
 struct spdk_bdev_histogram_ctx {

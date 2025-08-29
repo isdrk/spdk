@@ -889,13 +889,13 @@ typedef void (*spdk_bdev_qos_op_cb)(void *cb_arg, int status);
  * this function completes.
  *
  * \param bdev Block device.
- * \param limits Pointer to the QoS rate limits array which holding the limits.
+ * \param params Parameters which holds the QoS rate limits.
  * \param cb_fn Callback function to be called when the QoS limit has been updated.
  * \param cb_arg Argument to pass to cb_fn.
  *
  * The limits are ordered based on the @ref spdk_bdev_qos_rate_limit_type enum.
  */
-void spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
+void spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, const struct spdk_json_val *params,
 				   spdk_bdev_qos_op_cb cb_fn, void *cb_arg);
 
 struct spdk_bdev_qos;
