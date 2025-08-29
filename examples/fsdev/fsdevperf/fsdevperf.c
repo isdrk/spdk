@@ -30,7 +30,9 @@ struct fsdevperf_thread {
 struct fsdevperf_request {
 	struct fsdevperf_task	*task;
 	struct iovec		iov;
+	struct spdk_fsdev_io	fsdev_io;
 };
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_request, fsdev_io) % 8 == 0, "misalignment");
 
 struct fsdevperf_stats {
 	uint64_t	num_ios;
@@ -43,7 +45,9 @@ struct fsdevperf_filesystem {
 	struct spdk_io_channel			*ioch;
 	TAILQ_ENTRY(fsdevperf_filesystem)	tailq;
 	int					io_ctx_size;
+	struct spdk_fsdev_io			fsdev_io;
 };
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_filesystem, fsdev_io) % 8 == 0, "misalignment");
 
 struct fsdevperf_file {
 	struct fsdevperf_filesystem		*fs;
@@ -83,13 +87,13 @@ struct fsdevperf_task {
 		TAILQ_ENTRY(fsdevperf_task)	job;
 		TAILQ_ENTRY(fsdevperf_task)	thread;
 	} tailq;
+	struct spdk_fsdev_io			fsdev_io;
 };
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_task, fsdev_io) % 8 == 0, "misalignment");
 
-#define ALIGNED_TYPE_SIZE(type)		SPDK_ALIGN_CEIL(sizeof(struct type), 8)
-
-#define FSDEVPERF_FS_SIZE(io_ctx_size)	(ALIGNED_TYPE_SIZE(fsdevperf_filesystem) + io_ctx_size)
-#define FSDEVPERF_TASK_SIZE(fs)		(ALIGNED_TYPE_SIZE(fsdevperf_task) + (fs)->io_ctx_size)
-#define FSDEVPERF_REQUEST_SIZE(task)	(ALIGNED_TYPE_SIZE(fsdevperf_request) + (task)->fs->io_ctx_size)
+#define FSDEVPERF_FS_SIZE(io_ctx_size)	(sizeof(struct fsdevperf_filesystem) + io_ctx_size)
+#define FSDEVPERF_TASK_SIZE(fs)		(sizeof(struct fsdevperf_task) + (fs)->io_ctx_size)
+#define FSDEVPERF_REQUEST_SIZE(task)	(sizeof(struct fsdevperf_request) + (task)->fs->io_ctx_size)
 
 #define FSDEVPERF_POLLER_PERIOD 1ull
 
@@ -100,19 +104,19 @@ struct fsdevperf_task {
 static inline struct spdk_fsdev_io *
 fsdevperf_fs_get_fsdev_io(struct fsdevperf_filesystem *fs)
 {
-	return (struct spdk_fsdev_io *)(((char *)fs) + ALIGNED_TYPE_SIZE(fsdevperf_filesystem));
+	return &fs->fsdev_io;
 }
 
 static inline struct spdk_fsdev_io *
 fsdevperf_task_get_fsdev_io(struct fsdevperf_task *task)
 {
-	return (struct spdk_fsdev_io *)(((char *)task) + ALIGNED_TYPE_SIZE(fsdevperf_task));
+	return &task->fsdev_io;
 }
 
 static inline struct spdk_fsdev_io *
 fsdevperf_request_get_fsdev_io(struct fsdevperf_request *request)
 {
-	return (struct spdk_fsdev_io *)(((char *)request) + ALIGNED_TYPE_SIZE(fsdevperf_request));
+	return &request->fsdev_io;
 }
 
 struct fsdevperf_job;
