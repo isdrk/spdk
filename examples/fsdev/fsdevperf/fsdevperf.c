@@ -11,6 +11,7 @@
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
 #include "spdk/thread.h"
+#include "spdk/util.h"
 
 /*
  * fsdevperf_job describes a single job (i.e. pattern, io_size, etc.), spawned across multiple
@@ -27,12 +28,33 @@ struct fsdevperf_thread {
 	TAILQ_ENTRY(fsdevperf_thread)	tailq;
 };
 
+struct fsdevperf_fuse_io {
+	struct {
+		struct fuse_in_header		hdr;
+		union {
+			struct fuse_init_in	init;
+		} op;
+	} in;
+	struct {
+		struct fuse_out_header		hdr;
+		union {
+			struct fuse_init_out	init;
+		} op;
+	} out;
+};
+
+struct fsdevperf_io {
+	struct fsdevperf_fuse_io		fuse_io;
+	struct spdk_fsdev_io			fsdev_io;
+};
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_io, fsdev_io) % 8 == 0, "misalignment");
+
 struct fsdevperf_request {
 	struct fsdevperf_task	*task;
 	struct iovec		iov;
-	struct spdk_fsdev_io	fsdev_io;
+	struct fsdevperf_io	io;
 };
-SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_request, fsdev_io) % 8 == 0, "misalignment");
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_request, io) % 8 == 0, "misalignment");
 
 struct fsdevperf_stats {
 	uint64_t	num_ios;
@@ -41,13 +63,15 @@ struct fsdevperf_stats {
 
 struct fsdevperf_filesystem {
 	struct spdk_fsdev_desc			*fsdev_desc;
+	uint64_t				supported_fuse_opcodes;
 	struct spdk_fsdev_file_object		*root;
 	struct spdk_io_channel			*ioch;
 	TAILQ_ENTRY(fsdevperf_filesystem)	tailq;
+	struct fsdevperf_fuse_io		fuse_io;
 	int					io_ctx_size;
-	struct spdk_fsdev_io			fsdev_io;
+	struct fsdevperf_io			io;
 };
-SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_filesystem, fsdev_io) % 8 == 0, "misalignment");
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_filesystem, io) % 8 == 0, "misalignment");
 
 struct fsdevperf_file {
 	struct fsdevperf_filesystem		*fs;
@@ -87,9 +111,9 @@ struct fsdevperf_task {
 		TAILQ_ENTRY(fsdevperf_task)	job;
 		TAILQ_ENTRY(fsdevperf_task)	thread;
 	} tailq;
-	struct spdk_fsdev_io			fsdev_io;
+	struct fsdevperf_io			io;
 };
-SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_task, fsdev_io) % 8 == 0, "misalignment");
+SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_task, io) % 8 == 0, "misalignment");
 
 #define FSDEVPERF_FS_SIZE(io_ctx_size)	(sizeof(struct fsdevperf_filesystem) + io_ctx_size)
 #define FSDEVPERF_TASK_SIZE(fs)		(sizeof(struct fsdevperf_task) + (fs)->io_ctx_size)
@@ -104,19 +128,19 @@ SPDK_STATIC_ASSERT(offsetof(struct fsdevperf_task, fsdev_io) % 8 == 0, "misalign
 static inline struct spdk_fsdev_io *
 fsdevperf_fs_get_fsdev_io(struct fsdevperf_filesystem *fs)
 {
-	return &fs->fsdev_io;
+	return &fs->io.fsdev_io;
 }
 
 static inline struct spdk_fsdev_io *
 fsdevperf_task_get_fsdev_io(struct fsdevperf_task *task)
 {
-	return &task->fsdev_io;
+	return &task->io.fsdev_io;
 }
 
 static inline struct spdk_fsdev_io *
 fsdevperf_request_get_fsdev_io(struct fsdevperf_request *request)
 {
-	return &request->fsdev_io;
+	return &request->io.fsdev_io;
 }
 
 struct fsdevperf_job;
@@ -367,6 +391,7 @@ fsdevperf_filesystem_free(struct fsdevperf_filesystem *fs)
 static struct fsdevperf_filesystem *
 fsdevperf_filesystem_alloc(const char *name)
 {
+	struct spdk_fsdev *fsdev;
 	struct fsdevperf_filesystem *fs;
 	int rc, io_ctx_size;
 
@@ -391,6 +416,8 @@ fsdevperf_filesystem_alloc(const char *name)
 		goto error;
 	}
 
+	fsdev = spdk_fsdev_desc_get_fsdev(fs->fsdev_desc);
+	fs->supported_fuse_opcodes = spdk_fsdev_get_supported_fuse_opcodes(fsdev);
 	fs->io_ctx_size = io_ctx_size;
 
 	return fs;
@@ -926,18 +953,57 @@ fsdevperf_filesystem_umount_cb(void *cb_arg, int status, struct spdk_fsdev_io *f
 	fsdevperf_done();
 }
 
+static bool
+fsdevperf_filesystem_supports_opcode(struct fsdevperf_filesystem *fs, uint64_t opcode)
+{
+	return fs->supported_fuse_opcodes & SPDK_BIT(opcode);
+}
+
+static void
+fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
+		  struct spdk_io_channel *ioch, uint32_t opcode, uint64_t id, uint16_t source_id,
+		  uint64_t nodeid, uint32_t len, spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+{
+	io->fuse_io.in.hdr.opcode = opcode;
+	io->fuse_io.in.hdr.unique = id;
+	io->fuse_io.in.hdr.len = sizeof(io->fuse_io.in.hdr) + len;
+	io->fuse_io.in.hdr.nodeid = nodeid;
+	/* Skip uid/gid/pid */
+	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, id, SPDK_FSDEV_IO_FUSE,
+			   source_id, id, cb_fn, cb_ctx);
+	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
+	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;
+	io->fsdev_io.u_out.fuse.hdr = &io->fuse_io.out.hdr;
+	io->fsdev_io.u_out.fuse.op.raw = &io->fuse_io.out.op;
+}
+
 static void
 fsdevperf_filesystem_submit_mount(struct fsdevperf_filesystem *fs,
 				  spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_fs_get_fsdev_io(fs);
+	struct fuse_init_in *init = &fs->fuse_io.in.op.init;
 	uint64_t id;
 
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id,
-			   SPDK_FSDEV_IO_MOUNT, spdk_env_get_current_core(), id, cb_fn, cb_ctx);
-	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
-	fsdev_io->u_in.mount.opts.opts_size = SPDK_SIZEOF(&fsdev_io->u_in.mount.opts, opts_size);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_INIT)) {
+		fsdevperf_io_init(&fs->io, fs->fsdev_desc, fs->ioch, FUSE_INIT, id,
+				  spdk_env_get_current_core(), FUSE_ROOT_ID, sizeof(*init),
+				  cb_fn, cb_ctx);
+		/*
+		 * We don't really care about any of this, just set the version to avoid tripping up
+		 * modules that check it
+		 */
+		memset(init, 0, sizeof(*init));
+		init->major = 7;
+		init->minor = 31;
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id, SPDK_FSDEV_IO_MOUNT,
+				   spdk_env_get_current_core(), id, cb_fn, cb_ctx);
+		memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
+		fsdev_io->u_in.mount.opts.opts_size =
+			SPDK_SIZEOF(&fsdev_io->u_in.mount.opts, opts_size);
+	}
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -950,8 +1016,14 @@ fsdevperf_filesystem_submit_umount(struct fsdevperf_filesystem *fs,
 	uint64_t id;
 
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
-	spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id, SPDK_FSDEV_IO_UMOUNT,
-			   spdk_env_get_current_core(), id, cb_fn, cb_ctx);
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_DESTROY)) {
+		fsdevperf_io_init(&fs->io, fs->fsdev_desc, fs->ioch, FUSE_DESTROY, id,
+				  spdk_env_get_current_core(), FUSE_ROOT_ID, 0, cb_fn, cb_ctx);
+	} else {
+		spdk_fsdev_io_init(fsdev_io, fs->fsdev_desc, fs->ioch, id, SPDK_FSDEV_IO_UMOUNT,
+				   spdk_env_get_current_core(), id, cb_fn, cb_ctx);
+	}
+
 	spdk_fsdev_io_submit(fsdev_io);
 }
 
@@ -1746,7 +1818,12 @@ fsdevperf_filesystem_mount_cb(void *cb_arg, int status, struct spdk_fsdev_io *fs
 		return;
 	}
 
-	fs->root = fsdev_io->u_out.mount.root_fobject;
+	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_INIT)) {
+		fs->root = (void *)FUSE_ROOT_ID;
+	} else {
+		fs->root = fsdev_io->u_out.mount.root_fobject;
+	}
+
 	next = TAILQ_NEXT(fs, tailq);
 	if (next != NULL) {
 		fsdevperf_filesystem_mount(next);
