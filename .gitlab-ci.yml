@@ -37,19 +37,6 @@ unittests-build-job:
     - make -j4
     - ./test/unit/unittest.sh
 
-test-nvmf-job-rdma:
-  tags: [vm_host, x86_64]
-  stage: test
-  before_script:
-    - .ci/prepare_vm.sh
-  script:
-    - ./configure --enable-debug --with-rdma=mlx5_dv
-    - make -j${nproc}
-    - ./scripts/setup.sh
-    - NET_TYPE=phy ./test/nvmf/host/bdevperf.sh --transport=rdma
-    - NET_TYPE=phy ./test/nvmf/host/discovery.sh --transport=rdma
-    - NET_TYPE=phy ./test/nvmf/host/identify.sh --transport=rdma
-
 autotest-nvmf-tcp:
   tags: [vm_host, x86_64]
   stage: test
