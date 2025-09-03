@@ -903,6 +903,66 @@ file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_f
 }
 
 static int
+fsdev_aio_fill_attr(struct aio_fsdev_file_object *fobject, struct fuse_attr *attr)
+{
+	struct stat stbuf;
+	int res;
+
+	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH);
+	if (res == -1) {
+		res = -errno;
+		SPDK_ERRLOG("fstatat() failed with %d\n", res);
+		return res;
+	}
+
+	attr->ino = stbuf.st_ino;
+	attr->size = stbuf.st_size;
+	attr->blocks = stbuf.st_blocks;
+	attr->atime = stbuf.st_atime;
+	attr->mtime = stbuf.st_mtime;
+	attr->ctime = stbuf.st_ctime;
+	attr->atimensec = ST_ATIM_NSEC(&stbuf);
+	attr->mtimensec = ST_MTIM_NSEC(&stbuf);
+	attr->ctimensec = ST_CTIM_NSEC(&stbuf);
+	attr->mode = stbuf.st_mode;
+	attr->nlink = stbuf.st_nlink;
+	attr->uid = stbuf.st_uid;
+	attr->gid = stbuf.st_gid;
+	attr->rdev = stbuf.st_rdev;
+	attr->blksize = stbuf.st_blksize;
+
+	return 0;
+}
+
+static inline uint64_t
+fsdev_aio_attr_valid_sec(struct aio_fsdev *vfsdev)
+{
+	return vfsdev->opts.attr_valid_ms / SPDK_SEC_TO_MSEC;
+}
+
+static inline uint32_t
+fsdev_aio_attr_valid_nsec(struct aio_fsdev *vfsdev)
+{
+	return (vfsdev->opts.attr_valid_ms % SPDK_SEC_TO_MSEC) * SPDK_MSEC_TO_USEC;
+}
+
+static int
+fsdev_aio_fill_attr_out(struct aio_fsdev_file_object *fobject, struct fuse_attr_out *attr_out)
+{
+	int res;
+
+	res = fsdev_aio_fill_attr(fobject, &attr_out->attr);
+	if (res) {
+		return res;
+	}
+
+	attr_out->attr_valid = fsdev_aio_attr_valid_sec(fobject->vfsdev);
+	attr_out->attr_valid_nsec = fsdev_aio_attr_valid_nsec(fobject->vfsdev);
+
+	return 0;
+}
+
+static int
 utimensat_empty(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
 		const struct timespec *tv)
 {
@@ -967,21 +1027,24 @@ fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
 static int
 fsdev_aio_op_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_attr_out *attr_out = fsdev_io->u_out.fuse.op.attr;
 	int res;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getattr.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	res = file_object_fill_attr(fobject, &fsdev_io->u_out.getattr.attr);
+	res = fsdev_aio_fill_attr_out(fobject, attr_out);
 	if (res) {
 		SPDK_ERRLOG("Cannot fill attr for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
 		goto fop_failed;
 	}
+
+	out_hdr->len += sizeof(struct fuse_attr_out);
 
 	SPDK_DEBUGLOG(fsdev_aio, "GETATTR succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 
@@ -4442,6 +4505,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_WRITE:
 		status = fsdev_aio_op_write(ch, fsdev_io);
 		break;
+	case FUSE_GETATTR:
+		status = fsdev_aio_op_getattr(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4645,9 +4711,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FORGET:
 		status = fsdev_aio_op_forget(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_GETATTR:
-		status = fsdev_aio_op_getattr(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_SETATTR:
 		status = fsdev_aio_op_setattr(ch, fsdev_io);
 		break;
@@ -4752,6 +4815,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_READ:
 	case SPDK_FSDEV_IO_WRITE:
+	case SPDK_FSDEV_IO_GETATTR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5215,7 +5279,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 #endif
 
-	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE);
+	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
+					       (1ULL << FUSE_GETATTR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
