@@ -2558,37 +2558,47 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
 	struct aio_fsdev_file_object *fobject;
-	struct aio_fsdev_file_handle *fhandle;
-	uint32_t to_set = fsdev_io->u_in.setattr.to_set;
-	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_in.setattr.attr;
+	struct aio_fsdev_file_handle *fhandle = NULL;
+	struct fuse_setattr_in *setattr;
+	uint32_t valid;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_attr_out *attr_out = fsdev_io->u_out.fuse.op.attr;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setattr.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	/* fhandle is optional here */
-	fhandle = fsdev_io->u_in.setattr.fhandle ?
-		  fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setattr.fhandle) : NULL;
+	setattr = fsdev_io->u_in.fuse.op.setattr;
+	valid = setattr->valid;
 
-	if (to_set & SPDK_FSDEV_ATTR_MODE) {
+	if (valid & FATTR_FH) {
+		fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, setattr->fh);
+		if (!fhandle) {
+			SPDK_ERRLOG("Invalid fhandle: %" PRIx64 "\n", setattr->fh);
+			res = -EINVAL;
+			goto fop_failed;
+		}
+	}
+
+	if (valid & FATTR_MODE) {
 		if (fhandle) {
-			res = fchmod(fhandle->fd, attr->mode);
+			res = fchmod(fhandle->fd, setattr->mode);
 		} else {
-			res = fsdev_fchmodat(vfsdev, fobject, attr->mode);
+			res = fsdev_fchmodat(vfsdev, fobject, setattr->mode);
 		}
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
 			goto fop_failed;
 		}
-		fobject->mode = attr->mode;
+		fobject->mode = setattr->mode;
 	}
 
-	if (to_set & (SPDK_FSDEV_ATTR_UID | SPDK_FSDEV_ATTR_GID)) {
-		uid_t uid = (to_set & SPDK_FSDEV_ATTR_UID) ? attr->uid : (uid_t) -1;
-		gid_t gid = (to_set & SPDK_FSDEV_ATTR_GID) ? attr->gid : (gid_t) -1;
+	if (valid & (FATTR_UID | FATTR_GID)) {
+		uid_t uid = (valid & FATTR_UID) ? setattr->uid : (uid_t) -1;
+		gid_t gid = (valid & FATTR_GID) ? setattr->gid : (gid_t) -1;
 
 		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH);
 		if (res == -1) {
@@ -2598,7 +2608,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 
-	if (to_set & SPDK_FSDEV_ATTR_SIZE) {
+	if (valid & FATTR_SIZE) {
 		int truncfd;
 
 		if (fhandle) {
@@ -2612,7 +2622,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			}
 		}
 
-		res = ftruncate(truncfd, attr->size);
+		res = ftruncate(truncfd, setattr->size);
 		if (!fhandle) {
 			int saverr = errno;
 			close(truncfd);
@@ -2621,12 +2631,12 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("ftruncate failed for " FOBJECT_FMT " (size=%" PRIu64 ")\n", FOBJECT_ARGS(fobject),
-				    attr->size);
+				    setattr->size);
 			goto fop_failed;
 		}
 	}
 
-	if (to_set & (SPDK_FSDEV_ATTR_ATIME | SPDK_FSDEV_ATTR_MTIME)) {
+	if (valid & (FATTR_ATIME | FATTR_MTIME)) {
 		struct timespec tv[2];
 
 		tv[0].tv_sec = 0;
@@ -2634,18 +2644,18 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		tv[0].tv_nsec = UTIME_OMIT;
 		tv[1].tv_nsec = UTIME_OMIT;
 
-		if (to_set & SPDK_FSDEV_ATTR_ATIME_NOW) {
+		if (valid & FATTR_ATIME_NOW) {
 			tv[0].tv_nsec = UTIME_NOW;
-		} else if (to_set & SPDK_FSDEV_ATTR_ATIME) {
-			tv[0].tv_sec = attr->atime;
-			tv[0].tv_nsec = attr->atimensec;
+		} else if (valid & FATTR_ATIME) {
+			tv[0].tv_sec = setattr->atime;
+			tv[0].tv_nsec = setattr->atimensec;
 		}
 
-		if (to_set & SPDK_FSDEV_ATTR_MTIME_NOW) {
+		if (valid & FATTR_MTIME_NOW) {
 			tv[1].tv_nsec = UTIME_NOW;
-		} else if (to_set & SPDK_FSDEV_ATTR_MTIME) {
-			tv[1].tv_sec = attr->mtime;
-			tv[1].tv_nsec = attr->mtimensec;
+		} else if (valid & FATTR_MTIME) {
+			tv[1].tv_sec = setattr->mtime;
+			tv[1].tv_nsec = setattr->mtimensec;
 		}
 
 		if (fhandle) {
@@ -2661,13 +2671,14 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 
-	res = file_object_fill_attr(fobject, &fsdev_io->u_out.setattr.attr);
+	res = fsdev_aio_fill_attr_out(fobject, attr_out);
 	if (res) {
 		SPDK_ERRLOG("file_object_fill_attr failed for " FOBJECT_FMT "\n",
 			    FOBJECT_ARGS(fobject));
 		goto fop_failed;
 	}
 
+	out_hdr->len += sizeof(struct fuse_attr_out);
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "SETATTR succeeded for " FOBJECT_FMT "\n",
 		      FOBJECT_ARGS(fobject));
@@ -4508,6 +4519,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_GETATTR:
 		status = fsdev_aio_op_getattr(ch, fsdev_io);
 		break;
+	case FUSE_SETATTR:
+		status = fsdev_aio_op_setattr(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4711,9 +4725,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FORGET:
 		status = fsdev_aio_op_forget(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_SETATTR:
-		status = fsdev_aio_op_setattr(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
@@ -4816,6 +4827,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READ:
 	case SPDK_FSDEV_IO_WRITE:
 	case SPDK_FSDEV_IO_GETATTR:
+	case SPDK_FSDEV_IO_SETATTR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5280,7 +5292,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 #endif
 
 	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
-					       (1ULL << FUSE_GETATTR);
+					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
