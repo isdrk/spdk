@@ -474,10 +474,16 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 	return fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, (uint64_t)(uintptr_t)_fhandle);
 }
 
+static inline uint64_t
+fsdev_aio_get_fuse_fh(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
+{
+	return fhandle->hdr.lut_key + FILE_PTR_LUT_BASE;
+}
+
 static inline struct spdk_fsdev_file_handle *
 fsdev_aio_get_spdk_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
 {
-	return (struct spdk_fsdev_file_handle *)(uintptr_t)(fhandle->hdr.lut_key + FILE_PTR_LUT_BASE);
+	return (struct spdk_fsdev_file_handle *)(uintptr_t)fsdev_aio_get_fuse_fh(vfsdev, fhandle);
 }
 
 static inline void
@@ -1061,12 +1067,12 @@ fsdev_aio_op_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int fd;
 	DIR *dp = NULL;
 	struct aio_fsdev_file_object *fobject;
-	uint32_t flags = fsdev_io->u_in.opendir.flags;
+	uint32_t flags = fsdev_io->u_in.fuse.op.open->flags;
 	struct aio_fsdev_file_handle *fhandle = NULL;
 
 	UNUSED(flags);
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.opendir.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -1107,7 +1113,9 @@ fsdev_aio_op_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	SPDK_DEBUGLOG(fsdev_aio, "OPENDIR succeeded for " FOBJECT_FMT " (fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 
-	fsdev_io->u_out.opendir.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
+	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_open_out);
+	memset(fsdev_io->u_out.fuse.op.open, 0, sizeof(*fsdev_io->u_out.fuse.op.open));
+	fsdev_io->u_out.fuse.op.open->fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
 
 do_return:
 	file_object_unref(fobject, 1);
@@ -2453,10 +2461,10 @@ fsdev_aio_op_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int fd, res;
 	struct aio_fsdev_file_object *fobject;
-	uint32_t flags = fsdev_io->u_in.open.flags;
+	uint32_t flags = fsdev_io->u_in.fuse.op.open->flags;
 	struct aio_fsdev_file_handle *fhandle;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.open.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2480,7 +2488,12 @@ fsdev_aio_op_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fsdev_io->u_out.open.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
+	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_open_out);
+	fsdev_io->u_out.fuse.op.open->fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
+	fsdev_io->u_out.fuse.op.open->open_flags = 0;
+	if (fsdev_io->u_in.fuse.op.open->flags & O_DIRECT) {
+		fsdev_io->u_out.fuse.op.open->open_flags |= FOPEN_DIRECT_IO;
+	}
 
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "OPEN succeeded for " FOBJECT_FMT " (fh=%p, fd=%d)\n",
@@ -4522,6 +4535,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_SETATTR:
 		status = fsdev_aio_op_setattr(ch, fsdev_io);
 		break;
+	case FUSE_OPEN:
+		status = fsdev_aio_op_open(ch, fsdev_io);
+		break;
+	case FUSE_OPENDIR:
+		status = fsdev_aio_op_opendir(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4749,9 +4768,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_LINK:
 		status = fsdev_aio_op_link(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_OPEN:
-		status = fsdev_aio_op_open(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_STATFS:
 		status = fsdev_aio_op_statfs(ch, fsdev_io);
 		break;
@@ -4775,9 +4791,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_FLUSH:
 		status = fsdev_aio_op_flush(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_OPENDIR:
-		status = fsdev_aio_op_opendir(ch, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_READDIR:
 		status = fsdev_aio_op_readdir(ch, fsdev_io);
@@ -4828,6 +4841,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_WRITE:
 	case SPDK_FSDEV_IO_GETATTR:
 	case SPDK_FSDEV_IO_SETATTR:
+	case SPDK_FSDEV_IO_OPEN:
+	case SPDK_FSDEV_IO_OPENDIR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5292,7 +5307,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 #endif
 
 	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
-					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR);
+					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
+					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
