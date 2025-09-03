@@ -1189,7 +1189,7 @@ fsdev_aio_destroy_fhandle_cpl(void *_ctx)
 }
 
 static int
-fsdev_aio_do_release(struct spdk_fsdev_file_handle *fhandle, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_release(struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct fsdev_aio_release_ctx *ctx;
@@ -1199,7 +1199,7 @@ fsdev_aio_do_release(struct spdk_fsdev_file_handle *fhandle, struct spdk_fsdev_i
 		SPDK_ERRLOG("Cannot allocate release context\n");
 		return -ENOMEM;
 	}
-	ctx->fhandle = fsdev_aio_get_fhandle(vfsdev, fhandle);
+	ctx->fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.release->fh);
 	if (!ctx->fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", ctx->fhandle);
 		free(ctx);
@@ -1216,7 +1216,7 @@ fsdev_aio_do_release(struct spdk_fsdev_file_handle *fhandle, struct spdk_fsdev_i
 static int
 fsdev_aio_op_releasedir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	return fsdev_aio_do_release(fsdev_io->u_in.releasedir.fhandle, fsdev_io);
+	return fsdev_aio_do_release(fsdev_io);
 }
 
 static int
@@ -2844,7 +2844,7 @@ fop_failed:
 static int
 fsdev_aio_op_release(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	return fsdev_aio_do_release(fsdev_io->u_in.release.fhandle, fsdev_io);
+	return fsdev_aio_do_release(fsdev_io);
 }
 
 static inline void
@@ -4596,6 +4596,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_CREATE:
 		status = fsdev_aio_op_create(ch, fsdev_io);
 		break;
+	case FUSE_RELEASE:
+		status = fsdev_aio_op_release(ch, fsdev_io);
+		break;
+	case FUSE_RELEASEDIR:
+		status = fsdev_aio_op_releasedir(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4826,9 +4832,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_STATFS:
 		status = fsdev_aio_op_statfs(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_RELEASE:
-		status = fsdev_aio_op_release(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_FSYNC:
 		status = fsdev_aio_op_fsync(ch, fsdev_io);
 		break;
@@ -4849,9 +4852,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_READDIR:
 		status = fsdev_aio_op_readdir(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RELEASEDIR:
-		status = fsdev_aio_op_releasedir(ch, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FSYNCDIR:
 		status = fsdev_aio_op_fsyncdir(ch, fsdev_io);
@@ -4896,6 +4896,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_OPEN:
 	case SPDK_FSDEV_IO_OPENDIR:
 	case SPDK_FSDEV_IO_CREATE:
+	case SPDK_FSDEV_IO_RELEASE:
+	case SPDK_FSDEV_IO_RELEASEDIR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5361,7 +5363,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 
 	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
 					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
-					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE);
+					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE) | \
+					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
