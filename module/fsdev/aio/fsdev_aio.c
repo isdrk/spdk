@@ -474,6 +474,24 @@ fsdev_aio_get_spdk_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handl
 	return (struct spdk_fsdev_file_handle *)(uintptr_t)(fhandle->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
 
+static inline void
+fsdev_aio_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
+{
+	/* Note, this get_type() check here is temporary, once all commands
+	 * are converted to FUSE this can be an assert instead.
+	 */
+	if (spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE) {
+		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+
+		if (out_hdr != NULL) {
+			out_hdr->error = status;
+		}
+	}
+
+	/* Complete the IO */
+	spdk_fsdev_io_complete(fsdev_io, status);
+}
+
 static int
 is_dot_or_dotdot(const char *name)
 {
@@ -1046,7 +1064,7 @@ fsdev_aio_destroy_fhandle_cpl(void *_ctx)
 	struct aio_fsdev_file_handle *fhandle = ctx->fhandle;
 
 	file_handle_destroy(fhandle);
-	spdk_fsdev_io_complete(fsdev_io, 0);
+	fsdev_aio_io_complete(fsdev_io, 0);
 
 	free(ctx);
 }
@@ -4069,7 +4087,7 @@ fsdev_aio_op_abort(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
-			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+			fsdev_aio_io_complete(fsdev_io, -ECANCELED);
 			return 0; /* we found the IO to abort, no need to continue */
 		}
 	}
@@ -4102,7 +4120,7 @@ aio_io_poll_common(struct aio_io_channel *ch)
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 
 		TAILQ_REMOVE(&ios, vfsdev_io, link);
-		spdk_fsdev_io_complete(fsdev_io, vfsdev_io->status);
+		fsdev_aio_io_complete(fsdev_io, vfsdev_io->status);
 		res = SPDK_POLLER_BUSY;
 	}
 
@@ -4679,12 +4697,12 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	default:
 		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
-		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
+		fsdev_aio_io_complete(fsdev_io, -ENOSYS);
 		return;
 	}
 
 	if (status != IO_STATUS_ASYNC) {
-		spdk_fsdev_io_complete(fsdev_io, status);
+		fsdev_aio_io_complete(fsdev_io, status);
 	}
 }
 
@@ -4843,7 +4861,7 @@ fsdev_aio_reset_msg_cb(struct spdk_io_channel_iter *i)
 
 		if (fsdev_io->fsdev == &ctx->vfsdev->fsdev) {
 			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
-			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
+			fsdev_aio_io_complete(fsdev_io, -ECANCELED);
 		}
 	}
 
