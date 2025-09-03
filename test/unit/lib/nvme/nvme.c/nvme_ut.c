@@ -44,6 +44,7 @@ DEFINE_STUB(nvme_get_transport, const struct spdk_nvme_transport *, (const char 
 	    NULL);
 DEFINE_STUB(nvme_transport_get_trtype, spdk_nvme_transport_type_t,
 	    (const struct spdk_nvme_transport *transport), 0);
+DEFINE_STUB(nvme_qpair_state_string, const char *, (enum nvme_qpair_state state), NULL);
 
 static bool ut_destruct_called = false;
 void
