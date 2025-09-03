@@ -345,17 +345,23 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 	TAILQ_REMOVE(&aioch->ios_in_progress, aio, link);
 
 	if (res >= 0) {
-		switch (spdk_fsdev_io_get_type(fsdev_io)) {
-		case SPDK_FSDEV_IO_READ:
-			fsdev_io->u_out.read.data_size = res;
+		struct fuse_in_header *in_hdr = fsdev_io->u_in.fuse.hdr;
+		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+
+		assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
+
+		switch (in_hdr->opcode) {
+		case FUSE_READ:
+			out_hdr->len += res;
 			break;
-		case SPDK_FSDEV_IO_WRITE:
-			fsdev_io->u_out.write.data_size = res;
+		case FUSE_WRITE:
+			out_hdr->len += sizeof(struct fuse_write_out);
+			fsdev_io->u_out.fuse.op.write->size = res;
 
 			/* Even though we don't report support for handling this flag, the kernel
 			 * will send us on files opened with O_DIRECT, so we still handle it.
 			 */
-			if (fsdev_io->u_in.write.flags & SPDK_FSDEV_WRITE_KILL_SUIDGID) {
+			if (fsdev_io->u_in.fuse.op.write->flags & FUSE_WRITE_KILL_SUIDGID) {
 				/* We do not check the return value because
 				* failure is not fatal. */
 				clear_suid_sgid(aio);
@@ -2744,14 +2750,14 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct aio_fsdev_file_handle *fhandle;
-	size_t size = fsdev_io->u_in.read.size;
-	uint64_t offs = fsdev_io->u_in.read.offs;
-	uint32_t flags = fsdev_io->u_in.read.flags;
-	struct iovec *iovs = fsdev_io->u_in.read.iov;
-	uint32_t iovcnt = fsdev_io->u_in.read.iovcnt;
+	size_t size = fsdev_io->u_in.fuse.op.read->size;
+	uint64_t offs = fsdev_io->u_in.fuse.op.read->offset;
+	uint32_t flags = fsdev_io->u_in.fuse.op.read->flags;
+	struct iovec *iovs = fsdev_io->u_out.fuse.iov;
+	uint32_t iovcnt = fsdev_io->u_out.fuse.iovcnt;
 
 	/* we don't suport the memory domains at the moment */
-	assert(!fsdev_io->u_in.read.opts || !fsdev_io->u_in.read.opts->memory_domain);
+	assert(!fsdev_io->u_in.fuse.memory_domain);
 
 	UNUSED(size);
 	UNUSED(flags);
@@ -2765,11 +2771,10 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	if (vfsdev->opts.skip_rw) {
 		uint32_t i;
 
-		fsdev_io->u_out.read.data_size = 0;
 		vfsdev_io->status = 0;
 
 		for (i = 0; i < iovcnt; i++, iovs++) {
-			fsdev_io->u_out.read.data_size += iovs->iov_len;
+			fsdev_io->u_out.fuse.hdr->len += iovs->iov_len;
 		}
 
 		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
@@ -2777,7 +2782,7 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return IO_STATUS_ASYNC;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.read->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
@@ -2808,7 +2813,7 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 	mode_t new_mode;
 	int fd, error;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.write.fobject);
+	fobject = fsdev_aio_get_fobject_by_nodeid(vfsdev, fsdev_io->u_in.fuse.op.write->fh);
 	if (!fobject) {
 		return 0;
 	}
@@ -2887,14 +2892,14 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_io_channel *ch = spdk_io_channel_get_ctx(_ch);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct aio_fsdev_file_handle *fhandle;
-	size_t size = fsdev_io->u_in.write.size;
-	uint64_t offs = fsdev_io->u_in.write.offs;
-	uint32_t flags = fsdev_io->u_in.write.flags;
-	const struct iovec *iovs = fsdev_io->u_in.write.iov;
-	uint32_t iovcnt =  fsdev_io->u_in.write.iovcnt;
+	size_t size = fsdev_io->u_in.fuse.op.write->size;
+	uint64_t offs = fsdev_io->u_in.fuse.op.write->offset;
+	uint32_t flags = fsdev_io->u_in.fuse.op.write->flags;
+	const struct iovec *iovs = fsdev_io->u_in.fuse.iov;
+	uint32_t iovcnt =  fsdev_io->u_in.fuse.iovcnt;
 
 	/* we don't suport the memory domains at the moment */
-	assert(!fsdev_io->u_in.write.opts || !fsdev_io->u_in.write.opts->memory_domain);
+	assert(!fsdev_io->u_in.fuse.memory_domain);
 
 	UNUSED(size);
 	UNUSED(flags);
@@ -2907,12 +2912,14 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (vfsdev->opts.skip_rw) {
 		uint32_t i;
+		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 
-		fsdev_io->u_out.write.data_size = 0;
+		out_hdr->len += sizeof(struct fuse_write_out);
+		fsdev_io->u_out.fuse.op.write->size = 0;
 		vfsdev_io->status = 0;
 
 		for (i = 0; i < iovcnt; i++, iovs++) {
-			fsdev_io->u_out.write.data_size += iovs->iov_len;
+			fsdev_io->u_out.fuse.op.write->size += iovs->iov_len;
 		}
 
 		TAILQ_INSERT_TAIL(&ch->ios_to_complete, vfsdev_io, link);
@@ -2920,7 +2927,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		return IO_STATUS_ASYNC;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.write->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
@@ -4163,10 +4170,19 @@ aio_io_poll_aio(void *arg)
 		res = SPDK_POLLER_BUSY;
 
 		switch (type) {
-		case SPDK_FSDEV_IO_READ:
-		case SPDK_FSDEV_IO_WRITE:
-			iocbs[to_submit++] = &vfsdev_io->io;
-			rc = IO_STATUS_ASYNC;
+		case SPDK_FSDEV_IO_FUSE:
+			switch (fsdev_io->u_in.fuse.hdr->opcode) {
+			case FUSE_READ:
+			case FUSE_WRITE:
+				iocbs[to_submit++] = &vfsdev_io->io;
+				rc = IO_STATUS_ASYNC;
+				break;
+			default:
+				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
+				assert(0);
+				rc = -EINVAL;
+				break;
+			}
 			break;
 		case SPDK_FSDEV_IO_POLL:
 			TAILQ_REMOVE(&ios, vfsdev_io, link);
@@ -4176,6 +4192,10 @@ aio_io_poll_aio(void *arg)
 			TAILQ_REMOVE(&ios, vfsdev_io, link);
 			rc = fsdev_aio_do_setlk(ch, fsdev_io);
 			break;
+		case SPDK_FSDEV_IO_READ:
+		case SPDK_FSDEV_IO_WRITE:
+			SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
+		/* FALLTHROUGH */
 		default:
 			TAILQ_REMOVE(&ios, vfsdev_io, link);
 			break;
@@ -4247,12 +4267,12 @@ aio_retry_io_uring_read(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_i
 	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_handle *fhandle;
-	size_t size = fsdev_io->u_in.read.size;
-	uint64_t offs = fsdev_io->u_in.read.offs;
-	struct iovec *iovs = fsdev_io->u_in.read.iov;
-	uint32_t iovcnt = fsdev_io->u_in.read.iovcnt;
+	size_t size = fsdev_io->u_in.fuse.op.read->size;
+	uint64_t offs = fsdev_io->u_in.fuse.op.read->offset;
+	struct iovec *iovs = fsdev_io->u_out.fuse.iov;
+	uint32_t iovcnt = fsdev_io->u_out.fuse.iovcnt;
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.read.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.read->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
@@ -4272,14 +4292,14 @@ aio_retry_io_uring_write(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_
 	struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_handle *fhandle;
-	size_t size = fsdev_io->u_in.write.size;
-	uint64_t offs = fsdev_io->u_in.write.offs;
-	const struct iovec *iovs = fsdev_io->u_in.write.iov;
-	uint32_t iovcnt =  fsdev_io->u_in.write.iovcnt;
+	size_t size = fsdev_io->u_in.fuse.op.write->size;
+	uint64_t offs = fsdev_io->u_in.fuse.op.write->offset;
+	const struct iovec *iovs = fsdev_io->u_in.fuse.iov;
+	uint32_t iovcnt = fsdev_io->u_in.fuse.iovcnt;
 
 	UNUSED(size);
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.write.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.write->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		return -EINVAL;
@@ -4344,16 +4364,25 @@ aio_io_poll_io_uring(void *arg)
 		res = SPDK_POLLER_BUSY;
 
 		switch (type) {
-		case SPDK_FSDEV_IO_READ:
-			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
-			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_read(ch, vfsdev_io) == -EAGAIN) {
-				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
-			}
-			break;
-		case SPDK_FSDEV_IO_WRITE:
-			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
-			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_write(ch, vfsdev_io) == -EAGAIN) {
-				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+		case SPDK_FSDEV_IO_FUSE:
+			switch (fsdev_io->u_in.fuse.hdr->opcode) {
+			case FUSE_READ:
+				/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+				if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_read(ch, vfsdev_io) == -EAGAIN) {
+					TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+				}
+				break;
+			case FUSE_WRITE:
+				/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+				if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_write(ch, vfsdev_io) == -EAGAIN) {
+					TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+				}
+				break;
+			default:
+				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
+				assert(0);
+				rc = -EINVAL;
+				break;
 			}
 			break;
 		case SPDK_FSDEV_IO_POLL:
@@ -4392,6 +4421,35 @@ aio_io_poll_io_uring(void *arg)
 	return res;
 }
 #endif
+
+static int
+fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_in_header *in_hdr = fsdev_io->u_in.fuse.hdr;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	int status;
+
+	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
+	if (out_hdr != NULL) {
+		out_hdr->unique = fsdev_io->u_in.fuse.hdr->unique;
+		out_hdr->len = sizeof(*out_hdr);
+	}
+
+	switch (in_hdr->opcode) {
+	case FUSE_READ:
+		status = fsdev_aio_op_read(ch, fsdev_io);
+		break;
+	case FUSE_WRITE:
+		status = fsdev_aio_op_write(ch, fsdev_io);
+		break;
+	default:
+		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
+		status = -ENOSYS;
+		break;
+	}
+
+	return status;
+}
 
 static int
 aio_fsdev_create_cb(void *io_device, void *ctx_buf)
@@ -4572,6 +4630,9 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	assert(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
 
 	switch (type) {
+	case SPDK_FSDEV_IO_FUSE:
+		status = fsdev_aio_op_fuse(ch, fsdev_io);
+		break;
 	case SPDK_FSDEV_IO_MOUNT:
 		status = fsdev_aio_op_mount(ch, fsdev_io);
 		break;
@@ -4616,12 +4677,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_OPEN:
 		status = fsdev_aio_op_open(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_READ:
-		status = fsdev_aio_op_read(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_WRITE:
-		status = fsdev_aio_op_write(ch, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_STATFS:
 		status = fsdev_aio_op_statfs(ch, fsdev_io);
@@ -4695,10 +4750,16 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READDIR_SIMPLE:
 		status = fsdev_aio_op_readdir_simple(ch, fsdev_io);
 		break;
+	case SPDK_FSDEV_IO_READ:
+	case SPDK_FSDEV_IO_WRITE:
+		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
+		assert(false);
+		status = -ENOSYS;
+		break;
 	default:
 		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
-		fsdev_aio_io_complete(fsdev_io, -ENOSYS);
-		return;
+		status = -ENOSYS;
+		break;
 	}
 
 	if (status != IO_STATUS_ASYNC) {
@@ -5153,6 +5214,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		vfsdev->fsdev.notify_max_data_size = DEFAULT_NOTIFY_MAX_DATA_SIZE;
 	}
 #endif
+
+	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
