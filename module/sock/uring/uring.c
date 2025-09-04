@@ -507,13 +507,13 @@ uring_sock_connect(const char *ip, int port,  struct spdk_sock_group_impl *group
  * the spdk_sock_connect_async contract — i.e., to remove the need for a synchronous fallback
  * and avoid the problematic case where the callback is invoked before this function returns. */
 static struct spdk_sock *
-uring_sock_connect_async(const char *ip, int port, struct spdk_sock_opts *opts,
-			 spdk_sock_connect_cb_fn cb_fn, void *cb_arg)
+uring_sock_connect_async(const char *ip, int port, struct spdk_sock_group_impl *group,
+			 struct spdk_sock_opts *opts, spdk_sock_connect_cb_fn cb_fn, void *cb_arg)
 {
 	static struct spdk_sock *_sock;
 	struct spdk_uring_sock *sock;
 
-	_sock = uring_sock_connect(ip, port, opts);
+	_sock = uring_sock_connect(ip, port, group, opts);
 	if (!_sock) {
 		return NULL;
 	}
