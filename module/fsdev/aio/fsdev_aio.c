@@ -333,6 +333,20 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 	return (struct aio_fsdev_io *)fsdev_io->driver_ctx;
 }
 
+static const char *
+fsdev_aio_io_fuse_get_name(struct spdk_fsdev_io *fsdev_io)
+{
+	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
+	assert(fsdev_io->u_in.fuse.iov[0].iov_base);
+
+	/* The name will always be at the start of the first in iov.
+	 * For commands with 2 names (i.e. RENAME), the caller is
+	 * responsible for finding that 2nd name, this function only
+	 * takes care of the first one.
+	 */
+	return fsdev_io->u_in.fuse.iov[0].iov_base;
+}
+
 static int clear_suid_sgid(struct aio_fsdev_io *vfsdev_io);
 
 static void
@@ -2745,24 +2759,24 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int fd = -1;
 	int err;
 	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.create.name;
-	uint32_t mode = fsdev_io->u_in.create.mode;
-	uint32_t flags = fsdev_io->u_in.create.flags;
-	uint32_t umask = fsdev_io->u_in.create.umask;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
+	uint32_t mode = fsdev_io->u_in.fuse.op.create->mode;
+	uint32_t flags = fsdev_io->u_in.fuse.op.create->flags;
+	uint32_t umask = fsdev_io->u_in.fuse.op.create->umask;
 	struct fsdev_aio_cred old_cred, new_cred = {
-		.euid = fsdev_io->u_in.create.euid,
-		.egid = fsdev_io->u_in.create.egid,
+		.euid = fsdev_io->u_in.fuse.hdr->uid,
+		.egid = fsdev_io->u_in.fuse.hdr->gid,
 	};
 	struct aio_fsdev_file_handle *fhandle = NULL;
 	struct aio_fsdev_file_object *fobject = NULL;
-	struct spdk_fsdev_file_attr *attr = &fsdev_io->u_out.create.attr;
+	struct spdk_fuse_create_out *create_out = fsdev_io->u_out.fuse.op.create;
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("CREATE: %s not a safe component\n", name);
 		return -EINVAL;
 	}
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.create.parent_fobject);
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
 		return -EINVAL;
@@ -2793,13 +2807,13 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, attr, NULL);
+	memset(create_out, 0, sizeof(*create_out));
+	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, &create_out->entry);
 	if (err) {
 		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
 		goto fop_failed;
 	}
 	assert(fobject != NULL);
-	attr->mode = (mode & ~umask);
 
 	fhandle = file_handle_alloc(fobject, fd);
 	if (!fhandle) {
@@ -2813,8 +2827,9 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	SPDK_DEBUGLOG(fsdev_aio, "CREATE: succeeded (name=%s " FOBJECT_FMT " fh=%p)\n",
 		      name, FOBJECT_ARGS(fobject), fhandle);
 
-	fsdev_io->u_out.create.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
-	fsdev_io->u_out.create.fhandle = fsdev_aio_get_spdk_fhandle(vfsdev, fhandle);
+	fsdev_io->u_out.fuse.hdr->len += sizeof(*create_out);
+	create_out->open.fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
+	create_out->entry.attr.mode = (mode & ~umask);
 
 	err = 0;
 
@@ -4578,6 +4593,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_OPENDIR:
 		status = fsdev_aio_op_opendir(ch, fsdev_io);
 		break;
+	case FUSE_CREATE:
+		status = fsdev_aio_op_create(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4841,9 +4859,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_CREATE:
-		status = fsdev_aio_op_create(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_ABORT:
 		status = fsdev_aio_op_abort(ch, fsdev_io);
 		break;
@@ -4880,6 +4895,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_SETATTR:
 	case SPDK_FSDEV_IO_OPEN:
 	case SPDK_FSDEV_IO_OPENDIR:
+	case SPDK_FSDEV_IO_CREATE:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5345,7 +5361,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 
 	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
 					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
-					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR);
+					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
