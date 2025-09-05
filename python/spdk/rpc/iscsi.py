@@ -538,16 +538,16 @@ def iscsi_initiator_group_remove_initiators(
     return client.call('iscsi_initiator_group_remove_initiators', params)
 
 
-def iscsi_delete_target_node(client, target_node_name):
+def iscsi_delete_target_node(client, name):
     """Delete a target node.
 
     Args:
-        target_node_name: Target node name to be deleted. Example: iqn.2016-06.io.spdk:disk1.
+        name: Target node name to be deleted. Example: iqn.2016-06.io.spdk:disk1.
 
     Returns:
         True or False
     """
-    params = {'name': target_node_name}
+    params = {'name': name}
     return client.call('iscsi_delete_target_node', params)
 
 
