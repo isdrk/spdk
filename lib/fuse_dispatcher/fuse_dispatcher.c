@@ -42,87 +42,6 @@
  */
 #define SPDK_FUSE_KERNEL_MINOR_VERSION 34
 
-/*
- * NOTE: It appeared that the open flags have different values on the different HW architechtures.
- *
- * This code handles the open flags translation in case they're originated from a platform with
- * a different HW architecture.
- *
- * Currently supported:
- *  - X86
- *  - X86_64
- *  - ARM
- *  - ARM64
- */
-/* See https://lxr.missinglinkelectronics.com/linux/arch/arm/include/uapi/asm/fcntl.h */
-#define ARM_O_DIRECTORY      040000 /* must be a directory */
-#define ARM_O_NOFOLLOW      0100000 /* don't follow links */
-#define ARM_O_DIRECT        0200000 /* direct disk access hint - currently ignored */
-#define ARM_O_LARGEFILE     0400000
-
-/* See https://lxr.missinglinkelectronics.com/linux/include/uapi/asm-generic/fcntl.h */
-#define X86_O_DIRECT        00040000        /* direct disk access hint */
-#define X86_O_LARGEFILE     00100000
-#define X86_O_DIRECTORY     00200000        /* must be a directory */
-#define X86_O_NOFOLLOW      00400000        /* don't follow links */
-
-static inline void
-fsdev_d2h_open_flags(enum spdk_fuse_arch fuse_arch, uint32_t flags, uint32_t *translated_flags)
-{
-	*translated_flags = flags;
-
-	/* NOTE: we always check the original flags to avoid situation where the arch and the native flags
-	 * overlap and previously set native flag could be interpreted as original arch flag.
-	 */
-#define REPLACE_FLAG(arch_flag, native_flag) \
-	do { \
-		if (flags & (arch_flag)) { \
-			*translated_flags &= ~(arch_flag); \
-			*translated_flags |= (native_flag); \
-		} \
-	} while(0)
-
-	switch (fuse_arch) {
-	case SPDK_FUSE_ARCH_NATIVE:
-#if defined(__x86_64__) || defined(__i386__)
-	case SPDK_FUSE_ARCH_X86:
-	case SPDK_FUSE_ARCH_X86_64:
-#endif
-#if defined(__aarch64__) || defined(__arm__)
-	case SPDK_FUSE_ARCH_ARM:
-	case SPDK_FUSE_ARCH_ARM64:
-#endif
-		/* No translation required */
-		break;
-#if defined(__x86_64__) || defined(__i386__)
-	case SPDK_FUSE_ARCH_ARM:
-	case SPDK_FUSE_ARCH_ARM64:
-		/* Relace the ARM-specific flags with the native ones */
-		REPLACE_FLAG(ARM_O_DIRECTORY, O_DIRECTORY);
-		REPLACE_FLAG(ARM_O_NOFOLLOW, O_NOFOLLOW);
-		REPLACE_FLAG(ARM_O_DIRECT, O_DIRECT);
-		REPLACE_FLAG(ARM_O_LARGEFILE, O_LARGEFILE);
-		break;
-#endif
-#if defined(__aarch64__) || defined(__arm__)
-	case SPDK_FUSE_ARCH_X86:
-	case SPDK_FUSE_ARCH_X86_64:
-		/* Relace the X86-specific flags with the native ones */
-		REPLACE_FLAG(X86_O_DIRECTORY, O_DIRECTORY);
-		REPLACE_FLAG(X86_O_NOFOLLOW, O_NOFOLLOW);
-		REPLACE_FLAG(X86_O_DIRECT, O_DIRECT);
-		REPLACE_FLAG(X86_O_LARGEFILE, O_LARGEFILE);
-		break;
-#endif
-	default:
-		SPDK_ERRLOG("Unsupported FUSE arch: %d\n", fuse_arch);
-		assert(0);
-		break;
-	}
-
-#undef REPLACE_FLAG
-}
-
 struct iov_offs {
 	size_t iov_offs;
 	size_t buf_offs;
@@ -268,11 +187,6 @@ struct spdk_fuse_dispatcher {
 	 * Minor version of the protocol (read-only)
 	 */
 	uint32_t proto_minor;
-
-	/**
-	 * FUSE request source's architecture
-	 */
-	enum spdk_fuse_arch fuse_arch;
 
 	/**
 	 * Root file object
@@ -1354,7 +1268,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 	struct fuse_in_header *in_hdr;
 	struct fuse_out_header *out_hdr;
-	uint32_t *open_flags;
 	size_t in_size;
 
 	in_hdr = in_iov->iov_base;
@@ -1414,17 +1327,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	}
 
 	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_FUSE, fuse_dispatcher_passthrough_cpl_cb);
-
-	/* We are responsible for converting the open flags from host to device format before
-	 * passing the command to the fsdev.
-	 */
-	if (in_hdr->opcode == FUSE_OPEN) {
-		open_flags = &in->op.open->flags;
-		fsdev_d2h_open_flags(fuse_io->disp->fuse_arch, *open_flags, open_flags);
-	} else if (in_hdr->opcode == FUSE_CREATE) {
-		open_flags = &in->op.create->flags;
-		fsdev_d2h_open_flags(fuse_io->disp->fuse_arch, *open_flags, open_flags);
-	}
 	return 0;
 }
 
@@ -1840,10 +1742,8 @@ fuse_dispatcher_fill_link(struct fuse_io *fuse_io)
 static int
 fuse_dispatcher_fill_open(struct fuse_io *fuse_io)
 {
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	struct fuse_open_in *arg;
-	uint32_t flags;
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*arg));
 	if (!arg) {
@@ -1851,12 +1751,10 @@ fuse_dispatcher_fill_open(struct fuse_io *fuse_io)
 		return -EINVAL;
 	}
 
-	fsdev_d2h_open_flags(disp->fuse_arch, fsdev_io_d2h_u32(fuse_io->disp, arg->flags), &flags);
-
 	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_OPEN);
 
 	fsdev_io->u_in.open.fobject = file_object(fuse_io);
-	fsdev_io->u_in.open.flags = flags;
+	fsdev_io->u_in.open.flags = arg->flags;
 
 	return 0;
 }
@@ -2956,12 +2854,11 @@ fuse_dispatcher_fill_access(struct fuse_io *fuse_io)
 static int
 fuse_dispatcher_fill_create(struct fuse_io *fuse_io)
 {
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	bool compat = fsdev_io_proto_minor(fuse_io) < 12;
 	struct fuse_create_in *arg;
 	const char *name;
-	uint32_t flags, mode, umask = 0;
+	uint32_t mode, umask = 0;
 	size_t arg_size = compat ? sizeof(struct fuse_open_in) : sizeof(*arg);
 
 	arg = _fsdev_io_in_arg_get_buf(fuse_io, arg_size);
@@ -2981,14 +2878,12 @@ fuse_dispatcher_fill_create(struct fuse_io *fuse_io)
 		umask = fsdev_io_d2h_u32(fuse_io->disp, arg->umask);
 	}
 
-	fsdev_d2h_open_flags(disp->fuse_arch, fsdev_io_d2h_u32(fuse_io->disp, arg->flags), &flags);
-
 	fuse_init_fsdev_io(fuse_io, SPDK_FSDEV_IO_CREATE);
 
 	fsdev_io->u_in.create.parent_fobject = file_object(fuse_io);
 	fsdev_io->u_in.create.name = name;
 	fsdev_io->u_in.create.mode = mode;
-	fsdev_io->u_in.create.flags = flags;
+	fsdev_io->u_in.create.flags = arg->flags;
 	fsdev_io->u_in.create.umask = umask;
 	fsdev_io->u_in.create.euid = fuse_io->hdr.uid;
 	fsdev_io->u_in.create.egid = fuse_io->hdr.gid;
@@ -4113,7 +4008,6 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
 		return NULL;
 	}
 
-	disp->fuse_arch = SPDK_FUSE_ARCH_NATIVE;
 	fsdev = spdk_fsdev_desc_get_fsdev(desc);
 	disp->supported_fuse_opcodes = spdk_fsdev_get_supported_fuse_opcodes(fsdev);
 	disp->desc = desc;
@@ -4128,23 +4022,6 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
 	}
 
 	return disp;
-}
-
-int
-spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_arch fuse_arch)
-{
-	switch (fuse_arch) {
-	case SPDK_FUSE_ARCH_NATIVE:
-	case SPDK_FUSE_ARCH_X86:
-	case SPDK_FUSE_ARCH_X86_64:
-	case SPDK_FUSE_ARCH_ARM:
-	case SPDK_FUSE_ARCH_ARM64:
-		SPDK_NOTICELOG("FUSE arch set to %d\n", fuse_arch);
-		disp->fuse_arch = fuse_arch;
-		return 0;
-	default:
-		return -EINVAL;
-	}
 }
 
 size_t

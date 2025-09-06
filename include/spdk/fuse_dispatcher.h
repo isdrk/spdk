@@ -18,15 +18,6 @@ extern "C" {
 
 struct spdk_fuse_dispatcher;
 
-enum spdk_fuse_arch {
-	SPDK_FUSE_ARCH_NATIVE,
-	SPDK_FUSE_ARCH_X86,
-	SPDK_FUSE_ARCH_X86_64,
-	SPDK_FUSE_ARCH_ARM,
-	SPDK_FUSE_ARCH_ARM64,
-	_SPDK_FUSE_ARCH_LAST,
-};
-
 /**
  * FUSE fsdev dispatcher submit completion callback.
  *
@@ -62,18 +53,6 @@ struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc 
 		bool recovery_mode,
 		spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
 		void *notify_reply_cb_arg);
-
-/**
- * Set a FUSE request source's HW architecture.
- *
- * Unless this function is called explicitly, the arch set to SPDK_FUSE_ARCH_NATIVE.
- *
- * \param disp FUSE fsdev dispatcher object.
- * \param fuse_arch FUSE request source's HW architecture
- *
- * \return 0 on success or -EINVAL if the architecture is not supported
- */
-int spdk_fuse_dispatcher_set_arch(struct spdk_fuse_dispatcher *disp, enum spdk_fuse_arch fuse_arch);
 
 /**
  * Get the size of the io_ctx buffer.
