@@ -1430,17 +1430,22 @@ spdk_sock_get_memory_domain(struct spdk_sock *sock)
 void
 spdk_sock_initialize(void)
 {
-	struct spdk_net_impl *impl;
+	struct spdk_net_impl *impl, *tmp;
 	int rc;
 
-	STAILQ_FOREACH(impl, &g_net_impls, link) {
+	STAILQ_FOREACH_SAFE(impl, &g_net_impls, link, tmp) {
 		if (!impl->init) {
 			continue;
 		}
 
 		rc = impl->init();
 		if (rc) {
-			SPDK_ERRLOG("Failed to initalize sock impl %s, rc %d\n", impl->name, rc);
+			SPDK_NOTICELOG("Sock impl %s is not initialized (rc %d), so it's removed\n",
+				       impl->name, rc);
+			if (g_default_impl == impl) {
+				g_default_impl = sock_get_impl_by_name("posix");
+			}
+			STAILQ_REMOVE(&g_net_impls, impl, spdk_net_impl, link);
 		}
 	}
 }
