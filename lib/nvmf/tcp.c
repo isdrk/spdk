@@ -697,7 +697,7 @@ handle_await_req(void *arg)
 static inline void
 nvmf_tcp_req_put(struct spdk_nvmf_tcp_qpair *tqpair, struct spdk_nvmf_tcp_req *tcp_req)
 {
-	assert(!tcp_req->pdu_in_use);
+	assert(tqpair->sock == NULL || !tcp_req->pdu_in_use);
 
 	TAILQ_REMOVE(&tqpair->tcp_req_working_queue, tcp_req, state_link);
 	TAILQ_INSERT_TAIL(&tqpair->tcp_req_free_queue, tcp_req, state_link);
@@ -863,8 +863,11 @@ _nvmf_tcp_qpair_destroy(void *_tqpair)
 		}
 	}
 
-	err = spdk_sock_close(&tqpair->sock);
-	assert(err == 0);
+	/* The socket may have been closed by nvmf_tcp_poll_group_remove() */
+	if (tqpair->sock != NULL) {
+		err = spdk_sock_close(&tqpair->sock);
+		assert(err == 0);
+	}
 	nvmf_tcp_cleanup_all_states(tqpair);
 
 	if (tqpair->state_cntr[TCP_REQUEST_STATE_FREE] != tqpair->resource_count) {
@@ -3965,6 +3968,13 @@ nvmf_tcp_poll_group_add(struct spdk_nvmf_transport_poll_group *group,
 	tgroup = SPDK_CONTAINEROF(group, struct spdk_nvmf_tcp_poll_group, group);
 	tqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_tcp_qpair, qpair);
 
+	if (tqpair->sock == NULL) {
+		/* We currently only support moving the socket to a new poll group
+		 * immediately after it is accepted. If this is null, something has removed
+		 * the socket from the poll group and attempted to re-add it. */
+		return -ENOTSUP;;
+	}
+
 	rc =  nvmf_tcp_qpair_sock_init(tqpair);
 	if (rc != 0) {
 		SPDK_ERRLOG("Cannot set sock opt for tqpair=%p\n", tqpair);
@@ -4019,16 +4029,11 @@ nvmf_tcp_poll_group_remove(struct spdk_nvmf_transport_poll_group *group,
 	}
 	TAILQ_REMOVE(&tgroup->qpairs, tqpair, link);
 
-	/* Try to force out any pending writes, intentionally do not check rc as it is best effort try. */
-	spdk_sock_flush(tqpair->sock);
-
-	rc = spdk_sock_group_remove_sock(tgroup->sock_group, tqpair->sock);
-	if (rc != 0) {
-		SPDK_ERRLOG("Could not remove sock from sock_group: %s (%d)\n",
-			    spdk_strerror(errno), errno);
-	}
+	/* Close the socket entirely. We could reconnect if it is added to a new poll group. */
+	rc = spdk_sock_close(&tqpair->sock);
 
 	nvmf_tcp_abort_await_buffer_reqs(tqpair);
+	nvmf_tcp_cleanup_all_states(tqpair);
 
 	/* Remove the pending stream segments here. If we wait until later when the queue
 	 * is destroyed, these segments will leak. */
