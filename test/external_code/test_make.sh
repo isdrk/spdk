@@ -58,6 +58,31 @@ run_test "external_make_hello_bdev_shared_combo" make -C $test_root hello_world_
 run_test "external_run_hello_bdev_shared_combo" $_sudo $test_root/hello_world/hello_bdev \
 	--json $test_root/hello_world/bdev_external.json -b TestPT
 
+function external_run_hello_bdev_rpc() {
+	local PYTHONPATH=$PYTHONPATH:$test_root/passthru
+	local rpc_py="$_sudo --preserve-env=PYTHONPATH $SPDK_DIR/scripts/rpc.py --plugin bdev_passthru"
+
+	$_sudo LD_PRELOAD=libpassthru_external.so $SPDK_DIR/build/bin/spdk_tgt &
+	sleep 3
+	spdk_pid=$(pidof spdk_tgt)
+	trap 'sudo kill -9 $spdk_pid; exit 1' SIGINT SIGTERM EXIT
+
+	$rpc_py bdev_malloc_create 32 4096 -b Malloc0
+	$rpc_py construct_ext_passthru_bdev -b Malloc0 -p TestPT
+	$rpc_py bdev_get_bdevs -b TestPT
+	$rpc_py delete_ext_passthru_bdev TestPT
+	if $rpc_py bdev_get_bdevs -b TestPT; then
+		echo "TestPT bdev should not exist"
+		false
+	fi
+	$rpc_py construct_ext_passthru_bdev -b Malloc0 -p TestPT
+	$rpc_py bdev_get_bdevs -b TestPT
+	$rpc_py spdk_kill_instance 15
+	trap - SIGINT SIGTERM EXIT
+}
+
+run_test "external_run_hello_bdev_rpc" external_run_hello_bdev_rpc
+
 make -C $test_root clean
 
 # Make just the application linked against the combined SPDK shared library libspdk.so.
