@@ -3137,6 +3137,11 @@ fuse_dispatcher_fill_ioctl(struct fuse_io *fuse_io)
 	struct iovec in_iov[1];
 	struct iovec out_iov[1];
 
+	fuse_io->u.ioctl.in_iov = NULL;
+	fuse_io->u.ioctl.in_iovcnt = 0;
+	fuse_io->u.ioctl.out_iov = NULL;
+	fuse_io->u.ioctl.out_iovcnt = 0;
+
 	in = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*in));
 	if (!in) {
 		SPDK_ERRLOG("Cannot get fuse_ioctl_in\n");
@@ -3182,9 +3187,6 @@ fuse_dispatcher_fill_ioctl(struct fuse_io *fuse_io)
 			return -EINVAL;
 		}
 		fuse_io->u.ioctl.in_iovcnt = 1;
-	} else {
-		fuse_io->u.ioctl.in_iov = NULL;
-		fuse_io->u.ioctl.in_iovcnt = 0;
 	}
 
 	/*
@@ -3224,9 +3226,6 @@ fuse_dispatcher_fill_ioctl(struct fuse_io *fuse_io)
 			goto out_err;
 		}
 		fuse_io->u.ioctl.out_iovcnt = 1;
-	} else {
-		fuse_io->u.ioctl.out_iov = NULL;
-		fuse_io->u.ioctl.out_iovcnt = 0;
 	}
 
 	/* Used in the completion cb for checking UNRESTRICTED & RETRY flags. */
