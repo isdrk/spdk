@@ -3418,39 +3418,28 @@ fsdev_aio_op_rmdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	return res;
 }
 
-#define RENAME2_FLAGS_MAP \
-	RENAME2_FLAG(EXCHANGE)  \
-	RENAME2_FLAG(NOREPLACE) \
-	RENAME2_FLAG(WHITEOUT)
-
-static uint32_t
-fsdev_rename2_flags_to_posix(uint32_t flags)
-{
-	uint32_t result = 0;
-
-#define RENAME2_FLAG(name) \
-	if (flags & SPDK_FSDEV_RENAME_##name) { \
-		result |= RENAME_##name;        \
-	}
-
-	RENAME2_FLAGS_MAP;
-
-#undef RENAME2_FLAG
-
-	return result;
-}
 static int
-fsdev_aio_op_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t flags)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
 	/* old_fobject must be initialized to avoid a scan-build false positive */
 	struct aio_fsdev_file_object *old_fobject = NULL;
 	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.rename.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
 	struct aio_fsdev_file_object *new_parent_fobject;
-	const char *new_name = fsdev_io->u_in.rename.new_name;
-	uint32_t flags = fsdev_io->u_in.rename.flags;
+	const char *new_name;
+	size_t namelen;
+
+	namelen = strnlen(name, PATH_MAX + 1);
+	if (namelen == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
+	}
+
+	new_name = name + namelen + 1;
+	if (strnlen(new_name, PATH_MAX + 1) == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
+	}
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("name '%s' isn't safe\n", name);
@@ -3462,14 +3451,13 @@ fsdev_aio_op_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rename.parent_fobject);
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid parent_fobject\n");
 		return -EINVAL;
 	}
 
-	new_parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rename.new_parent_fobject);
+	new_parent_fobject = fsdev_aio_get_fobject_by_nodeid(vfsdev, newdir);
 	if (!new_parent_fobject) {
 		SPDK_ERRLOG("Invalid new_parent_fobject\n");
 		res = -EINVAL;
@@ -3490,7 +3478,7 @@ fsdev_aio_op_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 #else
 		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
-			      new_name, fsdev_rename2_flags_to_posix(flags));
+			      new_name, flags);
 		if (res == -1 && errno == ENOSYS) {
 			SPDK_ERRLOG("SYS_renameat2 returned ENOSYS\n");
 			res = -ENOSYS;
@@ -3518,6 +3506,23 @@ fop_failed:
 bad_new_parent_fobject:
 	file_object_unref(parent_fobject, 1);
 	return res;
+}
+
+static int
+fsdev_aio_op_rename(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	uint64_t newdir = fsdev_io->u_in.fuse.op.rename->newdir;
+
+	return fsdev_aio_do_rename(fsdev_io, newdir, 0);
+}
+
+static int
+fsdev_aio_op_rename2(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	uint32_t flags = fsdev_io->u_in.fuse.op.rename2->flags;
+	uint64_t newdir = fsdev_io->u_in.fuse.op.rename2->newdir;
+
+	return fsdev_aio_do_rename(fsdev_io, newdir, flags);
 }
 
 static int
@@ -4635,6 +4640,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_DESTROY:
 		status = fsdev_aio_op_destroy(ch, fsdev_io);
 		break;
+	case FUSE_RENAME:
+		status = fsdev_aio_op_rename(ch, fsdev_io);
+		break;
+	case FUSE_RENAME2:
+		status = fsdev_aio_op_rename2(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4829,9 +4840,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_RENAME:
-		status = fsdev_aio_op_rename(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_LINK:
 		status = fsdev_aio_op_link(ch, fsdev_io);
 		break;
@@ -4913,6 +4921,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_RMDIR:
 	case SPDK_FSDEV_IO_MOUNT:
 	case SPDK_FSDEV_IO_UMOUNT:
+	case SPDK_FSDEV_IO_RENAME:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5383,7 +5392,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET) | \
 					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
 					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
-					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY);
+					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
+					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
