@@ -3208,30 +3208,36 @@ fop_failed:
 }
 
 static int
-fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io,
-			struct aio_fsdev_file_object *parent_fobject,
-			const char *name, mode_t mode, dev_t rdev, const char *link, uid_t euid, gid_t egid,
-			uint32_t umask, struct aio_fsdev_file_object **pfobject, struct spdk_fsdev_file_attr *attr)
+fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t mode, dev_t rdev,
+			const char *link, uint32_t umask)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct aio_fsdev_file_object *parent_fobject;
+	struct aio_fsdev_file_object *fobject = NULL;
 	int res;
 	int saverr;
 	struct fsdev_aio_cred old_cred, new_cred = {
-		.euid = euid,
-		.egid = egid,
+		.euid = fsdev_io->u_in.fuse.hdr->uid,
+		.egid = fsdev_io->u_in.fuse.hdr->gid,
 	};
-
-	assert(parent_fobject != NULL);
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_entry_out *entry_out = fsdev_io->u_out.fuse.op.entry;
 
 	if (!is_safe_path_component(name)) {
-		SPDK_ERRLOG("%s isn'h safe\n", name);
+		SPDK_ERRLOG("%s isn't safe\n", name);
+		return -EINVAL;
+	}
+
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
+	if (!parent_fobject) {
+		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
 		return -EINVAL;
 	}
 
 	res = fsdev_aio_change_cred(&new_cred, &old_cred);
 	if (res) {
 		SPDK_ERRLOG("cannot change cred (err=%d)\n", res);
-		return res;
+		goto fop_failed;
 	}
 
 	if (S_ISDIR(mode)) {
@@ -3254,120 +3260,88 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io,
 
 	if (res == -1) {
 		SPDK_ERRLOG("cannot mkdirat/symlinkat/mknodat (err=%d)\n", saverr);
-		return saverr;
+		res = saverr;
+		goto fop_failed;
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, pfobject, attr, NULL);
+	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, entry_out);
 	if (res) {
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
-		return res;
+		goto fop_failed;
 	}
-	assert(*pfobject != NULL);
+	assert(fobject != NULL);
 	/*
 	 * Fixup the mode, functions creating files above ignore some bits important
 	 * for POSIX compliance.
 	 */
 	if (!S_ISLNK(mode)) {
-		res = fsdev_fchmodat(vfsdev, *pfobject, (mode & ~umask));
+		res = fsdev_fchmodat(vfsdev, fobject, (mode & ~umask));
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fsdev_aio_mknod_symlink mode fixup failed with %d\n", res);
-			file_object_unref(*pfobject, 1);
-			return res;
+			file_object_unref(fobject, 1);
+			goto fop_failed;
 		}
-		attr->mode = (mode & ~umask);
+		entry_out->attr.mode = (mode & ~umask);
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_mknod_symlink(%s " FOBJECT_FMT ") -> " FOBJECT_FMT ")\n",
-		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(*pfobject));
+		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(fobject));
 
-	return 0;
+	out_hdr->len += sizeof(*entry_out);
+	res = 0;
+
+fop_failed:
+	file_object_unref(parent_fobject, 1);
+	return res;
 }
 
 static int
 fsdev_aio_op_mknod(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.mknod.name;
-	mode_t mode = fsdev_io->u_in.mknod.mode;
-	uint32_t umask = fsdev_io->u_in.mknod.umask;
-	dev_t rdev = fsdev_io->u_in.mknod.rdev;
-	uid_t euid = fsdev_io->u_in.mknod.euid;
-	gid_t egid = fsdev_io->u_in.mknod.egid;
-	struct aio_fsdev_file_object *fobject = NULL;
-	int rc;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
+	mode_t mode = fsdev_io->u_in.fuse.op.mknod->mode;
+	uint32_t umask = fsdev_io->u_in.fuse.op.mknod->umask;
+	dev_t rdev = fsdev_io->u_in.fuse.op.mknod->rdev;
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mknod.parent_fobject);
-	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
-		return -EINVAL;
+	if (strnlen(name, PATH_MAX + 1) == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
 	}
 
-	rc = fsdev_aio_mknod_symlink(fsdev_io, parent_fobject, name, mode, rdev, NULL, euid, egid,
-				     umask, &fobject, &fsdev_io->u_out.mknod.attr);
-	if (!rc) {
-		assert(fobject);
-		fsdev_io->u_out.mknod.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
-	}
-
-	file_object_unref(parent_fobject, 1);
-	return rc;
+	return fsdev_aio_mknod_symlink(fsdev_io, name, mode, rdev, NULL, umask);
 }
 
 static int
 fsdev_aio_op_mkdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.mkdir.name;
-	mode_t mode = fsdev_io->u_in.mkdir.mode;
-	uint32_t umask = fsdev_io->u_in.mkdir.umask;
-	uid_t euid = fsdev_io->u_in.mkdir.euid;
-	gid_t egid = fsdev_io->u_in.mkdir.egid;
-	struct aio_fsdev_file_object *fobject = NULL;
-	int rc;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
+	mode_t mode = fsdev_io->u_in.fuse.op.mkdir->mode;
+	uint32_t umask = fsdev_io->u_in.fuse.op.mkdir->umask;
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.mkdir.parent_fobject);
-	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
-		return -EINVAL;
+	if (strnlen(name, PATH_MAX + 1) == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
 	}
 
-	rc = fsdev_aio_mknod_symlink(fsdev_io, parent_fobject, name, S_IFDIR | mode, 0, NULL, euid, egid,
-				     umask, &fobject, &fsdev_io->u_out.mkdir.attr);
-	if (!rc) {
-		fsdev_io->u_out.mkdir.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
-	}
-	file_object_unref(parent_fobject, 1);
-	return rc;
+	return fsdev_aio_mknod_symlink(fsdev_io, name, S_IFDIR | mode, 0, NULL, umask);
 }
 
 static int
 fsdev_aio_op_symlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct aio_fsdev_file_object *parent_fobject;
-	const char *target = fsdev_io->u_in.symlink.target;
-	const char *linkpath = fsdev_io->u_in.symlink.linkpath;
-	uid_t euid = fsdev_io->u_in.symlink.euid;
-	gid_t egid = fsdev_io->u_in.symlink.egid;
-	struct aio_fsdev_file_object *fobject = NULL;
-	int rc;
+	const char *target = fsdev_aio_io_fuse_get_name(fsdev_io);
+	size_t len;
+	const char *linkpath;
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.symlink.parent_fobject);
-	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
-		return -EINVAL;
+	len = strnlen(target, PATH_MAX + 1);
+	if (len == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
+	}
+	linkpath = target + len + 1;
+	if (strnlen(linkpath, PATH_MAX + 1) == PATH_MAX + 1) {
+		return -ENAMETOOLONG;
 	}
 
-	rc = fsdev_aio_mknod_symlink(fsdev_io, parent_fobject, target, S_IFLNK, 0, linkpath, euid, egid,
-				     0, &fobject, &fsdev_io->u_out.symlink.attr);
-	if (!rc) {
-		fsdev_io->u_out.symlink.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
-	}
-	file_object_unref(parent_fobject, 1);
-	return rc;
+	return fsdev_aio_mknod_symlink(fsdev_io, target, S_IFLNK, 0, linkpath, 0);
 }
 
 static int
@@ -4639,6 +4613,15 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_BATCH_FORGET:
 		status = fsdev_aio_op_batch_forget(ch, fsdev_io);
 		break;
+	case FUSE_SYMLINK:
+		status = fsdev_aio_op_symlink(ch, fsdev_io);
+		break;
+	case FUSE_MKNOD:
+		status = fsdev_aio_op_mknod(ch, fsdev_io);
+		break;
+	case FUSE_MKDIR:
+		status = fsdev_aio_op_mkdir(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4839,15 +4822,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_SYMLINK:
-		status = fsdev_aio_op_symlink(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_MKNOD:
-		status = fsdev_aio_op_mknod(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_MKDIR:
-		status = fsdev_aio_op_mkdir(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_UNLINK:
 		status = fsdev_aio_op_unlink(ch, fsdev_io);
 		break;
@@ -4931,6 +4905,9 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_RELEASEDIR:
 	case SPDK_FSDEV_IO_LOOKUP:
 	case SPDK_FSDEV_IO_FORGET:
+	case SPDK_FSDEV_IO_SYMLINK:
+	case SPDK_FSDEV_IO_MKNOD:
+	case SPDK_FSDEV_IO_MKDIR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5398,7 +5375,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
 					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE) | \
 					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR) | \
-					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET);
+					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET) | \
+					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
