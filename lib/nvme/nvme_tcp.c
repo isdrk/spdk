@@ -43,6 +43,10 @@
 #define NVME_TQPAIR_INFOLOG(tqpair, format, ...) NVME_QPAIR_INFOLOG((tqpair) ? &(tqpair)->qpair : NULL, format, ##__VA_ARGS__)
 #define NVME_TQPAIR_DEBUGLOG(tqpair, format, ...) NVME_QPAIR_DEBUGLOG((tqpair) ? &(tqpair)->qpair : NULL, format, ##__VA_ARGS__)
 
+#define nvme_tcp_qpair_set_state(_qpair, _state) do { \
+	(_qpair)->state = (_state); \
+} while (0)
+
 /*
  * Maximum value of transport_ack_timeout used by TCP controller
  */
@@ -1130,7 +1134,7 @@ nvme_tcp_qpair_send_h2c_term_req_complete(void *cb_arg)
 {
 	struct nvme_tcp_qpair *tqpair = cb_arg;
 
-	tqpair->state = NVME_TCP_QPAIR_STATE_EXITING;
+	nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_EXITING);
 }
 
 static void
@@ -1524,7 +1528,7 @@ nvme_tcp_send_icreq_complete(void *cb_arg)
 	tqpair->flags.icreq_send_ack = true;
 	if (tqpair->flags.icresp_received) {
 		NVME_TQPAIR_DEBUGLOG(tqpair, "finalize icresp\n");
-		tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND;
+		nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND);
 	}
 }
 
@@ -1596,7 +1600,7 @@ nvme_tcp_icresp_handle(struct nvme_tcp_qpair *tqpair,
 		return;
 	}
 
-	tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND;
+	nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_SEND);
 	return;
 end:
 	nvme_tcp_qpair_send_h2c_term_req(tqpair, pdu, fes, error_offset);
@@ -2282,7 +2286,7 @@ nvme_tcp_sock_connect_cb_fn(void *cb_arg, int status)
 		return;
 	}
 
-	tqpair->state = NVME_TCP_QPAIR_STATE_INITIALIZING;
+	nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_INITIALIZING);
 	nvme_tcp_qpair_icreq_send(tqpair);
 }
 
@@ -2419,7 +2423,7 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 		opts.impl_opts_size = sizeof(impl_opts);
 	}
 
-	tqpair->state = NVME_TCP_QPAIR_STATE_SOCK_CONNECTING;
+	nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_SOCK_CONNECTING);
 	tqpair->sock = spdk_sock_connect_async(ctrlr->trid.traddr, port, &opts,
 					       nvme_tcp_sock_connect_cb_fn, tqpair);
 	if (!tqpair->sock) {
@@ -2470,7 +2474,8 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 			NVME_TQPAIR_ERRLOG(tqpair, "Failed to send an NVMe-oF Fabric CONNECT command\n");
 			break;
 		}
-		tqpair->state = NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL;
+
+		nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL);
 		rc = -EAGAIN;
 		break;
 	case NVME_TCP_QPAIR_STATE_FABRIC_CONNECT_POLL:
@@ -2479,11 +2484,11 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 			if (nvme_fabric_qpair_auth_required(qpair)) {
 				rc = nvme_fabric_qpair_authenticate_async(qpair);
 				if (rc == 0) {
-					tqpair->state = NVME_TCP_QPAIR_STATE_AUTHENTICATING;
+					nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_AUTHENTICATING);
 					rc = -EAGAIN;
 				}
 			} else {
-				tqpair->state = NVME_TCP_QPAIR_STATE_RUNNING;
+				nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_RUNNING);
 				nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTED);
 			}
 		} else if (rc != -EAGAIN) {
@@ -2493,7 +2498,7 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	case NVME_TCP_QPAIR_STATE_AUTHENTICATING:
 		rc = nvme_fabric_qpair_authenticate_poll(qpair);
 		if (rc == 0) {
-			tqpair->state = NVME_TCP_QPAIR_STATE_RUNNING;
+			nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_RUNNING);
 			nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTED);
 		}
 		break;
@@ -2803,8 +2808,8 @@ nvme_tcp_qpair_authenticate(struct spdk_nvme_qpair *qpair)
 
 	rc = nvme_fabric_qpair_authenticate_async(qpair);
 	if (rc == 0) {
+		nvme_tcp_qpair_set_state(tqpair, NVME_TCP_QPAIR_STATE_AUTHENTICATING);
 		nvme_qpair_set_state(qpair, NVME_QPAIR_CONNECTING);
-		tqpair->state = NVME_TCP_QPAIR_STATE_AUTHENTICATING;
 	}
 
 	return rc;
