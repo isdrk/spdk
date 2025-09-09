@@ -1220,64 +1220,65 @@ fsdev_aio_op_releasedir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 }
 
 static int
-fsdev_aio_set_mount_opts(struct aio_fsdev *vfsdev, struct spdk_fsdev_mount_opts *opts)
+fsdev_aio_set_init_opts(struct aio_fsdev *vfsdev, const struct fuse_init_in *init_in,
+			struct fuse_init_out *init_out)
 {
-	bool writeback_cache_enabled = !!(opts->flags & SPDK_FSDEV_MOUNT_WRITEBACK_CACHE);
-	uint64_t flags = 0;
+	uint64_t flags;
+	uint32_t flags2;
+	uint64_t aio_flags = 0;
 
-	assert(opts != NULL);
-	assert(opts->opts_size != 0);
+	assert(init_out	!= NULL);
+	assert(init_in != NULL);
+	assert(init_in->major == FUSE_KERNEL_VERSION);
+	assert(init_in->minor >= 31);
 
 	UNUSED(vfsdev);
 
-	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, max_xfer_size)) {
-		/* Set the value the aio fsdev was created with */
-		opts->max_xfer_size = vfsdev->mount_opts.max_xfer_size;
-	}
+	memset(init_out, 0, sizeof(*init_out));
 
-	if (opts->opts_size > offsetof(struct spdk_fsdev_mount_opts, max_readahead)) {
-		/* Set the value the aio fsdev was created with */
-		opts->max_readahead = vfsdev->mount_opts.max_readahead;
-	}
+	init_out->major = FUSE_KERNEL_VERSION;
+	init_out->minor = 34; /* FUSE_KERNEL_MINOR_VERSION */
+	init_out->max_readahead = vfsdev->mount_opts.max_readahead;
+	init_out->max_background = 0xffff;
+	init_out->congestion_threshold = 0xffff;
+	init_out->max_write = vfsdev->mount_opts.max_xfer_size;
+	init_out->time_gran = 1;
+	init_out->max_pages = vfsdev->mount_opts.max_xfer_size / PAGE_SIZE;
 
-	if (vfsdev->opts.writeback_cache_enabled) {
+	if (vfsdev->opts.writeback_cache_enabled && (init_in->flags & FUSE_WRITEBACK_CACHE)) {
 		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
-		vfsdev->opts.writeback_cache_enabled = writeback_cache_enabled;
+		vfsdev->opts.writeback_cache_enabled = true;
 		SPDK_WARNLOG("Enabling writeback cache is unsafe and requires additional "
 			     "synchronization from the applications\n");
-	} else {
-		/* The writeback_cache_enabled was disabled upon creation => we reflect it in the opts */
-		writeback_cache_enabled = false;
+		aio_flags |= FUSE_WRITEBACK_CACHE;
 	}
 
-#define AIO_SET_MOUNT_FLAG(cond, store, flag) \
-	if ((cond) && (opts->flags & (SPDK_FSDEV_MOUNT_##flag))) { \
-		store |= (SPDK_FSDEV_MOUNT_##flag);                \
-	}
+	flags2 = (init_in->flags & FUSE_INIT_EXT) ? init_in->flags2 : 0;
+	flags = ((uint64_t)flags2 << 32) | init_in->flags;
+	aio_flags |=
+		FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_DONT_MASK |
+		FUSE_HAS_IOCTL_DIR | FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
+		FUSE_NO_OPEN_SUPPORT | FUSE_PARALLEL_DIROPS | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
+		FUSE_NO_OPENDIR_SUPPORT | FUSE_SUBMOUNTS | FUSE_SETXATTR_EXT | FUSE_INIT_EXT |
+		FUSE_EXPORT_SUPPORT | FUSE_AUTO_INVAL_DATA |  FUSE_EXPLICIT_INVAL_DATA | FUSE_POSIX_ACL |
+		FUSE_POSIX_LOCKS | FUSE_FLOCK_LOCKS | FUSE_ATOMIC_O_TRUNC | FUSE_NO_EXPORT_SUPPORT |
+		FUSE_DIRECT_IO_ALLOW_MMAP;
+	flags &= aio_flags;
+	init_out->flags = (uint32_t)(flags);
+	init_out->flags2 = (uint32_t)(flags >> 32);
 
-	AIO_SET_MOUNT_FLAG(true, flags, DOT_PATH_LOOKUP);
-	AIO_SET_MOUNT_FLAG(true, flags, AUTO_INVAL_DATA);
-	AIO_SET_MOUNT_FLAG(true, flags, EXPLICIT_INVAL_DATA);
-	AIO_SET_MOUNT_FLAG(true, flags, POSIX_ACL);
-	AIO_SET_MOUNT_FLAG(true, flags, POSIX_LOCKS);
-	AIO_SET_MOUNT_FLAG(true, flags, FLOCK_LOCKS);
-	AIO_SET_MOUNT_FLAG(true, flags, O_TRUNC);
-	AIO_SET_MOUNT_FLAG(true, flags, NO_EXPORT_SUPPORT);
-	AIO_SET_MOUNT_FLAG(true, flags, DIRECT_IO_ALLOW_MMAP);
-
-	/* Based on the setting above. */
-	AIO_SET_MOUNT_FLAG(writeback_cache_enabled, flags, WRITEBACK_CACHE);
-
-	/* Updating negotiated flags. */
-	opts->flags = vfsdev->mount_opts.flags = flags;
-
-#undef AIO_SET_MOUNT_FLAG
+	vfsdev->mount_opts.flags = flags;
 
 	/* The AIO doesn't apply any additional restrictions, so we just accept the requested opts */
-	SPDK_DEBUGLOG(fsdev_aio,
-		      "aio filesystem %s: opts updated: max_xfer_size=%" PRIu32 ", max_readahead=%" PRIu32
-		      ", writeback_cache=%" PRIu8 ", mount_flags=%" PRIu64 "\n", vfsdev->fsdev.name,
-		      opts->max_xfer_size, opts->max_readahead, writeback_cache_enabled, flags);
+
+	SPDK_INFOLOG(fsdev_aio, "INIT: %" PRIu32 ".%" PRIu32 "\n", init_out->major, init_out->minor);
+	SPDK_INFOLOG(fsdev_aio, "flags: 0x%08" PRIx64 "\n", flags);
+	SPDK_INFOLOG(fsdev_aio, "max_readahead: %" PRIu32 "\n", init_out->max_readahead);
+	SPDK_INFOLOG(fsdev_aio, "max_write: %" PRIu32 "\n", init_out->max_write);
+	SPDK_INFOLOG(fsdev_aio, "max_pages: %" PRIu32 "\n", init_out->max_pages);
+	SPDK_INFOLOG(fsdev_aio, "max_background: %" PRIu16 "\n", init_out->max_background);
+	SPDK_INFOLOG(fsdev_aio, "congestion_threshold: %" PRIu16 "\n", init_out->congestion_threshold);
+	SPDK_INFOLOG(fsdev_aio, "time_gran: %" PRIu32 "\n", init_out->time_gran);
 
 	return 0;
 }
@@ -1432,7 +1433,7 @@ fsdev_aio_fanotify_poller(void *ctx)
 #endif /* SPDK_CONFIG_HAVE_FANOTIFY */
 
 static void
-fsdev_aio_do_umount(struct aio_fsdev *vfsdev)
+fsdev_aio_do_destroy(struct aio_fsdev *vfsdev)
 {
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	if (vfsdev->fanotify_fd != -1) {
@@ -1449,15 +1450,14 @@ fsdev_aio_do_umount(struct aio_fsdev *vfsdev)
 }
 
 static int
-fsdev_aio_op_mount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct spdk_fsdev_mount_opts *in_opts = &fsdev_io->u_in.mount.opts;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_init_in *init_in = fsdev_io->u_in.fuse.op.init;
+	struct fuse_init_out *init_out = fsdev_io->u_out.fuse.op.init;
 
-	fsdev_aio_do_umount(vfsdev);
-
-	fsdev_io->u_out.mount.opts = *in_opts;
-	fsdev_aio_set_mount_opts(vfsdev, &fsdev_io->u_out.mount.opts);
+	fsdev_aio_do_destroy(vfsdev);
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	if (vfsdev->fanotify_fd != -1) {
@@ -1471,18 +1471,19 @@ fsdev_aio_op_mount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 #endif
 
+	fsdev_aio_set_init_opts(vfsdev, init_in, init_out);
+	out_hdr->len += sizeof(*init_out);
 	file_object_ref(vfsdev->root);
-	fsdev_io->u_out.mount.root_fobject = fsdev_aio_get_spdk_fobject(vfsdev, vfsdev->root);
 
 	return 0;
 }
 
 static int
-fsdev_aio_op_umount(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_destroy(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 
-	fsdev_aio_do_umount(vfsdev);
+	fsdev_aio_do_destroy(vfsdev);
 	file_object_unref(vfsdev->root, 1);
 
 	return 0;
@@ -4628,6 +4629,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_RMDIR:
 		status = fsdev_aio_op_rmdir(ch, fsdev_io);
 		break;
+	case FUSE_INIT:
+		status = fsdev_aio_op_init(ch, fsdev_io);
+		break;
+	case FUSE_DESTROY:
+		status = fsdev_aio_op_destroy(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4819,12 +4826,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_MOUNT:
-		status = fsdev_aio_op_mount(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_UMOUNT:
-		status = fsdev_aio_op_umount(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
@@ -4910,6 +4911,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_MKDIR:
 	case SPDK_FSDEV_IO_UNLINK:
 	case SPDK_FSDEV_IO_RMDIR:
+	case SPDK_FSDEV_IO_MOUNT:
+	case SPDK_FSDEV_IO_UMOUNT:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5379,7 +5382,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR) | \
 					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET) | \
 					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
-					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR);
+					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
+					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
