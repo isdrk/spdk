@@ -3384,10 +3384,10 @@ fsdev_aio_op_unlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.unlink.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
 	int res;
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.unlink.parent_fobject);
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
 		return -EINVAL;
@@ -3403,10 +3403,10 @@ fsdev_aio_op_rmdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
-	const char *name = fsdev_io->u_in.rmdir.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
 	int res;
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.rmdir.parent_fobject);
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", parent_fobject);
 		return -EINVAL;
@@ -4622,6 +4622,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_MKDIR:
 		status = fsdev_aio_op_mkdir(ch, fsdev_io);
 		break;
+	case FUSE_UNLINK:
+		status = fsdev_aio_op_unlink(ch, fsdev_io);
+		break;
+	case FUSE_RMDIR:
+		status = fsdev_aio_op_rmdir(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4822,12 +4828,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_UNLINK:
-		status = fsdev_aio_op_unlink(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_RMDIR:
-		status = fsdev_aio_op_rmdir(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_RENAME:
 		status = fsdev_aio_op_rename(ch, fsdev_io);
 		break;
@@ -4908,6 +4908,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_SYMLINK:
 	case SPDK_FSDEV_IO_MKNOD:
 	case SPDK_FSDEV_IO_MKDIR:
+	case SPDK_FSDEV_IO_UNLINK:
+	case SPDK_FSDEV_IO_RMDIR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5376,7 +5378,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE) | \
 					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR) | \
 					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET) | \
-					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK);
+					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
+					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
