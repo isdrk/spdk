@@ -144,17 +144,18 @@ check-so-deps-job:
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
     - sudo ./test/make/check_so_deps.sh
 
-# Disable temporarily the job, need additional debugging on ubuntu
-# external-code-test-job:
-#   extends: .test-job-vm-template
-#   tags: [not-crypto, vm, linux, x86_64, f39]
-#   script:
-#     # clean up output from previous runs
-#     - sudo rm -rf $CI_PROJECT_DIR/../output/
-#     # clean up previous build to have a clean new one
-#     - rm -rf ./mk/config.mk
-#     - rm -rf ./build
-#     - ./test/external_code/test_make.sh ./
+external-code-test-job:
+   tags: [vm_host, x86_64]
+   stage: test
+   before_script:
+    - .ci/prepare_vm.sh
+   script:
+     # clean up output from previous runs
+     - sudo rm -rf $CI_PROJECT_DIR/../output/
+     # clean up previous build to have a clean new one
+     - rm -rf ./mk/config.mk
+     - rm -rf ./build
+     - ./test/external_code/test_make.sh ./
 
 test-virtio-fs-app:
   stage: test
