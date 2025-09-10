@@ -15,7 +15,7 @@ install_xlio(){
 	git checkout "$XLIO_SHA"
 
 	./autogen.sh
-	./configure --prefix=/tmp/libxlio/install --enable-utls --with-dpcp=/tmp/libdpcp/install
+	./configure --prefix=/tmp/libxlio/install --enable-utls
 	make "-j$(nproc)"
 	make install
 }
@@ -27,7 +27,7 @@ install_dpcp(){
 	git checkout 5960d78ba2c88a9d991a57edfbddebea4bd1dd13
 
 	./autogen.sh
-	./configure --prefix=/tmp/libdpcp/install
+	./configure --prefix=/usr
 	make "-j$(nproc)"
 	make install
 }
