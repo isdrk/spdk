@@ -7,6 +7,7 @@
 set -e
 
 XLIO_SHA=${XLIO_SHA:-"3.60.1"}
+XLIO_PREFIX=${XLIO_PREFIX:-"/tmp/libxlio/install"}
 
 install_xlio(){
 	git clone https://github.com/Mellanox/libxlio.git /tmp/libxlio
@@ -15,7 +16,7 @@ install_xlio(){
 	git checkout "$XLIO_SHA"
 
 	./autogen.sh
-	./configure --prefix=/tmp/libxlio/install --enable-utls
+	./configure --prefix=$XLIO_PREFIX --enable-utls
 	make "-j$(nproc)"
 	make install
 }
