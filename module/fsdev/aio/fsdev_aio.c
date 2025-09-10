@@ -3515,21 +3515,24 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int res;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_object *new_parent_fobject;
-	const char *name = fsdev_io->u_in.link.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
 	struct aio_fsdev_file_object *link_fobject = NULL;
+	uint64_t oldnodeid = fsdev_io->u_in.fuse.op.link->oldnodeid;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_entry_out *entry_out = fsdev_io->u_out.fuse.op.entry;
 
 	if (!is_safe_path_component(name)) {
 		SPDK_ERRLOG("%s is not a safe component\n", name);
 		return -EINVAL;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.fobject);
+	fobject = fsdev_aio_get_fobject_by_nodeid(vfsdev, oldnodeid);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	new_parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.link.new_parent_fobject);
+	new_parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!new_parent_fobject) {
 		SPDK_ERRLOG("Invalid new_parent_fobject: %p\n", new_parent_fobject);
 		res = -EINVAL;
@@ -3545,16 +3548,15 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	res = fsdev_aio_do_lookup(vfsdev, new_parent_fobject, name, &link_fobject,
-				  &fsdev_io->u_out.link.attr, NULL);
+				  NULL, entry_out);
 	if (res) {
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
 		goto fop_failed;
 	}
 
-	assert(link_fobject);
-	fsdev_io->u_out.link.fobject = fsdev_aio_get_spdk_fobject(vfsdev, link_fobject);
-
+	out_hdr->len += sizeof(*entry_out);
 	res = 0;
+
 	SPDK_DEBUGLOG(fsdev_aio, "LINK succeeded for " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s\n",
 		      FOBJECT_ARGS(fobject), FOBJECT_ARGS(link_fobject), name);
 
@@ -4632,6 +4634,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
+	case FUSE_LINK:
+		status = fsdev_aio_op_link(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4823,9 +4828,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_LINK:
-		status = fsdev_aio_op_link(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_STATFS:
 		status = fsdev_aio_op_statfs(ch, fsdev_io);
 		break;
@@ -4906,6 +4908,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_UMOUNT:
 	case SPDK_FSDEV_IO_RENAME:
 	case SPDK_FSDEV_IO_READLINK:
+	case SPDK_FSDEV_IO_LINK:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5377,7 +5380,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
 					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
 					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
-					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK);
+					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK) | \
+					       (1ULL << FUSE_LINK);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
