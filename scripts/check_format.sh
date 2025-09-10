@@ -138,7 +138,7 @@ function check_c_style() {
 			rm -f astyle.log
 			touch astyle.log
 			# Exclude DPDK header files copied into our tree
-			git ls-files '*.[ch]' ':!:*/env_dpdk/*/*.h' ':!:include/linux/fuse_kernel.h' \
+			git ls-files '*.[ch]' ':!:*/env_dpdk/*/*.h' ':!:include/spdk/linux/**' \
 				| xargs -P$(nproc) -n10 astyle --break-return-type --attach-return-type-decl \
 					--options=.astylerc >> astyle.log
 			git ls-files '*.cpp' '*.cc' '*.cxx' '*.hh' '*.hpp' \
@@ -170,7 +170,7 @@ function check_comment_style() {
 
 	git grep --line-number -e '\/[*][^ *-]' -- '*.[ch]' > comment.log || true
 	git grep --line-number -e '[^ ][*]\/' -- '*.[ch]' ':!lib/rte_vhost*/*' >> comment.log || true
-	git grep --line-number -e '^[*]' -- '*.[ch]' ':!include/linux/fuse_kernel.h' >> comment.log || true
+	git grep --line-number -e '^[*]' -- '*.[ch]' ':!include/spdk/linux/**' >> comment.log || true
 	git grep --line-number -e '\s\/\/' -- '*.[ch]' >> comment.log || true
 	git grep --line-number -e '^\/\/' -- '*.[ch]' >> comment.log || true
 
@@ -281,7 +281,7 @@ function check_posix_includes() {
 
 	echo -n "Checking for POSIX includes..."
 	git grep -I -i -f scripts/posix.txt -- './*' ':!include/spdk/stdinc.h' \
-		':!include/linux/**' ':!scripts/posix.txt' ':!lib/env_dpdk/*/*.h' \
+		':!include/linux/**' ':!include/spdk/linux/**' ':!scripts/posix.txt' ':!lib/env_dpdk/*/*.h' \
 		':!*.patch' ':!configure' > scripts/posix.log || true
 	if [ -s scripts/posix.log ]; then
 		echo "POSIX includes detected. Please include spdk/stdinc.h instead."
@@ -396,6 +396,7 @@ check_naming_conventions() {
 		':!include/spdk/ftl.h' \
 		':!include/spdk/idxd_spec.h' \
 		':!include/spdk/iscsi_spec.h' \
+		':!include/spdk/linux/fuse.h' \
 		':!include/spdk/lvol.h' \
 		':!include/spdk/nvmf_fc_spec.h' \
 		':!include/spdk/vfio_user_spec.h'
@@ -404,6 +405,7 @@ check_naming_conventions() {
 		':!include/spdk/ftl.h' \
 		':!include/spdk/idxd_spec.h' \
 		':!include/spdk/iscsi_spec.h' \
+		':!include/spdk/linux/fuse.h' \
 		':!include/spdk/vfio_user_spec.h'
 }
 

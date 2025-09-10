@@ -15,7 +15,7 @@
 #include "spdk/fsdev.h"
 #include "spdk/fuse_dispatcher.h"
 #include "spdk/rmem.h"
-#include "linux/fuse_kernel.h"
+#include "spdk/linux/fuse.h"
 
 #include "lib/fuse_dispatcher/fuse_dispatcher.c"
 

@@ -15,7 +15,7 @@
 #include "spdk/likely.h"
 #include "spdk/fuse_dispatcher.h"
 #include "spdk/rmem.h"
-#include "linux/fuse_kernel.h"
+#include "spdk/linux/fuse.h"
 
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)

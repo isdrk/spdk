@@ -16,8 +16,8 @@
 
 /* FUSE stuff may have already been included through a different header file. */
 #ifndef FUSE_KERNEL_VERSION
-#include "linux/fuse_kernel.h"
-#elif FUSE_KERNEL_VERSION < 7 || FUSE_KERNEL_MINOR_VERSION < 31
+#include "spdk/linux/fuse.h"
+#elif FUSE_KERNEL_VERSION < 7 || (FUSE_KERNEL_VERSION == 7 && FUSE_KERNEL_MINOR_VERSION < 31)
 #error FUSE kernel header conflict - fsdev requires at least version 7.31
 #endif
 

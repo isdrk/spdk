@@ -21,7 +21,7 @@
 #include "spdk/likely.h"
 #include "spdk/pci_ids.h"
 #include "spdk/fuse_dispatcher.h"
-#include "linux/fuse_kernel.h"
+#include "spdk/linux/fuse.h"
 
 #include "vfu_virtio_internal.h"
 

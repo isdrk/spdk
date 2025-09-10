@@ -9,7 +9,7 @@
 #include "spdk/thread.h"
 #include "spdk/util.h"
 
-#include "linux/fuse_kernel.h"
+#include "spdk/linux/fuse.h"
 
 struct spdk_fuse_mount {
 	struct spdk_fsdev_desc		*fsdev_desc;
