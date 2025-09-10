@@ -8,7 +8,7 @@ variables:
   # VM_HOST Pool:
   VM_START_NUM: "001"
   VM_END_NUM: "016"
-  XLIO_SHA: 3.60.0
+  XLIO_SHA: 3.60.1
 
 workflow:
   rules:
