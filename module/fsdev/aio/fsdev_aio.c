@@ -3117,34 +3117,21 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	return IO_STATUS_ASYNC;
 }
 
-static void
-fsdev_aio_op_readlink_free(void *cb_arg)
-{
-	free(cb_arg);
-}
-
 static int
 fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
-	char *buf;
 	struct aio_fsdev_file_object *fobject;
+	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
+	char *buf = out_iov->iov_base;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readlink.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	buf = malloc(PATH_MAX + 1);
-	if (!buf) {
-		SPDK_ERRLOG("malloc(%zu) failed\n", (size_t)(PATH_MAX + 1));
-		res = -ENOMEM;
-		goto alloc_failed;
-	}
-
-	res = readlinkat(fobject->fd, "", buf, PATH_MAX + 1);
+	res = readlinkat(fobject->fd, "", buf, out_iov->iov_len);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("readlinkat failed for " FOBJECT_FMT " with %d\n",
@@ -3152,21 +3139,17 @@ fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		goto fop_failed;
 	}
 
-	if (((uint32_t)res) == PATH_MAX + 1) {
+	if (((uint32_t)res) == out_iov->iov_len) {
 		SPDK_ERRLOG("buffer is too short\n");
 		res = -ENAMETOOLONG;
 		goto fop_failed;
 	}
 
 	buf[res] = 0;
-	fsdev_io->u_out.readlink.linkname = buf;
-	spdk_fsdev_io_set_cleanup_callback(fsdev_io, fsdev_aio_op_readlink_free, buf);
-	buf = NULL;
+	fsdev_io->u_out.fuse.hdr->len += res + 1;
 	res = 0;
 
 fop_failed:
-	free(buf);
-alloc_failed:
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -4646,6 +4629,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_RENAME2:
 		status = fsdev_aio_op_rename2(ch, fsdev_io);
 		break;
+	case FUSE_READLINK:
+		status = fsdev_aio_op_readlink(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4837,9 +4823,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_READLINK:
-		status = fsdev_aio_op_readlink(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_LINK:
 		status = fsdev_aio_op_link(ch, fsdev_io);
 		break;
@@ -4922,6 +4905,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_MOUNT:
 	case SPDK_FSDEV_IO_UMOUNT:
 	case SPDK_FSDEV_IO_RENAME:
+	case SPDK_FSDEV_IO_READLINK:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5393,7 +5377,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
 					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
 					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
-					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2);
+					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
