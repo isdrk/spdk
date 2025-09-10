@@ -6,7 +6,7 @@
 
 set -e
 
-XLIO_SHA=${1:-"3.60.1"}
+XLIO_SHA=${XLIO_SHA:-"3.60.1"}
 
 install_xlio(){
 	git clone https://github.com/Mellanox/libxlio.git /tmp/libxlio
