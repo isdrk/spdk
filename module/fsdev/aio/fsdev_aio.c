@@ -3157,12 +3157,13 @@ fop_failed:
 static int
 fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
 	struct aio_fsdev_file_object *fobject;
 	struct statvfs stbuf;
+	struct fuse_statfs_out *statfs_out = fsdev_io->u_out.fuse.op.statfs;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.statfs.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -3175,15 +3176,17 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	fsdev_io->u_out.statfs.statfs.blocks = stbuf.f_blocks;
-	fsdev_io->u_out.statfs.statfs.bfree = stbuf.f_bfree;
-	fsdev_io->u_out.statfs.statfs.bavail = stbuf.f_bavail;
-	fsdev_io->u_out.statfs.statfs.files = stbuf.f_files;
-	fsdev_io->u_out.statfs.statfs.ffree = stbuf.f_ffree;
-	fsdev_io->u_out.statfs.statfs.bsize = stbuf.f_bsize;
-	fsdev_io->u_out.statfs.statfs.namelen = stbuf.f_namemax;
-	fsdev_io->u_out.statfs.statfs.frsize = stbuf.f_frsize;
+	memset(statfs_out, 0, sizeof(*statfs_out));
+	statfs_out->st.blocks = stbuf.f_blocks;
+	statfs_out->st.bfree = stbuf.f_bfree;
+	statfs_out->st.bavail = stbuf.f_bavail;
+	statfs_out->st.files = stbuf.f_files;
+	statfs_out->st.ffree = stbuf.f_ffree;
+	statfs_out->st.bsize = stbuf.f_bsize;
+	statfs_out->st.namelen = stbuf.f_namemax;
+	statfs_out->st.frsize = stbuf.f_frsize;
 
+	out_hdr->len += sizeof(*statfs_out);
 	res = 0;
 
 fop_failed:
@@ -4637,6 +4640,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_LINK:
 		status = fsdev_aio_op_link(ch, fsdev_io);
 		break;
+	case FUSE_STATFS:
+		status = fsdev_aio_op_statfs(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4828,9 +4834,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_STATFS:
-		status = fsdev_aio_op_statfs(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_FSYNC:
 		status = fsdev_aio_op_fsync(ch, fsdev_io);
 		break;
@@ -4909,6 +4912,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_RENAME:
 	case SPDK_FSDEV_IO_READLINK:
 	case SPDK_FSDEV_IO_LINK:
+	case SPDK_FSDEV_IO_STATFS:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5381,7 +5385,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
 					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
 					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK) | \
-					       (1ULL << FUSE_LINK);
+					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
