@@ -202,6 +202,8 @@ struct fsdevperf_app {
 	} poller;
 	mode_t					umask;
 	size_t					num_threads_per_core;
+	uint32_t				uid;
+	uint32_t				gid;
 	TAILQ_HEAD(, fsdevperf_job)		jobs;
 	TAILQ_HEAD(, fsdevperf_thread)		threads;
 	TAILQ_HEAD(, fsdevperf_file)		files;
@@ -981,7 +983,9 @@ fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
 	io->fuse_io.in.hdr.unique = id;
 	io->fuse_io.in.hdr.len = sizeof(io->fuse_io.in.hdr) + len;
 	io->fuse_io.in.hdr.nodeid = nodeid;
-	/* Skip uid/gid/pid */
+	io->fuse_io.in.hdr.uid = g_app.uid;
+	io->fuse_io.in.hdr.gid = g_app.gid;
+	/* Skip pid */
 	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, id, SPDK_FSDEV_IO_FUSE,
 			   source_id, id, cb_fn, cb_ctx);
 	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
@@ -2245,6 +2249,10 @@ static struct option g_options[] = {
 	{ "nrthreads", required_argument, NULL, FSDEVPERF_OPT_NRTHREADS },
 #define FSDEVPERF_OPT_DIRECT 0x1003
 	{ "direct", optional_argument, NULL, FSDEVPERF_OPT_DIRECT },
+#define FSDEVPERF_OPT_UID 0x1004
+	{ "uid", required_argument, NULL, FSDEVPERF_OPT_UID },
+#define FSDEVPERF_OPT_GID 0x1005
+	{ "gid", required_argument, NULL, FSDEVPERF_OPT_GID },
 	{},
 };
 
@@ -2409,6 +2417,8 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 	case FSDEVPERF_OPT_FILESIZE:
 	case FSDEVPERF_OPT_NRFILES:
 	case FSDEVPERF_OPT_NRTHREADS:
+	case FSDEVPERF_OPT_UID:
+	case FSDEVPERF_OPT_GID:
 		if (spdk_parse_capacity(arg, &u64, NULL) != 0) {
 			fsdevperf_errmsg("%s: invalid %s argument: %s\n",
 					 job->name, fsdevperf_get_option_name(ch), arg);
@@ -2438,6 +2448,12 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 			break;
 		case FSDEVPERF_OPT_NRTHREADS:
 			g_app.num_threads_per_core = (size_t)u64;
+			break;
+		case FSDEVPERF_OPT_UID:
+			g_app.uid = (uint32_t)u64;
+			break;
+		case FSDEVPERF_OPT_GID:
+			g_app.gid = (uint32_t)u64;
 			break;
 		}
 		break;
@@ -2474,6 +2490,8 @@ fsdevperf_usage(void)
 	printf(" -U, --unique                         generate unique data for each I/O\n");
 	printf("     --nrthreads=<count>              spawn <count> threads on each core\n");
 	printf("     --direct                         use direct I/O\n");
+	printf("     --uid                            uid to use in the fuse_in_header for FUSE-based fsdev modules (default: 0)\n");
+	printf("     --gid                            gid to use in the fuse_in_header for FUSE-based fsdev modules (default: 0)\n");
 }
 
 int
