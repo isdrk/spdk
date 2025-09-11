@@ -1060,7 +1060,7 @@ fsdevperf_task_submit_release(struct fsdevperf_task *task, uint64_t id,
 	struct fuse_release_in *release = &task->io.fuse_io.in.op.release;
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_RELEASE)) {
-		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_RELEASE, id,
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, task->ioch, FUSE_RELEASE, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*release),
 				  NULL, 0, NULL, 0, cb_fn, cb_ctx);
 		memset(release, 0, sizeof(*release));
@@ -1086,7 +1086,7 @@ fsdevperf_task_submit_forget(struct fsdevperf_task *task, uint64_t id,
 	struct fuse_forget_in *forget = &task->io.fuse_io.in.op.forget;
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_FORGET)) {
-		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_FORGET, id,
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, task->ioch, FUSE_FORGET, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*forget),
 				  NULL, 0, NULL, 0, cb_fn, cb_ctx);
 		forget->nlookup = nlookup;
@@ -1116,7 +1116,7 @@ fsdevperf_task_submit_create(struct fsdevperf_task *task, uint64_t id,
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_CREATE)) {
 		len = strlen(name) + 1;
-		fsdevperf_io_init(io, fs->fsdev_desc, fs->ioch, FUSE_CREATE, id,
+		fsdevperf_io_init(io, fs->fsdev_desc, task->ioch, FUSE_CREATE, id,
 				  task->source_id, (uint64_t)parent, sizeof(*create) + len,
 				  fuse_io->in.iovs, 1, NULL, 0, cb_fn, cb_ctx);
 		create->flags = flags;
@@ -1151,7 +1151,7 @@ fsdevperf_task_submit_open(struct fsdevperf_task *task, uint64_t id,
 	struct fuse_open_in *open = &task->io.fuse_io.in.op.open;
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_OPEN)) {
-		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_OPEN, id,
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, task->ioch, FUSE_OPEN, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*open),
 				  NULL, 0, NULL, 0, cb_fn, cb_ctx);
 		open->flags = flags;
@@ -1180,7 +1180,7 @@ fsdevperf_task_submit_lookup(struct fsdevperf_task *task, uint64_t id,
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_LOOKUP)) {
 		len = strlen(name) + 1;
-		fsdevperf_io_init(io, fs->fsdev_desc, fs->ioch, FUSE_LOOKUP, id,
+		fsdevperf_io_init(io, fs->fsdev_desc, task->ioch, FUSE_LOOKUP, id,
 				  task->source_id, (uint64_t)parent, len, fuse_io->in.iovs, 1,
 				  NULL, 0, cb_fn, cb_ctx);
 		fuse_io->in.iovs[0].iov_base = (char *)name;
@@ -1205,7 +1205,7 @@ fsdevperf_task_submit_statfs(struct fsdevperf_task *task, uint64_t id,
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_task_get_fsdev_io(task);
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_STATFS)) {
-		fsdevperf_io_init(&task->io, fs->fsdev_desc, fs->ioch, FUSE_STATFS, id,
+		fsdevperf_io_init(&task->io, fs->fsdev_desc, task->ioch, FUSE_STATFS, id,
 				  task->source_id, FUSE_ROOT_ID, 0, NULL, 0, NULL, 0,
 				  cb_fn, cb_ctx);
 	} else {
@@ -1232,7 +1232,7 @@ fsdevperf_request_submit_read(struct fsdevperf_request *request, uint64_t id,
 	struct fuse_read_in *read = &fuse_io->in.op.read;
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_READ)) {
-		fsdevperf_io_init(&request->io, fs->fsdev_desc, fs->ioch, FUSE_READ, id,
+		fsdevperf_io_init(&request->io, fs->fsdev_desc, task->ioch, FUSE_READ, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*read), NULL, 0,
 				  iovs, iovcnt, cb_fn, cb_ctx);
 		read->fh = (uint64_t) fhandle;
@@ -1270,7 +1270,7 @@ fsdevperf_request_submit_write(struct fsdevperf_request *request, uint64_t id,
 	struct fuse_write_in *write = &fuse_io->in.op.write;
 
 	if (fsdevperf_filesystem_supports_opcode(fs, FUSE_WRITE)) {
-		fsdevperf_io_init(&request->io, fs->fsdev_desc, fs->ioch, FUSE_WRITE, id,
+		fsdevperf_io_init(&request->io, fs->fsdev_desc, task->ioch, FUSE_WRITE, id,
 				  task->source_id, (uint64_t)fobject, sizeof(*write) + size,
 				  iovs, iovcnt, NULL, 0, cb_fn, cb_ctx);
 		write->fh = (uint64_t)fhandle;
