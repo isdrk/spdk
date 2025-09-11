@@ -803,15 +803,17 @@ nvme_ctrlr_update_ana_log_page(struct spdk_nvme_ctrlr *ctrlr)
 		return rc;
 	}
 
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -EIO;
+	rc = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
 
-	free(status);
-	return 0;
+	if (rc) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_get_log_page failed: rc=%s\n",
+				  spdk_strerror(abs(rc)));
+	}
+
+	return rc;
 }
 
 static int
@@ -937,6 +939,7 @@ nvme_ctrlr_set_arbitration_feature(struct spdk_nvme_ctrlr *ctrlr)
 {
 	uint32_t cdw11;
 	struct nvme_completion_poll_status *status;
+	int rc;
 
 	if (ctrlr->opts.arbitration_burst == 0) {
 		return;
@@ -969,12 +972,14 @@ nvme_ctrlr_set_arbitration_feature(struct spdk_nvme_ctrlr *ctrlr)
 		return;
 	}
 
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "Timeout to set arbitration feature\n");
-	}
-
+	rc = nvme_wait_for_adminq_completion(ctrlr, status);
 	if (!status->timed_out) {
 		free(status);
+	}
+
+	if (rc) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_set_feature failed: rc=%s\n",
+				  spdk_strerror(abs(rc)));
 	}
 }
 
@@ -2739,7 +2744,8 @@ nvme_ctrlr_identify_active_ns(struct spdk_nvme_ctrlr *ctrlr)
 			nvme_active_ns_ctx_destroy(ctx);
 		}
 
-		NVME_CTRLR_ERRLOG(ctrlr, "wait for nvme_ctrlr_identify_active_ns_async failed: rc=%d\n", rc);
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for nvme_ctrlr_identify_active_ns_async failed: rc=%s\n",
+				  spdk_strerror(abs(rc)));
 		return -ENXIO;
 	}
 
@@ -3425,7 +3431,8 @@ nvme_ctrlr_clear_changed_ns_log(struct spdk_nvme_ctrlr_aer_completion *async_eve
 	}
 
 	if (rc) {
-		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_get_log_page failed: rc=%d\n", rc);
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_get_log_page failed: rc=%s\n",
+				  spdk_strerror(abs(rc)));
 		goto out;
 	}
 
@@ -5076,14 +5083,17 @@ spdk_nvme_ctrlr_attach_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_attach_ns failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
-	free(status);
+
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_attach_ns failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+		return res;
+	}
 
 	res = nvme_ctrlr_identify_active_ns(ctrlr);
 	if (res) {
@@ -5122,14 +5132,17 @@ spdk_nvme_ctrlr_detach_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_detach_ns failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
-	free(status);
+
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_detach_ns failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+		return res;
+	}
 
 	return nvme_ctrlr_identify_active_ns(ctrlr);
 }
@@ -5152,16 +5165,18 @@ spdk_nvme_ctrlr_create_ns(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns_dat
 		free(status);
 		return 0;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_create_ns failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return 0;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	nsid = status->cpl.cdw0;
+	if (!status->timed_out) {
+		free(status);
 	}
 
-	nsid = status->cpl.cdw0;
-	free(status);
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_create_ns failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+		return 0;
+	}
 
 	assert(nsid > 0);
 
@@ -5190,14 +5205,17 @@ spdk_nvme_ctrlr_delete_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_delete_ns failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
-	free(status);
+
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_delete_ns failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+		return res;
+	}
 
 	return nvme_ctrlr_identify_active_ns(ctrlr);
 }
@@ -5221,14 +5239,17 @@ spdk_nvme_ctrlr_format(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_format failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
-	free(status);
+
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_format failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+		return res;
+	}
 
 	return spdk_nvme_ctrlr_reset(ctrlr);
 }
@@ -5286,13 +5307,17 @@ spdk_nvme_ctrlr_update_firmware(struct spdk_nvme_ctrlr *ctrlr, void *payload, ui
 			return res;
 		}
 
-		if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-			NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_fw_image_download failed!\n");
+		res = nvme_wait_for_adminq_completion(ctrlr, status);
+		if (res) {
 			if (!status->timed_out) {
 				free(status);
 			}
-			return -ENXIO;
+
+			NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_fw_image_download failed: rc=%s\n",
+					  spdk_strerror(abs(res)));
+			return res;
 		}
+
 		p += transfer;
 		offset += transfer;
 		size_remaining -= transfer;
@@ -5312,9 +5337,7 @@ spdk_nvme_ctrlr_update_firmware(struct spdk_nvme_ctrlr *ctrlr, void *payload, ui
 	}
 
 	res = nvme_wait_for_adminq_completion(ctrlr, status);
-
 	memcpy(completion_status, &status->cpl.status, sizeof(struct spdk_nvme_status));
-
 	if (!status->timed_out) {
 		free(status);
 	}
@@ -5327,9 +5350,11 @@ spdk_nvme_ctrlr_update_firmware(struct spdk_nvme_ctrlr *ctrlr, void *payload, ui
 				NVME_CTRLR_NOTICELOG(ctrlr,
 						     "firmware activation requires conventional reset to be performed. !\n");
 			} else {
-				NVME_CTRLR_ERRLOG(ctrlr, "nvme_ctrlr_cmd_fw_commit failed!\n");
+				NVME_CTRLR_ERRLOG(ctrlr, "wait for nvme_ctrlr_cmd_fw_commit failed: rc=%s\n",
+						  spdk_strerror(abs(res)));
 			}
-			return -ENXIO;
+
+			return res;
 		}
 	}
 
@@ -5656,16 +5681,18 @@ spdk_nvme_ctrlr_security_receive(struct spdk_nvme_ctrlr *ctrlr, uint8_t secp,
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_cmd_security_receive failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
-	}
-	free(status);
 
-	return 0;
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
+	}
+
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_security_receive failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+	}
+
+	return res;
 }
 
 int
@@ -5688,17 +5715,18 @@ spdk_nvme_ctrlr_security_send(struct spdk_nvme_ctrlr *ctrlr, uint8_t secp,
 		free(status);
 		return res;
 	}
-	if (nvme_wait_for_adminq_completion(ctrlr, status)) {
-		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_cmd_security_send failed!\n");
-		if (!status->timed_out) {
-			free(status);
-		}
-		return -ENXIO;
+
+	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	if (!status->timed_out) {
+		free(status);
 	}
 
-	free(status);
+	if (res) {
+		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_cmd_security_send failed: rc=%s\n",
+				  spdk_strerror(abs(res)));
+	}
 
-	return 0;
+	return res;
 }
 
 uint64_t
