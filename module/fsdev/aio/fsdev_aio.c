@@ -19,6 +19,8 @@
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 
+#define FSDEV_AIO_FUSE_KERNEL_MINOR_VERSION 34
+
 #define SPDK_URING_QUEUE_DEPTH 512
 
 #define FILE_PTR_LUT_INIT_SIZE 1000
@@ -77,6 +79,9 @@
 #endif
 
 #define FANOTIFY_MASK (FAN_ATTRIB | FAN_ONDIR | FAN_EVENT_ON_CHILD)
+
+#define MAX_GETXATTR_BUF_SIZE 512 /* TODO: what is the max size? */
+#define MAX_SETXATTR_BUF_SIZE 1024 /* TODO: what is the max size? */
 
 /*
  * Example of traditional IOCTL variant of the data that can be
@@ -1237,7 +1242,8 @@ fsdev_aio_set_init_opts(struct aio_fsdev *vfsdev, const struct fuse_init_in *ini
 	memset(init_out, 0, sizeof(*init_out));
 
 	init_out->major = FUSE_KERNEL_VERSION;
-	init_out->minor = 34; /* FUSE_KERNEL_MINOR_VERSION */
+	init_out->minor = spdk_min(init_in->minor, spdk_min(FSDEV_AIO_FUSE_KERNEL_MINOR_VERSION,
+				   FUSE_KERNEL_MINOR_VERSION));
 	init_out->max_readahead = vfsdev->mount_opts.max_readahead;
 	init_out->max_background = 0xffff;
 	init_out->congestion_threshold = 0xffff;
@@ -1259,10 +1265,13 @@ fsdev_aio_set_init_opts(struct aio_fsdev *vfsdev, const struct fuse_init_in *ini
 		FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_DONT_MASK |
 		FUSE_HAS_IOCTL_DIR | FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
 		FUSE_NO_OPEN_SUPPORT | FUSE_PARALLEL_DIROPS | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
-		FUSE_NO_OPENDIR_SUPPORT | FUSE_SUBMOUNTS | FUSE_SETXATTR_EXT | FUSE_INIT_EXT |
+		FUSE_NO_OPENDIR_SUPPORT | FUSE_SUBMOUNTS | FUSE_INIT_EXT |
 		FUSE_EXPORT_SUPPORT | FUSE_AUTO_INVAL_DATA |  FUSE_EXPLICIT_INVAL_DATA | FUSE_POSIX_ACL |
 		FUSE_POSIX_LOCKS | FUSE_FLOCK_LOCKS | FUSE_ATOMIC_O_TRUNC | FUSE_NO_EXPORT_SUPPORT |
 		FUSE_DIRECT_IO_ALLOW_MMAP;
+	if (init_out->minor >= 33) {
+		aio_flags |= FUSE_SETXATTR_EXT;
+	}
 	flags &= aio_flags;
 	init_out->flags = (uint32_t)(flags);
 	init_out->flags2 = (uint32_t)(flags >> 32);
@@ -3617,37 +3626,19 @@ fop_failed:
 	return res;
 }
 
-#define XATTR_FLAGS_MAP \
-	XATTR_FLAG(XATTR_CREATE) \
-	XATTR_FLAG(XATTR_REPLACE)
-
-static uint32_t
-fsdev_xattr_flags_to_posix(uint64_t flags)
-{
-	uint32_t result = 0;
-
-#define XATTR_FLAG(name) \
-	if (flags & SPDK_FSDEV_##name) { \
-		result |= name;          \
-	}
-
-	XATTR_FLAGS_MAP;
-
-#undef XATTR_FLAG
-
-	return result;
-}
-
 static int
 fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, fd;
 	struct aio_fsdev_file_object *fobject;
-	const char *name = fsdev_io->u_in.setxattr.name;
-	const char *value = fsdev_io->u_in.setxattr.value;
-	uint32_t size = fsdev_io->u_in.setxattr.size;
-	uint64_t flags = fsdev_io->u_in.setxattr.flags;
+	struct fuse_setxattr_in *setxattr_in = fsdev_io->u_in.fuse.op.setxattr;
+	size_t setxattr_in_size;
+	const char *name;
+	size_t namelen;
+	const char *value;
+	uint32_t size = setxattr_in->size;
+	uint64_t flags = setxattr_in->flags;
 	static const char *acl_access_name = "system.posix_acl_access";
 
 	if (!vfsdev->opts.xattr_enabled) {
@@ -3655,7 +3646,21 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -ENOSYS;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setxattr.fobject);
+	setxattr_in_size = (vfsdev->mount_opts.flags & FUSE_SETXATTR_EXT) ?
+			   sizeof(*setxattr_in) : FUSE_COMPAT_SETXATTR_IN_SIZE;
+
+	name = (char *)(setxattr_in) + setxattr_in_size;
+	namelen = strnlen(name, MAX_SETXATTR_BUF_SIZE); /* TODO: what is the max name length? */
+	if (namelen == MAX_SETXATTR_BUF_SIZE) {
+		return -ENAMETOOLONG;
+	}
+
+	value = name + namelen + 1;
+	if (strnlen(value, MAX_SETXATTR_BUF_SIZE - namelen - 1) == MAX_SETXATTR_BUF_SIZE - namelen - 1) {
+		return -ENAMETOOLONG;
+	}
+
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -3668,7 +3673,7 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		goto fop_failed;
 	}
 
-	res = fsetxattr(fd, name, value, size, fsdev_xattr_flags_to_posix(flags));
+	res = fsetxattr(fd, name, value, size, flags);
 	if (res == -1) {
 		res = -errno;
 		if (res == -ENOTSUP) {
@@ -3680,18 +3685,19 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	}
 
 	/* Clear SGID when system.posix_acl_access is set. */
-	if ((flags & SPDK_FSDEV_SETXATTR_ACL_KILL_SGID) && !strcmp(name, acl_access_name)) {
-		struct spdk_fsdev_file_attr st = {};
+	if ((vfsdev->mount_opts.flags & FUSE_SETXATTR_EXT) && (flags & FUSE_SETXATTR_ACL_KILL_SGID) &&
+	    !strcmp(name, acl_access_name)) {
+		struct fuse_entry_out entry_out = {};
 		mode_t new_mode;
 
-		res = file_object_fill_attr(fobject, &st);
+		res = fsdev_aio_fill_entry_out(fobject, &entry_out);
 		if (res) {
 			SPDK_ERRLOG("Failed to get file attrs for cleaning SGID on behalf of changed "
 				    "\"%s\" with error=%d - ignoring.\n", acl_access_name, res);
 			goto fop_failed;
 		}
 
-		new_mode = st.mode & ~S_ISGID;
+		new_mode = entry_out.attr.mode & ~S_ISGID;
 		res = fchmod(fobject->fd, new_mode);
 		if (res == -1) {
 			SPDK_WARNLOG("Failed to clean SGID on behalf of changed '%s' with errno=%d - ignoring.\n",
@@ -3719,9 +3725,11 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, fd;
 	struct aio_fsdev_file_object *fobject;
-	const char *name = fsdev_io->u_in.getxattr.name;
-	void *buffer = fsdev_io->u_in.getxattr.buffer;
-	size_t size = fsdev_io->u_in.getxattr.size;
+	struct fuse_getxattr_in *getxattr_in = fsdev_io->u_in.fuse.op.getxattr;
+	const char *name;
+	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
+	void *buffer = out_iov->iov_base;
+	size_t size = getxattr_in->size;
 	ssize_t value_size;
 
 	if (!vfsdev->opts.xattr_enabled) {
@@ -3729,7 +3737,13 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -ENOSYS;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getxattr.fobject);
+	name = (char *)(getxattr_in) + sizeof(*getxattr_in);
+	if (strnlen(name, MAX_GETXATTR_BUF_SIZE) == MAX_GETXATTR_BUF_SIZE) {
+		SPDK_ERRLOG("Invalid name\n");
+		return -EINVAL;
+	}
+
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -3756,8 +3770,7 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		goto fop_failed;
 	}
 
-	fsdev_io->u_out.getxattr.value_size = value_size;
-
+	fsdev_io->u_out.fuse.hdr->len += value_size;
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
@@ -3778,15 +3791,17 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 	ssize_t data_size;
 	int res, fd;
 	struct aio_fsdev_file_object *fobject;
-	char *buffer = fsdev_io->u_in.listxattr.buffer;
-	size_t size = fsdev_io->u_in.listxattr.size;
+	struct fuse_getxattr_in *getxattr_in = fsdev_io->u_in.fuse.op.getxattr;
+	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
+	void *buffer = out_iov->iov_base;
+	size_t size = getxattr_in->size;
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.listxattr.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -3810,9 +3825,7 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		goto fop_failed;
 	}
 
-	fsdev_io->u_out.listxattr.data_size = data_size;
-	fsdev_io->u_out.listxattr.size_only = (size == 0);
-
+	fsdev_io->u_out.fuse.hdr->len += data_size;
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " data_size=%zu\n",
 		      FOBJECT_ARGS(fobject), data_size);
@@ -3831,14 +3844,14 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res, fd;
 	struct aio_fsdev_file_object *fobject;
-	const char *name = fsdev_io->u_in.removexattr.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
 		return -ENOSYS;
 	}
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.removexattr.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -4602,6 +4615,18 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_FSYNCDIR:
 		status = fsdev_aio_op_fsync(ch, fsdev_io);
 		break;
+	case FUSE_SETXATTR:
+		status = fsdev_aio_op_setxattr(ch, fsdev_io);
+		break;
+	case FUSE_GETXATTR:
+		status = fsdev_aio_op_getxattr(ch, fsdev_io);
+		break;
+	case FUSE_LISTXATTR:
+		status = fsdev_aio_op_listxattr(ch, fsdev_io);
+		break;
+	case FUSE_REMOVEXATTR:
+		status = fsdev_aio_op_removexattr(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4793,18 +4818,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_SETXATTR:
-		status = fsdev_aio_op_setxattr(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_GETXATTR:
-		status = fsdev_aio_op_getxattr(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LISTXATTR:
-		status = fsdev_aio_op_listxattr(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_REMOVEXATTR:
-		status = fsdev_aio_op_removexattr(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_FLUSH:
 		status = fsdev_aio_op_flush(ch, fsdev_io);
 		break;
@@ -4868,6 +4881,10 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_STATFS:
 	case SPDK_FSDEV_IO_FSYNC:
 	case SPDK_FSDEV_IO_FSYNCDIR:
+	case SPDK_FSDEV_IO_SETXATTR:
+	case SPDK_FSDEV_IO_GETXATTR:
+	case SPDK_FSDEV_IO_LISTXATTR:
+	case SPDK_FSDEV_IO_REMOVEXATTR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5341,7 +5358,9 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
 					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK) | \
 					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS) | \
-					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR);
+					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR) | \
+					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
+					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
