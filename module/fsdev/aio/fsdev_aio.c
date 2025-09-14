@@ -2601,13 +2601,13 @@ fsdev_aio_op_flush(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_handle *fhandle;
 	int res, dup_fd;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flush.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flush.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsdev_io->u_in.fuse.op.flush->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
@@ -4627,6 +4627,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_REMOVEXATTR:
 		status = fsdev_aio_op_removexattr(ch, fsdev_io);
 		break;
+	case FUSE_FLUSH:
+		status = fsdev_aio_op_flush(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4818,9 +4821,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_FLUSH:
-		status = fsdev_aio_op_flush(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READDIR:
 		status = fsdev_aio_op_readdir(ch, fsdev_io);
 		break;
@@ -4885,6 +4885,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_GETXATTR:
 	case SPDK_FSDEV_IO_LISTXATTR:
 	case SPDK_FSDEV_IO_REMOVEXATTR:
+	case SPDK_FSDEV_IO_FLUSH:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5360,7 +5361,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS) | \
 					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR) | \
 					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
-					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR);
+					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
+					       (1ULL << FUSE_FLUSH);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
