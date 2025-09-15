@@ -4014,32 +4014,6 @@ fop_failed:
 	return res;
 }
 
-#define FALLOC_FLAGS_MAP \
-	FALLOC_FLAG(FL_KEEP_SIZE)      \
-	FALLOC_FLAG(FL_PUNCH_HOLE)     \
-	FALLOC_FLAG(FL_NO_HIDE_STALE)  \
-	FALLOC_FLAG(FL_COLLAPSE_RANGE) \
-	FALLOC_FLAG(FL_ZERO_RANGE)     \
-	FALLOC_FLAG(FL_INSERT_RANGE)   \
-	FALLOC_FLAG(FL_UNSHARE_RANGE)
-
-static uint32_t
-fsdev_falloc_flags_to_posix(uint32_t flags)
-{
-	uint32_t result = 0;
-
-#define FALLOC_FLAG(name) \
-	if (flags & SPDK_FSDEV_FALLOC_##name) { \
-		result |= FALLOC_##name;        \
-	}
-
-	FALLOC_FLAGS_MAP;
-
-#undef FALLOC_FLAG
-
-	return result;
-}
-
 static int
 fsdev_aio_do_fallocate(struct aio_fsdev_file_handle *fhandle, uint32_t mode,
 		       uint64_t offset, uint64_t length)
@@ -4072,11 +4046,12 @@ fsdev_aio_op_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	int res;
+	struct fuse_fallocate_in *fallocate_in = fsdev_io->u_in.fuse.op.fallocate;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	uint32_t mode = fsdev_io->u_in.fallocate.mode;
-	uint64_t offset  = fsdev_io->u_in.fallocate.offset;
-	uint64_t length = fsdev_io->u_in.fallocate.length;
+	uint32_t mode = fallocate_in->mode;
+	uint64_t offset  = fallocate_in->offset;
+	uint64_t length = fallocate_in->length;
 
 #ifndef __linux__
 	if (mode) {
@@ -4084,20 +4059,19 @@ fsdev_aio_op_fallocate(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		return -EINVAL;
 	}
 #endif
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fallocate.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fallocate.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fallocate_in->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
 		goto fop_failed;
 	}
 
-	mode = fsdev_falloc_flags_to_posix(mode);
 	res = fsdev_aio_do_fallocate(fhandle, mode, offset, length);
 	if (res) {
 		SPDK_ERRLOG("fallocate failed for fh=%p with err=%d\n",
@@ -4711,6 +4685,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_INTERRUPT:
 		status = fsdev_aio_op_interrupt(ch, fsdev_io);
 		break;
+	case FUSE_FALLOCATE:
+		status = fsdev_aio_op_fallocate(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4905,9 +4882,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_FALLOCATE:
-		status = fsdev_aio_op_fallocate(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		status = fsdev_aio_op_copy_file_range(ch, fsdev_io);
 		break;
@@ -4961,6 +4935,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READDIR:
 	case SPDK_FSDEV_IO_READDIR_SIMPLE:
 	case SPDK_FSDEV_IO_ABORT:
+	case SPDK_FSDEV_IO_FALLOCATE:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5438,7 +5413,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
 					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
 					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
-					       (1ULL << FUSE_INTERRUPT);
+					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
