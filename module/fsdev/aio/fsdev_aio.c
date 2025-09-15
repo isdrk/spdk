@@ -1629,7 +1629,7 @@ fsdev_aio_op_syncfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject;
 	int fd, res;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.syncfs.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (fobject != vfsdev->root) {
 		SPDK_ERRLOG("Syncfs expected root file object but received " FOBJECT_FMT
 			    "\n", FOBJECT_ARGS(fobject));
@@ -4696,6 +4696,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_COPY_FILE_RANGE:
 		status = fsdev_aio_op_copy_file_range(ch, fsdev_io);
 		break;
+	case FUSE_SYNCFS:
+		status = fsdev_aio_op_syncfs(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4942,6 +4945,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_ABORT:
 	case SPDK_FSDEV_IO_FALLOCATE:
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
+	case SPDK_FSDEV_IO_SYNCFS:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5420,7 +5424,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
 					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
 					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
-					       (1ULL << FUSE_COPY_FILE_RANGE);
+					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
