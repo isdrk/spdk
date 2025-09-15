@@ -4096,41 +4096,44 @@ fsdev_aio_op_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *f
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	ssize_t res;
 	int saverr = 0;
+	struct fuse_copy_file_range_in *copy_file_range_in = fsdev_io->u_in.fuse.op.copy_file_range;
 	struct aio_fsdev_file_object *fobject_in;
 	struct aio_fsdev_file_handle *fhandle_in;
-	off_t off_in = fsdev_io->u_in.copy_file_range.off_in;
+	off_t off_in = copy_file_range_in->off_in;
 	struct aio_fsdev_file_object *fobject_out;
 	struct aio_fsdev_file_handle *fhandle_out;
-	off_t off_out = fsdev_io->u_in.copy_file_range.off_out;
-	size_t len = fsdev_io->u_in.copy_file_range.len;
-	uint32_t flags = fsdev_io->u_in.copy_file_range.flags;
+	off_t off_out = copy_file_range_in->off_out;
+	size_t len = copy_file_range_in->len;
+	uint32_t flags = copy_file_range_in->flags;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_write_out *write_out = fsdev_io->u_out.fuse.op.write;
 
 	if (vfsdev->opts.disable_copy_file_range) {
 		SPDK_ERRLOG("copy_file_range is disabled by config\n");
 		return -ENOSYS;
 	}
 
-	fobject_in = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_in);
+	fobject_in = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject_in) {
 		SPDK_ERRLOG("Invalid fobject_in\n");
 		return -EINVAL;
 	}
 
-	fhandle_in = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_in);
+	fhandle_in = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, copy_file_range_in->fh_in);
 	if (!fhandle_in) {
 		SPDK_ERRLOG("Invalid fhandle_in: %p\n", fhandle_in);
 		res = -EINVAL;
 		goto bad_fobject_in;
 	}
 
-	fobject_out = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.copy_file_range.fobject_out);
+	fobject_out = fsdev_aio_get_fobject_by_nodeid(vfsdev, copy_file_range_in->nodeid_out);
 	if (!fobject_out) {
 		SPDK_ERRLOG("Invalid fobject_out\n");
 		res = -EINVAL;
 		goto bad_fobject_in;
 	}
 
-	fhandle_out = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.copy_file_range.fhandle_out);
+	fhandle_out = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, copy_file_range_in->fh_out);
 	if (!fhandle_out) {
 		SPDK_ERRLOG("Invalid fhandle_out: %p\n", fhandle_out);
 		res = -EINVAL;
@@ -4150,7 +4153,9 @@ fsdev_aio_op_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *f
 		      res, FOBJECT_ARGS(fobject_in), fhandle_in, (uint64_t)off_in, FOBJECT_ARGS(fobject_out), fhandle_out,
 		      (uint64_t)off_out, len, flags);
 
-	fsdev_io->u_out.copy_file_range.data_size = res;
+
+	out_hdr->len += sizeof(struct fuse_write_out);
+	write_out->size = res;
 	res = 0;
 
 fop_failed:
@@ -4688,6 +4693,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_FALLOCATE:
 		status = fsdev_aio_op_fallocate(ch, fsdev_io);
 		break;
+	case FUSE_COPY_FILE_RANGE:
+		status = fsdev_aio_op_copy_file_range(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4882,9 +4890,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
-		status = fsdev_aio_op_copy_file_range(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_SYNCFS:
 		status = fsdev_aio_op_syncfs(ch, fsdev_io);
 		break;
@@ -4936,6 +4941,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READDIR_SIMPLE:
 	case SPDK_FSDEV_IO_ABORT:
 	case SPDK_FSDEV_IO_FALLOCATE:
+	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5413,7 +5419,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
 					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
 					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
-					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE);
+					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
+					       (1ULL << FUSE_COPY_FILE_RANGE);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
