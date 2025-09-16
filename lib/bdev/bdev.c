@@ -28,6 +28,7 @@
 #include "bdev_internal.h"
 #include "spdk_internal/trace_defs.h"
 #include "spdk_internal/assert.h"
+#include "spdk_internal/bdev_qos_module.h"
 #include "bdev_qos_limits.h"
 
 #ifdef SPDK_CONFIG_VTUNE
@@ -85,8 +86,6 @@ bdev_name_cmp(struct spdk_bdev_name *name1, struct spdk_bdev_name *name2)
 }
 
 RB_GENERATE_STATIC(bdev_name_tree, spdk_bdev_name, node, bdev_name_cmp);
-
-struct spdk_bdev_qos;
 
 struct spdk_bdev_qos_mgr {
 	uint64_t last_timeslice;
@@ -180,52 +179,6 @@ static struct spdk_thread	*g_fini_thread = NULL;
 struct spdk_bdev_qos_desc {
 	struct spdk_bdev_qos *qos;
 	TAILQ_ENTRY(spdk_bdev_qos_desc) link;
-};
-
-struct spdk_bdev_qos {
-	/** QoS rate limits. */
-	struct bdev_qos_limits limits;
-
-	bdev_io_tailq_t queued_io;
-
-	struct spdk_spinlock spinlock;
-
-	TAILQ_ENTRY(spdk_bdev_qos) tailq;
-
-	/** Name of the QoS object. */
-	char *name;
-
-	bool pending_unregister;
-
-	/** List of open descriptors for this QoS object. */
-	TAILQ_HEAD(, spdk_bdev_qos_desc) open_descs;
-
-	/** List of user bdevs of this QoS object. */
-	TAILQ_HEAD(, spdk_bdev) bdevs;
-};
-
-struct spdk_bdev_qos_channel;
-
-struct spdk_bdev_qos_poll_group {
-	/** List of QoS I/Os waiting for submission. */
-	bdev_io_tailq_t allowed_io;
-
-	struct spdk_spinlock spinlock;
-
-	TAILQ_HEAD(, spdk_bdev_qos_channel) qos_ch_list;
-};
-
-struct spdk_bdev_qos_channel {
-	/** Borrowed QoS rate limits. */
-	struct bdev_qos_limits_cache limits;
-
-	/** Global QoS rate limits pool */
-	struct spdk_bdev_qos *qos;
-
-	/** Poll group to which this cache belongs. */
-	struct spdk_bdev_qos_poll_group *group;
-
-	TAILQ_ENTRY(spdk_bdev_qos_channel) link;
 };
 
 struct spdk_bdev_mgmt_channel {
