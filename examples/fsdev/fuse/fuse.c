@@ -42,7 +42,10 @@ fsdev_fuse_thread_exit(void *ctx)
 {
 	struct fsdev_fuse_thread *thread = ctx;
 
-	spdk_thread_exit(thread->thread);
+	if (thread->thread != spdk_thread_get_app_thread()) {
+		spdk_thread_exit(thread->thread);
+	}
+
 	free(thread);
 }
 
@@ -290,12 +293,16 @@ fsdev_fuse_start_app(void *ctx)
 		spdk_cpuset_zero(&cpumask);
 		spdk_cpuset_set_cpu(&cpumask, core, true);
 		snprintf(name, sizeof(name), "fuse%u", core);
-		thread->thread = spdk_thread_create(name, &cpumask);
-		if (thread->thread == NULL) {
-			fsdev_fuse_errmsg("%s\n", spdk_strerror(ENOMEM));
-			free(thread);
-			rc = -ENOMEM;
-			goto error;
+		if (core == spdk_env_get_main_core()) {
+			thread->thread = spdk_thread_get_app_thread();
+		} else {
+			thread->thread = spdk_thread_create(name, &cpumask);
+			if (thread->thread == NULL) {
+				fsdev_fuse_errmsg("%s\n", spdk_strerror(ENOMEM));
+				free(thread);
+				rc = -ENOMEM;
+				goto error;
+			}
 		}
 		g_app.num_active++;
 		thread->running = true;
