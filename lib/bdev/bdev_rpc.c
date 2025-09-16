@@ -931,19 +931,26 @@ static const struct spdk_json_object_decoder rpc_bdev_set_qos_limit_decoders[] =
 	},
 };
 
+struct rpc_bdev_qos_ctx {
+	struct spdk_jsonrpc_request	*request;
+	struct spdk_bdev_desc		*desc;
+};
+
 static void
 rpc_bdev_set_qos_limit_complete(void *cb_arg, int status)
 {
-	struct spdk_jsonrpc_request *request = cb_arg;
+	struct rpc_bdev_qos_ctx *ctx = cb_arg;
 
-	if (status != 0) {
-		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+	if (status == 0) {
+		spdk_jsonrpc_send_bool_response(ctx->request, true);
+	} else {
+		spdk_jsonrpc_send_error_response_fmt(ctx->request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 						     "Failed to configure rate limit: %s",
 						     spdk_strerror(-status));
-		return;
 	}
 
-	spdk_jsonrpc_send_bool_response(request, true);
+	spdk_bdev_close(ctx->desc);
+	free(ctx);
 }
 
 static void
@@ -951,8 +958,8 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		       const struct spdk_json_val *params)
 {
 	struct rpc_bdev_set_qos_limit req = {NULL, {UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX}};
-	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	struct spdk_bdev_desc *desc;
+	struct rpc_bdev_qos_ctx *ctx;
 	int i, rc;
 
 	if (spdk_json_decode_object(params, rpc_bdev_set_qos_limit_decoders,
@@ -985,20 +992,19 @@ rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	/* Get the old limits */
-	spdk_bdev_get_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits);
-
-	/* Merge the new rate limits, so only the diff appears in the limits array */
-	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		if (req.limits[i] != UINT64_MAX) {
-			limits[i] = req.limits[i];
-		}
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		spdk_bdev_close(desc);
+		spdk_jsonrpc_send_error_response(request, -ENOMEM, spdk_strerror(ENOMEM));
+		goto cleanup;
 	}
 
-	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), limits,
-				      rpc_bdev_set_qos_limit_complete, request);
+	ctx->request = request;
+	ctx->desc = desc;
 
-	spdk_bdev_close(desc);
+	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), req.limits,
+				      rpc_bdev_set_qos_limit_complete, ctx);
+
 cleanup:
 	free_rpc_bdev_set_qos_limit(&req);
 }
