@@ -3489,6 +3489,47 @@ Example response:
 }
 ~~
 
+### bdev_get_qos_devs {#rpc_bdev_get_qos_devs}
+
+Display current QoS devices.
+
+#### Parameters
+
+This method has no parameters.
+
+#### Response
+
+The response is an array of objects containing information about QoS devices.
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_get_qos_devs"
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "name": "qos_service1",
+      "bdevs": [
+        "Malloc0"
+      ]
+    }
+  ]
+}
+~~
+
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
 Set a bdev to read-only state

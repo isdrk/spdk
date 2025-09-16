@@ -1216,6 +1216,12 @@ def add_parser(subparsers):
     p.add_argument('bdev_name', help='bdev name')
     p.set_defaults(func=bdev_qos_remove_bdev)
 
+    def bdev_get_qos_devs(args):
+        print_dict(rpc.bdev.bdev_get_qos_devs(args.client))
+
+    p = subparsers.add_parser('bdev_get_qos_devs', help='Display current QoS list')
+    p.set_defaults(func=bdev_get_qos_devs)
+
     def bdev_error_inject_error(args):
         rpc.bdev.bdev_error_inject_error(args.client,
                                          name=args.name,

@@ -16,6 +16,8 @@
 
 #include "spdk/log.h"
 
+#include "spdk_internal/bdev_qos_module.h"
+
 #include "bdev_internal.h"
 
 static void
@@ -1188,6 +1190,49 @@ rpc_bdev_qos_remove_bdev(struct spdk_jsonrpc_request *request,
 	_rpc_bdev_qos_add_remove_bdev(request, params, false);
 }
 SPDK_RPC_REGISTER("bdev_qos_remove_bdev", rpc_bdev_qos_remove_bdev, SPDK_RPC_RUNTIME)
+
+static int
+rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
+{
+	struct spdk_json_write_ctx *w = ctx;
+	struct spdk_bdev *bdev;
+
+	spdk_json_write_object_begin(w);
+
+	spdk_json_write_named_string(w, "name", qos->name);
+
+	spdk_json_write_named_array_begin(w, "bdevs");
+	TAILQ_FOREACH(bdev, &qos->bdevs, internal.qos_link) {
+		spdk_json_write_string(w, spdk_bdev_get_name(bdev));
+	}
+	spdk_json_write_array_end(w);
+
+	spdk_json_write_object_end(w);
+
+	return 0;
+}
+
+static void
+rpc_bdev_get_qos_devs(struct spdk_jsonrpc_request *request,
+		      const struct spdk_json_val *params)
+{
+	struct spdk_json_write_ctx *w;
+
+	if (params != NULL) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "bdev_get_qos_devs requires no parameters");
+		return;
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	spdk_bdev_for_each_qos(w, rpc_bdev_qos_dump_info);
+
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+}
+SPDK_RPC_REGISTER("bdev_get_qos_devs", rpc_bdev_get_qos_devs, SPDK_RPC_RUNTIME)
 
 /* SPDK_RPC_ENABLE_BDEV_HISTOGRAM */
 

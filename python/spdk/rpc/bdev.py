@@ -1696,6 +1696,14 @@ def bdev_qos_remove_bdev(client, name, bdev_name):
     return client.call('bdev_qos_remove_bdev', params)
 
 
+def bdev_get_qos_devs(client):
+    """Get information about QoS objects.
+    Returns:
+        List of QoS objects.
+    """
+    return client.call('bdev_get_qos_devs')
+
+
 def bdev_nvme_apply_firmware(client, bdev_name, filename):
     """Download and commit firmware to NVMe device.
     Args:
