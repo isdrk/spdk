@@ -1011,6 +1011,220 @@ cleanup:
 
 SPDK_RPC_REGISTER("bdev_set_qos_limit", rpc_bdev_set_qos_limit, SPDK_RPC_RUNTIME)
 
+struct rpc_qos_create {
+	char *name;
+};
+
+static void
+free_rpc_qos_create(struct rpc_qos_create *req)
+{
+	free(req->name);
+}
+
+static const struct spdk_json_object_decoder rpc_qos_create_decoders[] = {
+	{"name", offsetof(struct rpc_qos_create, name), spdk_json_decode_string},
+};
+
+static void
+rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
+		    const struct spdk_json_val *params)
+{
+	struct rpc_qos_create req = {};
+	int rc;
+
+	if (spdk_json_decode_object(params, rpc_qos_create_decoders,
+				    SPDK_COUNTOF(rpc_qos_create_decoders),
+				    &req)) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		goto cleanup;
+	}
+
+	rc = spdk_bdev_qos_create(req.name, NULL, NULL);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to create QoS %s, %d\n", req.name, rc);
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	spdk_jsonrpc_send_bool_response(request, true);
+
+cleanup:
+	free_rpc_qos_create(&req);
+}
+SPDK_RPC_REGISTER("bdev_qos_create", rpc_bdev_qos_create, SPDK_RPC_RUNTIME)
+
+struct rpc_qos_destroy {
+	char *name;
+};
+
+static void
+free_rpc_qos_destroy(struct rpc_qos_destroy *req)
+{
+	free(req->name);
+}
+
+static const struct spdk_json_object_decoder rpc_qos_destroy_decoders[] = {
+	{"name", offsetof(struct rpc_qos_destroy, name), spdk_json_decode_string},
+};
+
+static void
+rpc_bdev_qos_destroy(struct spdk_jsonrpc_request *request,
+		     const struct spdk_json_val *params)
+{
+	struct rpc_qos_destroy req = {};
+	struct spdk_bdev_qos_desc *desc = NULL;
+	struct spdk_bdev_qos *qos;
+	int rc;
+
+	if (spdk_json_decode_object(params, rpc_qos_destroy_decoders,
+				    SPDK_COUNTOF(rpc_qos_destroy_decoders),
+				    &req)) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		goto cleanup;
+	}
+
+	rc = spdk_bdev_qos_open(req.name, &desc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to open QoS %s, %d\n", req.name, rc);
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	qos = spdk_bdev_qos_desc_get_qos(desc);
+
+	rc = spdk_bdev_qos_destroy(qos);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to delete QoS %s, %d\n", req.name, rc);
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	spdk_jsonrpc_send_bool_response(request, true);
+
+cleanup:
+	if (desc != NULL) {
+		spdk_bdev_qos_close(desc);
+	}
+	free_rpc_qos_destroy(&req);
+}
+SPDK_RPC_REGISTER("bdev_qos_destroy", rpc_bdev_qos_destroy, SPDK_RPC_RUNTIME)
+
+struct qos_add_remove_bdev_ctx {
+	char *name;
+	char *bdev_name;
+	struct spdk_jsonrpc_request *request;
+	struct spdk_bdev_qos_desc *qos_desc;
+	struct spdk_bdev_desc *bdev_desc;
+};
+
+static void
+free_qos_add_remove_bdev_ctx(struct qos_add_remove_bdev_ctx *ctx)
+{
+	if (ctx->bdev_desc != NULL) {
+		spdk_bdev_close(ctx->bdev_desc);
+	}
+	if (ctx->qos_desc != NULL) {
+		spdk_bdev_qos_close(ctx->qos_desc);
+	}
+	free(ctx->name);
+	free(ctx->bdev_name);
+	free(ctx);
+}
+
+static const struct spdk_json_object_decoder qos_add_remove_bdev_decoders[] = {
+	{"name", offsetof(struct qos_add_remove_bdev_ctx, name), spdk_json_decode_string},
+	{"bdev_name", offsetof(struct qos_add_remove_bdev_ctx, bdev_name), spdk_json_decode_string},
+};
+
+static void
+bdev_qos_add_remove_bdev_done(void *cb_arg, int status)
+{
+	struct qos_add_remove_bdev_ctx *ctx = cb_arg;
+
+	if (status == 0) {
+		spdk_jsonrpc_send_bool_response(ctx->request, true);
+	} else {
+		spdk_jsonrpc_send_error_response(ctx->request, status,
+						 spdk_strerror(-status));
+	}
+
+	free_qos_add_remove_bdev_ctx(ctx);
+}
+
+static void
+_rpc_bdev_qos_add_remove_bdev(struct spdk_jsonrpc_request *request,
+			      const struct spdk_json_val *params,
+			      bool add)
+{
+	struct qos_add_remove_bdev_ctx *ctx;
+	struct spdk_bdev_qos *qos;
+	struct spdk_bdev *bdev;
+	int rc;
+
+	ctx = calloc(1, sizeof(*ctx));
+	if (ctx == NULL) {
+		spdk_jsonrpc_send_error_response(request, -ENOMEM, spdk_strerror(ENOMEM));
+		return;
+	}
+
+	ctx->request = request;
+
+	if (spdk_json_decode_object(params, qos_add_remove_bdev_decoders,
+				    SPDK_COUNTOF(qos_add_remove_bdev_decoders), ctx)) {
+		SPDK_ERRLOG("spdk_json_decode_object failed\n");
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "spdk_json_decode_object failed");
+		goto cleanup;
+	}
+
+	rc = spdk_bdev_qos_open(ctx->name, &ctx->qos_desc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to open QoS %s, %d\n", ctx->name, rc);
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	rc = spdk_bdev_open_ext(ctx->bdev_name, false, dummy_bdev_event_cb,
+				NULL, &ctx->bdev_desc);
+	if (rc != 0) {
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	qos = spdk_bdev_qos_desc_get_qos(ctx->qos_desc);
+	bdev = spdk_bdev_desc_get_bdev(ctx->bdev_desc);
+
+	if (add) {
+		spdk_bdev_qos_add_bdev(qos, bdev, bdev_qos_add_remove_bdev_done, ctx);
+	} else {
+		spdk_bdev_qos_remove_bdev(qos, bdev, bdev_qos_add_remove_bdev_done, ctx);
+	}
+	return;
+
+cleanup:
+	free_qos_add_remove_bdev_ctx(ctx);
+}
+
+static void
+rpc_bdev_qos_add_bdev(struct spdk_jsonrpc_request *request,
+		      const struct spdk_json_val *params)
+{
+	_rpc_bdev_qos_add_remove_bdev(request, params, true);
+}
+SPDK_RPC_REGISTER("bdev_qos_add_bdev", rpc_bdev_qos_add_bdev, SPDK_RPC_RUNTIME)
+
+static void
+rpc_bdev_qos_remove_bdev(struct spdk_jsonrpc_request *request,
+			 const struct spdk_json_val *params)
+{
+	_rpc_bdev_qos_add_remove_bdev(request, params, false);
+}
+SPDK_RPC_REGISTER("bdev_qos_remove_bdev", rpc_bdev_qos_remove_bdev, SPDK_RPC_RUNTIME)
+
 /* SPDK_RPC_ENABLE_BDEV_HISTOGRAM */
 
 struct rpc_bdev_enable_histogram_request {

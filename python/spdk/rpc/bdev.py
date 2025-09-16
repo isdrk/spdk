@@ -1652,6 +1652,50 @@ def bdev_set_qos_limit(
     return client.call('bdev_set_qos_limit', params)
 
 
+def bdev_qos_create(client, name):
+    """Create a QoS object.
+    Args:
+        name: name of a QoS object.
+    """
+    params = dict()
+    params['name'] = name
+    return client.call('bdev_qos_create', params)
+
+
+def bdev_qos_destroy(client, name):
+    """Delete a QoS object.
+    Args:
+        name: name of a QoS object.
+    """
+    params = dict()
+    params['name'] = name
+    return client.call('bdev_qos_destroy', params)
+
+
+def bdev_qos_add_bdev(client, name, bdev_name):
+    """Add a bdev to a QoS object.
+    Args:
+        name: Name of a QoS object.
+        bdev_name: Name of a bdev.
+    """
+    params = dict()
+    params['name'] = name
+    params['bdev_name'] = bdev_name
+    return client.call('bdev_qos_add_bdev', params)
+
+
+def bdev_qos_remove_bdev(client, name, bdev_name):
+    """Remove a bdev from a QoS object.
+    Args:
+        name: Name of a QoS object.
+        bdev_name: Name of a bdev.
+    """
+    params = dict()
+    params['name'] = name
+    params['bdev_name'] = bdev_name
+    return client.call('bdev_qos_remove_bdev', params)
+
+
 def bdev_nvme_apply_firmware(client, bdev_name, filename):
     """Download and commit firmware to NVMe device.
     Args:

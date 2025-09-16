@@ -1181,6 +1181,41 @@ def add_parser(subparsers):
                    type=int, required=False)
     p.set_defaults(func=bdev_set_qos_limit)
 
+    def bdev_qos_create(args):
+        rpc.bdev.bdev_qos_create(args.client,
+                                 name=args.name)
+
+    p = subparsers.add_parser('bdev_qos_create', help='Create a QoS object')
+    p.add_argument('name', help='QoS object name')
+    p.set_defaults(func=bdev_qos_create)
+
+    def bdev_qos_destroy(args):
+        rpc.bdev.bdev_qos_destroy(args.client, name=args.name)
+
+    p = subparsers.add_parser('bdev_qos_destroy', help='Delete a QoS object')
+    p.add_argument('name', help='QoS object name')
+    p.set_defaults(func=bdev_qos_destroy)
+
+    def bdev_qos_add_bdev(args):
+        rpc.bdev.bdev_qos_add_bdev(args.client,
+                                   name=args.name,
+                                   bdev_name=args.bdev_name)
+
+    p = subparsers.add_parser('bdev_qos_add_bdev', help='Add a bdev to a QoS object')
+    p.add_argument('name', help='QoS object name')
+    p.add_argument('bdev_name', help='bdev name')
+    p.set_defaults(func=bdev_qos_add_bdev)
+
+    def bdev_qos_remove_bdev(args):
+        rpc.bdev.bdev_qos_remove_bdev(args.client,
+                                      name=args.name,
+                                      bdev_name=args.bdev_name)
+
+    p = subparsers.add_parser('bdev_qos_remove_bdev', help='Remove a bdev from a QoS object')
+    p.add_argument('name', help='QoS object name')
+    p.add_argument('bdev_name', help='bdev name')
+    p.set_defaults(func=bdev_qos_remove_bdev)
+
     def bdev_error_inject_error(args):
         rpc.bdev.bdev_error_inject_error(args.client,
                                          name=args.name,

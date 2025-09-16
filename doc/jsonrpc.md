@@ -3353,6 +3353,142 @@ Example response:
 }
 ~~
 
+### bdev_qos_create {#rpc_bdev_qos_create}
+
+Create a QoS device.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS device name
+
+#### Example
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_qos_create",
+  "params": {
+    "name": "qos_service1"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
+### bdev_qos_destroy {#rpc_bdev_qos_destroy}
+
+Delete a QoS device.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS device name
+
+#### Example
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_qos_destroy",
+  "params": {
+    "name": "qos_service1"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
+### bdev_qos_add_bdev {#rpc_bdev_qos_add_bdev}
+
+Add a bdev to a QoS device.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS device name
+ bdev_name         | Required   | string | bdev name
+
+#### Example
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_qos_add_bdev",
+  "params": {
+    "name": "qos_service1",
+    "bdev_name": "Malloc0"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
+### bdev_qos_remove_bdev {#rpc_bdev_qos_remove_bdev}
+
+Remove a bdev from a QoS device.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS device name
+ bdev_name         | Required   | string | bdev name
+
+#### Example
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_qos_remove_bdev",
+  "params": {
+    "name": "qos_service1",
+    "bdev_name": "Malloc0"
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
 Set a bdev to read-only state
