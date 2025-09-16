@@ -1344,7 +1344,7 @@ test_nvme_wait_for_completion(void)
 	memset(&g_status, 0, sizeof(g_status));
 	completion_delay_us = 2000000;
 	ctrlr.opts.admin_timeout_ms = 1000;
-	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status);
+	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status, false);
 	CU_ASSERT(g_status.timed_out == true);
 	CU_ASSERT(g_status.done == false);
 	CU_ASSERT(rc == -ECANCELED);
@@ -1354,7 +1354,7 @@ test_nvme_wait_for_completion(void)
 	g_process_comp_result = -1;
 	completion_delay_us = 1000000;
 	ctrlr.opts.admin_timeout_ms = 2000;
-	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status);
+	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status, false);
 	CU_ASSERT(rc == -ECANCELED);
 	CU_ASSERT(g_status.timed_out == true);
 	CU_ASSERT(g_status.done == false);
@@ -1367,7 +1367,7 @@ test_nvme_wait_for_completion(void)
 	memset(&g_status, 0, sizeof(g_status));
 	completion_delay_us = 1000000;
 	ctrlr.opts.admin_timeout_ms = 2000;
-	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status);
+	rc = nvme_wait_for_adminq_completion(&ctrlr, &g_status, false);
 	CU_ASSERT(g_status.timed_out == false);
 	CU_ASSERT(g_status.done == true);
 	CU_ASSERT(rc == 0);

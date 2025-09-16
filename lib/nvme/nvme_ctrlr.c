@@ -803,11 +803,7 @@ nvme_ctrlr_update_ana_log_page(struct spdk_nvme_ctrlr *ctrlr)
 		return rc;
 	}
 
-	rc = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	rc = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (rc) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_get_log_page failed: rc=%s\n",
 				  spdk_strerror(abs(rc)));
@@ -972,11 +968,7 @@ nvme_ctrlr_set_arbitration_feature(struct spdk_nvme_ctrlr *ctrlr)
 		return;
 	}
 
-	rc = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	rc = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (rc) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_set_feature failed: rc=%s\n",
 				  spdk_strerror(abs(rc)));
@@ -2738,7 +2730,7 @@ nvme_ctrlr_identify_active_ns(struct spdk_nvme_ctrlr *ctrlr)
 	}
 
 	nvme_ctrlr_identify_active_ns_async(ctx);
-	rc = nvme_wait_for_adminq_completion(ctrlr, &ctx->status);
+	rc = nvme_wait_for_adminq_completion(ctrlr, &ctx->status, false);
 	if (rc || ctx->state == NVME_ACTIVE_NS_STATE_ERROR) {
 		if (!ctx->status.timed_out) {
 			nvme_active_ns_ctx_destroy(ctx);
@@ -3425,11 +3417,7 @@ nvme_ctrlr_clear_changed_ns_log(struct spdk_nvme_ctrlr_aer_completion *async_eve
 		goto out;
 	}
 
-	rc = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	rc = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (rc) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_get_log_page failed: rc=%s\n",
 				  spdk_strerror(abs(rc)));
@@ -5084,11 +5072,7 @@ spdk_nvme_ctrlr_attach_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_attach_ns failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
@@ -5133,11 +5117,7 @@ spdk_nvme_ctrlr_detach_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_detach_ns failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
@@ -5166,7 +5146,7 @@ spdk_nvme_ctrlr_create_ns(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns_dat
 		return 0;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	res = nvme_wait_for_adminq_completion(ctrlr, status, false);
 	nsid = status->cpl.cdw0;
 	if (!status->timed_out) {
 		free(status);
@@ -5206,11 +5186,7 @@ spdk_nvme_ctrlr_delete_ns(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid)
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_delete_ns failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
@@ -5240,11 +5216,7 @@ spdk_nvme_ctrlr_format(struct spdk_nvme_ctrlr *ctrlr, uint32_t nsid,
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_format failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
@@ -5307,7 +5279,7 @@ spdk_nvme_ctrlr_update_firmware(struct spdk_nvme_ctrlr *ctrlr, void *payload, ui
 			return res;
 		}
 
-		res = nvme_wait_for_adminq_completion(ctrlr, status);
+		res = nvme_wait_for_adminq_completion(ctrlr, status, false);
 		if (res) {
 			if (!status->timed_out) {
 				free(status);
@@ -5336,7 +5308,7 @@ spdk_nvme_ctrlr_update_firmware(struct spdk_nvme_ctrlr *ctrlr, void *payload, ui
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
+	res = nvme_wait_for_adminq_completion(ctrlr, status, false);
 	memcpy(completion_status, &status->cpl.status, sizeof(struct spdk_nvme_status));
 	if (!status->timed_out) {
 		free(status);
@@ -5682,11 +5654,7 @@ spdk_nvme_ctrlr_security_receive(struct spdk_nvme_ctrlr *ctrlr, uint8_t secp,
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "wait for spdk_nvme_ctrlr_cmd_security_receive failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
@@ -5716,11 +5684,7 @@ spdk_nvme_ctrlr_security_send(struct spdk_nvme_ctrlr *ctrlr, uint8_t secp,
 		return res;
 	}
 
-	res = nvme_wait_for_adminq_completion(ctrlr, status);
-	if (!status->timed_out) {
-		free(status);
-	}
-
+	res = nvme_wait_for_adminq_completion(ctrlr, status, true);
 	if (res) {
 		NVME_CTRLR_ERRLOG(ctrlr, "spdk_nvme_ctrlr_cmd_security_send failed: rc=%s\n",
 				  spdk_strerror(abs(res)));
