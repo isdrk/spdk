@@ -1671,47 +1671,25 @@ fsdev_aio_op_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	off_t offset = fsdev_io->u_in.lseek.offset;
-	enum spdk_fsdev_seek_whence whence = fsdev_io->u_in.lseek.whence;
-	int awhence;
+	struct fuse_lseek_in *lseek_in = fsdev_io->u_in.fuse.op.lseek;
+	off_t offset = lseek_in->offset;
+	uint32_t whence = lseek_in->whence;
+	struct fuse_lseek_out *lseek_out = fsdev_io->u_out.fuse.op.lseek;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lseek.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.lseek.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, lseek_in->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
 		goto fop_failed;
 	}
 
-	switch (whence) {
-	case SPDK_FSDEV_SEEK_SET:
-		awhence = SEEK_SET;
-		break;
-	case SPDK_FSDEV_SEEK_CUR:
-		awhence = SEEK_CUR;
-		break;
-	case SPDK_FSDEV_SEEK_END:
-		awhence = SEEK_END;
-		break;
-	case SPDK_FSDEV_SEEK_HOLE:
-		awhence = SEEK_HOLE;
-		break;
-	case SPDK_FSDEV_SEEK_DATA:
-		awhence = SEEK_DATA;
-		break;
-	default:
-		/* Inducing error from lseek() with invalid whence. */
-		awhence = -1;
-	}
-
-	offset = lseek(fhandle->fd, offset, awhence);
-	fsdev_io->u_out.lseek.offset = offset;
-	fsdev_io->u_out.lseek.whence = whence;
+	offset = lseek(fhandle->fd, offset, (int)whence);
 	if (offset == (off_t) -1) {
 		res = -errno;
 		SPDK_ERRLOG("Failed to change read/write offset for " FOBJECT_FMT " (err=%d)\n",
@@ -1720,6 +1698,9 @@ fsdev_aio_op_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
+
+	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_lseek_out);
+	lseek_out->offset = offset;
 	res = 0;
 
 fop_failed:
@@ -4699,6 +4680,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_SYNCFS:
 		status = fsdev_aio_op_syncfs(ch, fsdev_io);
 		break;
+	case FUSE_LSEEK:
+		status = fsdev_aio_op_lseek(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4893,12 +4877,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_SYNCFS:
-		status = fsdev_aio_op_syncfs(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_LSEEK:
-		status = fsdev_aio_op_lseek(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_POLL:
 		status = fsdev_aio_op_poll(ch, fsdev_io);
 		break;
@@ -4946,6 +4924,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FALLOCATE:
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 	case SPDK_FSDEV_IO_SYNCFS:
+	case SPDK_FSDEV_IO_LSEEK:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5424,7 +5403,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
 					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
 					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
-					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS);
+					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS) | \
+					       (1ULL << FUSE_LSEEK);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
