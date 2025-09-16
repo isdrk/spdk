@@ -10201,10 +10201,8 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
-	bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
-
-	if (bdev_ch->qos_cache != NULL) {
-		assert(bdev_ch->qos_cache->qos != NULL);
+	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
+		assert(bdev_ch->qos_cache != NULL);
 
 		bdev_qos_unblock_all_queued_io(bdev_ch);
 
@@ -10212,6 +10210,8 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 		bdev_qos_cache_destroy(bdev_ch->qos_cache);
 		spdk_spin_unlock(&bdev->internal.spinlock);
 		bdev_ch->qos_cache = NULL;
+
+		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
 	}
 
 	spdk_bdev_for_each_channel_continue(i, 0);
