@@ -186,17 +186,11 @@ struct spdk_bdev_qos {
 	/** Function that processes queued I/O commands each time slice. */
 	spdk_bdev_qos_poll_fn poll_fn;
 
-	/** QoS cache list */
-	TAILQ_HEAD(qos_cache_list, spdk_bdev_qos_cache) cache_list;
-
 	bdev_io_tailq_t queued_io;
 
 	struct spdk_spinlock spinlock;
 
 	TAILQ_ENTRY(spdk_bdev_qos) tailq;
-
-	/** Indicate this QoS is started. */
-	bool started;
 };
 
 struct spdk_bdev_qos_cache {
@@ -206,13 +200,8 @@ struct spdk_bdev_qos_cache {
 	/** Global QoS rate limits pool */
 	struct spdk_bdev_qos *qos;
 
-	/** Thread on which this cache is located. */
-	struct spdk_thread *thread;
-
 	/** Bdev management channel to which this cache belongs. */
 	struct spdk_bdev_mgmt_channel *mgmt_ch;
-
-	TAILQ_ENTRY(spdk_bdev_qos_cache) tailq;
 };
 
 struct spdk_bdev_mgmt_channel {
@@ -429,10 +418,6 @@ static void _bdev_io_get_accel_buf(struct spdk_bdev_io *bdev_io);
 
 static void bdev_write_zero_buffer_done(struct spdk_bdev_io *bdev_io, bool success, void *cb_arg);
 static void bdev_write_zero_buffer(void *bdev_io);
-
-static void bdev_enable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
-				struct spdk_io_channel *ch, void *_ctx);
-static void bdev_enable_qos_done(struct spdk_bdev *bdev, void *_ctx, int status);
 
 static int bdev_readv_blocks_with_md(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 				     struct iovec *iov, int iovcnt, void *md_buf, uint64_t offset_blocks,
@@ -2522,6 +2507,7 @@ spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 	g_bdev_mgr.qos_timeslice_size = g_bdev_opts.qos_timeslice_us * spdk_get_ticks_hz() /
 					SPDK_SEC_TO_USEC;
 
+	g_bdev_mgr.qos_last_timeslice = spdk_get_ticks();
 	g_bdev_mgr.qos_poller = SPDK_POLLER_REGISTER(bdev_poll_qos, NULL,
 				g_bdev_opts.qos_timeslice_us);
 	spdk_poller_pause(g_bdev_mgr.qos_poller);
@@ -4298,8 +4284,6 @@ bdev_qos_cache_create(struct spdk_bdev_qos *qos)
 
 	bdev_qos_limits_cache_init(&qos_cache->limits, &qos->limits);
 	qos_cache->qos = qos;
-	TAILQ_INSERT_TAIL(&qos->cache_list, qos_cache, tailq);
-	qos_cache->thread = spdk_get_thread();
 
 	return qos_cache;
 }
@@ -4307,17 +4291,6 @@ bdev_qos_cache_create(struct spdk_bdev_qos *qos)
 static void
 bdev_qos_cache_destroy(struct spdk_bdev_qos_cache *qos_cache)
 {
-	struct spdk_bdev_qos *qos = qos_cache->qos;
-
-	assert(qos != NULL);
-
-	TAILQ_REMOVE(&qos->cache_list, qos_cache, tailq);
-
-	if (TAILQ_EMPTY(&qos->cache_list) && !qos->started) {
-		SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
-		free(qos);
-	}
-
 	free(qos_cache);
 }
 
@@ -4371,19 +4344,6 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 }
 
 static void
-bdev_qos_enable(void *arg)
-{
-	struct spdk_bdev_qos *qos = arg;
-
-	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list)) {
-		g_bdev_mgr.qos_last_timeslice = spdk_get_ticks();
-		spdk_poller_resume(g_bdev_mgr.qos_poller);
-	}
-
-	TAILQ_INSERT_TAIL(&g_bdev_mgr.qos_list, qos, tailq);
-}
-
-static void
 bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_qos	*qos = bdev->internal.qos;
@@ -4392,14 +4352,6 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 
 	/* Rate limiting on this bdev enabled */
 	if (qos) {
-		if (!qos->started) {
-			SPDK_DEBUGLOG(bdev, "Start QoS %p for bdev %s\n", qos, bdev->name);
-
-			qos->started = true;
-
-			spdk_thread_send_msg(spdk_thread_get_app_thread(), bdev_qos_enable, qos);
-		}
-
 		if (!(ch->flags & BDEV_CH_QOS_ENABLED)) {
 			ch->qos_cache = bdev_qos_cache_create(qos);
 			if (ch->qos_cache == NULL) {
@@ -4819,26 +4771,6 @@ bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *mgmt_ch, struct spdk_bdev_io *b
 	return rc == 1;
 }
 
-static void
-_bdev_qos_destroy(void *arg)
-{
-	struct spdk_bdev_qos *qos = arg;
-
-	qos->started = false;
-
-	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
-
-	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list) && g_bdev_mgr.qos_poller) {
-		spdk_poller_pause(g_bdev_mgr.qos_poller);
-	}
-
-	if (TAILQ_EMPTY(&qos->cache_list)) {
-		SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
-		spdk_spin_destroy(&qos->spinlock);
-		free(qos);
-	}
-}
-
 static struct spdk_bdev_qos *
 bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
 {
@@ -4850,7 +4782,6 @@ bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
 		return NULL;
 	}
 
-	TAILQ_INIT(&qos->cache_list);
 	TAILQ_INIT(&qos->queued_io);
 	spdk_spin_init(&qos->spinlock);
 
@@ -4860,25 +4791,30 @@ bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
 	bdev_qos_limits_init(&qos->limits, g_bdev_opts.qos_io_slice,
 			     g_bdev_opts.qos_byte_slice);
 
+	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list)) {
+		g_bdev_mgr.qos_last_timeslice = spdk_get_ticks();
+		spdk_poller_resume(g_bdev_mgr.qos_poller);
+	}
+
+	TAILQ_INSERT_TAIL(&g_bdev_mgr.qos_list, qos, tailq);
+
 	return qos;
 }
 
 static void
 bdev_qos_destroy(struct spdk_bdev_qos *qos)
 {
-	if (!qos->started) {
-		assert(TAILQ_EMPTY(&qos->cache_list));
-		spdk_spin_destroy(&qos->spinlock);
-		free(qos);
-	} else {
-		qos->ctx = NULL;
+	qos->ctx = NULL;
 
-		spdk_thread_send_msg(spdk_thread_get_app_thread(), _bdev_qos_destroy, qos);
+	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
+
+	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list) && g_bdev_mgr.qos_poller) {
+		spdk_poller_pause(g_bdev_mgr.qos_poller);
 	}
 
-	/* It is safe to continue with destroying the bdev even though the QoS channel hasn't
-	 * been destroyed yet. The destruction path will end up waiting for the final
-	 * channel to be put before it releases resources. */
+	SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
+	spdk_spin_destroy(&qos->spinlock);
+	free(qos);
 }
 
 void
@@ -8687,6 +8623,11 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 		bdev_name_del_unsafe(&bdev->internal.bdev_name);
 		bdev_alias_del(bdev, uuid, bdev_name_del_unsafe);
 
+		if (bdev->internal.qos) {
+			bdev_qos_destroy(bdev->internal.qos);
+			bdev->internal.qos = NULL;
+		}
+
 		spdk_notify_send("bdev_unregister", spdk_bdev_get_name(bdev));
 
 		if (bdev->internal.reset_in_progress != NULL) {
@@ -8803,26 +8744,6 @@ spdk_bdev_unregister_by_name(const char *bdev_name, struct spdk_bdev_module *mod
 	return 0;
 }
 
-static int
-bdev_start_qos(struct spdk_bdev *bdev)
-{
-	if (!bdev_qos_limits_check_disabled(bdev->internal.qos_limits)) {
-		SPDK_DEBUGLOG(bdev, "Starting QoS for %s\n", bdev->name);
-		/* Create QoS */
-		if (!bdev->internal.qos) {
-			bdev->internal.qos = bdev_qos_create(bdev, bdev_channel_poll_qos);
-			if (!bdev->internal.qos) {
-				return -ENOMEM;
-			}
-
-			/* Setup QoS using the previously configured limits */
-			bdev_qos_limits_set(&bdev->internal.qos->limits, bdev->internal.qos_limits);
-		}
-	}
-
-	return 0;
-}
-
 static void
 log_already_claimed(enum spdk_log_level level, const int line, const char *func, const char *detail,
 		    struct spdk_bdev *bdev)
@@ -8865,7 +8786,6 @@ static int
 bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 {
 	struct spdk_thread *thread;
-	int rc = 0;
 
 	thread = spdk_get_thread();
 	if (!thread) {
@@ -8892,13 +8812,6 @@ bdev_open(struct spdk_bdev *bdev, bool write, struct spdk_bdev_desc *desc)
 		LOG_ALREADY_CLAIMED_ERROR("already claimed", bdev);
 		spdk_spin_unlock(&bdev->internal.spinlock);
 		return -EPERM;
-	}
-
-	rc = bdev_start_qos(bdev);
-	if (rc != 0) {
-		SPDK_ERRLOG("Failed to start QoS on bdev %s\n", bdev->name);
-		spdk_spin_unlock(&bdev->internal.spinlock);
-		return rc;
 	}
 
 	TAILQ_INSERT_TAIL(&bdev->internal.open_descs, desc, link);
@@ -9337,15 +9250,6 @@ bdev_close(struct spdk_bdev *bdev, struct spdk_bdev_desc *desc)
 		bdev_desc_free(desc);
 	} else {
 		spdk_spin_unlock(&desc->spinlock);
-	}
-
-	/* If no more descriptors, kill QoS channel */
-	if (bdev->internal.qos && TAILQ_EMPTY(&bdev->internal.open_descs)) {
-		SPDK_DEBUGLOG(bdev, "Closed last descriptor for bdev %s on thread %p. Stopping QoS.\n",
-			      bdev->name, spdk_get_thread());
-
-		bdev_qos_destroy(bdev->internal.qos);
-		bdev->internal.qos = NULL;
 	}
 
 	if (bdev->internal.status == SPDK_BDEV_STATUS_REMOVING && TAILQ_EMPTY(&bdev->internal.open_descs)) {
@@ -10276,16 +10180,16 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 				bdev_set_qos_limit_done(ctx, -ENOMEM);
 				return;
 			}
-		}
 
-		bdev_update_qos_rate_limits(bdev, new_limits);
-
-		if (!bdev->internal.qos->started) {
 			/* Enabling */
+			bdev_update_qos_rate_limits(bdev, new_limits);
+
 			spdk_bdev_for_each_channel(bdev, bdev_enable_qos_msg, ctx,
 						   bdev_enable_qos_done);
 		} else {
 			/* Updating the limits */
+			bdev_update_qos_rate_limits(bdev, new_limits);
+
 			spdk_bdev_for_each_channel(bdev, bdev_update_qos_msg, ctx,
 						   bdev_update_qos_msg_done);
 		}

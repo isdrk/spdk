@@ -1051,6 +1051,13 @@ reset_completions(void)
 }
 
 static void
+qos_dynamic_enable_done(void *cb_arg, int status)
+{
+	int *rc = cb_arg;
+	*rc = status;
+}
+
+static void
 basic_qos(void)
 {
 	struct spdk_io_channel *io_ch[2];
@@ -1058,6 +1065,7 @@ basic_qos(void)
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status status, abort_status;
 	uint32_t qos_io_slice, qos_byte_slice;
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
 	int rc;
 
 	setup_test();
@@ -1069,25 +1077,23 @@ basic_qos(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	/* setup_test() automatically opens the bdev,
-	 * but this test needs to do that in a different
-	 * way. */
-	spdk_bdev_close(g_desc);
-	CU_ASSERT(bdev->internal.qos == NULL);
+
 	/*
 	 * Enable read/write IOPS, read only byte per second and
 	 * read/write byte per second rate limits.
 	 * In this case, all rate limits will take equal effect.
 	 */
 	/* 2000 read/write I/O per second, or 2 per millisecond */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
+	limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
 	/* 8Mb read/write per second with 4K block size */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
+	limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
 	/* 8Mb read only per second with 4K block size */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 8;
+	limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 8;
 
-	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	rc = -1;
+	spdk_bdev_set_qos_rate_limits(bdev, limits, qos_dynamic_enable_done, &rc);
 	poll_threads();
+	CU_ASSERT(rc == 0);
 
 	g_get_io_channel = true;
 
@@ -1183,16 +1189,15 @@ basic_qos(void)
 	poll_threads();
 	set_thread(0);
 
-	/* Close the descriptor, which should stop the qos channel */
+	/* Close the descriptor, which should not change anything. */
 	spdk_bdev_close(g_desc);
 	poll_threads();
-	CU_ASSERT(bdev->internal.qos == NULL);
+	CU_ASSERT(bdev->internal.qos != NULL);
 
-	/* Open the bdev again, no qos channel setup without valid channels. */
+	/* Open the bdev again, which should not change anything. */
 	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
 	poll_threads();
 	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
-	CU_ASSERT(bdev->internal.qos->started == false);
 
 	/* Create the channels in reverse order. */
 	set_thread(1);
@@ -1228,6 +1233,7 @@ io_during_qos_queue(void)
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status status0, status1, status2;
 	uint32_t qos_io_slice, qos_byte_slice;
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
 	int rc;
 
 	setup_test();
@@ -1240,11 +1246,6 @@ io_during_qos_queue(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	/* setup_test() automatically opens the bdev,
-	 * but this test needs to do that in a different
-	 * way. */
-	spdk_bdev_close(g_desc);
-	CU_ASSERT(bdev->internal.qos == NULL);
 
 	/* AM: this test is different from original one due to configuration restructions - we can't set
 	 * limit with byte granularity to allow only few IOs per time slice.
@@ -1252,16 +1253,18 @@ io_during_qos_queue(void)
 	 * it is allowed to push the limit beyond zero */
 
 	/* 4000 read/write I/O per second, or 4 per millisecond */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 4000;
+	limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 4000;
 	/* 8Mb byte per second */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
+	limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 8;
 	/* 4Mb byte per second */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 4;
+	limits[SPDK_BDEV_QOS_R_BPS_RATE_LIMIT] = 4;
 	/* 4Mb byte per second */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 4;
+	limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 4;
 
-	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	rc = -1;
+	spdk_bdev_set_qos_rate_limits(bdev, limits, qos_dynamic_enable_done, &rc);
 	poll_threads();
+	CU_ASSERT(rc == 0);
 	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 
 	g_get_io_channel = true;
@@ -1335,6 +1338,7 @@ io_during_qos_reset(void)
 	struct spdk_bdev_channel *bdev_ch[2];
 	struct spdk_bdev *bdev;
 	enum spdk_bdev_io_status status0, status1, reset_status;
+	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
 	int rc;
 
 	setup_test();
@@ -1342,11 +1346,6 @@ io_during_qos_reset(void)
 
 	/* Enable QoS */
 	bdev = &g_bdev.bdev;
-	/* setup_test() automatically opens the bdev,
-	 * but this test needs to do that in a different
-	 * way. */
-	spdk_bdev_close(g_desc);
-	CU_ASSERT(bdev->internal.qos == NULL);
 
 	/*
 	 * Enable read/write IOPS, write only byte per sec and
@@ -1355,14 +1354,17 @@ io_during_qos_reset(void)
 	 * take effect first.
 	 */
 	/* 2000 read/write I/O per second, or 2 per millisecond */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
+	limits[SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT] = 2000;
 	/* 4Mb per second with 4K block size */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 4;
+	limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 4;
 	/* 8Mb per second with 4K block size */
-	bdev->internal.qos_limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 8;
+	limits[SPDK_BDEV_QOS_W_BPS_RATE_LIMIT] = 8;
 
-	spdk_bdev_open_ext("ut_bdev", true, _bdev_event_cb, NULL, &g_desc);
+	rc = -1;
+	spdk_bdev_set_qos_rate_limits(bdev, limits, qos_dynamic_enable_done, &rc);
 	poll_threads();
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 	SPDK_CU_ASSERT_FATAL(bdev->internal.qos != NULL);
 
 	g_get_io_channel = true;
@@ -1774,13 +1776,6 @@ enomem_retry_during_abort(void)
 	spdk_put_io_channel(io_ch);
 	poll_threads();
 	teardown_test();
-}
-
-static void
-qos_dynamic_enable_done(void *cb_arg, int status)
-{
-	int *rc = cb_arg;
-	*rc = status;
 }
 
 static void
