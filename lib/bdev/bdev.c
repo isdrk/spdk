@@ -7207,38 +7207,27 @@ bdev_reset_freeze_channel_done(struct spdk_bdev *bdev, void *_ctx, int status)
 }
 
 static void
-bdev_qos_abort_all_queued_io(struct spdk_bdev_qos *qos, struct spdk_bdev_channel *ch)
+bdev_qos_cache_abort_all_queued_io(struct spdk_bdev_qos_cache *qos_cache,
+				   struct spdk_bdev_channel *bdev_ch)
 {
+	struct spdk_bdev_qos *qos = qos_cache->qos;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = qos_cache->mgmt_ch;
+
 	spdk_spin_lock(&qos->spinlock);
-	bdev_abort_all_queued_io(&qos->queued_io, ch);
+	bdev_abort_all_queued_io(&qos->queued_io, bdev_ch);
 	spdk_spin_unlock(&qos->spinlock);
-}
-
-static void
-bdev_abort_all_qos_queued_io(struct spdk_bdev_channel *ch)
-{
-	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		assert(ch->qos_cache != NULL);
-		assert(ch->qos_cache->qos != NULL);
-
-		bdev_qos_abort_all_queued_io(ch->qos_cache->qos, ch);
-	}
-}
-
-static void
-bdev_ch_abort_all_qos_queued_io(struct spdk_bdev_channel *ch)
-{
-	bdev_abort_all_qos_queued_io(ch);
-}
-
-static void
-bdev_ch_abort_all_qos_allowed_io(struct spdk_bdev_channel *ch)
-{
-	struct spdk_bdev_mgmt_channel *mgmt_ch = ch->shared_resource->mgmt_ch;
 
 	spdk_spin_lock(&mgmt_ch->spinlock);
-	bdev_abort_all_queued_io(&mgmt_ch->qos_allowed_io, ch);
+	bdev_abort_all_queued_io(&mgmt_ch->qos_allowed_io, bdev_ch);
 	spdk_spin_unlock(&mgmt_ch->spinlock);
+}
+
+static void
+bdev_qos_abort_all_queued_io(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_bdev_qos_cache *qos_cache = bdev_ch->qos_cache;
+
+	bdev_qos_cache_abort_all_queued_io(qos_cache, bdev_ch);
 }
 
 static void
@@ -7301,8 +7290,10 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 	bdev_abort_all_nomem_io(channel);
 	bdev_abort_all_queued_io(&shared_resource->nomem_io, channel);
 	bdev_abort_all_buf_io(mgmt_channel, channel);
-	bdev_ch_abort_all_qos_queued_io(channel);
-	bdev_ch_abort_all_qos_allowed_io(channel);
+
+	if (channel->flags & BDEV_CH_QOS_ENABLED) {
+		bdev_qos_abort_all_queued_io(channel);
+	}
 
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
