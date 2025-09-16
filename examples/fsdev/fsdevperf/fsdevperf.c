@@ -228,8 +228,8 @@ struct fsdevperf_aux_io_type {
 	int		value;
 	bool		random;
 } g_aux_io_types[] = {
-	{ "randread", SPDK_FSDEV_IO_READ, true },
-	{ "randwrite", SPDK_FSDEV_IO_WRITE, true },
+	{ "randread", FUSE_READ, true },
+	{ "randwrite", FUSE_WRITE, true },
 };
 
 static int
@@ -322,8 +322,8 @@ fsdevperf_parse_io_pattern(const char *pattern, bool *random)
 	int i;
 
 	*random = false;
-	for (i = 0; i < __SPDK_FSDEV_IO_LAST; i++) {
-		name = spdk_fsdev_io_type_get_name(i);
+	for (i = 0; i < SPDK_FSDEV_MAX_FUSE_OPC; i++) {
+		name = spdk_fsdev_get_opcode_name(i);
 		if (name != NULL && strcmp(name, pattern) == 0) {
 			return i;
 		}
@@ -351,7 +351,7 @@ fsdevperf_job_get_io_pattern_name(struct fsdevperf_job *job)
 		}
 	}
 
-	return spdk_fsdev_io_type_get_name(job->io_pattern);
+	return spdk_fsdev_get_opcode_name(job->io_pattern);
 }
 
 static struct fsdevperf_thread *
@@ -1600,12 +1600,12 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 	offset = fsdevperf_task_get_offset(task);
 	id = fsdevperf_task_next_id(task);
 	switch (task->io_pattern) {
-	case SPDK_FSDEV_IO_READ:
+	case FUSE_READ:
 		fsdevperf_request_submit_read(request, id, task->fobj, task->fh, offset,
 					      task->io_size, &request->iov, 1,
 					      fsdevperf_request_complete_cb, request);
 		break;
-	case SPDK_FSDEV_IO_WRITE:
+	case FUSE_WRITE:
 		fsdevperf_request_generate_data(request, id);
 		fsdevperf_request_submit_write(request, id, task->fobj, task->fh, offset,
 					       task->io_size, &request->iov, 1,

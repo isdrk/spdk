@@ -226,6 +226,12 @@ enum spdk_fsdev_io_type {
 	__SPDK_FSDEV_IO_LAST
 };
 
+/* There are fewer than 64 FUSE opcodes (52 as of writing this comment in
+ * September 2025), but leave some space to account for more being added
+ * in the future. Only 3 opcodes were added between 2019 and 2025.
+ */
+#define SPDK_FSDEV_MAX_FUSE_OPC	64
+
 /** Notification type */
 enum spdk_fsdev_notify_type {
 	SPDK_FSDEV_NOTIFY_INVAL_DATA,
@@ -237,7 +243,7 @@ enum spdk_fsdev_notify_type {
  * fsdev IO statistics
  */
 struct spdk_fsdev_io_stat {
-	/** Stats by IO type */
+	/** Stats by opcode */
 	struct {
 		/* Number of handled IOs */
 		uint64_t count;
@@ -249,7 +255,7 @@ struct spdk_fsdev_io_stat {
 		uint64_t total_ticks;
 		/* Number of IOs outstanding */
 		uint64_t io_outstanding;
-	} io[__SPDK_FSDEV_IO_LAST];
+	} io[SPDK_FSDEV_MAX_FUSE_OPC];
 	/** Number of bytes read */
 	uint64_t bytes_read;
 	/** Number of bytes written */
@@ -395,6 +401,15 @@ int spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn);
  * \return non-NULL IO type name if operation is successful, or NULL otherwise.
  */
 const char *spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type);
+
+/**
+ * Get fuse opc name
+ *
+ * \param opc FUSE opcode
+ *
+ * \return non-NULL name if operation is successful, or NULL otherwise.
+ */
+const char *spdk_fsdev_get_opcode_name(uint32_t opc);
 
 /**
  * Get filesystem device name.

@@ -264,7 +264,7 @@ rpc_fsdev_get_iostat_write(struct spdk_json_write_ctx *w, struct spdk_fsdev_io_s
 			continue;
 		}
 
-		name = spdk_fsdev_io_type_get_name(i);
+		name = spdk_fsdev_get_opcode_name(i);
 		if (!name) {
 			SPDK_ERRLOG("Cannot get name for IO %zu\n", i);
 			continue;
