@@ -228,24 +228,6 @@
 	spdk_bdev_reservation_report;
 	spdk_bdev_get_reservation_caps;
 
-	# Public functions in bdev_group.h
-	spdk_bdev_group_create;
-	spdk_bdev_group_add_bdev;
-	spdk_bdev_group_remove_bdev;
-	spdk_bdev_group_for_each_bdev;
-	spdk_bdev_group_get_name;
-	spdk_bdev_group_get_qos_rate_limits;
-	spdk_bdev_group_set_qos_rate_limits;
-	spdk_bdev_group_destroy;
-	spdk_bdev_group_get_by_name;
-	spdk_bdev_group_open;
-	spdk_bdev_group_close;
-	spdk_bdev_group_desc_get_bdev_group;
-	spdk_for_each_bdev_group;
-	spdk_bdev_group_get_device_stat;
-	spdk_bdev_group_get_io_stat;
-	spdk_bdev_group_subsystem_config_json;
-
 	# Everything else
 	local: *;
 };

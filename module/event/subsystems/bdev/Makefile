@@ -10,7 +10,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 SO_VER := 7
 SO_MINOR := 0
 
-C_SRCS = bdev.c bdev_group.c
+C_SRCS = bdev.c
 LIBNAME = event_bdev
 
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
