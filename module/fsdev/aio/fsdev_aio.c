@@ -3656,7 +3656,7 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd == -1) {
 		res = -errno;
 		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
@@ -3730,7 +3730,7 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd == -1) {
 		res = -errno;
 		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
@@ -3787,7 +3787,7 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd == -1) {
 		res = -errno;
 		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
@@ -3839,7 +3839,7 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
 	if (fd == -1) {
 		res = -errno;
 		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
