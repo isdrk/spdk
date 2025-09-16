@@ -557,17 +557,18 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	struct spdk_fsdev_channel *ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
 	uint64_t current_tsc = spdk_get_ticks();
+	uint32_t opc = fsdev_io->internal.type;
 
 	fsdev_io->internal.submit_tsc = current_tsc;
 
 	TAILQ_INSERT_TAIL(&ch->io_submitted, fsdev_io, internal.ch_link);
 
 	ch->io_outstanding++;
-	ch->stat->io[fsdev_io->internal.type].count++;
-	ch->stat->io[fsdev_io->internal.type].io_outstanding++;
+	ch->stat->io[opc].count++;
+	ch->stat->io[opc].io_outstanding++;
 	shared_resource->io_outstanding++;
 	spdk_trace_record_tsc(current_tsc, TRACE_FSDEV_IO_START, ch->trace_id, 0, (uintptr_t)fsdev_io,
-			      fsdev_io->internal.type, ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
+			      opc, ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 
 	if (spdk_unlikely(!TAILQ_EMPTY(&ch->delayed_submit))) {
 		/* We must always submit I/O the fsdev module in source unique order. So if there are
@@ -1371,7 +1372,7 @@ static inline void
 fsdev_io_complete(void *ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
-	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
+	uint32_t opc = fsdev_io->internal.type;
 	struct spdk_fsdev_channel *ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
 	uint64_t submit_tsc;
@@ -1392,16 +1393,16 @@ fsdev_io_complete(void *ctx)
 	assert(ch->io_outstanding > 0);
 	assert(shared_resource->io_outstanding > 0);
 	ch->io_outstanding--;
-	ch->stat->io[fsdev_io->internal.type].io_outstanding--;
+	ch->stat->io[opc].io_outstanding--;
 	shared_resource->io_outstanding--;
 	TAILQ_REMOVE(&ch->io_submitted, fsdev_io, internal.ch_link);
 	spdk_trace_record(TRACE_FSDEV_IO_DONE, ch->trace_id, 0, (uintptr_t)fsdev_io,
 			  ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
 
-	if (type == SPDK_FSDEV_IO_READ) {
+	if (opc == SPDK_FSDEV_IO_READ) {
 		ch->stat->bytes_read += fsdev_io->u_out.read.data_size;
-	} else if (type == SPDK_FSDEV_IO_WRITE) {
+	} else if (opc == SPDK_FSDEV_IO_WRITE) {
 		ch->stat->bytes_written += fsdev_io->u_out.write.data_size;
 	}
 
@@ -1421,15 +1422,15 @@ fsdev_io_complete(void *ctx)
 		cleanup_cb_fn(cleanup_cb_arg);
 	}
 
-	if (tsc_diff < ch->stat->io[type].min_ticks) {
-		ch->stat->io[type].min_ticks = tsc_diff;
+	if (tsc_diff < ch->stat->io[opc].min_ticks) {
+		ch->stat->io[opc].min_ticks = tsc_diff;
 	}
 
-	if (tsc_diff > ch->stat->io[type].max_ticks) {
-		ch->stat->io[type].max_ticks = tsc_diff;
+	if (tsc_diff > ch->stat->io[opc].max_ticks) {
+		ch->stat->io[opc].max_ticks = tsc_diff;
 	}
 
-	ch->stat->io[type].total_ticks += tsc_diff;
+	ch->stat->io[opc].total_ticks += tsc_diff;
 }
 
 void
