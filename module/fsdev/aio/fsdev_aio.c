@@ -2026,109 +2026,77 @@ posix_lock_type_to_str(uint32_t posix_lock_type)
 }
 #endif
 
-static int
-fsdev_file_lock_to_flock(struct aio_fsdev_file_handle *fhandle,
-			 struct spdk_fsdev_file_lock *fsdev_lock,
-			 struct flock *posix_lock)
+static void
+fuse_lk_to_flock(struct fuse_file_lock *lk, struct flock *posix_lock)
 {
-	switch (fsdev_lock->type) {
-	case SPDK_FSDEV_RDLCK:
-		posix_lock->l_type = F_RDLCK;
-		break;
-	case SPDK_FSDEV_WRLCK:
-		posix_lock->l_type = F_WRLCK;
-		break;
-	case SPDK_FSDEV_UNLCK:
-		posix_lock->l_type = F_UNLCK;
-		break;
-	default:
-		SPDK_ERRLOG("Invalid lock type %d encountered during fsdev to flock conversion.\n",
-			    fsdev_lock->type);
-		return -EINVAL;
-	}
+	memset(posix_lock, 0, sizeof(*posix_lock));
 
+	posix_lock->l_type = lk->type;
 	posix_lock->l_whence = SEEK_SET;
-
-	posix_lock->l_start = fsdev_lock->start;
-	if (fsdev_lock->end == SPDK_FSDEV_FILE_LOCK_END_OF_FILE) {
+	posix_lock->l_start = lk->start;
+	if (lk->end == 0) {
 		/* 0 means lock to the end of the file in POSIX */
 		posix_lock->l_len = 0;
 	} else {
-		posix_lock->l_len = fsdev_lock->end - fsdev_lock->start + 1;
+		posix_lock->l_len = lk->end - lk->start + 1;
 	}
 
-	posix_lock->l_pid = fsdev_lock->pid;
+	posix_lock->l_pid = lk->pid;
 
 	SPDK_DEBUGLOG(fsdev_aio, "fsdev -> flock type=%s, start=%lu, len=%lu, pid=%u\n",
 		      posix_lock_type_to_str(posix_lock->l_type), posix_lock->l_start,
 		      posix_lock->l_len, posix_lock->l_pid);
-
-	return 0;
 }
 
 static int
-flock_to_fsdev_file_lock(struct aio_fsdev_file_handle *fhandle,
-			 struct flock *posix_lock,
-			 struct spdk_fsdev_file_lock *fsdev_lock)
+flock_to_fuse_lk(int fd, const struct flock *posix_lock, struct fuse_file_lock *lk)
 {
 	off_t current_pos;
 
-	switch (posix_lock->l_type) {
-	case F_RDLCK:
-		fsdev_lock->type = SPDK_FSDEV_RDLCK;
-		break;
-	case F_WRLCK:
-		fsdev_lock->type = SPDK_FSDEV_WRLCK;
-		break;
-	case F_UNLCK:
-		fsdev_lock->type = SPDK_FSDEV_UNLCK;
-		break;
-	default:
-		SPDK_ERRLOG("Invalid lock type %d encountered during flock to fsdev conversion.\n",
-			    posix_lock->l_type);
-		return -EINVAL;
-	}
+	memset(lk, 0, sizeof(*lk));
 
 	switch (posix_lock->l_whence) {
 	case SEEK_SET:
-		fsdev_lock->start = posix_lock->l_start;
+		lk->start = posix_lock->l_start;
 		break;
 	case SEEK_CUR:
-		current_pos = lseek(fhandle->fd, 0, SEEK_CUR);
+		current_pos = lseek(fd, 0, SEEK_CUR);
 		if (current_pos == (off_t) -1) {
-			SPDK_ERRLOG("Failed to get current file pos for fh=%p during "
-				    "posix lock conversion with whence=%d!\n", fhandle,
+			SPDK_ERRLOG("Failed to get current file pos during "
+				    "posix lock conversion with whence=%d!\n",
 				    posix_lock->l_whence);
 			return -EINVAL;
 		}
-		fsdev_lock->start = current_pos + posix_lock->l_start;
+		lk->start = current_pos + posix_lock->l_start;
 		break;
 	case SEEK_END:
-		current_pos = lseek(fhandle->fd, 0, SEEK_END);
+		current_pos = lseek(fd, 0, SEEK_END);
 		if (current_pos == (off_t) -1) {
-			SPDK_ERRLOG("Failed to get current file pos for fh=%p during "
-				    "posix lock conversion with whence=%d!\n", fhandle,
+			SPDK_ERRLOG("Failed to get current file pos during "
+				    "posix lock conversion with whence=%d!\n",
 				    posix_lock->l_whence);
 			return -EINVAL;
 		}
-		fsdev_lock->start = current_pos + posix_lock->l_start;
+		lk->start = current_pos + posix_lock->l_start;
 		break;
 	default:
-		SPDK_ERRLOG("Invalid whence=%d for fh=%p during "
-			    "posix lock conversion!\n", posix_lock->l_whence, fhandle);
+		SPDK_ERRLOG("Invalid whence=%d during "
+			    "posix lock conversion!\n", posix_lock->l_whence);
 		return -EINVAL;
 	}
+
 	if (posix_lock->l_len == 0) {
 		/* Lock to the end of the file. */
-		fsdev_lock->end = LONG_MAX;
+		lk->end = LONG_MAX;
 	} else {
-		fsdev_lock->end = posix_lock->l_start + posix_lock->l_len - 1;
+		lk->end = posix_lock->l_start + posix_lock->l_len - 1;
 	}
 
-	fsdev_lock->pid = posix_lock->l_pid;
+	lk->type = posix_lock->l_type;
+	lk->pid = posix_lock->l_pid;
 
-	SPDK_DEBUGLOG(fsdev_aio, "flock -> fsdev lock type=%x, start=%lu, end=%lu, pid=%u\n",
-		      fsdev_lock->type, fsdev_lock->start, fsdev_lock->end, fsdev_lock->pid);
+	SPDK_DEBUGLOG(fsdev_aio, "flock -> fuse lk type=%x, start=%lu, end=%lu, pid=%u\n",
+		      lk->type, lk->start, lk->end, lk->pid);
 	return 0;
 }
 
@@ -2146,31 +2114,29 @@ fsdev_aio_op_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.getlk.lock;
+	struct fuse_lk_in *lk_in = fsdev_io->u_in.fuse.op.lk;
+	struct fuse_lk_out *lk_out = fsdev_io->u_out.fuse.op.lk;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.getlk.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.getlk.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, lk_in->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
 		goto fop_failed;
 	}
 
+	fuse_lk_to_flock(&lk_in->lk, &posix_lock);
+
 	/*
 	 * We're using the input lock and passing it to fcntl(F_GETLK).
 	 * This technique is used for checking if a lock of particular
 	 * type and the file region can be obtained.
 	 */
-	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
-	if (res) {
-		goto fop_failed;
-	}
-
 	res = fcntl(fhandle->fd, F_GETLK, &posix_lock);
 	if (res == -1) {
 		res = -errno;
@@ -2179,12 +2145,14 @@ fsdev_aio_op_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	res = flock_to_fsdev_file_lock(fhandle, &posix_lock, &fsdev_io->u_out.getlk.lock);
+	res = flock_to_fuse_lk(fhandle->fd, &posix_lock, &lk_out->lk);
 	if (res) {
 		goto fop_failed;
 	}
 
+	fsdev_io->u_out.fuse.hdr->len = sizeof(struct fuse_lk_out);
 	res = 0;
+
 	SPDK_DEBUGLOG(fsdev_aio, "GETLK succeeded for " FOBJECT_FMT " lock=(type:%d,start:%lu,len:%lu)\n",
 		      FOBJECT_ARGS(fobject), posix_lock.l_type, posix_lock.l_start, posix_lock.l_len);
 
@@ -2206,27 +2174,40 @@ fsdev_aio_do_setlk(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct flock posix_lock;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
+	struct fuse_lk_in *lk_in = fsdev_io->u_in.fuse.op.lk;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	struct spdk_fsdev_file_lock *fsdev_lock = &fsdev_io->u_in.setlk.lock;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.setlk.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.setlk.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, lk_in->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
 		goto fop_failed;
 	}
 
-	res = fsdev_file_lock_to_flock(fhandle, fsdev_lock, &posix_lock);
-	if (res) {
+	/* if FUSE_LK_FLOCK is requested, handle flock style of the lock. */
+	if (lk_in->lk_flags & FUSE_LK_FLOCK) {
+		res = flock(fhandle->fd, lk_in->lk.type | LOCK_NB);
+		if (res == -1) {
+			res = -errno;
+			SPDK_ERRLOG("flock failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
+		}
+
+		res = 0;
+		SPDK_DEBUGLOG(fsdev_aio, "flock succeeded for " FOBJECT_FMT " fh=%p operation=%d\n",
+			      FOBJECT_ARGS(fobject), fhandle, lk_in->lk.type);
 		goto fop_failed;
+
 	}
+
+	/* Otherwise, handle POSIX advisory record locking. */
+	fuse_lk_to_flock(&lk_in->lk, &posix_lock);
 
 	res = fcntl(fhandle->fd, F_SETLK, &posix_lock);
 	if (res == -1) {
@@ -2244,7 +2225,7 @@ fsdev_aio_do_setlk(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 			goto fop_failed;
 		}
 
-		if (res == -EAGAIN && fsdev_io->u_in.setlk.wait) {
+		if (res == -EAGAIN && fsdev_io->u_in.fuse.hdr->opcode == FUSE_SETLKW) {
 			TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 			res = IO_STATUS_ASYNC;
 		}
@@ -3942,60 +3923,6 @@ fop_failed:
 }
 
 static int
-fsdev_aio_op_flock(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
-	struct aio_fsdev_file_object *fobject;
-	struct aio_fsdev_file_handle *fhandle;
-	int operation;
-
-	switch (fsdev_io->u_in.flock.operation) {
-	case SPDK_FSDEV_LOCK_SH:
-		operation = LOCK_SH;
-		break;
-	case SPDK_FSDEV_LOCK_EX:
-		operation = LOCK_EX;
-		break;
-	case SPDK_FSDEV_LOCK_UN:
-		operation = LOCK_UN;
-		break;
-	default:
-		SPDK_ERRLOG("Invalid flock operation type %d\n",
-			    fsdev_io->u_in.flock.operation);
-		return -EINVAL;
-	}
-
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.flock.fobject);
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.flock.fhandle);
-	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		res = -EINVAL;
-		goto fop_failed;
-	}
-
-	res = flock(fhandle->fd, operation | LOCK_NB);
-	if (res == -1) {
-		res = -errno;
-		SPDK_ERRLOG("flock failed for fh=%p with err=%d\n", fhandle, res);
-		goto fop_failed;
-	}
-
-	res = 0;
-	SPDK_DEBUGLOG(fsdev_aio, "FLOCK succeeded for " FOBJECT_FMT " fh=%p operation=%d\n",
-		      FOBJECT_ARGS(fobject), fhandle, operation);
-
-fop_failed:
-	file_object_unref(fobject, 1);
-	return res;
-}
-
-static int
 fsdev_aio_do_fallocate(struct aio_fsdev_file_handle *fhandle, uint32_t mode,
 		       uint64_t offset, uint64_t length)
 {
@@ -4312,6 +4239,10 @@ aio_io_poll_aio(void *arg)
 				iocbs[to_submit++] = &vfsdev_io->io;
 				rc = IO_STATUS_ASYNC;
 				break;
+			case FUSE_SETLKW:
+				TAILQ_REMOVE(&ios, vfsdev_io, link);
+				rc = fsdev_aio_do_setlk(ch, fsdev_io);
+				break;
 			default:
 				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
 				assert(0);
@@ -4324,9 +4255,6 @@ aio_io_poll_aio(void *arg)
 			rc = fsdev_aio_do_poll(ch, fsdev_io);
 			break;
 		case SPDK_FSDEV_IO_SETLK:
-			TAILQ_REMOVE(&ios, vfsdev_io, link);
-			rc = fsdev_aio_do_setlk(ch, fsdev_io);
-			break;
 		case SPDK_FSDEV_IO_READ:
 		case SPDK_FSDEV_IO_WRITE:
 			SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
@@ -4513,6 +4441,9 @@ aio_io_poll_io_uring(void *arg)
 					TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
 				}
 				break;
+			case FUSE_SETLKW:
+				rc = fsdev_aio_do_setlk(ch, fsdev_io);
+				break;
 			default:
 				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
 				assert(0);
@@ -4522,9 +4453,6 @@ aio_io_poll_io_uring(void *arg)
 			break;
 		case SPDK_FSDEV_IO_POLL:
 			rc = fsdev_aio_do_poll(ch, fsdev_io);
-			break;
-		case SPDK_FSDEV_IO_SETLK:
-			rc = fsdev_aio_do_setlk(ch, fsdev_io);
 			break;
 		default:
 			SPDK_ERRLOG("Unsupported IO type: %d\n", type);
@@ -4682,6 +4610,13 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		break;
 	case FUSE_LSEEK:
 		status = fsdev_aio_op_lseek(ch, fsdev_io);
+		break;
+	case FUSE_GETLK:
+		status = fsdev_aio_op_getlk(ch, fsdev_io);
+		break;
+	case FUSE_SETLK:
+	case FUSE_SETLKW:
+		status = fsdev_aio_op_setlk(ch, fsdev_io);
 		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
@@ -4874,17 +4809,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_FLOCK:
-		status = fsdev_aio_op_flock(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_POLL:
 		status = fsdev_aio_op_poll(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_GETLK:
-		status = fsdev_aio_op_getlk(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_SETLK:
-		status = fsdev_aio_op_setlk(ch, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		status = fsdev_aio_op_ioctl(ch, fsdev_io);
@@ -4925,6 +4851,9 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
 	case SPDK_FSDEV_IO_SYNCFS:
 	case SPDK_FSDEV_IO_LSEEK:
+	case SPDK_FSDEV_IO_FLOCK:
+	case SPDK_FSDEV_IO_SETLK:
+	case SPDK_FSDEV_IO_GETLK:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5404,7 +5333,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
 					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
 					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS) | \
-					       (1ULL << FUSE_LSEEK);
+					       (1ULL << FUSE_LSEEK) | (1ULL << FUSE_GETLK) | (1ULL << FUSE_SETLK) | \
+					       (1ULL << FUSE_SETLKW);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
