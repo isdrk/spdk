@@ -4169,6 +4169,19 @@ bdev_handle_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
 }
 
 static void
+bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
+{
+	struct spdk_bdev_io *bdev_io, *tmp;
+
+	TAILQ_FOREACH_SAFE(bdev_io, queue, internal.link, tmp) {
+		if (ch == NULL || bdev_io->internal.ch == ch) {
+			TAILQ_REMOVE(queue, bdev_io, internal.link);
+			_bdev_io_submit(bdev_io);
+		}
+	}
+}
+
+static void
 bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos, spdk_bdev_io_fn allow_fn)
 {
 	struct spdk_bdev_io *bdev_io, *tmp;
@@ -4290,12 +4303,22 @@ bdev_reset_qos(void)
 }
 
 static void
-bdev_qos_unthrottle_queued_io(struct spdk_bdev_qos *qos, struct spdk_bdev_channel *ch,
-			      spdk_bdev_io_fn fn)
+bdev_qos_cache_unblock_all_queued_io(struct spdk_bdev_qos_cache *qos_cache,
+				     struct spdk_bdev_channel *bdev_ch)
 {
+	struct spdk_bdev_qos *qos = qos_cache->qos;
+
 	spdk_spin_lock(&qos->spinlock);
-	bdev_handle_all_queued_io(&qos->queued_io, ch, fn);
+	bdev_unblock_all_queued_io(&qos->queued_io, bdev_ch);
 	spdk_spin_unlock(&qos->spinlock);
+}
+
+static void
+bdev_qos_unblock_all_queued_io(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_bdev_qos_cache *qos_cache = bdev_ch->qos_cache;
+
+	bdev_qos_cache_unblock_all_queued_io(qos_cache, bdev_ch);
 }
 
 static struct spdk_bdev_qos_cache *
@@ -10183,8 +10206,7 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 	if (bdev_ch->qos_cache != NULL) {
 		assert(bdev_ch->qos_cache->qos != NULL);
 
-		bdev_qos_unthrottle_queued_io(bdev_ch->qos_cache->qos, bdev_ch,
-					      _bdev_submit_qos_allowed_io);
+		bdev_qos_unblock_all_queued_io(bdev_ch);
 
 		spdk_spin_lock(&bdev->internal.spinlock);
 		bdev_qos_cache_destroy(bdev_ch->qos_cache);
