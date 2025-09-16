@@ -455,8 +455,7 @@ static int bdev_unlock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_cha
 				 uint64_t offset, uint64_t length,
 				 lock_range_cb cb_fn, void *cb_arg);
 
-static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
-				 struct spdk_bdev_io *bio_to_abort);
+static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort);
 static bool bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *ch, struct spdk_bdev_io *bio_to_abort);
 
 static bool claim_type_is_v2(enum spdk_bdev_claim_type type);
@@ -2865,7 +2864,7 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 		struct spdk_bdev_mgmt_channel *mgmt_channel = shared_resource->mgmt_ch;
 		struct spdk_bdev_io *bio_to_abort = bdev_io->u.abort.bio_to_abort;
 
-		if (bdev_abort_queued_io(&shared_resource->nomem_io, bdev_ch, bio_to_abort) ||
+		if (bdev_abort_queued_io(&shared_resource->nomem_io, bio_to_abort) ||
 		    bdev_abort_buf_io(mgmt_channel, bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io,
 						    SPDK_BDEV_IO_STATUS_SUCCESS);
@@ -3641,13 +3640,12 @@ bdev_rw_split_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 }
 
 static bool
-bdev_qos_abort_queued_io(struct spdk_bdev_qos *qos, struct spdk_bdev_channel *ch,
-			 struct spdk_bdev_io *bio_to_abort)
+bdev_qos_abort_queued_io(struct spdk_bdev_qos *qos, struct spdk_bdev_io *bio_to_abort)
 {
 	bool success;
 
 	spdk_spin_lock(&qos->spinlock);
-	success = bdev_abort_queued_io(&qos->queued_io, ch, bio_to_abort);
+	success = bdev_abort_queued_io(&qos->queued_io, bio_to_abort);
 	spdk_spin_unlock(&qos->spinlock);
 
 	return success;
@@ -3660,7 +3658,7 @@ bdev_abort_qos_queued_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bio_
 		assert(ch->qos_cache != NULL);
 		assert(ch->qos_cache->qos != NULL);
 
-		return bdev_qos_abort_queued_io(ch->qos_cache->qos, ch, bio_to_abort);
+		return bdev_qos_abort_queued_io(ch->qos_cache->qos, bio_to_abort);
 	}
 
 	return false;
@@ -3673,7 +3671,7 @@ bdev_abort_qos_allowed_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bio
 	bool success;
 
 	spdk_spin_lock(&mgmt_ch->spinlock);
-	success = bdev_abort_queued_io(&mgmt_ch->qos_allowed_io, ch, bio_to_abort);
+	success = bdev_abort_queued_io(&mgmt_ch->qos_allowed_io, bio_to_abort);
 	spdk_spin_unlock(&mgmt_ch->spinlock);
 
 	return success;
@@ -4798,10 +4796,10 @@ bdev_abort_all_nomem_io(struct spdk_bdev_channel *ch)
 }
 
 static bool
-bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
-		     struct spdk_bdev_io *bio_to_abort)
+bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort)
 {
 	struct spdk_bdev_io *bdev_io;
+	struct spdk_bdev_channel *ch;
 
 	TAILQ_FOREACH(bdev_io, queue, internal.link) {
 		if (bdev_io == bio_to_abort) {
@@ -4813,6 +4811,7 @@ bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
 			 *  that spdk_bdev_io_complete() will do.
 			 */
 			if (bdev_io->type != SPDK_BDEV_IO_TYPE_RESET) {
+				ch = bdev_io->internal.ch;
 				bdev_io_increment_outstanding(ch, ch->shared_resource);
 			}
 			spdk_bdev_io_complete(bio_to_abort, SPDK_BDEV_IO_STATUS_ABORTED);
