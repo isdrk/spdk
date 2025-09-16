@@ -209,6 +209,9 @@ struct spdk_bdev_qos_cache {
 	/** Thread on which this cache is located. */
 	struct spdk_thread *thread;
 
+	/** Bdev management channel to which this cache belongs. */
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
+
 	TAILQ_ENTRY(spdk_bdev_qos_cache) tailq;
 };
 
@@ -3640,51 +3643,32 @@ bdev_rw_split_get_buf_cb(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_i
 }
 
 static bool
-bdev_qos_abort_queued_io(struct spdk_bdev_qos *qos, struct spdk_bdev_io *bio_to_abort)
+bdev_qos_cache_abort_queued_io(struct spdk_bdev_qos_cache *qos_cache,
+			       struct spdk_bdev_io *bio_to_abort)
 {
+	struct spdk_bdev_qos *qos = qos_cache->qos;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = qos_cache->mgmt_ch;
 	bool success;
 
 	spdk_spin_lock(&qos->spinlock);
 	success = bdev_abort_queued_io(&qos->queued_io, bio_to_abort);
 	spdk_spin_unlock(&qos->spinlock);
 
-	return success;
-}
-
-static bool
-bdev_abort_qos_queued_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bio_to_abort)
-{
-	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		assert(ch->qos_cache != NULL);
-		assert(ch->qos_cache->qos != NULL);
-
-		return bdev_qos_abort_queued_io(ch->qos_cache->qos, bio_to_abort);
+	if (!success) {
+		spdk_spin_lock(&mgmt_ch->spinlock);
+		success = bdev_abort_queued_io(&mgmt_ch->qos_allowed_io, bio_to_abort);
+		spdk_spin_unlock(&mgmt_ch->spinlock);
 	}
-
-	return false;
-}
-
-static bool
-bdev_abort_qos_allowed_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bio_to_abort)
-{
-	struct spdk_bdev_mgmt_channel *mgmt_ch = ch->shared_resource->mgmt_ch;
-	bool success;
-
-	spdk_spin_lock(&mgmt_ch->spinlock);
-	success = bdev_abort_queued_io(&mgmt_ch->qos_allowed_io, bio_to_abort);
-	spdk_spin_unlock(&mgmt_ch->spinlock);
 
 	return success;
 }
 
 static bool
-bdev_ch_abort_qos_queued_io(struct spdk_bdev_channel *ch, struct spdk_bdev_io *bio_to_abort)
+bdev_qos_abort_queued_io(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bio_to_abort)
 {
-	if (bdev_abort_qos_queued_io(ch, bio_to_abort)) {
-		return true;
-	}
+	struct spdk_bdev_qos_cache *qos_cache = bdev_ch->qos_cache;
 
-	return bdev_abort_qos_allowed_io(ch, bio_to_abort);
+	return bdev_qos_cache_abort_queued_io(qos_cache, bio_to_abort);
 }
 
 /* Explicitly mark this inline, since it's used as a function pointer and otherwise won't
@@ -3704,7 +3688,7 @@ _bdev_io_submit(struct spdk_bdev_io *bdev_io)
 		_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_ABORTED);
 	} else if (bdev_ch->flags & (BDEV_CH_QOS_ENABLED)) {
 		if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_ABORT) &&
-		    bdev_ch_abort_qos_queued_io(bdev_ch, bdev_io->u.abort.bio_to_abort)) {
+		    bdev_qos_abort_queued_io(bdev_ch, bdev_io->u.abort.bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 		} else {
 			bdev_qos_io_submit(bdev_ch, bdev_io);
@@ -4436,6 +4420,7 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 				return;
 			}
 
+			ch->qos_cache->mgmt_ch = ch->shared_resource->mgmt_ch;
 			ch->flags |= BDEV_CH_QOS_ENABLED;
 		}
 	}
