@@ -1708,85 +1708,6 @@ fop_failed:
 	return res;
 }
 
-static short
-fsdev_events_to_posix(uint32_t spdk_events)
-{
-	short result = 0;
-
-	if (spdk_events & SPDK_FSDEV_POLLIN) {
-		result |= POLLIN;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLOUT) {
-		result |= POLLOUT;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLPRI) {
-		result |= POLLPRI;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLERR) {
-		result |= POLLERR;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLHUP) {
-		result |= POLLHUP;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLNVAL) {
-		result |= POLLNVAL;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLRDNORM) {
-		result |= POLLRDNORM;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLRDBAND) {
-		result |= POLLRDBAND;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLWRNORM) {
-		result |= POLLWRNORM;
-	}
-	if (spdk_events & SPDK_FSDEV_POLLWRBAND) {
-		result |= POLLWRBAND;
-	}
-
-	return result;
-}
-
-static uint32_t
-posix_events_to_fsdev(short events)
-{
-	uint32_t result = 0;
-
-	if (events & POLLIN) {
-		result |= SPDK_FSDEV_POLLIN;
-	}
-	if (events & POLLOUT) {
-		result |= SPDK_FSDEV_POLLOUT;
-	}
-	if (events & POLLPRI) {
-		result |= SPDK_FSDEV_POLLPRI;
-	}
-	if (events & POLLERR) {
-		result |= SPDK_FSDEV_POLLERR;
-	}
-	if (events & POLLHUP) {
-		result |= SPDK_FSDEV_POLLHUP;
-	}
-	if (events & POLLNVAL) {
-		result |= SPDK_FSDEV_POLLNVAL;
-	}
-	if (events & POLLRDNORM) {
-		result |= SPDK_FSDEV_POLLRDNORM;
-	}
-	if (events & POLLRDBAND) {
-		result |= SPDK_FSDEV_POLLRDBAND;
-	}
-	if (events & POLLWRNORM) {
-		result |= SPDK_FSDEV_POLLWRNORM;
-	}
-	if (events & POLLWRBAND) {
-		result |= SPDK_FSDEV_POLLWRBAND;
-	}
-
-	return result;
-}
-
-
 static int
 fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
@@ -1795,16 +1716,18 @@ fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	short posix_events = fsdev_events_to_posix(fsdev_io->u_in.poll.events);
+	struct fuse_poll_in *poll_in = fsdev_io->u_in.fuse.op.poll;
+	struct fuse_poll_out *poll_out = fsdev_io->u_out.fuse.op.poll;
+	short posix_events = poll_in->events;
 	struct pollfd fds;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.poll.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.poll.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, poll_in->fh);
 	if (!fhandle) {
 		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
 		res = -EINVAL;
@@ -1817,7 +1740,6 @@ fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	/* Zero timeout - return immediately even if no events available. */
 	res = poll(&fds, 1, 0);
-	fsdev_io->u_out.poll.revents = posix_events_to_fsdev(fds.revents);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("Failed poll for " FOBJECT_FMT " (err=%d)\n",
@@ -1825,23 +1747,15 @@ fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	/*
-	 * Wait is set and there are no events -> wait for the fhandle to
-	 * become ready to perform I/O
-	 */
-	if (res == 0 && fsdev_io->u_in.poll.wait) {
+	if (res == 0) {
 		TAILQ_INSERT_TAIL(&ch->ios_for_submit, vfsdev_io, link);
 		res = IO_STATUS_ASYNC;
 		goto fop_failed;
 	}
 
-	/*
-	 * The fsdev API expects -EAGAIN for no-events case and 0 for
-	 * the case any events available.
-	 */
-	if (res == 0) {
-		res = -EAGAIN;
-	} else if (res > 0) {
+	if (res > 0) {
+		fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_poll_out);
+		poll_out->revents = fds.revents;
 		res = 0;
 	}
 
@@ -4243,6 +4157,10 @@ aio_io_poll_aio(void *arg)
 				TAILQ_REMOVE(&ios, vfsdev_io, link);
 				rc = fsdev_aio_do_setlk(ch, fsdev_io);
 				break;
+			case FUSE_POLL:
+				TAILQ_REMOVE(&ios, vfsdev_io, link);
+				rc = fsdev_aio_do_poll(ch, fsdev_io);
+				break;
 			default:
 				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
 				assert(0);
@@ -4251,9 +4169,6 @@ aio_io_poll_aio(void *arg)
 			}
 			break;
 		case SPDK_FSDEV_IO_POLL:
-			TAILQ_REMOVE(&ios, vfsdev_io, link);
-			rc = fsdev_aio_do_poll(ch, fsdev_io);
-			break;
 		case SPDK_FSDEV_IO_SETLK:
 		case SPDK_FSDEV_IO_READ:
 		case SPDK_FSDEV_IO_WRITE:
@@ -4444,15 +4359,15 @@ aio_io_poll_io_uring(void *arg)
 			case FUSE_SETLKW:
 				rc = fsdev_aio_do_setlk(ch, fsdev_io);
 				break;
+			case FUSE_POLL:
+				rc = fsdev_aio_do_poll(ch, fsdev_io);
+				break;
 			default:
 				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
 				assert(0);
 				rc = -EINVAL;
 				break;
 			}
-			break;
-		case SPDK_FSDEV_IO_POLL:
-			rc = fsdev_aio_do_poll(ch, fsdev_io);
 			break;
 		default:
 			SPDK_ERRLOG("Unsupported IO type: %d\n", type);
@@ -4617,6 +4532,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_SETLK:
 	case FUSE_SETLKW:
 		status = fsdev_aio_op_setlk(ch, fsdev_io);
+		break;
+	case FUSE_POLL:
+		status = fsdev_aio_op_poll(ch, fsdev_io);
 		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
@@ -4809,9 +4727,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_POLL:
-		status = fsdev_aio_op_poll(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_IOCTL:
 		status = fsdev_aio_op_ioctl(ch, fsdev_io);
 		break;
@@ -4854,6 +4769,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FLOCK:
 	case SPDK_FSDEV_IO_SETLK:
 	case SPDK_FSDEV_IO_GETLK:
+	case SPDK_FSDEV_IO_POLL:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5334,7 +5250,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
 					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS) | \
 					       (1ULL << FUSE_LSEEK) | (1ULL << FUSE_GETLK) | (1ULL << FUSE_SETLK) | \
-					       (1ULL << FUSE_SETLKW);
+					       (1ULL << FUSE_SETLKW) | (1ULL << FUSE_POLL);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
