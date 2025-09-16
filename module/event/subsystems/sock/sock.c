@@ -4,6 +4,7 @@
  *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include "spdk/config.h"
 #include "spdk/stdinc.h"
 #include "spdk/sock.h"
 #include "spdk/init.h"
