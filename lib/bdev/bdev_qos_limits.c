@@ -256,20 +256,24 @@ bdev_qos_limits_cache_init(struct bdev_qos_limits_cache *caches,
 }
 
 static void
-bdev_qos_limit_cache_reset(struct bdev_qos_limit_cache *cache)
+bdev_qos_limit_cache_reset(struct bdev_qos_limit_cache *cache,
+			   struct bdev_qos_limit *limit)
 {
-	if (cache->remaining != INT64_MAX) {
+	if (!limit->max_per_timeslice) {
+		cache->remaining = INT64_MAX;
+	} else {
 		cache->remaining = 0;
 	}
 }
 
 void
-bdev_qos_limits_cache_reset(struct bdev_qos_limits_cache *caches)
+bdev_qos_limits_cache_reset(struct bdev_qos_limits_cache *caches,
+			    struct bdev_qos_limits *limits)
 {
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		bdev_qos_limit_cache_reset(&caches->rate_limits[i]);
+		bdev_qos_limit_cache_reset(&caches->rate_limits[i], &limits->rate_limits[i]);
 	}
 }
 
@@ -615,12 +619,27 @@ bdev_qos_limits_reset_quota(struct bdev_qos_limits *limits, int timeslice_count)
 }
 
 bool
-bdev_qos_limits_check_disabled(const uint64_t *limits)
+bdev_qos_limit_values_check_disabled(const uint64_t *limits)
 {
 	int i;
 
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		if (limits[i] != 0 && limits[i] != SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool
+bdev_qos_limits_check_disabled(struct bdev_qos_limits *limits)
+{
+	struct bdev_qos_limit *limit;
+	int i;
+
+	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
+		limit = &limits->rate_limits[i];
+		if (limit->limit != 0 && limit->limit != SPDK_BDEV_QOS_LIMIT_NOT_DEFINED) {
 			return false;
 		}
 	}

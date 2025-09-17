@@ -385,6 +385,7 @@ struct set_qos_limit_ctx {
 	void (*cb_fn)(void *cb_arg, int status);
 	void *cb_arg;
 	struct spdk_bdev *bdev;
+	struct spdk_bdev_qos *qos;
 };
 
 struct spdk_bdev_channel_iter {
@@ -4235,7 +4236,9 @@ bdev_channel_poll_qos(struct spdk_bdev_qos *qos, int timeslice_count)
 static void
 bdev_qos_channel_reset(struct spdk_bdev_qos_channel *qos_ch)
 {
-	bdev_qos_limits_cache_reset(&qos_ch->limits);
+	struct spdk_bdev_qos *qos = qos_ch->qos;
+
+	bdev_qos_limits_cache_reset(&qos_ch->limits, &qos->limits);
 }
 
 static void
@@ -4386,26 +4389,6 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 		spdk_put_io_channel(spdk_io_channel_from_ctx(shared_resource->mgmt_ch));
 		spdk_poller_unregister(&shared_resource->nomem_poller);
 		free(shared_resource);
-	}
-}
-
-static void
-bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
-{
-	struct spdk_bdev_qos	*qos = bdev->internal.qos;
-
-	assert(spdk_spin_held(&bdev->internal.spinlock));
-
-	/* Rate limiting on this bdev enabled */
-	if (qos) {
-		if (!(ch->flags & BDEV_CH_QOS_ENABLED)) {
-			ch->qos_ch = bdev_get_qos_channel(qos);
-			if (ch->qos_ch == NULL) {
-				return;
-			}
-
-			ch->flags |= BDEV_CH_QOS_ENABLED;
-		}
 	}
 }
 
@@ -4665,7 +4648,17 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 #endif
 
 	spdk_spin_lock(&bdev->internal.spinlock);
-	bdev_enable_qos(bdev, ch);
+	if (bdev->internal.qos) {
+		ch->qos_ch = bdev_get_qos_channel(bdev->internal.qos);
+		if (ch->qos_ch == NULL) {
+			spdk_spin_unlock(&bdev->internal.spinlock);
+			bdev_channel_destroy_resource(ch);
+			return -1;
+		}
+
+		ch->flags |= BDEV_CH_QOS_ENABLED;
+	}
+
 
 	TAILQ_FOREACH(range, &bdev->internal.locked_ranges, tailq) {
 		struct lba_range *new_range;
@@ -10133,16 +10126,8 @@ static void
 bdev_disable_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct set_qos_limit_ctx *ctx = _ctx;
-	struct spdk_bdev_qos *qos;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
-	qos = bdev->internal.qos;
-	bdev->internal.qos = NULL;
-	spdk_spin_unlock(&bdev->internal.spinlock);
-
-	if (qos != NULL) {
-		bdev_qos_destroy(qos);
-	}
+	bdev_qos_destroy(ctx->qos);
 
 	bdev_set_qos_limit_done(ctx, 0);
 }
@@ -10164,23 +10149,20 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 }
 
 static void
-bdev_update_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
-		    struct spdk_io_channel *ch, void *_ctx)
+bdev_update_qos_msg(struct spdk_io_channel_iter *i)
 {
-	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
+	struct spdk_bdev_qos_channel *qos_ch = spdk_io_channel_get_ctx(_ch);
 
-	if (bdev_ch->qos_ch != NULL) {
-		bdev_qos_limits_cache_init(&bdev_ch->qos_ch->limits,
-					   &bdev_ch->qos_ch->qos->limits);
-	}
+	bdev_qos_channel_reset(qos_ch);
 
-	spdk_bdev_for_each_channel_continue(i, 0);
+	spdk_for_each_channel_continue(i, 0);
 }
 
 static void
-bdev_update_qos_msg_done(struct spdk_bdev *bdev, void *_ctx, int status)
+bdev_update_qos_msg_done(struct spdk_io_channel_iter *i, int status)
 {
-	struct set_qos_limit_ctx *ctx = _ctx;
+	struct set_qos_limit_ctx *ctx = spdk_io_channel_iter_get_ctx(i);
 
 	bdev_set_qos_limit_done(ctx, 0);
 }
@@ -10189,12 +10171,30 @@ static void
 bdev_enable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 		    struct spdk_io_channel *ch, void *_ctx)
 {
+	struct set_qos_limit_ctx *ctx = _ctx;
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+	int rc = 0;
 
-	spdk_spin_lock(&bdev->internal.spinlock);
-	bdev_enable_qos(bdev, bdev_ch);
-	spdk_spin_unlock(&bdev->internal.spinlock);
-	spdk_bdev_for_each_channel_continue(i, 0);
+	if (!(bdev_ch->flags & BDEV_CH_QOS_ENABLED)) {
+		bdev_ch->qos_ch = bdev_get_qos_channel(ctx->qos);
+		if (bdev_ch->qos_ch != NULL) {
+			bdev_ch->flags |= BDEV_CH_QOS_ENABLED;
+		} else {
+			rc = -1;
+		}
+	}
+
+	spdk_bdev_for_each_channel_continue(i, rc);
+}
+
+static void
+bdev_enable_qos_failed(struct spdk_bdev *bdev, void *_ctx, int status)
+{
+	struct set_qos_limit_ctx *ctx = _ctx;
+
+	bdev_qos_destroy(ctx->qos);
+
+	bdev_set_qos_limit_done(ctx, -1);
 }
 
 static void
@@ -10202,15 +10202,16 @@ bdev_enable_qos_done(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct set_qos_limit_ctx *ctx = _ctx;
 
-	bdev_set_qos_limit_done(ctx, status);
-}
+	if (status == 0) {
+		spdk_spin_lock(&bdev->internal.spinlock);
+		bdev->internal.qos = ctx->qos;
+		spdk_spin_unlock(&bdev->internal.spinlock);
 
-static void
-bdev_update_qos_rate_limits(struct spdk_bdev *bdev, const uint64_t *limits)
-{
-	assert(bdev->internal.qos != NULL);
-
-	bdev_qos_limits_set(&bdev->internal.qos->limits, limits);
+		bdev_set_qos_limit_done(ctx, status);
+	} else {
+		spdk_bdev_for_each_channel(bdev, bdev_disable_qos_msg, ctx,
+					   bdev_enable_qos_failed);
+	}
 }
 
 static void
@@ -10218,7 +10219,6 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 			 void (*cb_fn)(void *cb_arg, int status), void *cb_arg)
 {
 	struct set_qos_limit_ctx *ctx;
-	bool disable_rate_limit = true;
 
 	SPDK_DEBUGLOG(bdev, "Updating QoS limits for %s (new_limits=%p)\n",
 		      bdev->name, new_limits);
@@ -10248,42 +10248,41 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 		return;
 	}
 	bdev->internal.qos_mod_in_progress = true;
-
-	disable_rate_limit = bdev_qos_limits_check_disabled(new_limits);
-
-	if (disable_rate_limit == false) {
-		if (bdev->internal.qos == NULL) {
-			bdev->internal.qos = bdev_qos_create(bdev->name);
-			if (bdev->internal.qos == NULL) {
-				spdk_spin_unlock(&bdev->internal.spinlock);
-				bdev_set_qos_limit_done(ctx, -ENOMEM);
-				return;
-			}
-
-			/* Enabling */
-			bdev_update_qos_rate_limits(bdev, new_limits);
-
-			spdk_bdev_for_each_channel(bdev, bdev_enable_qos_msg, ctx,
-						   bdev_enable_qos_done);
-		} else {
-			/* Updating the limits */
-			bdev_update_qos_rate_limits(bdev, new_limits);
-
-			spdk_bdev_for_each_channel(bdev, bdev_update_qos_msg, ctx,
-						   bdev_update_qos_msg_done);
-		}
-	}  else	if (bdev->internal.qos != NULL) {
-		bdev_update_qos_rate_limits(bdev, new_limits);
-
-		spdk_bdev_for_each_channel(bdev, bdev_disable_qos_msg, ctx,
-					   bdev_disable_qos_msg_done);
-	} else {
-		spdk_spin_unlock(&bdev->internal.spinlock);
-		bdev_set_qos_limit_done(ctx, 0);
-		return;
-	}
-
 	spdk_spin_unlock(&bdev->internal.spinlock);
+
+	ctx->qos = bdev->internal.qos;
+
+	if (ctx->qos != NULL) {
+		/* Updating the limits */
+		bdev_qos_limits_set(&ctx->qos->limits, new_limits);
+
+		if (bdev_qos_limits_check_disabled(&ctx->qos->limits)) {
+			/* Disabling */
+			spdk_spin_lock(&bdev->internal.spinlock);
+			bdev->internal.qos = NULL;
+			spdk_spin_unlock(&bdev->internal.spinlock);
+
+			spdk_bdev_for_each_channel(bdev, bdev_disable_qos_msg, ctx,
+						   bdev_disable_qos_msg_done);
+		} else {
+			spdk_for_each_channel(ctx->qos, bdev_update_qos_msg, ctx,
+					      bdev_update_qos_msg_done);
+		}
+	} else if (!bdev_qos_limit_values_check_disabled(new_limits)) {
+		/* Enabling */
+		ctx->qos = bdev_qos_create(bdev->name);
+		if (ctx->qos == NULL) {
+			bdev_set_qos_limit_done(ctx, -ENOMEM);
+			return;
+		}
+
+		bdev_qos_limits_set(&ctx->qos->limits, new_limits);
+
+		spdk_bdev_for_each_channel(bdev, bdev_enable_qos_msg, ctx,
+					   bdev_enable_qos_done);
+	} else {
+		bdev_set_qos_limit_done(ctx, 0);
+	}
 }
 
 void
