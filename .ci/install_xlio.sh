@@ -17,7 +17,7 @@ install_xlio(){
 
 	./autogen.sh
 	./configure --prefix=$XLIO_PREFIX --enable-utls
-	make "-j$(nproc)"
+	make -j4
 	make install
 }
 
@@ -29,7 +29,7 @@ install_dpcp(){
 
 	./autogen.sh
 	./configure --prefix=/usr
-	make "-j$(nproc)"
+	make -j4
 	make install
 }
 
