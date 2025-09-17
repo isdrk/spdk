@@ -1302,6 +1302,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	}
 	in->iov = in_iov;
 	in->iovcnt = in_iovcnt;
+	in->memory_domain = NULL;
 
 	/* Done preparing in headers, now move to out headers if they exist. */
 
@@ -1325,6 +1326,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 		out->iov = NULL;
 		out->iovcnt = 0;
 	}
+	out->memory_domain = NULL;
 
 	fuse_init_fsdev_io_ex(fuse_io, SPDK_FSDEV_IO_FUSE, fuse_dispatcher_passthrough_cpl_cb);
 	return 0;
