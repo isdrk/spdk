@@ -4182,9 +4182,10 @@ bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
 }
 
 static void
-bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos, spdk_bdev_io_fn allow_fn)
+bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos)
 {
 	struct spdk_bdev_io *bdev_io, *tmp;
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
 	bdev_io_tailq_t tmp_head;
 
 	TAILQ_INIT(&tmp_head);
@@ -4196,7 +4197,12 @@ bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos, spdk_bdev_io_fn allow_fn)
 	TAILQ_FOREACH_SAFE(bdev_io, &tmp_head, internal.link, tmp) {
 		if (!bdev_qos_limits_queue_io(&qos->limits, bdev_io)) {
 			TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
-			allow_fn(NULL, bdev_io);
+
+			mgmt_ch = bdev_io->internal.ch->qos_cache->mgmt_ch;
+
+			spdk_spin_lock(&mgmt_ch->spinlock);
+			TAILQ_INSERT_TAIL(&mgmt_ch->qos_allowed_io, bdev_io, internal.link);
+			spdk_spin_unlock(&mgmt_ch->spinlock);
 		}
 	}
 
@@ -4204,27 +4210,6 @@ bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos, spdk_bdev_io_fn allow_fn)
 	TAILQ_SWAP(&tmp_head, &qos->queued_io, spdk_bdev_io, internal.link);
 	TAILQ_CONCAT(&qos->queued_io, &tmp_head, internal.link);
 	spdk_spin_unlock(&qos->spinlock);
-}
-
-static int
-_bdev_allow_qos_io(void *ctx, struct spdk_bdev_io *bdev_io)
-{
-	struct spdk_bdev_channel *ch = bdev_io->internal.ch;
-	struct spdk_bdev_mgmt_channel *mgmt_ch = ch->shared_resource->mgmt_ch;
-
-	spdk_spin_lock(&mgmt_ch->spinlock);
-	TAILQ_INSERT_TAIL(&mgmt_ch->qos_allowed_io, bdev_io, internal.link);
-	spdk_spin_unlock(&mgmt_ch->spinlock);
-
-	return 0;
-}
-
-static void
-bdev_retry_qos_queued_io(struct spdk_bdev *bdev)
-{
-	struct spdk_bdev_qos *qos = bdev->internal.qos;
-
-	bdev_qos_retry_queued_io(qos, _bdev_allow_qos_io);
 }
 
 static int
@@ -4263,7 +4248,7 @@ bdev_channel_poll_qos(struct spdk_bdev_qos *qos, int timeslice_count)
 	/* Reset for next round of rate limiting */
 	bdev_qos_limits_reset_quota(&qos->limits, timeslice_count);
 
-	bdev_retry_qos_queued_io(bdev);
+	bdev_qos_retry_queued_io(qos);
 }
 
 static void
