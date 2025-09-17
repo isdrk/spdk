@@ -1473,7 +1473,7 @@ fsdev_io_complete(void *ctx)
 		if (opc == FUSE_READ) {
 			ch->stat->bytes_read +=
 				fsdev_io->u_out.fuse.hdr->len - sizeof(struct fuse_out_header);
-		} else {
+		} else if (opc == FUSE_WRITE) {
 			ch->stat->bytes_written += fsdev_io->u_out.fuse.op.write->size;
 		}
 	} else {
