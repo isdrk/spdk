@@ -3,11 +3,12 @@
 #  Copyright (C) 2021 Intel Corporation
 #  All rights reserved.
 #
+# shellcheck disable=SC2317 #Test is not ready yet
 
-testdir=$(readlink -f $(dirname $0))
-rootdir=$(readlink -f $testdir/../../..)
-source $rootdir/test/common/autotest_common.sh
-source $rootdir/test/nvmf/common.sh
+testdir=$(readlink -f "$(dirname "$0")")
+rootdir=$(readlink -f "${testdir}/../../..")
+source "${rootdir}/test/common/autotest_common.sh"
+source "${rootdir}/test/nvmf/common.sh"
 
 allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
 
@@ -145,15 +146,15 @@ function gen_accel_mlx5_crypto_crc_json() {
 
 validate_crypto_crc_stats() {
 	rpc_sock=$1
-	stats=$($rpc_py -s $rpc_sock accel_mlx5_dump_stats -l total)
+	stats=$($rpc_py -s "$rpc_sock" accel_mlx5_dump_stats -l total)
 
-	sig_crypto_umrs=$(echo $stats | jq -r '.total.umrs.sig_crypto_umrs')
+	sig_crypto_umrs=$(echo "$stats" | jq -r '.total.umrs.sig_crypto_umrs')
 	if [ "$sig_crypto_umrs" == 0 ]; then
 		echo "Unexpected number of crypto_umrs: $sig_crypto_umrs, expected > 0"
 		return 1
 	fi
-	sig_umrs=$(echo $stats | jq -r '.total.umrs.sig_umrs')
-	crypto_umrs=$(echo $stats | jq -r '.total.umrs.crypto_umrs')
+	sig_umrs=$(echo "$stats" | jq -r '.total.umrs.sig_umrs')
+	crypto_umrs=$(echo "$stats" | jq -r '.total.umrs.crypto_umrs')
 	if ((sig_umrs + crypto_umrs > 0)); then
 		echo "Unexpected number of unmerged UMRs"
 		return 1
@@ -163,24 +164,24 @@ validate_crypto_crc_stats() {
 nvmftestinit
 nvmfappstart -m 0x3
 
-$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS
-$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
+$rpc_py nvmf_create_transport "$NVMF_TRANSPORT_OPTS"
+$rpc_py bdev_malloc_create "$MALLOC_BDEV_SIZE" "$MALLOC_BLOCK_SIZE" -b Malloc0
 $rpc_py nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -a -s SPDK00000000000001
 $rpc_py nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Malloc0
-$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $IP_ADDR -s $NVMF_PORT
+$rpc_py nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t "$TEST_TRANSPORT" -a "$IP_ADDR" -s "$NVMF_PORT"
 
 # test crypto and crc32c with TCP data digest
-env $XLIO_OPTS SPDK_XLIO_PATH=$XLIO_PATH $bdevperf --json <(gen_accel_mlx5_crypto_crc_json) -q 1 -o 4096 -t 10 -w randread -M 50 -m 0xc -r $app_sock &
+env "$XLIO_OPTS" SPDK_XLIO_PATH="$XLIO_PATH" "$bdevperf" --json <(gen_accel_mlx5_crypto_crc_json) -q 1 -o 4096 -t 10 -w randread -M 50 -m 0xc -r "$app_sock" &
 bdevperf_pid=$!
-waitforlisten $bdevperf_pid $app_sock
+waitforlisten "$bdevperf_pid" "$app_sock"
 sleep 5
-validate_crypto_crc_stats $app_sock
+validate_crypto_crc_stats "$app_sock"
 sleep 1
-wait $bdevperf_pid
+wait "$bdevperf_pid"
 
 #$bdevperf --json <(gen_accel_mlx5_crypto_crc_json) -q 128 -o 131072 -t 10 -w randrw -M 50 -m 0xc -r $app_sock
 #bdevperf_pid=$!
-#waitforlisten $bdevperf_pid $app_sock
+#waitforlisten "$bdevperf_pid" "$app_sock"
 #sleep 5
 #validate_crypto_crc_stats $app_sock
 #sleep 1
