@@ -4155,20 +4155,6 @@ spdk_bdev_dump_info_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w)
 }
 
 static void
-bdev_handle_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch,
-			  spdk_bdev_io_fn fn)
-{
-	struct spdk_bdev_io *bdev_io, *tmp;
-
-	TAILQ_FOREACH_SAFE(bdev_io, queue, internal.link, tmp) {
-		if (ch == NULL || bdev_io->internal.ch == ch) {
-			TAILQ_REMOVE(queue, bdev_io, internal.link);
-			fn(NULL, bdev_io);
-		}
-	}
-}
-
-static void
 bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_io *bdev_io, *tmp;
@@ -4212,20 +4198,11 @@ bdev_qos_retry_queued_io(struct spdk_bdev_qos *qos)
 	spdk_spin_unlock(&qos->spinlock);
 }
 
-static int
-_bdev_submit_qos_allowed_io(void *ctx, struct spdk_bdev_io *bdev_io)
-{
-	struct spdk_bdev_channel *ch = bdev_io->internal.ch;
-
-	bdev_io_do_submit(ch, bdev_io);
-
-	return 0;
-}
-
 static void
-bdev_mgmt_ch_submit_qos_allowed_io(struct spdk_bdev_mgmt_channel *mgmt_ch)
+bdev_qos_resubmit_all_allowed_io(struct spdk_bdev_mgmt_channel *mgmt_ch)
 {
 	bdev_io_tailq_t tmp_head;
+	struct spdk_bdev_io *bdev_io, *tmp;
 
 	TAILQ_INIT(&tmp_head);
 
@@ -4233,7 +4210,10 @@ bdev_mgmt_ch_submit_qos_allowed_io(struct spdk_bdev_mgmt_channel *mgmt_ch)
 	TAILQ_SWAP(&mgmt_ch->qos_allowed_io, &tmp_head, spdk_bdev_io, internal.link);
 	spdk_spin_unlock(&mgmt_ch->spinlock);
 
-	bdev_handle_all_queued_io(&tmp_head, NULL, _bdev_submit_qos_allowed_io);
+	TAILQ_FOREACH_SAFE(bdev_io, &tmp_head, internal.link, tmp) {
+		TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
+		bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+	}
 }
 
 static void
@@ -4252,7 +4232,7 @@ bdev_channel_poll_qos(struct spdk_bdev_qos *qos, int timeslice_count)
 }
 
 static void
-bdev_ch_reset_qos_cache(struct spdk_bdev_channel *bdev_ch)
+bdev_qos_reset_cache(struct spdk_bdev_channel *bdev_ch)
 {
 	if (bdev_ch->qos_cache != NULL) {
 		bdev_qos_limits_cache_reset(&bdev_ch->qos_cache->limits);
@@ -4260,14 +4240,14 @@ bdev_ch_reset_qos_cache(struct spdk_bdev_channel *bdev_ch)
 }
 
 static void
-bdev_mgmt_ch_reset_qos_cache(struct spdk_bdev_mgmt_channel *mgmt_ch)
+bdev_qos_reset_all_cache(struct spdk_bdev_mgmt_channel *mgmt_ch)
 {
 	struct spdk_bdev_shared_resource *shared_resource;
 	struct spdk_bdev_channel *bdev_ch;
 
 	TAILQ_FOREACH(shared_resource, &mgmt_ch->shared_resources, link) {
 		TAILQ_FOREACH(bdev_ch, &shared_resource->bdev_ch_list, tailq_shared_resource) {
-			bdev_ch_reset_qos_cache(bdev_ch);
+			bdev_qos_reset_cache(bdev_ch);
 		}
 	}
 }
@@ -4277,8 +4257,8 @@ _bdev_reset_qos(struct spdk_io_channel *ch, void *ctx)
 {
 	struct spdk_bdev_mgmt_channel *mgmt_ch = __io_ch_to_bdev_mgmt_ch(ch);
 
-	bdev_mgmt_ch_reset_qos_cache(mgmt_ch);
-	bdev_mgmt_ch_submit_qos_allowed_io(mgmt_ch);
+	bdev_qos_reset_all_cache(mgmt_ch);
+	bdev_qos_resubmit_all_allowed_io(mgmt_ch);
 }
 
 static void
