@@ -437,12 +437,6 @@ fsdev_aio_get_fobject_by_nodeid(struct aio_fsdev *vfsdev, uint64_t nodeid)
 	return fobject;
 }
 
-static inline struct aio_fsdev_file_object *
-fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_fobject)
-{
-	return fsdev_aio_get_fobject_by_nodeid(vfsdev, (uint64_t)(uintptr_t)_fobject);
-}
-
 static inline uint64_t
 fsdev_aio_fobject_to_nodeid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
@@ -493,36 +487,21 @@ fsdev_aio_get_fhandle_by_fuse_fh(struct aio_fsdev *vfsdev, uint64_t fh)
 	return fhandle;
 }
 
-static inline struct aio_fsdev_file_handle *
-fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_fhandle)
-{
-	return fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, (uint64_t)(uintptr_t)_fhandle);
-}
-
 static inline uint64_t
 fsdev_aio_get_fuse_fh(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
 {
 	return fhandle->hdr.lut_key + FILE_PTR_LUT_BASE;
 }
 
-static inline struct spdk_fsdev_file_handle *
-fsdev_aio_get_spdk_fhandle(struct aio_fsdev *vfsdev, struct aio_fsdev_file_handle *fhandle)
-{
-	return (struct spdk_fsdev_file_handle *)(uintptr_t)fsdev_aio_get_fuse_fh(vfsdev, fhandle);
-}
-
 static inline void
 fsdev_aio_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 {
-	/* Note, this get_type() check here is temporary, once all commands
-	 * are converted to FUSE this can be an assert instead.
-	 */
-	if (spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE) {
-		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 
-		if (out_hdr != NULL) {
-			out_hdr->error = status;
-		}
+	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
+
+	if (out_hdr != NULL) {
+		out_hdr->error = status;
 	}
 
 	/* Complete the IO */
@@ -4805,65 +4784,14 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	int status;
 	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 
-	assert(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
-
-	switch (type) {
-	case SPDK_FSDEV_IO_FUSE:
+	if (spdk_likely(type == SPDK_FSDEV_IO_FUSE)) {
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_READ:
-	case SPDK_FSDEV_IO_WRITE:
-	case SPDK_FSDEV_IO_GETATTR:
-	case SPDK_FSDEV_IO_SETATTR:
-	case SPDK_FSDEV_IO_OPEN:
-	case SPDK_FSDEV_IO_OPENDIR:
-	case SPDK_FSDEV_IO_CREATE:
-	case SPDK_FSDEV_IO_RELEASE:
-	case SPDK_FSDEV_IO_RELEASEDIR:
-	case SPDK_FSDEV_IO_LOOKUP:
-	case SPDK_FSDEV_IO_FORGET:
-	case SPDK_FSDEV_IO_SYMLINK:
-	case SPDK_FSDEV_IO_MKNOD:
-	case SPDK_FSDEV_IO_MKDIR:
-	case SPDK_FSDEV_IO_UNLINK:
-	case SPDK_FSDEV_IO_RMDIR:
-	case SPDK_FSDEV_IO_MOUNT:
-	case SPDK_FSDEV_IO_UMOUNT:
-	case SPDK_FSDEV_IO_RENAME:
-	case SPDK_FSDEV_IO_READLINK:
-	case SPDK_FSDEV_IO_LINK:
-	case SPDK_FSDEV_IO_STATFS:
-	case SPDK_FSDEV_IO_FSYNC:
-	case SPDK_FSDEV_IO_FSYNCDIR:
-	case SPDK_FSDEV_IO_SETXATTR:
-	case SPDK_FSDEV_IO_GETXATTR:
-	case SPDK_FSDEV_IO_LISTXATTR:
-	case SPDK_FSDEV_IO_REMOVEXATTR:
-	case SPDK_FSDEV_IO_FLUSH:
-	case SPDK_FSDEV_IO_READDIR:
-	case SPDK_FSDEV_IO_READDIR_SIMPLE:
-	case SPDK_FSDEV_IO_ABORT:
-	case SPDK_FSDEV_IO_FALLOCATE:
-	case SPDK_FSDEV_IO_COPY_FILE_RANGE:
-	case SPDK_FSDEV_IO_SYNCFS:
-	case SPDK_FSDEV_IO_LSEEK:
-	case SPDK_FSDEV_IO_FLOCK:
-	case SPDK_FSDEV_IO_SETLK:
-	case SPDK_FSDEV_IO_GETLK:
-	case SPDK_FSDEV_IO_POLL:
-	case SPDK_FSDEV_IO_IOCTL:
-		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
-		assert(false);
-		status = -ENOSYS;
-		break;
-	default:
+		if (status != IO_STATUS_ASYNC) {
+			fsdev_aio_io_complete(fsdev_io, status);
+		}
+	} else {
 		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
-		status = -ENOSYS;
-		break;
-	}
-
-	if (status != IO_STATUS_ASYNC) {
-		fsdev_aio_io_complete(fsdev_io, status);
+		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
 	}
 }
 
