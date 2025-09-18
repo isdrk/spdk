@@ -948,7 +948,12 @@ again:
 			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
 			break;
 		case MLX5_CQE_RESP_ERR:
-			wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+			srq = qp->srq;
+			if (!srq) {
+				wc[n].wr_id = mlx5_qp_get_rq_comp_wr_id(qp, cqe);
+			} else {
+				wc[n].wr_id = mlx5_srq_get_comp_wr_id(srq, cqe);
+			}
 			handle_err_cqe((struct mlx5_err_cqe *)cqe, &wc[n]);
 			break;
 		case MLX5_CQE_SIG_ERR:
