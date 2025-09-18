@@ -10209,6 +10209,29 @@ bdev_write_zero_buffer_done(struct spdk_bdev_io *bdev_io, bool success, void *cb
 	parent_io->internal.cb(parent_io, success, parent_io->internal.caller_ctx);
 }
 
+static int
+_bdev_channel_enable_qos(struct spdk_bdev_channel *bdev_ch,
+			 struct spdk_bdev_qos *qos)
+{
+	if (!(bdev_ch->flags & BDEV_CH_QOS_ENABLED)) {
+		bdev_ch->qos_ch = bdev_get_qos_channel(qos);
+		if (bdev_ch->qos_ch == NULL) {
+			return -1;
+		}
+		bdev_ch->flags |= BDEV_CH_QOS_ENABLED;
+	}
+	return 0;
+}
+
+static void
+_bdev_channel_disable_qos(struct spdk_bdev_channel *bdev_ch)
+{
+	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
+		bdev_put_qos_channel(bdev_ch);
+		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
+	}
+}
+
 static void
 bdev_set_qos_limit_done(struct set_qos_limit_ctx *ctx, int status)
 {
@@ -10246,12 +10269,7 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 {
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
-	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
-		bdev_put_qos_channel(bdev_ch);
-		bdev_ch->qos_ch = NULL;
-
-		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
-	}
+	_bdev_channel_disable_qos(bdev_ch);
 
 	spdk_bdev_for_each_channel_continue(i, 0);
 }
@@ -10282,17 +10300,10 @@ bdev_enable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 	struct set_qos_limit_ctx *ctx = _ctx;
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 	struct spdk_bdev_qos *qos;
-	int rc = 0;
+	int rc;
 
-	if (!(bdev_ch->flags & BDEV_CH_QOS_ENABLED)) {
-		qos = bdev_qos_desc_get_qos(ctx->desc);
-		bdev_ch->qos_ch = bdev_get_qos_channel(qos);
-		if (bdev_ch->qos_ch != NULL) {
-			bdev_ch->flags |= BDEV_CH_QOS_ENABLED;
-		} else {
-			rc = -1;
-		}
-	}
+	qos = bdev_qos_desc_get_qos(ctx->desc);
+	rc = _bdev_channel_enable_qos(bdev_ch, qos);
 
 	spdk_bdev_for_each_channel_continue(i, rc);
 }
