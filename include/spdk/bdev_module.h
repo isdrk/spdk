@@ -753,6 +753,8 @@ struct spdk_bdev {
 
 		TAILQ_ENTRY(spdk_bdev) link;
 
+		TAILQ_ENTRY(spdk_bdev) qos_link;
+
 		/** points to a reset bdev_io if one is in progress. */
 		struct spdk_bdev_io *reset_in_progress;
 
