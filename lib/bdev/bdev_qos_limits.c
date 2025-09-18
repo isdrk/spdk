@@ -42,7 +42,7 @@ bdev_qos_limit_is_read_io(struct spdk_bdev_io *bdev_io)
 static uint64_t
 bdev_qos_limit_get_io_size_in_bytes(struct spdk_bdev_io *bdev_io)
 {
-	uint32_t blocklen = bdev_io_get_block_size(bdev_io);
+	uint32_t blocklen = spdk_bdev_io_get_block_size(bdev_io);
 
 	switch (bdev_io->type) {
 	case SPDK_BDEV_IO_TYPE_NVME_IO:

@@ -128,4 +128,12 @@ struct spdk_bdev_qos_channel {
 	TAILQ_ENTRY(spdk_bdev_qos_channel) link;
 };
 
+/**
+ * Notify that the bdev I/O passed the current QoS limit check
+ * to move to the next QoS limit check.
+ *
+ * \param bdev_io The bdev_io
+ */
+void spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io);
+
 #endif /* SPDK_INTERNAL_BDEV_QOS_MODULE_H */

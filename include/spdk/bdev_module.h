@@ -1513,6 +1513,15 @@ struct spdk_io_channel *spdk_bdev_io_get_io_channel(struct spdk_bdev_io *bdev_io
 uint64_t spdk_bdev_io_get_submit_tsc(struct spdk_bdev_io *bdev_io);
 
 /**
+ * Get the block size of the block device that this bdev I/O belongs to.
+ *
+ * \param bdev_io The bdev I/O
+ *
+ * \return Block size in bytes.
+ */
+uint32_t spdk_bdev_io_get_block_size(struct spdk_bdev_io *bdev_io);
+
+/**
  * Resize for a bdev.
  *
  * Change number of blocks for provided block device.

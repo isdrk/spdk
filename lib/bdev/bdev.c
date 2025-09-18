@@ -28,6 +28,7 @@
 #include "bdev_internal.h"
 #include "spdk_internal/trace_defs.h"
 #include "spdk_internal/assert.h"
+#include "spdk_internal/bdev.h"
 #include "spdk_internal/bdev_qos_module.h"
 #include "bdev_qos_limits.h"
 
@@ -406,7 +407,6 @@ static int bdev_unlock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_cha
 				 uint64_t offset, uint64_t length,
 				 lock_range_cb cb_fn, void *cb_arg);
 
-static bool bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort);
 static bool bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *ch, struct spdk_bdev_io *bio_to_abort);
 
 static bool claim_type_is_v2(enum spdk_bdev_claim_type type);
@@ -1074,7 +1074,7 @@ bdev_io_needs_metadata(struct spdk_bdev_desc *desc, struct spdk_bdev_io *bdev_io
 }
 
 uint32_t
-bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
+spdk_bdev_io_get_block_size(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev *bdev = bdev_io->bdev;
 
@@ -2857,7 +2857,7 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 		struct spdk_bdev_mgmt_channel *mgmt_channel = shared_resource->mgmt_ch;
 		struct spdk_bdev_io *bio_to_abort = bdev_io->u.abort.bio_to_abort;
 
-		if (bdev_abort_queued_io(&shared_resource->nomem_io, bio_to_abort) ||
+		if (spdk_bdev_abort_queued_io(&shared_resource->nomem_io, bio_to_abort) ||
 		    bdev_abort_buf_io(mgmt_channel, bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io,
 						    SPDK_BDEV_IO_STATUS_SUCCESS);
@@ -2909,8 +2909,8 @@ _bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bde
 static inline void bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch,
 		struct spdk_bdev_io *bdev_io);
 
-static void
-bdev_qos_allow_io(struct spdk_bdev_io *bdev_io)
+void
+spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev_qos_channel *qos_ch = bdev_io->internal.blocked_qos_ch;
 
@@ -2940,7 +2940,7 @@ bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev
 	 */
 
 submit:
-	bdev_qos_allow_io(bdev_io);
+	spdk_bdev_qos_module_allow_io(bdev_io);
 }
 
 static void
@@ -3273,7 +3273,7 @@ _bdev_rw_split(void *_bdev_io)
 	void *md_buf = NULL;
 	int rc;
 
-	blocklen = bdev_io_get_block_size(bdev_io);
+	blocklen = spdk_bdev_io_get_block_size(bdev_io);
 
 	max_size = max_size ? max_size : UINT32_MAX;
 	max_segment_size = max_segment_size ? max_segment_size : UINT32_MAX;
@@ -3616,7 +3616,8 @@ bdev_io_split(struct spdk_bdev_io *bdev_io)
 		} else {
 			assert(bdev_io->type == SPDK_BDEV_IO_TYPE_READ);
 			spdk_bdev_io_get_buf(bdev_io, bdev_rw_split_get_buf_cb,
-					     bdev_io->u.bdev.num_blocks * bdev_io_get_block_size(bdev_io));
+					     bdev_io->u.bdev.num_blocks *
+					     spdk_bdev_io_get_block_size(bdev_io));
 		}
 		break;
 	case SPDK_BDEV_IO_TYPE_UNMAP:
@@ -3654,12 +3655,12 @@ bdev_qos_channel_abort_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 	bool success;
 
 	spdk_spin_lock(&qos->spinlock);
-	success = bdev_abort_queued_io(&qos->queued_io, bio_to_abort);
+	success = spdk_bdev_abort_queued_io(&qos->queued_io, bio_to_abort);
 	spdk_spin_unlock(&qos->spinlock);
 
 	if (!success) {
 		spdk_spin_lock(&group->spinlock);
-		success = bdev_abort_queued_io(&group->allowed_io, bio_to_abort);
+		success = spdk_bdev_abort_queued_io(&group->allowed_io, bio_to_abort);
 		spdk_spin_unlock(&group->spinlock);
 	}
 
@@ -4163,8 +4164,8 @@ spdk_bdev_dump_info_json(struct spdk_bdev *bdev, struct spdk_json_write_ctx *w)
 	return 0;
 }
 
-static void
-bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
+void
+spdk_bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_io *bdev_io, *tmp;
 
@@ -4221,7 +4222,7 @@ bdev_qos_resubmit_all_allowed_io(struct spdk_bdev_qos_poll_group *group)
 
 	TAILQ_FOREACH_SAFE(bdev_io, &tmp_head, internal.link, tmp) {
 		TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
-		bdev_qos_allow_io(bdev_io);
+		spdk_bdev_qos_module_allow_io(bdev_io);
 	}
 }
 
@@ -4274,7 +4275,7 @@ bdev_qos_channel_unblock_all_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 	struct spdk_bdev_qos *qos = qos_ch->qos;
 
 	spdk_spin_lock(&qos->spinlock);
-	bdev_unblock_all_queued_io(&qos->queued_io, bdev_ch);
+	spdk_bdev_unblock_all_queued_io(&qos->queued_io, bdev_ch);
 	spdk_spin_unlock(&qos->spinlock);
 }
 
@@ -4760,8 +4761,8 @@ bdev_abort_all_buf_io(struct spdk_bdev_mgmt_channel *mgmt_ch, struct spdk_bdev_c
  * Abort I/O that are queued waiting for submission.  These types of I/O are
  *  linked using the spdk_bdev_io link TAILQ_ENTRY.
  */
-static void
-bdev_abort_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
+void
+spdk_bdev_abort_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_io *bdev_io, *tmp;
 
@@ -4788,12 +4789,12 @@ bdev_abort_all_nomem_io(struct spdk_bdev_channel *ch)
 	struct spdk_bdev_shared_resource *shared_resource = ch->shared_resource;
 
 	shared_resource->nomem_abort_in_progress = true;
-	bdev_abort_all_queued_io(&shared_resource->nomem_io, ch);
+	spdk_bdev_abort_all_queued_io(&shared_resource->nomem_io, ch);
 	shared_resource->nomem_abort_in_progress = false;
 }
 
-static bool
-bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort)
+bool
+spdk_bdev_abort_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_io *bio_to_abort)
 {
 	struct spdk_bdev_io *bdev_io;
 	struct spdk_bdev_channel *ch;
@@ -7417,11 +7418,11 @@ bdev_qos_channel_abort_all_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 	struct spdk_bdev_qos_poll_group *group = qos_ch->group;
 
 	spdk_spin_lock(&qos->spinlock);
-	bdev_abort_all_queued_io(&qos->queued_io, bdev_ch);
+	spdk_bdev_abort_all_queued_io(&qos->queued_io, bdev_ch);
 	spdk_spin_unlock(&qos->spinlock);
 
 	spdk_spin_lock(&group->spinlock);
-	bdev_abort_all_queued_io(&group->allowed_io, bdev_ch);
+	spdk_bdev_abort_all_queued_io(&group->allowed_io, bdev_ch);
 	spdk_spin_unlock(&group->spinlock);
 }
 
@@ -7494,7 +7495,7 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 	 * nomem I/Os of this channel.
 	 */
 	bdev_abort_all_nomem_io(channel);
-	bdev_abort_all_queued_io(&shared_resource->nomem_io, channel);
+	spdk_bdev_abort_all_queued_io(&shared_resource->nomem_io, channel);
 	bdev_abort_all_buf_io(mgmt_channel, channel);
 
 	if (channel->flags & BDEV_CH_QOS_ENABLED) {
