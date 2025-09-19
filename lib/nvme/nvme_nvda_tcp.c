@@ -718,6 +718,15 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	SPDK_INFOLOG(nvme_xlio, "tqpair %p socket 0x%lx is destroyed\n",
 		     tqpair, tqpair->xlio_sock);
 
+	/* XLIO may call event callback on a destroyed socket, whose tqpair
+	 * has already been freed, so update userdata (i.e., tqpair) to NULL and checked
+	 * it when event is comming.
+	 */
+	rc = xlio_socket_update(tqpair->xlio_sock, 0, (uintptr_t)NULL);
+	if (rc) {
+		SPDK_WARNLOG("Fail to update socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+	}
+
 	if (nvme_qpair_is_admin_queue(&tqpair->qpair)) {
 		xlio_sock_put_admin_group();
 	}
@@ -910,6 +919,12 @@ static void
 xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int value)
 {
 	struct nvme_tcp_qpair *tqpair = (struct nvme_tcp_qpair *)userdata_sq;
+
+	if (spdk_unlikely(!tqpair)) {
+		SPDK_INFOLOG(nvme_xlio, "tqpair is NULL: sock=0x%lx event=%d value=%d\n",
+			     sock, event, value);
+		return;
+	}
 
 	switch (event) {
 	case XLIO_SOCKET_EVENT_ESTABLISHED:
