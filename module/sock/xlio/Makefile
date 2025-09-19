@@ -15,6 +15,7 @@ ifneq ($(strip $(CONFIG_XLIO_DIR)),)
 CFLAGS += -I$(CONFIG_XLIO_DIR)/include
 endif
 
+LOCAL_SYS_LIBS = -libverbs
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
 include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
