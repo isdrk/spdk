@@ -435,17 +435,17 @@ fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_objec
 static inline struct aio_fsdev_file_handle *
 fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_fhandle)
 {
-	uint64_t n = (uint64_t)(uintptr_t)_fhandle;
+	uint64_t fh = (uint64_t)(uintptr_t)_fhandle;
 	struct aio_fsdev_file_handle *fhandle;
 
-	if (n < FILE_PTR_LUT_BASE) {
-		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle (< 0x%" PRIx64 ")\n", n, FILE_PTR_LUT_BASE);
+	if (fh < FILE_PTR_LUT_BASE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle (< 0x%" PRIx64 ")\n", fh, FILE_PTR_LUT_BASE);
 		return NULL;
 	}
 
-	fhandle = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
+	fhandle = spdk_lut_get(vfsdev->lut, fh - FILE_PTR_LUT_BASE);
 	if (fhandle == SPDK_LUT_INVALID_VALUE) {
-		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle\n", n);
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fhandle\n", fh);
 		return NULL;
 	}
 
@@ -456,7 +456,7 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 		assert(fhandle->hdr.refcount <= 1);
 	} else {
 		/* Error: the key rather belongs to a fobject */
-		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", n);
+		SPDK_WARNLOG("0x%" PRIx64 " is not a fhandle\n", fh);
 		fhandle = NULL;
 	}
 
