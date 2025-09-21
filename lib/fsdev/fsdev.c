@@ -525,7 +525,6 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 	fsdev_io->internal.usr_cb_arg = cb_arg;
 	fsdev_io->internal.status = -ENOSYS;
 	fsdev_io->internal.in_submit_request = false;
-	fsdev_io->internal.cleanup_cb_fn = NULL;
 	fsdev_io->internal.source_id = source_id;
 	fsdev_io->internal.source_unique = source_unique;
 
@@ -1458,8 +1457,6 @@ fsdev_io_complete(void *ctx)
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
 	uint64_t submit_tsc;
 	uint64_t tsc_diff;
-	spdk_fsdev_io_cleanup_cb cleanup_cb_fn;
-	void *cleanup_cb_arg;
 
 	if (spdk_unlikely(fsdev_io->internal.in_submit_request)) {
 		/*
@@ -1506,17 +1503,11 @@ fsdev_io_complete(void *ctx)
 	 * do all the necessary work here or save relevant data fields for later use.
 	 */
 	submit_tsc = fsdev_io->internal.submit_tsc;
-	cleanup_cb_fn = fsdev_io->internal.cleanup_cb_fn;
-	cleanup_cb_arg = fsdev_io->internal.cleanup_cb_arg;
 
 	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
 				     fsdev_io->internal.status, fsdev_io);
 
 	tsc_diff = spdk_get_ticks() - submit_tsc;
-
-	if (cleanup_cb_fn) {
-		cleanup_cb_fn(cleanup_cb_arg);
-	}
 
 	if (tsc_diff < ch->stat->io[opc].min_ticks) {
 		ch->stat->io[opc].min_ticks = tsc_diff;
@@ -1596,14 +1587,6 @@ struct spdk_io_channel *
 spdk_fsdev_io_get_io_channel(struct spdk_fsdev_io *fsdev_io)
 {
 	return fsdev_io->internal.ch->channel;
-}
-
-void
-spdk_fsdev_io_set_cleanup_callback(struct spdk_fsdev_io *fsdev_io, spdk_fsdev_io_cleanup_cb cb_fn,
-				   void *cb_arg)
-{
-	fsdev_io->internal.cleanup_cb_fn = cb_fn;
-	fsdev_io->internal.cleanup_cb_arg = cb_arg;
 }
 
 static int

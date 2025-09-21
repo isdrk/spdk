@@ -391,17 +391,6 @@ struct spdk_io_channel *spdk_fsdev_io_get_io_channel(struct spdk_fsdev_io *fsdev
 typedef void (*spdk_fsdev_io_cleanup_cb)(void *cb_arg);
 
 /**
- * Set optional I/O cleanup callback.
- *
- * \param fsdev_io I/O
- * \param cb_fn Called when the I/O object is no longer in use, so a module can clean up any associated resources.
- * \param cb_arg Argument passed to function cb_fn.
- */
-void spdk_fsdev_io_set_cleanup_callback(struct spdk_fsdev_io *fsdev_io,
-					spdk_fsdev_io_cleanup_cb cb_fn,
-					void *cb_arg);
-
-/**
  * Add the given module to the list of registered modules.
  * This function should be invoked by referencing the macro
  * SPDK_FSDEV_MODULE_REGISTER in the module c file.

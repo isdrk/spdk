@@ -1336,12 +1336,6 @@ struct spdk_fsdev_io {
 		/** Entry to the list io_submitted of struct spdk_fsdev_channel */
 		TAILQ_ENTRY(spdk_fsdev_io) ch_link;
 
-		/** Cleanup callback - an optional callback which can be set by module */
-		void *cleanup_cb_fn;
-
-		/** Cleanup callback's param */
-		void *cleanup_cb_arg;
-
 		/* Timestamp */
 		uint64_t submit_tsc;
 
