@@ -373,22 +373,28 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 	TAILQ_INSERT_TAIL(&aioch->ios_to_complete, aio, link);
 }
 
+#define fsdev_io_get_aio_fobject(fsdev_io) \
+	fsdev_aio_get_fobject_by_nodeid(fsdev_to_aio_fsdev(fsdev_io->fsdev), fsdev_io->u_in.fuse.hdr->nodeid)
+
 static inline struct aio_fsdev_file_object *
-fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_fobject)
+fsdev_aio_get_fobject_by_nodeid(struct aio_fsdev *vfsdev, uint64_t nodeid)
 {
-	uint64_t n = (uint64_t)(uintptr_t)_fobject;
 	struct aio_fsdev_file_object *fobject;
 
-	if (n < FILE_PTR_LUT_BASE) {
-		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject (< 0x%" PRIx64 ")\n", n, FILE_PTR_LUT_BASE);
+	if (nodeid == FUSE_ROOT_ID) {
+		nodeid = FILE_PTR_LUT_BASE;
+	}
+
+	if (nodeid < FILE_PTR_LUT_BASE) {
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject (< 0x%" PRIx64 ")\n", nodeid, FILE_PTR_LUT_BASE);
 		return NULL;
 	}
 
 	spdk_spin_lock(&vfsdev->lock);
-	fobject = spdk_lut_get(vfsdev->lut, n - FILE_PTR_LUT_BASE);
+	fobject = spdk_lut_get(vfsdev->lut, nodeid - FILE_PTR_LUT_BASE);
 	if (fobject == SPDK_LUT_INVALID_VALUE) {
 		spdk_spin_unlock(&vfsdev->lock);
-		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject\n", n);
+		SPDK_WARNLOG("0x%" PRIx64 " is not a valid fobject\n", nodeid);
 		return NULL;
 	}
 
@@ -398,7 +404,7 @@ fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_
 		__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED); /* ref by caller */
 	} else {
 		/* Error: the key rather belongs to a fhandle */
-		SPDK_WARNLOG("0x%" PRIx64 " is not a fobject\n", n);
+		SPDK_WARNLOG("0x%" PRIx64 " is not a fobject\n", nodeid);
 		fobject = NULL;
 	}
 	spdk_spin_unlock(&vfsdev->lock);
@@ -406,10 +412,20 @@ fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_
 	return fobject;
 }
 
+static inline struct aio_fsdev_file_object *
+fsdev_aio_get_fobject(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_object *_fobject)
+{
+	return fsdev_aio_get_fobject_by_nodeid(vfsdev, (uint64_t)(uintptr_t)_fobject);
+}
+
 static inline struct spdk_fsdev_file_object *
 fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
 {
 	assert(fobject);
+
+	if (fobject == vfsdev->root) {
+		return (struct spdk_fsdev_file_object *)(uintptr_t)FUSE_ROOT_ID;
+	}
 
 	return (struct spdk_fsdev_file_object *)(uintptr_t)(fobject->hdr.lut_key + FILE_PTR_LUT_BASE);
 }
