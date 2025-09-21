@@ -2333,51 +2333,133 @@ fsdev_aio_restore_cred(struct fsdev_aio_cred *old)
 }
 
 static int
+fsdev_aio_add_dirent(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
+		     const struct dirent *entry)
+{
+	size_t namelen;
+	size_t entlen;
+	size_t entlen_padded;
+	struct fuse_dirent *dirent;
+
+	assert(buf != NULL);
+
+	namelen = strlen(entry->d_name);
+	entlen = FUSE_NAME_OFFSET + namelen;
+	entlen_padded = FUSE_DIRENT_ALIGN(entlen);
+
+	if (entlen_padded > bufsize) {
+		return -EAGAIN;
+	}
+
+	dirent = (struct fuse_dirent *)buf;
+	dirent->ino = entry->d_ino;
+	dirent->off = entry->d_off;
+	dirent->namelen = namelen;
+	dirent->type = entry->d_type;
+	memcpy(dirent->name, entry->d_name, namelen);
+	memset(dirent->name + namelen, 0, entlen_padded - entlen);
+
+	return (int)entlen_padded;
+}
+
+static size_t
+fsdev_aio_add_direntplus(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
+			 struct aio_fsdev_file_object *fobject, const struct dirent *entry)
+{
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	size_t namelen;
+	size_t entlen;
+	size_t entlen_padded;
+	struct aio_fsdev_file_object *entry_fobject;
+	struct fuse_direntplus *direntplus;
+	struct fuse_dirent *dirent;
+	int res;
+
+	assert(buf != NULL);
+
+	namelen = strlen(entry->d_name);
+	entlen = FUSE_NAME_OFFSET_DIRENTPLUS + namelen;
+	entlen_padded = FUSE_DIRENT_ALIGN(entlen);
+	if (entlen_padded > bufsize) {
+		return -EAGAIN;
+	}
+
+	direntplus = (struct fuse_direntplus *)buf;
+	dirent = &direntplus->dirent;
+
+	if (is_dot_or_dotdot(entry->d_name)) {
+		memset(direntplus, 0, sizeof(*direntplus));
+
+		dirent->ino = entry->d_ino;
+		dirent->off = entry->d_off;
+		dirent->namelen = namelen;
+		dirent->type = DT_DIR;
+
+		memcpy(dirent->name, entry->d_name, namelen);
+		memset(dirent->name + namelen, 0, entlen_padded - entlen);
+
+		return entlen_padded;
+	}
+
+	memset(dirent, 0, sizeof(*dirent));
+
+	res = fsdev_aio_do_lookup(vfsdev, fobject, entry->d_name, &entry_fobject, NULL,
+				  &direntplus->entry_out);
+	if (res) {
+		SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", entry->d_name, res);
+		return res;
+	}
+
+	dirent->ino = entry->d_ino;
+	dirent->off = entry->d_off;
+	dirent->namelen = namelen;
+	dirent->type = entry->d_type;
+	memcpy(dirent->name, entry->d_name, namelen);
+	memset(dirent->name + namelen, 0, entlen_padded - entlen);
+
+	return entlen_padded;
+}
+
+static int
 fsdev_aio_do_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io, bool simple)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	struct spdk_fsdev_file_object *_fobject;
-	struct spdk_fsdev_file_handle *_fhandle;
-	off_t offset;
+	struct fuse_read_in *read_in = fsdev_io->u_in.fuse.op.read;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	struct aio_fsdev_file_object *entry_fobject;
+	char *buf = fsdev_io->u_out.fuse.iov[0].iov_base;
+	size_t bufsize = fsdev_io->u_out.fuse.iov[0].iov_len;
+	uint32_t bytes_written = 0;
+	off_t offset;
 	int res;
 
-	if (!simple) {
-		_fobject = fsdev_io->u_in.readdir.fobject;
-		_fhandle = fsdev_io->u_in.readdir.fhandle;
-		offset = fsdev_io->u_in.readdir.offset;
-	} else {
-		_fobject = fsdev_io->u_in.readdir_simple.fobject;
-		_fhandle = fsdev_io->u_in.readdir_simple.fhandle;
-		offset = fsdev_io->u_in.readdir_simple.offset;
-	}
-
-	fobject = fsdev_aio_get_fobject(vfsdev, _fobject);
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", _fobject);
+	if (bufsize < read_in->size) {
+		SPDK_ERRLOG("Invalid readdir size: %zu < %" PRIu32 "\n", bufsize, read_in->size);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, _fhandle);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
+	if (!fobject) {
+		SPDK_ERRLOG("Invalid fobject: 0x%" PRIx64 "\n", fsdev_io->u_in.fuse.hdr->nodeid);
+		return -EINVAL;
+	}
+
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, read_in->fh);
 	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", _fhandle);
+		SPDK_ERRLOG("Invalid fhandle: 0x%" PRIx64 "\n", read_in->fh);
 		res = -EINVAL;
 		goto fop_failed;
 	}
 
-	if (((off_t)offset) != fhandle->dir.offset) {
+	offset = ((off_t)read_in->offset);
+	if (offset != fhandle->dir.offset) {
 		seekdir(fhandle->dir.dp, offset);
 		fhandle->dir.entry = NULL;
 		fhandle->dir.offset = offset;
 	}
 
+	bufsize = read_in->size;
 	while (1) {
-		const char *name;
-		struct spdk_fsdev_file_attr attr = {0};
-		bool forget = false;
-
 		if (!fhandle->dir.entry) {
 			errno = 0;
 			fhandle->dir.entry = readdir(fhandle->dir.dp);
@@ -2393,19 +2475,17 @@ fsdev_aio_do_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io,
 		}
 
 		offset = fhandle->dir.entry->d_off;
-		name = fhandle->dir.entry->d_name;
-		entry_fobject = NULL;
 
 		/* Hide root's parent directory */
-		if (fobject == vfsdev->root && strcmp(name, "..") == 0) {
+		if (fobject == vfsdev->root && strcmp(fhandle->dir.entry->d_name, "..") == 0) {
+			res = 0;
 			goto continue_readdir;
 		}
 
 		/* handle t simple readdir first as it doesn't need to lookup the entry */
 		if (simple) {
-			res = fsdev_io->u_in.readdir_simple.entry_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io, name,
-					fhandle->dir.entry->d_ino, fhandle->dir.entry->d_type, offset);
-			if (res) {
+			res = fsdev_aio_add_dirent(fsdev_io, buf, bufsize, fhandle->dir.entry);
+			if (res < 0) {
 				/* non-zero value returned -> stop the readdir */
 				goto fop_failed;
 			}
@@ -2414,30 +2494,17 @@ fsdev_aio_do_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io,
 		}
 
 		/* normal readdir case handling does lookup and works with fobjects */
-		if (is_dot_or_dotdot(name)) {
-			attr.ino = fhandle->dir.entry->d_ino;
-			attr.mode = DT_DIR << 12;
-			goto skip_lookup;
-		}
-
-		res = fsdev_aio_do_lookup(vfsdev, fobject, name, &entry_fobject, &attr, NULL);
-		if (res) {
-			SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", name, res);
-			goto continue_readdir;
-		}
-
-skip_lookup:
-		res = fsdev_io->u_in.readdir.entry_cb_fn(fsdev_io->internal.usr_cb_arg, fsdev_io, name,
-				entry_fobject ? fsdev_aio_get_spdk_fobject(vfsdev, entry_fobject) : NULL,
-				&attr, offset, &forget);
-		if ((forget || res) && entry_fobject) {
-			file_object_unref(entry_fobject, 1);
-		}
-		if (res) {
-			break;
+		res = fsdev_aio_add_direntplus(fsdev_io, buf, bufsize, fobject, fhandle->dir.entry);
+		if (res < 0) {
+			/* non-zero value returned -> stop the readdir */
+			goto fop_failed;
 		}
 
 continue_readdir:
+		bytes_written += res;
+		buf += res;
+		bufsize -= res;
+
 		fhandle->dir.entry = NULL;
 		fhandle->dir.offset = offset;
 	}
@@ -2445,21 +2512,25 @@ continue_readdir:
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
 		      "READDIR succeeded for " FOBJECT_FMT " (simple=%d, sfh=%p, offset=%" PRIu64 " -> %" PRIu64 ")\n",
-		      FOBJECT_ARGS(fobject), simple, fhandle, offset, offset);
+		      FOBJECT_ARGS(fobject), simple, fhandle, read_in->offset, offset);
 fop_failed:
+	if (!res || res == -EAGAIN) {
+		fsdev_io->u_out.fuse.hdr->len += bytes_written;
+		res = 0;
+	}
 	file_object_unref(fobject, 1);
 	return res;
 }
 
 
 static int
-fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_readdirplus(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	return fsdev_aio_do_readdir(ch, fsdev_io, false);
 }
 
 static int
-fsdev_aio_op_readdir_simple(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_op_readdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	return fsdev_aio_do_readdir(ch, fsdev_io, true);
 }
@@ -4630,6 +4701,12 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_FLUSH:
 		status = fsdev_aio_op_flush(ch, fsdev_io);
 		break;
+	case FUSE_READDIRPLUS:
+		status = fsdev_aio_op_readdirplus(ch, fsdev_io);
+		break;
+	case FUSE_READDIR:
+		status = fsdev_aio_op_readdir(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4821,9 +4898,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_READDIR:
-		status = fsdev_aio_op_readdir(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
 		break;
@@ -4854,9 +4928,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_IOCTL:
 		status = fsdev_aio_op_ioctl(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_READDIR_SIMPLE:
-		status = fsdev_aio_op_readdir_simple(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READ:
 	case SPDK_FSDEV_IO_WRITE:
 	case SPDK_FSDEV_IO_GETATTR:
@@ -4886,6 +4957,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_LISTXATTR:
 	case SPDK_FSDEV_IO_REMOVEXATTR:
 	case SPDK_FSDEV_IO_FLUSH:
+	case SPDK_FSDEV_IO_READDIR:
+	case SPDK_FSDEV_IO_READDIR_SIMPLE:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5362,7 +5435,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR) | \
 					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
 					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
-					       (1ULL << FUSE_FLUSH);
+					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
