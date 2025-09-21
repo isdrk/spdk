@@ -83,7 +83,7 @@
  * get or set by AIO ioctl() implementation, when the structure size
  * is well known in advance.
  */
-struct aio_ioctl_rest {
+struct aio_ioctl_data {
 	uint32_t width;
 	uint32_t height;
 };
@@ -96,7 +96,7 @@ struct aio_ioctl_rest {
  * - 44  - cmd number.
  * - data type for the output data (root structure).
  */
-#define AIO_IOCTL_GET_REST_DATA_CMD _IOR('E', 44, struct aio_ioctl_rest)
+#define AIO_IOCTL_GET_DATA_CMD _IOR('E', 44, struct aio_ioctl_data)
 
 /*
  * Setting data.
@@ -106,7 +106,7 @@ struct aio_ioctl_rest {
  * - 45  - cmd number.
  * - data type for the output data (root structure).
  */
-#define AIO_IOCTL_SET_REST_DATA_CMD _IOW('E', 45, struct aio_ioctl_rest)
+#define AIO_IOCTL_SET_DATA_CMD _IOW('E', 45, struct aio_ioctl_data)
 
 /*
  * Setting and getting data in one blow. The input buffer must be used for poulating
@@ -117,7 +117,7 @@ struct aio_ioctl_rest {
  * - 46  - cmd number.
  * - size of the output data (root structure) is sizeof(struct aio_ioctl_unrest)
  */
-#define AIO_IOCTL_REST_DATA_CMD _IOWR('E', 46, struct aio_ioctl_rest)
+#define AIO_IOCTL_DATA_CMD _IOWR('E', 46, struct aio_ioctl_data)
 
 /*
  * No data exchange (action) command. Input and output buffers are zero.
@@ -1699,17 +1699,17 @@ fsdev_aio_op_poll(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 	return fsdev_aio_do_poll(ch, fsdev_io);
 }
 
-static struct aio_ioctl_rest aio_rest;
+static struct aio_ioctl_data aio_data;
 
 /**
  * Example implemenatation of ioctl.
  *
  * It handles the ioctl cmds that we created to show how to do that properly.
- * - AIO_IOCTL_GET_REST_DATA_CMD - traditional get for some internal struct
+ * - AIO_IOCTL_GET_DATA_CMD - traditional get for some internal struct
  *   which size is known.
- * - AIO_IOCTL_SET_REST_DATA_CMD - same as the previous for setting the local
+ * - AIO_IOCTL_SET_DATA_CMD - same as the previous for setting the local
  *   data.
- * - AIO_IOCTL_REST_DATA_CMD - getting and setting data in same cmd.
+ * - AIO_IOCTL_DATA_CMD - getting and setting data in same cmd.
  * - AIO_IOCTL_ACT_CMD - no data, just a command.
  */
 static int
@@ -1720,8 +1720,8 @@ fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 	struct iovec *out_iovec = fsdev_io->u_in.ioctl.out_iov;
 	uint32_t in_iovcnt = fsdev_io->u_in.ioctl.in_iovcnt;
 	uint32_t out_iovcnt = fsdev_io->u_in.ioctl.out_iovcnt;
-	struct aio_ioctl_rest *rt_data;
-	struct aio_ioctl_rest saved;
+	struct aio_ioctl_data *rt_data;
+	struct aio_ioctl_data saved;
 	uint32_t in_bufsz, out_bufsz;
 	void *in_buf, *out_buf;
 
@@ -1732,23 +1732,23 @@ fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 	out_bufsz = out_iovcnt && out_iovec ? out_iovec[0].iov_len : 0;
 
 	switch (request) {
-	case AIO_IOCTL_GET_REST_DATA_CMD:
+	case AIO_IOCTL_GET_DATA_CMD:
 		if (out_bufsz != sizeof(*rt_data)) {
 			return -EIO;
 		}
 
-		rt_data = (struct aio_ioctl_rest *)out_buf;
-		*rt_data = aio_rest;
+		rt_data = (struct aio_ioctl_data *)out_buf;
+		*rt_data = aio_data;
 		break;
-	case AIO_IOCTL_SET_REST_DATA_CMD:
+	case AIO_IOCTL_SET_DATA_CMD:
 		if (in_bufsz != sizeof(*rt_data)) {
 			return -EIO;
 		}
 
-		rt_data = (struct aio_ioctl_rest *)in_buf;
-		aio_rest = *rt_data;
+		rt_data = (struct aio_ioctl_data *)in_buf;
+		aio_data = *rt_data;
 		break;
-	case AIO_IOCTL_REST_DATA_CMD:
+	case AIO_IOCTL_DATA_CMD:
 		if (in_bufsz != sizeof(*rt_data) || out_bufsz != sizeof(*rt_data)) {
 			return -EIO;
 		}
@@ -1756,16 +1756,16 @@ fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 		/*
 		 * Input and output buffers can point to the same region of memory. Saving the input.
 		 */
-		rt_data = (struct aio_ioctl_rest *)in_buf;
+		rt_data = (struct aio_ioctl_data *)in_buf;
 		saved = *rt_data;
 
 		/*
 		 * Populating the data and sending _old_ data back (we decided we want this kind of behavior
 		 * for this particular custom ioctl cmd) like a normal get.
 		 */
-		rt_data = (struct aio_ioctl_rest *)out_buf;
-		*rt_data = aio_rest;
-		aio_rest = saved;
+		rt_data = (struct aio_ioctl_data *)out_buf;
+		*rt_data = aio_data;
+		aio_data = saved;
 		break;
 	case AIO_IOCTL_ACT_CMD:
 		SPDK_DEBUGLOG(fsdev_aio, "Zero-sized ioctl() has been successfully handled.\n");
@@ -1824,9 +1824,9 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	 */
 	fsdev_io->u_out.ioctl.result = 0;
 	switch (request) {
-	case AIO_IOCTL_GET_REST_DATA_CMD:
-	case AIO_IOCTL_SET_REST_DATA_CMD:
-	case AIO_IOCTL_REST_DATA_CMD:
+	case AIO_IOCTL_GET_DATA_CMD:
+	case AIO_IOCTL_SET_DATA_CMD:
+	case AIO_IOCTL_DATA_CMD:
 	case AIO_IOCTL_ACT_CMD:
 		res = fsdev_aio_do_aio_ioctl(fsdev_io);
 		break;
