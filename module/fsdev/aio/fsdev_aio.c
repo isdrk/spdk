@@ -877,42 +877,6 @@ file_handle_destroy(struct aio_fsdev_file_handle *fhandle)
 }
 
 static int
-file_object_fill_attr(struct aio_fsdev_file_object *fobject, struct spdk_fsdev_file_attr *attr)
-{
-	struct stat stbuf;
-	int res;
-
-	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH);
-	if (res == -1) {
-		res = -errno;
-		SPDK_ERRLOG("fstatat() failed with %d\n", res);
-		return res;
-	}
-
-	fobject->mode = stbuf.st_mode;
-	memset(attr, 0, sizeof(*attr));
-
-	attr->ino = stbuf.st_ino;
-	attr->size = stbuf.st_size;
-	attr->blocks = stbuf.st_blocks;
-	attr->atime = stbuf.st_atime;
-	attr->mtime = stbuf.st_mtime;
-	attr->ctime = stbuf.st_ctime;
-	attr->atimensec = ST_ATIM_NSEC(&stbuf);
-	attr->mtimensec = ST_MTIM_NSEC(&stbuf);
-	attr->ctimensec = ST_CTIM_NSEC(&stbuf);
-	attr->mode = stbuf.st_mode;
-	attr->nlink = stbuf.st_nlink;
-	attr->uid = stbuf.st_uid;
-	attr->gid = stbuf.st_gid;
-	attr->rdev = stbuf.st_rdev;
-	attr->blksize = stbuf.st_blksize;
-	attr->valid_ms = fobject->vfsdev->opts.attr_valid_ms;
-
-	return 0;
-}
-
-static int
 fsdev_aio_fill_attr(struct aio_fsdev_file_object *fobject, struct fuse_attr *attr)
 {
 	struct stat stbuf;
@@ -1480,7 +1444,7 @@ fsdev_aio_op_destroy(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 static int
 fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobject,
 		    const char *name, struct aio_fsdev_file_object **pfobject,
-		    struct spdk_fsdev_file_attr *attr, struct fuse_entry_out *entry_out)
+		    struct fuse_entry_out *entry_out)
 {
 	int newfd;
 	int res;
@@ -1530,15 +1494,6 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		close(newfd);
 	}
 
-	if (attr) {
-		res = file_object_fill_attr(fobject, attr);
-		if (res) {
-			SPDK_ERRLOG("fill_attr(%s) failed with %d\n", name, res);
-			file_object_unref(fobject, 1);
-			return res;
-		}
-	}
-
 	if (entry_out) {
 		res = fsdev_aio_fill_entry_out(fobject, entry_out);
 		if (res) {
@@ -1584,10 +1539,9 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-
 	SPDK_DEBUGLOG(fsdev_aio, "  name %s\n", name);
 
-	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, entry_out);
+	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, entry_out);
 	if (err) {
 		SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", name, err);
 		goto fop_failed;
@@ -2325,7 +2279,7 @@ fsdev_aio_add_direntplus(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsi
 		goto fill_dentry; /* skip lookup and fill the entry_out */
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, fobject, entry->d_name, &entry_fobject, NULL,
+	res = fsdev_aio_do_lookup(vfsdev, fobject, entry->d_name, &entry_fobject,
 				  &direntplus->entry_out);
 	if (res) {
 		SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", entry->d_name, res);
@@ -2768,7 +2722,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	res = fsdev_aio_fill_attr_out(fobject, attr_out);
 	if (res) {
-		SPDK_ERRLOG("file_object_fill_attr failed for " FOBJECT_FMT "\n",
+		SPDK_ERRLOG("fsdev_aio_fill_entry_out failed for " FOBJECT_FMT "\n",
 			    FOBJECT_ARGS(fobject));
 		goto fop_failed;
 	}
@@ -2839,7 +2793,7 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	memset(create_out, 0, sizeof(*create_out));
-	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, &create_out->entry);
+	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, &create_out->entry);
 	if (err) {
 		SPDK_ERRLOG("CREATE: lookup failed with %d\n", err);
 		goto fop_failed;
@@ -3253,7 +3207,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 		goto fop_failed;
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, entry_out);
+	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, entry_out);
 	if (res) {
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
 		goto fop_failed;
@@ -3351,7 +3305,7 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		return -EINVAL;
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, NULL);
+	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
 		return -EIO;
@@ -3452,7 +3406,7 @@ fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t fl
 		goto bad_new_parent_fobject;
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &old_fobject, NULL, NULL);
+	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &old_fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
 		res = -EIO;
@@ -3552,8 +3506,7 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
-	res = fsdev_aio_do_lookup(vfsdev, new_parent_fobject, name, &link_fobject,
-				  NULL, entry_out);
+	res = fsdev_aio_do_lookup(vfsdev, new_parent_fobject, name, &link_fobject, entry_out);
 	if (res) {
 		SPDK_ERRLOG("lookup failed (err=%d)\n", res);
 		goto fop_failed;
