@@ -2268,9 +2268,9 @@ fsdev_aio_restore_cred(struct fsdev_aio_cred *old)
 	}
 }
 
-static int
-fsdev_aio_add_dirent(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
-		     const struct dirent *entry)
+static inline int
+fsdev_aio_fill_dirent(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
+		      const struct dirent *entry)
 {
 	size_t namelen;
 	size_t entlen;
@@ -2298,46 +2298,32 @@ fsdev_aio_add_dirent(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
 	return (int)entlen_padded;
 }
 
+static int
+fsdev_aio_add_dirent(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
+		     const struct dirent *entry)
+{
+	return fsdev_aio_fill_dirent(fsdev_io, buf, bufsize, entry);
+}
+
 static size_t
 fsdev_aio_add_direntplus(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsize,
 			 struct aio_fsdev_file_object *fobject, const struct dirent *entry)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	size_t namelen;
-	size_t entlen;
-	size_t entlen_padded;
 	struct aio_fsdev_file_object *entry_fobject;
-	struct fuse_direntplus *direntplus;
-	struct fuse_dirent *dirent;
+	struct fuse_direntplus *direntplus = (struct fuse_direntplus *)buf;
 	int res;
+	size_t dentry_offs = offsetof(struct fuse_direntplus, dirent);
 
-	assert(buf != NULL);
-
-	namelen = strlen(entry->d_name);
-	entlen = FUSE_NAME_OFFSET_DIRENTPLUS + namelen;
-	entlen_padded = FUSE_DIRENT_ALIGN(entlen);
-	if (entlen_padded > bufsize) {
+	/* check that the buffer size is at least enough for the direntplus, so that it's safe to lookup the entry_out */
+	if (bufsize <= sizeof(*direntplus)) {
 		return -EAGAIN;
 	}
 
-	direntplus = (struct fuse_direntplus *)buf;
-	dirent = &direntplus->dirent;
-
 	if (is_dot_or_dotdot(entry->d_name)) {
-		memset(direntplus, 0, sizeof(*direntplus));
-
-		dirent->ino = entry->d_ino;
-		dirent->off = entry->d_off;
-		dirent->namelen = namelen;
-		dirent->type = DT_DIR;
-
-		memcpy(dirent->name, entry->d_name, namelen);
-		memset(dirent->name + namelen, 0, entlen_padded - entlen);
-
-		return entlen_padded;
+		memset(&direntplus->entry_out, 0, sizeof(direntplus->entry_out));
+		goto fill_dentry; /* skip lookup and fill the entry_out */
 	}
-
-	memset(dirent, 0, sizeof(*dirent));
 
 	res = fsdev_aio_do_lookup(vfsdev, fobject, entry->d_name, &entry_fobject, NULL,
 				  &direntplus->entry_out);
@@ -2346,14 +2332,14 @@ fsdev_aio_add_direntplus(struct spdk_fsdev_io *fsdev_io, char *buf, size_t bufsi
 		return res;
 	}
 
-	dirent->ino = entry->d_ino;
-	dirent->off = entry->d_off;
-	dirent->namelen = namelen;
-	dirent->type = entry->d_type;
-	memcpy(dirent->name, entry->d_name, namelen);
-	memset(dirent->name + namelen, 0, entlen_padded - entlen);
+fill_dentry:
+	res = fsdev_aio_fill_dirent(fsdev_io, buf + dentry_offs, bufsize - dentry_offs, entry);
+	if (res < 0) {
+		SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_fill_dirent(%s) failed with err=%d\n", entry->d_name, res);
+		return res;
+	}
 
-	return entlen_padded;
+	return dentry_offs + res;
 }
 
 static int
