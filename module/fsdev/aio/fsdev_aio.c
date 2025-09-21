@@ -1787,44 +1787,56 @@ static struct aio_ioctl_data aio_data;
  * - AIO_IOCTL_ACT_CMD - no data, just a command.
  */
 static int
-fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io, void *in_buf, uint32_t in_bufsz,
+		       void *out_buf, uint32_t out_bufsz)
 {
-	uint32_t request = fsdev_io->u_in.ioctl.request;
-	struct iovec *in_iovec = fsdev_io->u_in.ioctl.in_iov;
-	struct iovec *out_iovec = fsdev_io->u_in.ioctl.out_iov;
-	uint32_t in_iovcnt = fsdev_io->u_in.ioctl.in_iovcnt;
-	uint32_t out_iovcnt = fsdev_io->u_in.ioctl.out_iovcnt;
+	struct fuse_ioctl_in *ioctl_in = fsdev_io->u_in.fuse.op.ioctl;
 	struct aio_ioctl_data *rt_data;
 	struct aio_ioctl_data saved;
-	uint32_t in_bufsz, out_bufsz;
-	void *in_buf, *out_buf;
 
-	in_buf = in_iovcnt && in_iovec ? in_iovec[0].iov_base : NULL;
-	in_bufsz = in_iovcnt && in_iovec ? in_iovec[0].iov_len : 0;
-
-	out_buf = out_iovcnt && out_iovec ? out_iovec[0].iov_base : NULL;
-	out_bufsz = out_iovcnt && out_iovec ? out_iovec[0].iov_len : 0;
-
-	switch (request) {
+	switch (ioctl_in->cmd) {
 	case AIO_IOCTL_GET_DATA_CMD:
-		if (out_bufsz != sizeof(*rt_data)) {
-			return -EIO;
+		if (ioctl_in->out_size != sizeof(*rt_data)) {
+			SPDK_ERRLOG("Invalid out size: %u\n", ioctl_in->out_size);
+			return -EINVAL;
+		}
+
+		if (out_bufsz < sizeof(*rt_data)) {
+			SPDK_ERRLOG("Out iovec is too small: %" PRIu32 "\n", out_bufsz);
+			return -EINVAL;
 		}
 
 		rt_data = (struct aio_ioctl_data *)out_buf;
 		*rt_data = aio_data;
 		break;
 	case AIO_IOCTL_SET_DATA_CMD:
-		if (in_bufsz != sizeof(*rt_data)) {
-			return -EIO;
+		if (ioctl_in->in_size != sizeof(*rt_data)) {
+			SPDK_ERRLOG("Invalid in size: %u\n", ioctl_in->in_size);
+			return -EINVAL;
+		}
+
+		if (in_bufsz < sizeof(*rt_data)) {
+			SPDK_ERRLOG("In iovec is too small: %" PRIu32 "\n", in_bufsz);
+			return -EINVAL;
 		}
 
 		rt_data = (struct aio_ioctl_data *)in_buf;
 		aio_data = *rt_data;
 		break;
 	case AIO_IOCTL_DATA_CMD:
-		if (in_bufsz != sizeof(*rt_data) || out_bufsz != sizeof(*rt_data)) {
-			return -EIO;
+		if (ioctl_in->in_size != sizeof(*rt_data) || ioctl_in->out_size != sizeof(*rt_data)) {
+			SPDK_ERRLOG("Invalid in or out size: %u or %u\n", ioctl_in->in_size, ioctl_in->out_size);
+			return -EINVAL;
+		}
+
+		if (in_bufsz < sizeof(*rt_data)) {
+			SPDK_ERRLOG("In iovec is too small: %" PRIu32 "\n", in_bufsz);
+			return -EINVAL;
+		}
+
+		if (out_bufsz < sizeof(*rt_data)) {
+			SPDK_ERRLOG("Out iovec is too small: %" PRIu32 "\n", out_bufsz);
+			return -EINVAL;
 		}
 
 		/*
@@ -1845,16 +1857,18 @@ fsdev_aio_do_aio_ioctl(struct spdk_fsdev_io *fsdev_io)
 		SPDK_DEBUGLOG(fsdev_aio, "Zero-sized ioctl() has been successfully handled.\n");
 		break;
 	default:
-		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
+		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", ioctl_in->cmd);
 		return -ENOTTY;
 	}
+
+	fsdev_io->u_out.fuse.hdr->len += ioctl_in->out_size;
 
 	return 0;
 }
 
 static int
 fsdev_aio_do_fsioc_ioctl(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
-			 uint32_t request, void *ioctl_arg)
+			 uint32_t request, void *buf)
 {
 	int fd;
 	int res;
@@ -1866,7 +1880,7 @@ fsdev_aio_do_fsioc_ioctl(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object 
 		return res;
 	}
 
-	res = ioctl(fd, request, ioctl_arg);
+	res = ioctl(fd, request, buf);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("ioctl failed for fd %d\n", fd);
@@ -1881,47 +1895,114 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int res;
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
-	uint32_t request =  fsdev_io->u_in.ioctl.request;
+	struct fuse_ioctl_in *ioctl_in = fsdev_io->u_in.fuse.op.ioctl;
+	struct fuse_ioctl_out *ioctl_out = fsdev_io->u_out.fuse.op.ioctl;
+	uint32_t in_bufsz = 0, out_bufsz = 0;
+	void *in_buf = NULL, *out_buf = NULL;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.ioctl.fobject);
+	/*
+	 * FUSE_IOCTL_COMPAT is used when 32-bit user space app calls ioctl()
+	 * on a 64-bit kernel.
+	 */
+	if (ioctl_in->flags & (FUSE_IOCTL_COMPAT | FUSE_IOCTL_32BIT)) {
+		SPDK_ERRLOG("Compat ioctl is not supported.\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Another compat flag. Not supported.
+	 */
+	if (ioctl_in->flags & FUSE_IOCTL_COMPAT_X32) {
+		SPDK_ERRLOG("Compat x32 ioctl is not supported.\n");
+		return -EINVAL;
+	}
+
+	/*
+	 * Unrestricted flag. Not supported.
+	 */
+	if (ioctl_in->flags & FUSE_IOCTL_UNRESTRICTED) {
+		SPDK_ERRLOG("Unrestricted ioctl is not supported.\n");
+		return -EINVAL;
+	}
+
+	if (!fsdev_io->u_out.fuse.iovcnt || !fsdev_io->u_out.fuse.iov[0].iov_base) {
+		SPDK_ERRLOG("No ioctl out buffers provided (%" PRIu32 ")\n", fsdev_io->u_out.fuse.iovcnt);
+		return -EINVAL;
+	}
+
+	if (fsdev_io->u_out.fuse.iov[0].iov_len < sizeof(struct fuse_ioctl_out)) {
+		SPDK_ERRLOG("Invalid ioctl out buffer size: %" PRIu64 "\n", fsdev_io->u_out.fuse.iov[0].iov_len);
+		return -EINVAL;
+	}
+
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fsdev_io->u_out.ioctl.in_iovcnt = 0;
-	fsdev_io->u_out.ioctl.out_iovcnt = 0;
+	if (ioctl_in->in_size) {
+		struct iovec *in_iovs = fsdev_io->u_in.fuse.iov;
 
-	/*
-	 * Zero for now and in case of forwarding ioctl to the local filesystem this
-	 * can hold the return code of the ioctl() function.
-	 */
-	fsdev_io->u_out.ioctl.result = 0;
-	switch (request) {
+		if (in_iovs[0].iov_len >= ioctl_in->in_size) {
+			in_buf = in_iovs[0].iov_base;
+			in_bufsz = in_iovs[0].iov_len;
+		} else {
+			SPDK_ERRLOG("In iovec is too small for %" PRIu32 "\n", ioctl_in->in_size);
+			return -EINVAL;
+		}
+	}
+
+	if (ioctl_in->out_size) {
+		struct iovec *out_iovs = fsdev_io->u_out.fuse.iov;
+
+		if (out_iovs[0].iov_len >= sizeof(*ioctl_out) + ioctl_in->out_size) {
+			out_buf = out_iovs[0].iov_base + sizeof(*ioctl_out);
+			out_bufsz = out_iovs[0].iov_len - sizeof(*ioctl_out);
+		} else if (fsdev_io->u_out.fuse.iovcnt > 1 && out_iovs[1].iov_base &&
+			   out_iovs[1].iov_len >= ioctl_in->out_size) {
+			out_buf = out_iovs[1].iov_base;
+			out_bufsz = out_iovs[1].iov_len;
+		} else {
+			SPDK_ERRLOG("Out iovecs are too small for out size %" PRIu32 "\n", ioctl_in->out_size);
+			return -EINVAL;
+		}
+	}
+
+	memset(ioctl_out, 0, sizeof(*ioctl_out));
+	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_ioctl_out);
+
+	switch (ioctl_in->cmd) {
 	case AIO_IOCTL_GET_DATA_CMD:
 	case AIO_IOCTL_SET_DATA_CMD:
 	case AIO_IOCTL_DATA_CMD:
 	case AIO_IOCTL_ACT_CMD:
-		res = fsdev_aio_do_aio_ioctl(fsdev_io);
+		res = fsdev_aio_do_aio_ioctl(fsdev_io, in_buf, in_bufsz, out_buf, out_bufsz);
 		break;
 	case FS_IOC_GETFLAGS:
 	case FS_IOC_FSGETXATTR:
-		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, request, fsdev_io->u_in.ioctl.out_iov->iov_base);
+		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, ioctl_in->cmd, out_buf);
+		if (!res) {
+			fsdev_io->u_out.fuse.hdr->len += ioctl_in->out_size;
+		}
 		break;
 	case FS_IOC_SETFLAGS:
-		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, request, fsdev_io->u_in.ioctl.in_iov->iov_base);
+		res = fsdev_aio_do_fsioc_ioctl(vfsdev, fobject, ioctl_in->cmd, in_buf);
 		break;
 	default:
-		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", request);
+		SPDK_INFOLOG(fsdev_aio, "Unknown ioctl cmd: %u\n", ioctl_in->cmd);
 		res = -ENOTTY;
+		goto fop_failed;
 		break;
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "IOCTL(%u) for " FOBJECT_FMT " handled with result=%d\n",
-		      request, FOBJECT_ARGS(fobject), res);
+		      ioctl_in->cmd, FOBJECT_ARGS(fobject), res);
 
+fop_failed:
 	file_object_unref(fobject, 1);
-	return res;
+	ioctl_out->result = res;
+	return 0;
 }
 
 #if DEBUG
@@ -4536,6 +4617,9 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_POLL:
 		status = fsdev_aio_op_poll(ch, fsdev_io);
 		break;
+	case FUSE_IOCTL:
+		status = fsdev_aio_op_ioctl(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4727,9 +4811,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_IOCTL:
-		status = fsdev_aio_op_ioctl(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READ:
 	case SPDK_FSDEV_IO_WRITE:
 	case SPDK_FSDEV_IO_GETATTR:
@@ -4770,6 +4851,7 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_SETLK:
 	case SPDK_FSDEV_IO_GETLK:
 	case SPDK_FSDEV_IO_POLL:
+	case SPDK_FSDEV_IO_IOCTL:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5250,7 +5332,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
 					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS) | \
 					       (1ULL << FUSE_LSEEK) | (1ULL << FUSE_GETLK) | (1ULL << FUSE_SETLK) | \
-					       (1ULL << FUSE_SETLKW) | (1ULL << FUSE_POLL);
+					       (1ULL << FUSE_SETLKW) | (1ULL << FUSE_POLL) | (1ULL << FUSE_IOCTL);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
