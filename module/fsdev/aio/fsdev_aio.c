@@ -433,9 +433,8 @@ fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_objec
 /* The returned fhandle pointer is only valid while the stack frame this pointer is returned to
  * remains valid. You cannot store tihs pointer to be used later. Instead, look it back up again. */
 static inline struct aio_fsdev_file_handle *
-fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_fhandle)
+fsdev_aio_get_fhandle_by_fuse_fh(struct aio_fsdev *vfsdev, uint64_t fh)
 {
-	uint64_t fh = (uint64_t)(uintptr_t)_fhandle;
 	struct aio_fsdev_file_handle *fhandle;
 
 	if (fh < FILE_PTR_LUT_BASE) {
@@ -461,6 +460,12 @@ fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_
 	}
 
 	return fhandle;
+}
+
+static inline struct aio_fsdev_file_handle *
+fsdev_aio_get_fhandle(struct aio_fsdev *vfsdev, struct spdk_fsdev_file_handle *_fhandle)
+{
+	return fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, (uint64_t)(uintptr_t)_fhandle);
 }
 
 static inline struct spdk_fsdev_file_handle *
