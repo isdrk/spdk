@@ -5182,24 +5182,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 #endif
 
-	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
-					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
-					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE) | \
-					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR) | \
-					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET) | \
-					       (1ULL << FUSE_MKNOD) | (1ULL << FUSE_MKDIR) | (1ULL << FUSE_SYMLINK) | \
-					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
-					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
-					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK) | \
-					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS) | \
-					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR) | \
-					       (1ULL << FUSE_SETXATTR) | (1ULL << FUSE_GETXATTR) | \
-					       (1ULL << FUSE_LISTXATTR) | (1ULL << FUSE_REMOVEXATTR) | \
-					       (1ULL << FUSE_FLUSH) | (1ULL << FUSE_READDIRPLUS) | (1ULL << FUSE_READDIR) | \
-					       (1ULL << FUSE_INTERRUPT) | (1ULL << FUSE_FALLOCATE) | \
-					       (1ULL << FUSE_COPY_FILE_RANGE) | (1ULL << FUSE_SYNCFS) | \
-					       (1ULL << FUSE_LSEEK) | (1ULL << FUSE_GETLK) | (1ULL << FUSE_SETLK) | \
-					       (1ULL << FUSE_SETLKW) | (1ULL << FUSE_POLL) | (1ULL << FUSE_IOCTL);
+	vfsdev->fsdev.supported_fuse_opcodes = UINT64_MAX;
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
