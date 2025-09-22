@@ -1788,6 +1788,7 @@ qos_dynamic_enable(void)
 	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
 	uint32_t qos_io_slice;
 	int status, second_status, rc, i;
+	struct spdk_bdev_qos_desc *desc;
 
 	setup_test();
 	MOCK_SET(spdk_get_ticks, 0);
@@ -1938,16 +1939,18 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) != 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
 
-	/* Enable QoS. This should immediately fail because the previous disable QoS hasn't completed. */
+	/* Enable QoS. This returns success but it does not stop disabling QoS.
+	 * We check if QoS is disabled correctly. */
 	second_status = 0;
 	limits[SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT] = 10;
 	spdk_bdev_set_qos_rate_limits(bdev, limits, qos_dynamic_enable_done, &second_status);
 	poll_threads();
 	CU_ASSERT(status == 0); /* The disable should succeed */
-	CU_ASSERT(second_status < 0); /* The enable should fail */
+	CU_ASSERT(second_status == 0); /* The enable succeeded but this is false alarm. */
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
+	CU_ASSERT(bdev_qos_open(bdev->name, &desc) == -ENODEV);
 
 	/* Enable QoS. This should succeed now that the disable has completed. */
 	status = -1;

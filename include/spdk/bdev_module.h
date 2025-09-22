@@ -686,9 +686,6 @@ struct spdk_bdev {
 
 		struct spdk_bdev_group *group;
 
-		/** True if the state of the QoS is being modified */
-		bool qos_mod_in_progress;
-
 		/** Trace ID for this bdev. */
 		uint16_t trace_id;
 

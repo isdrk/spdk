@@ -8821,11 +8821,6 @@ bdev_unregister_unsafe(struct spdk_bdev *bdev)
 		event_notify(desc, _remove_notify);
 	}
 
-	if (bdev->internal.qos_mod_in_progress) {
-		/* QoS setup is in progress, can't unregister for now. */
-		rc = -EBUSY;
-	}
-
 	/* If there are no descriptors, proceed removing the bdev */
 	if (rc == 0) {
 		bdev_examine_allowlist_remove(bdev->name);
@@ -10413,11 +10408,7 @@ struct set_qos_limit_ctx {
 static void
 bdev_set_qos_limit_done(struct set_qos_limit_ctx *ctx, int status)
 {
-	struct spdk_bdev *bdev = ctx->bdev;
-
 	assert(spdk_thread_is_app_thread(NULL));
-
-	bdev->internal.qos_mod_in_progress = false;
 
 	if (ctx->desc) {
 		bdev_qos_close(ctx->desc);
@@ -10457,7 +10448,7 @@ set_qos_limit_delete_bdev_done(void *cb_arg, int status)
 	qos = bdev_qos_desc_get_qos(ctx->desc);
 	bdev_qos_destroy(qos);
 
-	bdev_set_qos_limit_done(ctx, 0);
+	bdev_set_qos_limit_done(ctx, status);
 }
 
 static void
@@ -10496,17 +10487,9 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 	ctx->cb_arg = cb_arg;
 	ctx->bdev = bdev;
 
-	if (bdev->internal.qos_mod_in_progress) {
-		free(ctx);
-		cb_fn(cb_arg, -EAGAIN);
-		return;
-	}
-	bdev->internal.qos_mod_in_progress = true;
-
 	rc = bdev_qos_open(bdev->name, &ctx->desc);
 	if (rc == 0) {
 		qos = bdev_qos_desc_get_qos(ctx->desc);
-		assert(qos == bdev->internal.qos);
 
 		/* Updating the limits */
 		bdev_qos_limits_set(&qos->limits, new_limits);
