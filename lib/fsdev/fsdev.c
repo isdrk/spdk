@@ -1192,26 +1192,39 @@ spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_
 	return res;
 }
 
-int
-spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
+static int
+fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
 {
 	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
-	int res = 0;
+	int rc;
 
 	if (!fsdev->fn_table->set_notifications) {
 		return -EOPNOTSUPP;
 	}
 
-	spdk_spin_lock(&fsdev->internal.spinlock);
-	if (fsdev->internal.notify_cb) {
-		res = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
-		if (!res) {
-			fsdev->internal.notify_cb = NULL;
-			fsdev->internal.notify_ctx = NULL;
-		}
-	} else {
-		res = -EALREADY;
+	if (!fsdev->internal.notify_cb) {
+		return -EALREADY;
 	}
+
+	rc = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
+	if (rc != 0) {
+		return rc;
+	}
+
+	fsdev->internal.notify_cb = NULL;
+	fsdev->internal.notify_ctx = NULL;
+
+	return 0;
+}
+
+int
+spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
+{
+	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
+	int res;
+
+	spdk_spin_lock(&fsdev->internal.spinlock);
+	res = fsdev_disable_notifications_unsafe(desc);
 	spdk_spin_unlock(&fsdev->internal.spinlock);
 
 	return res;
