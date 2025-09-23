@@ -228,6 +228,9 @@ struct spdk_fsdev {
 		/** Notifications callback context. */
 		void *notify_ctx;
 
+		/** Filesystem desc responsible for handling notifications. */
+		struct spdk_fsdev_desc *notify_desc;
+
 		TAILQ_ENTRY(spdk_fsdev) link;
 
 		/** Fsdev name used for quick lookup */

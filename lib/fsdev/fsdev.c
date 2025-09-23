@@ -1181,6 +1181,8 @@ spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_
 	if (!fsdev->internal.notify_cb) {
 		res = fsdev->fn_table->set_notifications(fsdev->ctxt, true);
 		if (!res) {
+			assert(fsdev->internal.notify_desc == NULL);
+			fsdev->internal.notify_desc = desc;
 			fsdev->internal.notify_cb = notify_cb;
 			fsdev->internal.notify_ctx = ctx;
 		}
@@ -1206,9 +1208,14 @@ fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
 		return -EALREADY;
 	}
 
+	if (fsdev->internal.notify_desc != desc) {
+		return -EINVAL;
+	}
+
 	rc = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
 	assert(rc == 0);
 
+	fsdev->internal.notify_desc = NULL;
 	fsdev->internal.notify_cb = NULL;
 	fsdev->internal.notify_ctx = NULL;
 
@@ -1939,6 +1946,10 @@ fsdev_close(struct spdk_fsdev *fsdev, struct spdk_fsdev_desc *desc)
 
 	spdk_spin_lock(&fsdev->internal.spinlock);
 	spdk_spin_lock(&desc->spinlock);
+
+	if (fsdev->internal.notify_desc == desc) {
+		fsdev_disable_notifications_unsafe(desc);
+	}
 
 	TAILQ_REMOVE(&fsdev->internal.open_descs, desc, link);
 	desc->closed = true;
