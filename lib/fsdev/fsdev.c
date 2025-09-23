@@ -1196,7 +1196,7 @@ static int
 fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
 {
 	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
-	int rc;
+	int rc __attribute__((unused));
 
 	if (!fsdev->fn_table->set_notifications) {
 		return -EOPNOTSUPP;
@@ -1207,9 +1207,7 @@ fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
 	}
 
 	rc = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
-	if (rc != 0) {
-		return rc;
-	}
+	assert(rc == 0);
 
 	fsdev->internal.notify_cb = NULL;
 	fsdev->internal.notify_ctx = NULL;
