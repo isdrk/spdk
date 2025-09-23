@@ -1521,5 +1521,5 @@ static struct spdk_net_impl g_xlio_net_impl = {
 	.set_opts	= xlio_sock_impl_set_opts,
 };
 
-SPDK_NET_IMPL_REGISTER_DEFAULT(xlio, &g_xlio_net_impl);
+SPDK_NET_IMPL_REGISTER(xlio, &g_xlio_net_impl);
 SPDK_LOG_REGISTER_COMPONENT(sock_xlio)
