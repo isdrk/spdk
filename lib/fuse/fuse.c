@@ -30,6 +30,7 @@ struct spdk_fuse_mount {
 	size_t				max_io_depth;
 	size_t				max_xfer_size;
 	struct spdk_thread		*thread;
+	struct iovec			notify_iov;
 	TAILQ_ENTRY(spdk_fuse_mount)	tailq;
 	pthread_mutex_t			mutex;
 };
@@ -622,6 +623,7 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 
 	spdk_memory_domain_destroy(mount->domain);
 	pthread_mutex_destroy(&mount->mutex);
+	free(mount->notify_iov.iov_base);
 	free(mount->name);
 	free(mount->mountpoint);
 	free(mount);
@@ -649,6 +651,40 @@ fsdev_fuse_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fs
 	default:
 		SPDK_ERRLOG("%s: unhandled event %d\n", spdk_fsdev_get_name(fsdev), type);
 		break;
+	}
+}
+
+static void
+fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
+		     const struct spdk_fsdev_notify_data *notify_data,
+		     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
+{
+	struct spdk_fuse_mount *mount = ctx;
+	struct spdk_fsdev_notify_reply_data reply_data = {};
+	struct fuse_out_header *outhdr = mount->notify_iov.iov_base;
+	bool has_reply;
+	int rc;
+
+	rc = spdk_fuse_dispatcher_encode_notify(mount->dispatcher, &mount->notify_iov, 1,
+						notify_data, 0, &has_reply);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to encode notification: %s\n", mount->name,
+			    spdk_strerror(-rc));
+		goto reply;
+	}
+
+	rc = write(mount->fd, outhdr, outhdr->len);
+	if (rc < 0) {
+		SPDK_ERRLOG("%s: failed to write notification: %s\n", mount->name,
+			    spdk_strerror(errno));
+		goto reply;
+	}
+
+	rc = 0;
+reply:
+	if (reply_cb != NULL) {
+		reply_data.status = rc;
+		reply_cb(&reply_data, reply_ctx);
 	}
 }
 
@@ -989,6 +1025,22 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	if (mnt->dispatcher == NULL) {
 		rc = -ENOMEM;
 		goto error;
+	}
+
+	mnt->notify_iov.iov_len = spdk_fuse_dispatcher_get_notify_buf_size(mnt->dispatcher);
+	if (mnt->notify_iov.iov_len > 0) {
+		mnt->notify_iov.iov_base = calloc(1, mnt->notify_iov.iov_len);
+		if (mnt->notify_iov.iov_base == NULL) {
+			SPDK_ERRLOG("%s: failed to allocate notify buffer\n", mnt->name);
+			goto error;
+		}
+
+		rc = spdk_fsdev_enable_notifications(mnt->fsdev_desc, fsdev_fuse_notify_cb, mnt);
+		if (rc != 0) {
+			SPDK_ERRLOG("%s: failed to enable notifications: %s\n", mnt->name,
+				    spdk_strerror(-rc));
+			goto error;
+		}
 	}
 
 	rc = stat(mnt->mountpoint, &st);
