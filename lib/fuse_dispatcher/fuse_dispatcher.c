@@ -4292,7 +4292,7 @@ fuse_dispatcher_encode_notify_inval_entry(struct spdk_fuse_dispatcher *disp,
 	namelen = strlen(notify_data->inval_entry.name);
 	out_hdr->error = fsdev_io_d2h_i32(disp, FUSE_NOTIFY_INVAL_ENTRY);
 	out_hdr->len = fsdev_io_d2h_u32(disp,
-					sizeof(struct fuse_out_header) + sizeof(struct fuse_notify_inval_entry_out) + namelen);
+					sizeof(struct fuse_out_header) + sizeof(struct fuse_notify_inval_entry_out) + namelen + 1);
 
 	if (out_hdr->len > buf_size) {
 		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
@@ -4305,7 +4305,7 @@ fuse_dispatcher_encode_notify_inval_entry(struct spdk_fuse_dispatcher *disp,
 		fsdev_io_d2h_u64(disp, file_ino(disp, notify_data->inval_entry.parent_fobject));
 	inval_entry->namelen = fsdev_io_d2h_u32(disp, namelen);
 	name = (char *)(out_hdr + 1) + sizeof(*inval_entry);
-	memcpy(name, notify_data->inval_entry.name, namelen);
+	memcpy(name, notify_data->inval_entry.name, namelen + 1);
 	return 0;
 }
 

@@ -309,7 +309,7 @@ ut_fuse_disp_test_encode_notify(void)
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(fuse_notify_data.hdr.len == sizeof(fuse_notify_data.hdr) + sizeof(
 			  fuse_notify_data.inval_entry.fuse) +
-		  strlen(UT_FNAME));
+		  strlen(UT_FNAME) + 1);
 	CU_ASSERT(fuse_notify_data.hdr.error == FUSE_NOTIFY_INVAL_ENTRY);
 	CU_ASSERT(fuse_notify_data.hdr.unique == 2);
 	CU_ASSERT(fuse_notify_data.inval_entry.fuse.parent == (uint64_t)(uintptr_t)UT_FOBJECT);
