@@ -4304,6 +4304,7 @@ fuse_dispatcher_encode_notify_inval_entry(struct spdk_fuse_dispatcher *disp,
 	inval_entry->parent =
 		fsdev_io_d2h_u64(disp, file_ino(disp, notify_data->inval_entry.parent_fobject));
 	inval_entry->namelen = fsdev_io_d2h_u32(disp, namelen);
+	inval_entry->flags = 0;
 	name = (char *)(out_hdr + 1) + sizeof(*inval_entry);
 	memcpy(name, notify_data->inval_entry.name, namelen + 1);
 	return 0;
