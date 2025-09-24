@@ -979,16 +979,19 @@ SPDK_RPC_REGISTER("bdev_set_qos_limit", rpc_bdev_set_qos_limit, SPDK_RPC_RUNTIME
 
 struct rpc_qos_create {
 	char *name;
+	char *parent_name;
 };
 
 static void
 free_rpc_qos_create(struct rpc_qos_create *req)
 {
 	free(req->name);
+	free(req->parent_name);
 }
 
 static const struct spdk_json_object_decoder rpc_qos_create_decoders[] = {
 	{"name", offsetof(struct rpc_qos_create, name), spdk_json_decode_string},
+	{"parent_name", offsetof(struct rpc_qos_create, parent_name), spdk_json_decode_string, true},
 };
 
 static void
@@ -996,6 +999,8 @@ rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
 		    const struct spdk_json_val *params)
 {
 	struct rpc_qos_create req = {};
+	struct spdk_bdev_qos_desc *desc = NULL;
+	struct spdk_bdev_qos *parent = NULL;
 	int rc;
 
 	if (spdk_json_decode_object(params, rpc_qos_create_decoders,
@@ -1007,7 +1012,16 @@ rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
-	rc = spdk_bdev_qos_create(req.name, NULL, NULL);
+	if (req.parent_name != NULL) {
+		rc = spdk_bdev_qos_open(req.parent_name, &desc);
+		if (rc != 0) {
+			spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+			goto cleanup;
+		}
+		parent = spdk_bdev_qos_desc_get_qos(desc);
+	}
+
+	rc = spdk_bdev_qos_create(req.name, parent, NULL, NULL);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to create QoS %s, %d\n", req.name, rc);
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
@@ -1017,6 +1031,9 @@ rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
 	spdk_jsonrpc_send_bool_response(request, true);
 
 cleanup:
+	if (desc != NULL) {
+		spdk_bdev_qos_close(desc);
+	}
 	free_rpc_qos_create(&req);
 }
 SPDK_RPC_REGISTER("bdev_qos_create", rpc_bdev_qos_create, SPDK_RPC_RUNTIME)
@@ -1196,10 +1213,16 @@ rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
 {
 	struct spdk_json_write_ctx *w = ctx;
 	struct spdk_bdev *bdev;
+	struct spdk_bdev_qos *parent;
 
 	spdk_json_write_object_begin(w);
 
 	spdk_json_write_named_string(w, "name", qos->name);
+
+	parent = qos->parent;
+	if (parent != NULL) {
+		spdk_json_write_named_string(w, "parent", parent->name);
+	}
 
 	spdk_json_write_named_array_begin(w, "bdevs");
 	TAILQ_FOREACH(bdev, &qos->bdevs, internal.qos_link) {

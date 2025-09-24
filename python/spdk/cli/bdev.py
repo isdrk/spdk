@@ -1183,10 +1183,12 @@ def add_parser(subparsers):
 
     def bdev_qos_create(args):
         rpc.bdev.bdev_qos_create(args.client,
-                                 name=args.name)
+                                 name=args.name,
+                                 parent_name=args.parent_name)
 
     p = subparsers.add_parser('bdev_qos_create', help='Create a QoS object')
     p.add_argument('name', help='QoS object name')
+    p.add_argument('-p', '--parent-name', help='Name of immediate parent')
     p.set_defaults(func=bdev_qos_create)
 
     def bdev_qos_destroy(args):

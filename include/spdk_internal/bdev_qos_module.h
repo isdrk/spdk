@@ -90,6 +90,15 @@ struct spdk_bdev_qos {
 
 	/** List of user bdevs of this QoS object. */
 	TAILQ_HEAD(, spdk_bdev) bdevs;
+
+	/** Parent QoS object. */
+	struct spdk_bdev_qos *parent;
+
+	/** Child QoS list. */
+	TAILQ_HEAD(, spdk_bdev_qos) children;
+
+	/** Link pointer to the sibling QoS list. */
+	TAILQ_ENTRY(spdk_bdev_qos) sibling_link;
 };
 
 struct spdk_bdev_qos_channel;
@@ -112,6 +121,9 @@ struct spdk_bdev_qos_channel {
 
 	/** Poll group to which this cache belongs. */
 	struct spdk_bdev_qos_poll_group *group;
+
+	/** Pointer to parent QoS channel. */
+	struct spdk_bdev_qos_channel *parent_ch;
 
 	TAILQ_ENTRY(spdk_bdev_qos_channel) link;
 };

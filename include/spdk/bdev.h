@@ -914,14 +914,15 @@ struct spdk_bdev_qos_desc;
  * the user must call spdk_bdev_qos_close() with the returned descriptor.
  *
  * \param name Unique name for the QoS object. Must not conflict with existing QoS objects.
+ * \param parent Pointer to the immediate parent.
  * \param _qos Output parameter that will contain the pointer to the created QoS object.
  * \param _desc Output parameter that will contain the pointer to the created QoS descriptor.
  *
  * \return 0 on success, -EEXIST if a QoS object with the same name already exists,
  *         -ENOMEM if memory allocation failed.
  */
-int spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos **_qos,
-			 struct spdk_bdev_qos_desc **_desc);
+int spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
+			 struct spdk_bdev_qos **_qos, struct spdk_bdev_qos_desc **_desc);
 
 /**
  * Destroy a QoS object and free its resources.

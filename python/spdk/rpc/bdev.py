@@ -1652,13 +1652,16 @@ def bdev_set_qos_limit(
     return client.call('bdev_set_qos_limit', params)
 
 
-def bdev_qos_create(client, name):
+def bdev_qos_create(client, name, parent_name=None):
     """Create a QoS object.
     Args:
         name: name of a QoS object.
+        parent_name: Name of immediate parent QoS object.
     """
     params = dict()
     params['name'] = name
+    if parent_name is not None:
+        params['parent_name'] = parent_name
     return client.call('bdev_qos_create', params)
 
 

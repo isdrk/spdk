@@ -3362,6 +3362,7 @@ Create a QoS device.
  Name              | Optional   | Type   | Description
 ------------------ | ---------- | ------ | ------------------------------------------------------------------
  name              | Required   | string | QoS device name
+ parent_name       | Optional   | string | Immediate parent QoS device name
 
 #### Example
 

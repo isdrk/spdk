@@ -2906,6 +2906,23 @@ _bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bde
 	}
 }
 
+static inline void bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch,
+		struct spdk_bdev_io *bdev_io);
+
+static void
+bdev_qos_allow_io(struct spdk_bdev_io *bdev_io)
+{
+	struct spdk_bdev_qos_channel *qos_ch = bdev_io->internal.blocked_qos_ch;
+
+	qos_ch = qos_ch->parent_ch;
+	if (qos_ch != NULL) {
+		bdev_io->internal.blocked_qos_ch = qos_ch;
+		bdev_qos_channel_queue_io(qos_ch, bdev_io);
+	} else {
+		bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+	}
+}
+
 static inline void
 bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev_io *bdev_io)
 {
@@ -2923,12 +2940,14 @@ bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev
 	 */
 
 submit:
-	bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+	bdev_qos_allow_io(bdev_io);
 }
 
 static void
 bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
 {
+	bdev_io->internal.blocked_qos_ch = bdev_ch->qos_ch;
+
 	bdev_qos_channel_queue_io(bdev_ch->qos_ch, bdev_io);
 }
 
@@ -3652,7 +3671,13 @@ bdev_qos_abort_queued_io(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io 
 {
 	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
 
-	return bdev_qos_channel_abort_queued_io(qos_ch, bio_to_abort);
+	while (qos_ch != NULL) {
+		if (bdev_qos_channel_abort_queued_io(qos_ch, bio_to_abort)) {
+			return true;
+		}
+		qos_ch = qos_ch->parent_ch;
+	}
+	return false;
 }
 
 /* Explicitly mark this inline, since it's used as a function pointer and otherwise won't
@@ -4196,7 +4221,7 @@ bdev_qos_resubmit_all_allowed_io(struct spdk_bdev_qos_poll_group *group)
 
 	TAILQ_FOREACH_SAFE(bdev_io, &tmp_head, internal.link, tmp) {
 		TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
-		bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+		bdev_qos_allow_io(bdev_io);
 	}
 }
 
@@ -4314,15 +4339,52 @@ bdev_get_qos_channel(struct spdk_bdev_qos *qos)
 }
 
 static void
-bdev_put_qos_channel(struct spdk_bdev_channel *bdev_ch)
+bdev_put_qos_channel(struct spdk_bdev_qos_channel *qos_ch,
+		     struct spdk_bdev_channel *bdev_ch)
 {
-	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
-
 	bdev_qos_channel_unblock_all_queued_io(qos_ch, bdev_ch);
 
 	spdk_put_io_channel(spdk_io_channel_from_ctx(qos_ch));
+}
+
+static void
+bdev_put_qos_channels(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
+
+	while (qos_ch != NULL) {
+		bdev_put_qos_channel(qos_ch, bdev_ch);
+		qos_ch = qos_ch->parent_ch;
+	}
 
 	bdev_ch->qos_ch = NULL;
+}
+
+static int
+bdev_get_qos_channels(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_qos *_qos)
+{
+	struct spdk_bdev_qos *qos = _qos;
+	struct spdk_bdev_qos_channel *qos_ch;
+
+	qos_ch = bdev_ch->qos_ch = bdev_get_qos_channel(qos);
+	if (bdev_ch->qos_ch == NULL) {
+		return -1;
+	}
+
+	while (qos->parent != NULL) {
+		qos_ch->parent_ch = bdev_get_qos_channel(qos->parent);
+		if (qos_ch->parent_ch == NULL) {
+			goto err;
+		}
+		qos = qos->parent;
+		qos_ch = qos_ch->parent_ch;
+	}
+
+	return 0;
+
+err:
+	bdev_put_qos_channels(bdev_ch);
+	return -1;
 }
 
 static void
@@ -4346,7 +4408,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	spdk_put_io_channel(ch->accel_channel);
 
 	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		bdev_put_qos_channel(ch);
+		bdev_put_qos_channels(ch);
 		ch->flags &= ~BDEV_CH_QOS_ENABLED;
 	}
 
@@ -4525,6 +4587,7 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	struct spdk_bdev_mgmt_channel	*mgmt_ch;
 	struct spdk_bdev_shared_resource *shared_resource;
 	struct lba_range		*range;
+	int				rc;
 
 	ch->bdev = bdev;
 	ch->channel = bdev->fn_table->get_io_channel(bdev->ctxt);
@@ -4625,8 +4688,8 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 
 	spdk_spin_lock(&bdev->internal.spinlock);
 	if (bdev->internal.qos) {
-		ch->qos_ch = bdev_get_qos_channel(bdev->internal.qos);
-		if (ch->qos_ch == NULL) {
+		rc = bdev_get_qos_channels(ch, bdev->internal.qos);
+		if (rc != 0) {
 			spdk_spin_unlock(&bdev->internal.spinlock);
 			bdev_channel_destroy_resource(ch);
 			return -1;
@@ -4843,6 +4906,7 @@ bdev_qos_create(const char *name)
 
 	TAILQ_INIT(&qos->open_descs);
 	TAILQ_INIT(&qos->bdevs);
+	TAILQ_INIT(&qos->children);
 
 	rc = bdev_qos_get_impl(qos);
 	if (rc != 0) {
@@ -4864,14 +4928,18 @@ bdev_qos_create(const char *name)
 }
 
 int
-spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos **_qos,
-		     struct spdk_bdev_qos_desc **_desc)
+spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
+		     struct spdk_bdev_qos **_qos, struct spdk_bdev_qos_desc **_desc)
 {
 	struct spdk_bdev_qos *qos;
 	struct spdk_bdev_qos_desc *desc = NULL;
 
 	if (!spdk_thread_is_app_thread(NULL)) {
 		return -EINVAL;
+	}
+
+	if (parent != NULL && !TAILQ_EMPTY(&parent->bdevs)) {
+		return -EBUSY;
 	}
 
 	qos = bdev_qos_get_by_name(name);
@@ -4892,6 +4960,11 @@ spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos **_qos,
 	if (qos == NULL) {
 		free(desc);
 		return -ENOMEM;
+	}
+
+	if (parent != NULL) {
+		TAILQ_INSERT_TAIL(&parent->children, qos, sibling_link);
+		qos->parent = parent;
 	}
 
 	if (_qos != NULL) {
@@ -4925,13 +4998,17 @@ spdk_bdev_qos_destroy(struct spdk_bdev_qos *qos)
 		return -EINVAL;
 	}
 
-	if (!TAILQ_EMPTY(&qos->bdevs)) {
+	if (!TAILQ_EMPTY(&qos->bdevs) || !TAILQ_EMPTY(&qos->children)) {
 		return -EBUSY;
 	}
 
 	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
 
 	bdev_qos_put_impl(qos);
+
+	if (qos->parent != NULL) {
+		TAILQ_REMOVE(&qos->parent->children, qos, sibling_link);
+	}
 
 	if (!TAILQ_EMPTY(&qos->open_descs)) {
 		qos->pending_unregister = true;
@@ -7353,7 +7430,10 @@ bdev_qos_abort_all_queued_io(struct spdk_bdev_channel *bdev_ch)
 {
 	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
 
-	bdev_qos_channel_abort_all_queued_io(qos_ch, bdev_ch);
+	while (qos_ch != NULL) {
+		bdev_qos_channel_abort_all_queued_io(qos_ch, bdev_ch);
+		qos_ch = qos_ch->parent_ch;
+	}
 }
 
 static void
@@ -10214,9 +10294,11 @@ static int
 _bdev_channel_enable_qos(struct spdk_bdev_channel *bdev_ch,
 			 struct spdk_bdev_qos *qos)
 {
+	int rc;
+
 	if (!(bdev_ch->flags & BDEV_CH_QOS_ENABLED)) {
-		bdev_ch->qos_ch = bdev_get_qos_channel(qos);
-		if (bdev_ch->qos_ch == NULL) {
+		rc = bdev_get_qos_channels(bdev_ch, qos);
+		if (rc != 0) {
 			return -1;
 		}
 		bdev_ch->flags |= BDEV_CH_QOS_ENABLED;
@@ -10228,7 +10310,7 @@ static void
 _bdev_channel_disable_qos(struct spdk_bdev_channel *bdev_ch)
 {
 	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
-		bdev_put_qos_channel(bdev_ch);
+		bdev_put_qos_channels(bdev_ch);
 		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
 	}
 }
@@ -10337,6 +10419,11 @@ spdk_bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 
 	if (!spdk_thread_is_app_thread(NULL)) {
 		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
+	if (!TAILQ_EMPTY(&qos->children)) {
+		cb_fn(cb_arg, -EBUSY);
 		return;
 	}
 
@@ -10503,7 +10590,7 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 		}
 	} else if (!bdev_qos_limit_values_check_disabled(new_limits)) {
 		/* Enabling */
-		rc = spdk_bdev_qos_create(bdev->name, &qos, &ctx->desc);
+		rc = spdk_bdev_qos_create(bdev->name, NULL, &qos, &ctx->desc);
 		if (rc != 0) {
 			bdev_set_qos_limit_done(ctx, rc);
 			return;
