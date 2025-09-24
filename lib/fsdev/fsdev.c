@@ -178,7 +178,8 @@ static uint32_t fsdev_io_fuse_opc_values[__SPDK_FSDEV_IO_LAST] = {
 
 static const char *fsdev_notify_type_names[] = {
 	"inval_data",
-	"inval_entry"
+	"inval_entry",
+	"fuse"
 };
 SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NUM_TYPES,
 		   "Incorrect size");
@@ -1288,6 +1289,25 @@ spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 	};
 
 	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+}
+
+static void
+fsdev_fuse_notify_done(const struct spdk_fsdev_notify_reply_data *reply, void *ctx)
+{
+	struct spdk_fuse_notify_request *req = ctx;
+
+	req->cb_fn(req, reply->status);
+}
+
+int
+spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
+{
+	struct spdk_fsdev_notify_data notify_data = {
+		.type = SPDK_FSDEV_NOTIFY_FUSE,
+		.fuse = req,
+	};
+
+	return fsdev_notify(req->fsdev, &notify_data, fsdev_fuse_notify_done, req);
 }
 
 void

@@ -453,6 +453,15 @@ int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 				  void *reply_ctx);
 
 /**
+ * Send a SPDK_FSDEV_NOTIFY_FUSE notification.
+ *
+ * \param req Notification request.
+ *
+ * \return 0 on success, negative errno otherwise.
+ */
+int spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req);
+
+/**
  * Increment filesystem device notification reply statistics.
  *
  * \param fsdev Filesystem device.

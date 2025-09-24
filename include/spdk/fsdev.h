@@ -236,6 +236,7 @@ enum spdk_fsdev_io_type {
 enum spdk_fsdev_notify_type {
 	SPDK_FSDEV_NOTIFY_INVAL_DATA,
 	SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
+	SPDK_FSDEV_NOTIFY_FUSE,
 	SPDK_FSDEV_NOTIFY_NUM_TYPES
 };
 
@@ -565,6 +566,17 @@ typedef void (*spdk_fsdev_reset_completion_cb)(struct spdk_fsdev_desc *desc, boo
  */
 int spdk_fsdev_reset(struct spdk_fsdev_desc *desc, spdk_fsdev_reset_completion_cb cb, void *cb_arg);
 
+struct spdk_fuse_notify_request;
+
+typedef void (*spdk_fuse_notify_request_cb)(struct spdk_fuse_notify_request *req, int status);
+
+struct spdk_fuse_notify_request {
+	struct spdk_fsdev		*fsdev;
+	struct iovec			*iovs;
+	uint32_t			iovcnt;
+	spdk_fuse_notify_request_cb	cb_fn;
+};
+
 struct spdk_fsdev_notify_data {
 	/** Notification type */
 	enum spdk_fsdev_notify_type type;
@@ -581,6 +593,9 @@ struct spdk_fsdev_notify_data {
 			struct spdk_fsdev_file_object *parent_fobject;
 			const char *name;
 		} inval_entry;
+
+		/** Data for SPDK_FSDEV_NOTIFY_FUSE notification type */
+		struct spdk_fuse_notify_request *fuse;
 	};
 };
 
