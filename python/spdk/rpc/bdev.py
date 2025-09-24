@@ -1652,16 +1652,19 @@ def bdev_set_qos_limit(
     return client.call('bdev_set_qos_limit', params)
 
 
-def bdev_qos_create(client, name, parent_name=None):
+def bdev_qos_create(client, name, parent_name=None, modules=None):
     """Create a QoS object.
     Args:
         name: name of a QoS object.
         parent_name: Name of immediate parent QoS object.
+        modules: List of modules to enable selectively, e.g. ["hybrid","timeslice"]
     """
     params = dict()
     params['name'] = name
     if parent_name is not None:
         params['parent_name'] = parent_name
+    if modules:
+        params['modules'] = modules
     return client.call('bdev_qos_create', params)
 
 
@@ -1713,7 +1716,8 @@ def bdev_hybrid_qos_set_limit(
         rw_ios_per_sec=None,
         rw_mbytes_per_sec=None,
         r_mbytes_per_sec=None,
-        w_mbytes_per_sec=None):
+        w_mbytes_per_sec=None,
+        modules=None):
     """Set rate limit of a QoS object.
     Args:
         name: name of a QoS object.

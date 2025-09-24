@@ -16,6 +16,8 @@ struct spdk_bdev_qos_channel_impl {
 	struct spdk_bdev_qos_channel *qos_ch;
 
 	struct spdk_bdev_qos_impl *qos_impl;
+
+	TAILQ_ENTRY(spdk_bdev_qos_channel_impl) link;
 };
 
 /** Abstract base class for module-dependent object per QoS device */
@@ -23,6 +25,8 @@ struct spdk_bdev_qos_impl {
 	struct spdk_bdev_qos *qos;
 
 	struct spdk_bdev_qos_module *module;
+
+	TAILQ_ENTRY(spdk_bdev_qos_impl) link;
 };
 
 /** QoS module */
@@ -108,6 +112,8 @@ struct spdk_bdev_qos_module {
 	 * finishing has to be explicitly completed by calling spdk_bdev_qos_module_fini_done().
 	 */
 	bool async_fini;
+
+	TAILQ_ENTRY(spdk_bdev_qos_module) link;
 };
 
 /**
@@ -118,6 +124,14 @@ struct spdk_bdev_qos_module {
  * \param qos_module Module to be added.
  */
 void spdk_bdev_qos_module_list_add(struct spdk_bdev_qos_module *qos_module);
+
+/**
+ * Find a registered module with name pointed by \c name.
+ *
+ * \param name name of module to be searched for.
+ * \return pointer to module.
+ */
+struct spdk_bdev_qos_module *spdk_bdev_qos_module_list_find(const char *name);
 
 /*
  *  Macro used to register module for later initialization.
@@ -135,6 +149,27 @@ static void __attribute__((constructor)) _spdk_bdev_qos_module_register_##name(v
  */
 void spdk_bdev_qos_module_fini_done(void);
 
+/**
+ * Find a module-dependent object from a QoS device.
+ *
+ * \param qos QoS object.
+ * \param module QoS module.
+ * \return pointer to a module-dependent object.
+ */
+struct spdk_bdev_qos_impl *spdk_bdev_qos_find_impl(struct spdk_bdev_qos *qos,
+		const struct spdk_bdev_qos_module *module);
+
+/**
+ * Find a module-dependent object from a QoS channel.
+ *
+ * \param qos_ch QoS channel.
+ * \param module QoS module.
+ * \return pointer to a module-dependent object.
+ */
+struct spdk_bdev_qos_channel_impl *spdk_bdev_qos_channel_find_impl(
+	struct spdk_bdev_qos_channel *qos_ch,
+	const struct spdk_bdev_qos_module *module);
+
 struct spdk_bdev_qos_desc;
 
 struct spdk_bdev_qos {
@@ -143,8 +178,8 @@ struct spdk_bdev_qos {
 
 	bool pending_unregister;
 
-	/** QoS implementation provided by QoS module. */
-	struct spdk_bdev_qos_impl *impl;
+	/** QoS implementations provided by QoS modules. */
+	TAILQ_HEAD(, spdk_bdev_qos_impl) impl_list;
 
 	/** List of open descriptors for this QoS object. */
 	TAILQ_HEAD(, spdk_bdev_qos_desc) open_descs;
@@ -165,8 +200,8 @@ struct spdk_bdev_qos {
 };
 
 struct spdk_bdev_qos_channel {
-	/** QoS channel implementation provided by QoS module. */
-	struct spdk_bdev_qos_channel_impl *impl;
+	/** QoS channel implementations provided by QoS modules. */
+	TAILQ_HEAD(, spdk_bdev_qos_channel_impl) impl_list;
 
 	/** Global QoS rate limits pool */
 	struct spdk_bdev_qos *qos;

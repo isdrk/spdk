@@ -1181,6 +1181,9 @@ struct spdk_bdev_io_internal_fields {
 
 	/** Current QoS channel where the I/O last failed the limit check. */
 	struct spdk_bdev_qos_channel *blocked_qos_ch;
+
+	/** Current QoS channel implementation where the I/O last failed the limit check. */
+	struct spdk_bdev_qos_channel_impl *blocked_qos_ch_impl;
 };
 
 struct spdk_bdev_io {
@@ -1218,7 +1221,7 @@ struct spdk_bdev_io {
 		struct spdk_bdev_io_reservation_report_params reservation_report;
 	} u;
 
-	uint8_t reserved3[32];
+	uint8_t reserved3[24];
 
 	/**
 	 *  Fields that are used internally by the bdev subsystem.  Bdev modules

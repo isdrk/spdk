@@ -241,7 +241,10 @@
 
 	# Public functions in spdk_internal/bdev_qos_module.h
 	spdk_bdev_qos_module_list_add;
+	spdk_bdev_qos_module_list_find;
 	spdk_bdev_qos_module_fini_done;
+	spdk_bdev_qos_find_impl;
+	spdk_bdev_qos_channel_find_impl;
 	spdk_bdev_qos_module_allow_io;
 
 	# Everything else

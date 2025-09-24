@@ -654,6 +654,7 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 	enum spdk_bdev_io_type io_type;
 	const char *name = NULL;
 	struct spdk_bdev_qos *qos;
+	struct spdk_bdev_qos_impl *qos_impl;
 	int i, rc;
 
 	spdk_json_write_object_begin(w);
@@ -702,9 +703,11 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 
 		spdk_json_write_named_array_begin(w, "module_specific");
 
-		spdk_json_write_object_begin(w);
-		qos->impl->module->info_json(qos->impl, w);
-		spdk_json_write_object_end(w);
+		TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+			spdk_json_write_object_begin(w);
+			qos_impl->module->info_json(qos_impl, w);
+			spdk_json_write_object_end(w);
+		}
 
 		spdk_json_write_array_end(w);
 
@@ -907,9 +910,36 @@ SPDK_RPC_REGISTER("bdev_set_qd_sampling_period",
 		  rpc_bdev_set_qd_sampling_period,
 		  SPDK_RPC_RUNTIME)
 
+#define MAX_NUM_MODULES	8
+
+struct rpc_qos_modules {
+	char *modules[MAX_NUM_MODULES];
+	size_t num_modules;
+};
+
+static int
+decode_rpc_modules(const struct spdk_json_val *val, void *out)
+{
+	struct rpc_qos_modules *list = out;
+
+	return spdk_json_decode_array(val, spdk_json_decode_string, list->modules,
+				      MAX_NUM_MODULES, &list->num_modules, sizeof(char *));
+}
+
+static void
+free_rpc_qos_modules(struct rpc_qos_modules *list)
+{
+	size_t i;
+
+	for (i = 0; i < list->num_modules; i++) {
+		free(list->modules[i]);
+	}
+}
+
 struct rpc_qos_create {
 	char *name;
 	char *parent_name;
+	struct rpc_qos_modules modules;
 };
 
 static void
@@ -917,11 +947,13 @@ free_rpc_qos_create(struct rpc_qos_create *req)
 {
 	free(req->name);
 	free(req->parent_name);
+	free_rpc_qos_modules(&req->modules);
 }
 
 static const struct spdk_json_object_decoder rpc_qos_create_decoders[] = {
 	{"name", offsetof(struct rpc_qos_create, name), spdk_json_decode_string},
 	{"parent_name", offsetof(struct rpc_qos_create, parent_name), spdk_json_decode_string, true},
+	{"modules", offsetof(struct rpc_qos_create, modules), decode_rpc_modules, true},
 };
 
 static void
@@ -951,7 +983,8 @@ rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
 		parent = spdk_bdev_qos_desc_get_qos(desc);
 	}
 
-	rc = spdk_bdev_qos_create(req.name, parent, NULL, NULL);
+	rc = spdk_bdev_qos_create(req.name, parent, (const char **)req.modules.modules,
+				  req.modules.num_modules, NULL, NULL);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to create QoS %s, %d\n", req.name, rc);
 		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
@@ -1144,6 +1177,7 @@ rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
 	struct spdk_json_write_ctx *w = ctx;
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_qos *parent;
+	struct spdk_bdev_qos_impl *qos_impl;
 
 	spdk_json_write_object_begin(w);
 
@@ -1162,9 +1196,11 @@ rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
 
 	spdk_json_write_named_array_begin(w, "module_specific");
 
-	spdk_json_write_object_begin(w);
-	qos->impl->module->info_json(qos->impl, w);
-	spdk_json_write_object_end(w);
+	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+		spdk_json_write_object_begin(w);
+		qos_impl->module->info_json(qos_impl, w);
+		spdk_json_write_object_end(w);
+	}
 
 	spdk_json_write_array_end(w);
 

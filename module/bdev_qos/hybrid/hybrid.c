@@ -943,7 +943,6 @@ bdev_hybrid_qos_retry_queued_io(struct spdk_bdev_hybrid_qos *hqos)
 {
 	bdev_io_tailq_t tmp_head;
 	struct spdk_bdev_io *bdev_io, *tmp;
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
 	struct spdk_bdev_hybrid_qos_channel *hqos_ch;
 	struct spdk_bdev_hybrid_qos_poll_group *hgroup;
 
@@ -957,8 +956,7 @@ bdev_hybrid_qos_retry_queued_io(struct spdk_bdev_hybrid_qos *hqos)
 		if (!bdev_qos_limits_queue_io(&hqos->limits, bdev_io)) {
 			TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
 
-			qos_ch_impl = bdev_io->internal.blocked_qos_ch->impl;
-			hqos_ch = bdev_hybrid_qos_channel(qos_ch_impl);
+			hqos_ch = bdev_hybrid_qos_channel(bdev_io->internal.blocked_qos_ch_impl);
 			hgroup = hqos_ch->hgroup;
 
 			spdk_spin_lock(&hgroup->spinlock);
@@ -1334,8 +1332,17 @@ set_qos_limit_reset_channel(struct spdk_io_channel_iter *i)
 {
 	struct spdk_io_channel *_ch = spdk_io_channel_iter_get_channel(i);
 	struct spdk_bdev_qos_channel *qos_ch = spdk_io_channel_get_ctx(_ch);
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
-	struct spdk_bdev_hybrid_qos_channel *hqos_ch = bdev_hybrid_qos_channel(qos_ch_impl);
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+	struct spdk_bdev_hybrid_qos_channel *hqos_ch;
+
+	qos_ch_impl = spdk_bdev_qos_channel_find_impl(qos_ch, &hybrid_if);
+	if (qos_ch_impl == NULL) {
+		assert(false);
+		spdk_for_each_channel_continue(i, -EINVAL);
+		return;
+	}
+
+	hqos_ch = bdev_hybrid_qos_channel(qos_ch_impl);
 
 	bdev_hybrid_qos_channel_reset(hqos_ch);
 
@@ -1386,7 +1393,13 @@ bdev_set_hybrid_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 {
 	struct set_qos_limit_ctx *ctx;
 	struct spdk_bdev_qos *qos;
+	struct spdk_bdev_qos_impl *qos_impl;
 	int rc;
+
+	if (spdk_bdev_qos_module_list_find(hybrid_if.name) == NULL) {
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
 
 	SPDK_DEBUGLOG(qos_hybrid, "Updating QoS limits for %s (new_limits=%p)\n",
 		      bdev->name, new_limits);
@@ -1412,10 +1425,13 @@ bdev_set_hybrid_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 	if (rc == 0) {
 		qos = spdk_bdev_qos_desc_get_qos(ctx->desc);
 
-		/* Updating the limits */
-		_bdev_hybrid_qos_set_rate_limits(qos->impl, new_limits);
+		qos_impl = spdk_bdev_qos_find_impl(qos, &hybrid_if);
+		assert(qos_impl != NULL);
 
-		if (_bdev_hybrid_qos_check_disabled(qos->impl)) {
+		/* Updating the limits */
+		_bdev_hybrid_qos_set_rate_limits(qos_impl, new_limits);
+
+		if (_bdev_hybrid_qos_check_disabled(qos_impl)) {
 			/* Disabling */
 			spdk_bdev_qos_remove_bdev(qos, bdev,
 						  set_qos_limit_delete_bdev_done, ctx);
@@ -1425,13 +1441,16 @@ bdev_set_hybrid_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 		}
 	} else if (!bdev_qos_limit_values_check_disabled(new_limits)) {
 		/* Enabling */
-		rc = spdk_bdev_qos_create(bdev->name, NULL, &qos, &ctx->desc);
+		rc = spdk_bdev_qos_create(bdev->name, NULL, NULL, 0, &qos, &ctx->desc);
 		if (rc != 0) {
 			bdev_set_qos_limit_done(ctx, rc);
 			return;
 		}
 
-		_bdev_hybrid_qos_set_rate_limits(qos->impl, new_limits);
+		qos_impl = spdk_bdev_qos_find_impl(qos, &hybrid_if);
+		assert(qos_impl != NULL);
+
+		_bdev_hybrid_qos_set_rate_limits(qos_impl, new_limits);
 
 		spdk_bdev_qos_add_bdev(qos, bdev, set_qos_limit_add_bdev_done, ctx);
 	} else {
@@ -1506,7 +1525,13 @@ bdev_hybrid_qos_set_rate_limits(const char *name, uint64_t *new_limits,
 {
 	struct set_qos_limit_ctx *ctx;
 	struct spdk_bdev_qos *qos;
+	struct spdk_bdev_qos_impl *qos_impl;
 	int rc;
+
+	if (spdk_bdev_qos_module_list_find(hybrid_if.name) == NULL) {
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
 
 	bdev_qos_limit_values_adjust(new_limits);
 
@@ -1527,7 +1552,10 @@ bdev_hybrid_qos_set_rate_limits(const char *name, uint64_t *new_limits,
 
 	qos = spdk_bdev_qos_desc_get_qos(ctx->desc);
 
-	_bdev_hybrid_qos_set_rate_limits(qos->impl, new_limits);
+	qos_impl = spdk_bdev_qos_find_impl(qos, &hybrid_if);
+	assert(qos_impl != NULL);
+
+	_bdev_hybrid_qos_set_rate_limits(qos_impl, new_limits);
 
 	spdk_for_each_channel(qos, set_qos_limit_reset_channel, ctx,
 			      set_qos_limit_reset_channel_done);

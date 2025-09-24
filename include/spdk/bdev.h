@@ -865,6 +865,10 @@ struct spdk_bdev_qos_desc;
  *
  * \param name Unique name for the QoS object. Must not conflict with existing QoS objects.
  * \param parent Pointer to the immediate parent.
+ * \param modules List of Qos modules to enable selectively. If omitted, all QoS modules
+ *                are configured to this QoS object.
+ * \param num_modules Number of QoS modules to enable selectively. If 0, all QoS modules are
+ *                    configured to this QoS object.
  * \param _qos Output parameter that will contain the pointer to the created QoS object.
  * \param _desc Output parameter that will contain the pointer to the created QoS descriptor.
  *
@@ -872,6 +876,7 @@ struct spdk_bdev_qos_desc;
  *         -ENOMEM if memory allocation failed.
  */
 int spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
+			 const char **modules, int num_modules,
 			 struct spdk_bdev_qos **_qos, struct spdk_bdev_qos_desc **_desc);
 
 /**

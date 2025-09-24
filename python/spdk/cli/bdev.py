@@ -1182,13 +1182,21 @@ def add_parser(subparsers):
     p.set_defaults(func=bdev_set_qos_limit)
 
     def bdev_qos_create(args):
+        modules = None
+        if args.modules:
+            modules = []
+            for m in args.modules.strip().split(' '):
+                modules.append(m)
         rpc.bdev.bdev_qos_create(args.client,
                                  name=args.name,
-                                 parent_name=args.parent_name)
+                                 parent_name=args.parent_name,
+                                 modules=modules)
 
     p = subparsers.add_parser('bdev_qos_create', help='Create a QoS object')
     p.add_argument('name', help='QoS object name')
     p.add_argument('-p', '--parent-name', help='Name of immediate parent')
+    p.add_argument('-m', dest='modules', help="""Whitespace-separated list of modules to enable selectively.
+    If this parameter is omitted or no module name is specified, all modules are enabled.""")
     p.set_defaults(func=bdev_qos_create)
 
     def bdev_qos_destroy(args):

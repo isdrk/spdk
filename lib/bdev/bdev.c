@@ -102,7 +102,7 @@ struct spdk_bdev_mgr {
 
 	TAILQ_HEAD(, spdk_bdev_open_async_ctx) async_bdev_opens;
 
-	struct spdk_bdev_qos_module *qos_module;
+	TAILQ_HEAD(, spdk_bdev_qos_module) qos_modules;
 
 	TAILQ_HEAD(, spdk_bdev_qos) qos_list;
 
@@ -118,7 +118,7 @@ static struct spdk_bdev_mgr g_bdev_mgr = {
 	.init_complete = false,
 	.module_init_complete = false,
 	.async_bdev_opens = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.async_bdev_opens),
-	.qos_module = NULL,
+	.qos_modules = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.qos_modules),
 	.qos_list = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.qos_list),
 };
 
@@ -2091,6 +2091,7 @@ static void
 bdev_qos_config_json(struct spdk_bdev_qos *qos, struct spdk_json_write_ctx *w)
 {
 	struct spdk_bdev *bdev;
+	struct spdk_bdev_qos_impl *qos_impl;
 
 	spdk_json_write_object_begin(w);
 
@@ -2120,9 +2121,11 @@ bdev_qos_config_json(struct spdk_bdev_qos *qos, struct spdk_json_write_ctx *w)
 		spdk_json_write_object_end(w);
 	}
 
-	spdk_json_write_object_begin(w);
-	qos->impl->module->config_json(qos->impl, w);
-	spdk_json_write_object_end(w);
+	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+		spdk_json_write_object_begin(w);
+		qos_impl->module->config_json(qos_impl, w);
+		spdk_json_write_object_end(w);
+	}
 }
 
 void
@@ -2386,13 +2389,16 @@ static int
 bdev_qos_modules_init(void)
 {
 	struct spdk_bdev_qos_module *module;
+	int rc;
 
-	module = g_bdev_mgr.qos_module;
-	if (module == NULL) {
-		return 0;
+	TAILQ_FOREACH(module, &g_bdev_mgr.qos_modules, link) {
+		rc = module->module_init();
+		if (rc != 0) {
+			return rc;
+		}
 	}
 
-	return module->module_init();
+	return 0;
 }
 
 void
@@ -2552,30 +2558,47 @@ spdk_bdev_module_fini_done(void)
 	}
 }
 
+static struct spdk_bdev_qos_module *g_finishing_qos_module = NULL;
+
 static void
 bdev_qos_module_fini_iter(void)
 {
 	struct spdk_bdev_qos_module *module;
 
-	module = g_bdev_mgr.qos_module;
-	if (module == NULL) {
-		goto done;
+	if (g_finishing_qos_module == NULL) {
+		module = TAILQ_FIRST(&g_bdev_mgr.qos_modules);
+	} else {
+		module = TAILQ_NEXT(g_finishing_qos_module, link);
 	}
 
-	module->module_fini();
+	while (module != NULL) {
+		if (module->async_fini) {
+			/* Save our place so we can resume later. We must save the
+			 * variable here, before calling module_fini() below,
+			 * because in some cases the module may immediately call
+			 * spdk_bdev_qos_module_fini_done() and re-enter this function
+			 * to continue iterating.
+			 */
+			g_finishing_qos_module = module;
+		}
 
-	if (module->async_fini) {
-		return;
+		module->module_fini();
+
+		if (module->async_fini) {
+			return;
+		}
+
+		module = TAILQ_NEXT(module, link);
 	}
 
-done:
-	spdk_bdev_qos_module_fini_done();
+	g_finishing_qos_module = NULL;
+	spdk_thread_send_msg(spdk_get_thread(), bdev_module_fini_iter, NULL);
 }
 
 void
 spdk_bdev_qos_module_fini_done(void)
 {
-	spdk_thread_send_msg(spdk_get_thread(), bdev_module_fini_iter, NULL);
+	bdev_qos_module_fini_iter();
 }
 
 static void
@@ -2843,8 +2866,8 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 static inline void bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch,
 		struct spdk_bdev_io *bdev_io);
 
-void
-spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
+static void
+bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev_qos_channel *qos_ch = bdev_io->internal.blocked_qos_ch;
 
@@ -2857,12 +2880,36 @@ spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
 	}
 }
 
+static void
+bdev_qos_channel_impl_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
+			       struct spdk_bdev_io *bdev_io)
+{
+	bdev_io->internal.blocked_qos_ch_impl = qos_ch_impl;
+
+	qos_ch_impl->qos_impl->module->queue_io(qos_ch_impl, bdev_io);
+}
+
+void
+spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
+{
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl = bdev_io->internal.blocked_qos_ch_impl;
+
+	qos_ch_impl = TAILQ_NEXT(qos_ch_impl, link);
+	if (qos_ch_impl != NULL) {
+		bdev_qos_channel_impl_queue_io(qos_ch_impl, bdev_io);
+	} else {
+		bdev_io->internal.blocked_qos_ch_impl = NULL;
+		bdev_qos_module_allow_io(bdev_io);
+	}
+}
+
+
 static inline void
 bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev_io *bdev_io)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl = TAILQ_FIRST(&qos_ch->impl_list);
 
-	qos_ch_impl->qos_impl->module->queue_io(qos_ch_impl, bdev_io);
+	bdev_qos_channel_impl_queue_io(qos_ch_impl, bdev_io);
 }
 
 static void
@@ -3572,9 +3619,15 @@ static bool
 bdev_qos_channel_abort_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 				 struct spdk_bdev_io *bio_to_abort)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
 
-	return qos_ch_impl->qos_impl->module->abort_queued_io(qos_ch_impl, bio_to_abort);
+	TAILQ_FOREACH(qos_ch_impl, &qos_ch->impl_list, link) {
+		if (qos_ch_impl->qos_impl->module->abort_queued_io(qos_ch_impl, bio_to_abort)) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static bool
@@ -4087,26 +4140,57 @@ spdk_bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel
 	}
 }
 
-static int
-bdev_qos_channel_get_impl(struct spdk_bdev_qos_channel *qos_ch)
+static void
+bdev_qos_channel_impl_put(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
 {
-	struct spdk_bdev_qos_impl *qos_impl = qos_ch->qos->impl;
+	qos_ch_impl->qos_impl->module->put_channel_impl(qos_ch_impl);
+}
 
-	qos_ch->impl = qos_impl->module->get_channel_impl(qos_impl);
-	if (qos_ch->impl != NULL) {
-		qos_ch->impl->qos_ch = qos_ch;
-		return 0;
-	} else {
-		return -1;
+static struct spdk_bdev_qos_channel_impl *
+bdev_qos_channel_impl_get(struct spdk_bdev_qos_channel *qos_ch,
+			  struct spdk_bdev_qos_impl *qos_impl)
+{
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+
+	qos_ch_impl = qos_impl->module->get_channel_impl(qos_impl);
+	if (qos_ch_impl == NULL) {
+		return NULL;
 	}
+	qos_ch_impl->qos_ch = qos_ch;
+	return qos_ch_impl;
 }
 
 static void
-bdev_qos_channel_put_impl(struct spdk_bdev_qos_channel *qos_ch)
+bdev_qos_channel_put_impls(struct spdk_bdev_qos_channel *qos_ch)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl, *tmp_qos_ch_impl;
 
-	qos_ch_impl->qos_impl->module->put_channel_impl(qos_ch_impl);
+	TAILQ_FOREACH_SAFE(qos_ch_impl, &qos_ch->impl_list, link, tmp_qos_ch_impl) {
+		TAILQ_REMOVE(&qos_ch->impl_list, qos_ch_impl, link);
+		bdev_qos_channel_impl_put(qos_ch_impl);
+	}
+}
+
+static int
+bdev_qos_channel_get_impls(struct spdk_bdev_qos_channel *qos_ch)
+{
+	struct spdk_bdev_qos *qos = qos_ch->qos;
+	struct spdk_bdev_qos_impl *qos_impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+
+	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+		qos_ch_impl = bdev_qos_channel_impl_get(qos_ch, qos_impl);
+		if (qos_ch_impl == NULL) {
+			goto err;
+		}
+		TAILQ_INSERT_TAIL(&qos_ch->impl_list, qos_ch_impl, link);
+	}
+
+	return 0;
+
+err:
+	bdev_qos_channel_put_impls(qos_ch);
+	return -1;
 }
 
 static int
@@ -4115,9 +4199,10 @@ bdev_qos_channel_create(void *io_device, void *ctx_buf)
 	struct spdk_bdev_qos *qos = io_device;
 	struct spdk_bdev_qos_channel *qos_ch = ctx_buf;
 
+	TAILQ_INIT(&qos_ch->impl_list);
 	qos_ch->qos = qos;
 
-	return bdev_qos_channel_get_impl(qos_ch);
+	return bdev_qos_channel_get_impls(qos_ch);
 }
 
 static void
@@ -4125,7 +4210,7 @@ bdev_qos_channel_destroy(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev_qos_channel *qos_ch = ctx_buf;
 
-	bdev_qos_channel_put_impl(qos_ch);
+	bdev_qos_channel_put_impls(qos_ch);
 }
 
 static struct spdk_bdev_qos_channel *
@@ -4144,9 +4229,11 @@ static void
 bdev_put_qos_channel(struct spdk_bdev_qos_channel *qos_ch,
 		     struct spdk_bdev_channel *bdev_ch)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
 
-	qos_ch_impl->qos_impl->module->unblock_all_queued_io(qos_ch_impl, bdev_ch);
+	TAILQ_FOREACH(qos_ch_impl, &qos_ch->impl_list, link) {
+		qos_ch_impl->qos_impl->module->unblock_all_queued_io(qos_ch_impl, bdev_ch);
+	}
 
 	spdk_put_io_channel(spdk_io_channel_from_ctx(qos_ch));
 }
@@ -4649,24 +4736,70 @@ bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *mgmt_ch, struct spdk_bdev_io *b
 	return rc == 1;
 }
 
-static int
-bdev_qos_get_impl(struct spdk_bdev_qos *qos)
+static void
+bdev_qos_impl_put(struct spdk_bdev_qos_impl *qos_impl)
 {
-	qos->impl = g_bdev_mgr.qos_module->get_impl();
-	if (qos->impl != NULL) {
-		qos->impl->qos = qos;
-		return 0;
-	} else {
-		return -1;
+	qos_impl->module->put_impl(qos_impl);
+}
+
+static struct spdk_bdev_qos_impl *
+bdev_qos_impl_get(struct spdk_bdev_qos *qos, struct spdk_bdev_qos_module *module)
+{
+	struct spdk_bdev_qos_impl *qos_impl;
+
+	qos_impl = module->get_impl();
+	if (qos_impl == NULL) {
+		return NULL;
 	}
+	qos_impl->module = module;
+	qos_impl->qos = qos;
+	return qos_impl;
 }
 
 static void
-bdev_qos_put_impl(struct spdk_bdev_qos *qos)
+bdev_qos_put_impls(struct spdk_bdev_qos *qos)
 {
-	struct spdk_bdev_qos_impl *qos_impl = qos->impl;
+	struct spdk_bdev_qos_impl *qos_impl, *tmp_qos_impl;
 
-	qos_impl->module->put_impl(qos_impl);
+	TAILQ_FOREACH_SAFE(qos_impl, &qos->impl_list, link, tmp_qos_impl) {
+		TAILQ_REMOVE(&qos->impl_list, qos_impl, link);
+		bdev_qos_impl_put(qos_impl);
+	}
+}
+
+static int
+bdev_qos_get_impls(struct spdk_bdev_qos *qos, const char **modules, int num_modules)
+{
+	struct spdk_bdev_qos_module *module;
+	struct spdk_bdev_qos_impl *qos_impl;
+	int i;
+
+	if (num_modules == 0) {
+		TAILQ_FOREACH(module, &g_bdev_mgr.qos_modules, link) {
+			qos_impl = bdev_qos_impl_get(qos, module);
+			if (qos_impl == NULL) {
+				goto err;
+			}
+			TAILQ_INSERT_TAIL(&qos->impl_list, qos_impl, link);
+		}
+	} else {
+		for (i = 0; i < num_modules; i++) {
+			module = spdk_bdev_qos_module_list_find(modules[i]);
+			assert(module != NULL);
+
+			qos_impl = bdev_qos_impl_get(qos, module);
+			if (qos_impl == NULL) {
+				goto err;
+			}
+			TAILQ_INSERT_TAIL(&qos->impl_list, qos_impl, link);
+		}
+	}
+
+	return 0;
+
+err:
+	bdev_qos_put_impls(qos);
+	return -1;
 }
 
 static struct spdk_bdev_qos *
@@ -4684,7 +4817,7 @@ bdev_qos_get_by_name(const char *name)
 }
 
 static struct spdk_bdev_qos *
-bdev_qos_create(const char *name)
+bdev_qos_create(const char *name, const char **modules, int num_modules)
 {
 	struct spdk_bdev_qos *qos;
 	int rc;
@@ -4704,8 +4837,9 @@ bdev_qos_create(const char *name)
 	TAILQ_INIT(&qos->open_descs);
 	TAILQ_INIT(&qos->bdevs);
 	TAILQ_INIT(&qos->children);
+	TAILQ_INIT(&qos->impl_list);
 
-	rc = bdev_qos_get_impl(qos);
+	rc = bdev_qos_get_impls(qos, modules, num_modules);
 	if (rc != 0) {
 		free(qos->name);
 		free(qos);
@@ -4725,10 +4859,12 @@ bdev_qos_create(const char *name)
 
 int
 spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
+		     const char **modules, int num_modules,
 		     struct spdk_bdev_qos **_qos, struct spdk_bdev_qos_desc **_desc)
 {
 	struct spdk_bdev_qos *qos;
 	struct spdk_bdev_qos_desc *desc = NULL;
+	int i, j;
 
 	if (!spdk_thread_is_app_thread(NULL)) {
 		return -EINVAL;
@@ -4736,6 +4872,25 @@ spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
 
 	if (parent != NULL && !TAILQ_EMPTY(&parent->bdevs)) {
 		return -EBUSY;
+	}
+
+	if (num_modules != 0) {
+		if (modules == NULL) {
+			return -EINVAL;
+		}
+		for (i = 0; i < num_modules; i++) {
+			if (spdk_bdev_qos_module_list_find(modules[i]) == NULL) {
+				SPDK_ERRLOG("%s was not found in QoS modules\n", modules[i]);
+				return -EINVAL;
+			}
+			for (j = i + 1; j < num_modules; j++) {
+				if (strcmp(modules[i], modules[j]) == 0) {
+					SPDK_ERRLOG("Duplicate found %s at %d and %d\n",
+						    modules[i], i, j);
+					return -EINVAL;
+				}
+			}
+		}
 	}
 
 	qos = bdev_qos_get_by_name(name);
@@ -4752,7 +4907,7 @@ spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos *parent,
 		}
 	}
 
-	qos = bdev_qos_create(name);
+	qos = bdev_qos_create(name, modules, num_modules);
 	if (qos == NULL) {
 		free(desc);
 		return -ENOMEM;
@@ -4798,7 +4953,7 @@ spdk_bdev_qos_destroy(struct spdk_bdev_qos *qos)
 		return -EBUSY;
 	}
 
-	bdev_qos_put_impl(qos);
+	bdev_qos_put_impls(qos);
 
 	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
 
@@ -4893,13 +5048,55 @@ spdk_bdev_for_each_qos(void *ctx, spdk_bdev_for_each_qos_fn fn)
 void
 spdk_bdev_qos_module_list_add(struct spdk_bdev_qos_module *module)
 {
-	if (g_bdev_mgr.qos_module != NULL) {
-		SPDK_ERRLOG("ERROR: module '%s' is already registered.\n",
-			    g_bdev_mgr.qos_module->name);
+	if (spdk_bdev_qos_module_list_find(module->name) != NULL) {
+		SPDK_ERRLOG("ERROR: module '%s' is already registered.\n", module->name);
 		assert(false);
 	}
 
-	g_bdev_mgr.qos_module = module;
+	TAILQ_INSERT_TAIL(&g_bdev_mgr.qos_modules, module, link);
+}
+
+struct spdk_bdev_qos_module *
+spdk_bdev_qos_module_list_find(const char *name)
+{
+	struct spdk_bdev_qos_module *module;
+
+	TAILQ_FOREACH(module, &g_bdev_mgr.qos_modules, link) {
+		if (strcmp(name, module->name) == 0) {
+			break;
+		}
+	}
+
+	return module;
+}
+
+struct spdk_bdev_qos_impl *
+spdk_bdev_qos_find_impl(struct spdk_bdev_qos *qos, const struct spdk_bdev_qos_module *module)
+{
+	struct spdk_bdev_qos_impl *qos_impl;
+
+	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+		if (qos_impl->module == module) {
+			break;
+		}
+	}
+
+	return qos_impl;
+}
+
+struct spdk_bdev_qos_channel_impl *
+spdk_bdev_qos_channel_find_impl(struct spdk_bdev_qos_channel *qos_ch,
+				const struct spdk_bdev_qos_module *module)
+{
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+
+	TAILQ_FOREACH(qos_ch_impl, &qos_ch->impl_list, link) {
+		if (qos_ch_impl->qos_impl->module == module) {
+			break;
+		}
+	}
+
+	return qos_ch_impl;
 }
 
 void
@@ -7203,9 +7400,11 @@ static void
 bdev_qos_channel_abort_all_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 				     struct spdk_bdev_channel *bdev_ch)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = qos_ch->impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
 
-	qos_ch_impl->qos_impl->module->abort_all_queued_io(qos_ch_impl, bdev_ch);
+	TAILQ_FOREACH(qos_ch_impl, &qos_ch->impl_list, link) {
+		qos_ch_impl->qos_impl->module->abort_all_queued_io(qos_ch_impl, bdev_ch);
+	}
 }
 
 static void
