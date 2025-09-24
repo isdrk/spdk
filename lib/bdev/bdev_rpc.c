@@ -650,10 +650,10 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 {
 	struct spdk_json_write_ctx *w = ctx;
 	struct spdk_bdev_alias *tmp;
-	uint64_t qos_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
 	struct spdk_memory_domain **domains;
 	enum spdk_bdev_io_type io_type;
 	const char *name = NULL;
+	struct spdk_bdev_qos *qos;
 	int i, rc;
 
 	spdk_json_write_object_begin(w);
@@ -695,12 +695,21 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 		}
 	}
 
-	spdk_json_write_named_object_begin(w, "assigned_rate_limits");
-	spdk_bdev_get_qos_rate_limits(bdev, qos_limits);
-	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
-		spdk_json_write_named_uint64(w, spdk_bdev_get_qos_rpc_type(i), qos_limits[i]);
+	qos = bdev->internal.qos;
+	if (qos != NULL) {
+		spdk_json_write_named_object_begin(w, "qos");
+		spdk_json_write_named_string(w, "name", qos->name);
+
+		spdk_json_write_named_array_begin(w, "module_specific");
+
+		spdk_json_write_object_begin(w);
+		qos->impl->module->info_json(qos->impl, w);
+		spdk_json_write_object_end(w);
+
+		spdk_json_write_array_end(w);
+
+		spdk_json_write_object_end(w);
 	}
-	spdk_json_write_object_end(w);
 
 	spdk_json_write_named_bool(w, "claimed",
 				   (bdev->internal.claim_type != SPDK_BDEV_CLAIM_NONE));
@@ -897,85 +906,6 @@ cleanup:
 SPDK_RPC_REGISTER("bdev_set_qd_sampling_period",
 		  rpc_bdev_set_qd_sampling_period,
 		  SPDK_RPC_RUNTIME)
-
-struct rpc_bdev_set_qos_limit {
-	char	*name;
-};
-
-static void
-free_rpc_bdev_set_qos_limit(struct rpc_bdev_set_qos_limit *r)
-{
-	free(r->name);
-}
-
-static const struct spdk_json_object_decoder rpc_bdev_set_qos_limit_decoders[] = {
-	{"name", offsetof(struct rpc_bdev_set_qos_limit, name), spdk_json_decode_string},
-};
-
-struct rpc_bdev_qos_ctx {
-	struct spdk_jsonrpc_request	*request;
-	struct spdk_bdev_desc		*desc;
-};
-
-static void
-rpc_bdev_set_qos_limit_complete(void *cb_arg, int status)
-{
-	struct rpc_bdev_qos_ctx *ctx = cb_arg;
-
-	if (status == 0) {
-		spdk_jsonrpc_send_bool_response(ctx->request, true);
-	} else {
-		spdk_jsonrpc_send_error_response_fmt(ctx->request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						     "Failed to configure rate limit: %s",
-						     spdk_strerror(-status));
-	}
-
-	spdk_bdev_close(ctx->desc);
-	free(ctx);
-}
-
-static void
-rpc_bdev_set_qos_limit(struct spdk_jsonrpc_request *request,
-		       const struct spdk_json_val *params)
-{
-	struct rpc_bdev_set_qos_limit req = {NULL};
-	struct spdk_bdev_desc *desc;
-	struct rpc_bdev_qos_ctx *ctx;
-	int rc;
-
-	if (spdk_json_decode_object_relaxed(params, rpc_bdev_set_qos_limit_decoders,
-					    SPDK_COUNTOF(rpc_bdev_set_qos_limit_decoders),
-					    &req)) {
-		SPDK_ERRLOG("spdk_json_decode_object failed\n");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
-						 "spdk_json_decode_object failed");
-		goto cleanup;
-	}
-	rc = spdk_bdev_open_ext(req.name, false, dummy_bdev_event_cb, NULL, &desc);
-	if (rc != 0) {
-		SPDK_ERRLOG("Failed to open bdev '%s': %d\n", req.name, rc);
-		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
-		goto cleanup;
-	}
-
-	ctx = calloc(1, sizeof(*ctx));
-	if (ctx == NULL) {
-		spdk_bdev_close(desc);
-		spdk_jsonrpc_send_error_response(request, -ENOMEM, spdk_strerror(ENOMEM));
-		goto cleanup;
-	}
-
-	ctx->request = request;
-	ctx->desc = desc;
-
-	spdk_bdev_set_qos_rate_limits(spdk_bdev_desc_get_bdev(desc), params,
-				      rpc_bdev_set_qos_limit_complete, ctx);
-
-cleanup:
-	free_rpc_bdev_set_qos_limit(&req);
-}
-
-SPDK_RPC_REGISTER("bdev_set_qos_limit", rpc_bdev_set_qos_limit, SPDK_RPC_RUNTIME)
 
 struct rpc_qos_create {
 	char *name;
@@ -1228,6 +1158,14 @@ rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
 	TAILQ_FOREACH(bdev, &qos->bdevs, internal.qos_link) {
 		spdk_json_write_string(w, spdk_bdev_get_name(bdev));
 	}
+	spdk_json_write_array_end(w);
+
+	spdk_json_write_named_array_begin(w, "module_specific");
+
+	spdk_json_write_object_begin(w);
+	qos->impl->module->info_json(qos->impl, w);
+	spdk_json_write_object_end(w);
+
 	spdk_json_write_array_end(w);
 
 	spdk_json_write_object_end(w);

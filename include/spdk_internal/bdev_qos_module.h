@@ -128,78 +128,16 @@ static void __attribute__((constructor)) _spdk_bdev_qos_module_register_##name(v
         spdk_bdev_qos_module_list_add(module); \
 }
 
-struct bdev_qos_limit {
-	/** IOs or bytes allowed per second (i.e., 1s). */
-	uint64_t limit;
-
-	/** Remaining IOs or bytes allowed in current timeslice (e.g., 1ms).
-	 *  For remaining bytes, allowed to run negative if an I/O is submitted when
-	 *  some bytes are remaining, but the I/O is bigger than that amount. The
-	 *  excess will be deducted from the next timeslice.
-	 */
-	volatile int64_t remaining_this_timeslice;
-
-	/** Minimum allowed IOs or bytes to be issued in one timeslice (e.g., 1ms). */
-	uint32_t min_per_timeslice;
-
-	/** Maximum allowed IOs or bytes to be issued in one timeslice (e.g., 1ms). */
-	uint32_t max_per_timeslice;
-
-	/** Slice of IOs or bytes allocated from the global pool. */
-	uint32_t slice_per_borrow;
-
-	/** Function to check whether to queue the IO.
-	 * If The IO is allowed to pass, the quota will be reduced correspondingly.
-	 */
-	bool (*queue_io)(struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
-
-	/** Function to rewind the quota once the IO was allowed to be sent by this
-	 * limit but queued due to one of the further limits.
-	 */
-	void (*rewind_quota)(struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
-
-};
-
-struct bdev_qos_limit_cache {
-	/** Remaining IOs or bytes allocated from the global pool in the current
-	 *  timeslice. If fully consumed, allocate another slice from the global
-	 *  pool again.
-	 */
-	int64_t remaining;
-
-	/** Function to check whether to queue the IO.
-	 * If The IO is allowed to pass, the quota will be reduced correspondingly.
-	 */
-	bool (*queue_io)(struct bdev_qos_limit_cache *cache,
-			 struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
-
-	/** Function to rewind the quota once the IO was allowed to be sent by this
-	 * limit but queued due to one of the further limits.
-	 */
-	void (*rewind_quota)(struct bdev_qos_limit_cache *cache,
-			     struct bdev_qos_limit *limit, struct spdk_bdev_io *io);
-};
-
-struct bdev_qos_limits {
-	struct bdev_qos_limit rate_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
-};
-
-struct bdev_qos_limits_cache {
-	struct bdev_qos_limit_cache rate_limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES];
-};
+/**
+ * Inidicate that the module finish has completed.
+ *
+ * To be called in response to the module_fini, only if async_fini is set.
+ */
+void spdk_bdev_qos_module_fini_done(void);
 
 struct spdk_bdev_qos_desc;
 
 struct spdk_bdev_qos {
-	/** QoS rate limits. */
-	struct bdev_qos_limits limits;
-
-	bdev_io_tailq_t queued_io;
-
-	struct spdk_spinlock spinlock;
-
-	TAILQ_ENTRY(spdk_bdev_qos) tailq;
-
 	/** Name of the QoS object. */
 	char *name;
 
@@ -220,25 +158,13 @@ struct spdk_bdev_qos {
 	/** Child QoS list. */
 	TAILQ_HEAD(, spdk_bdev_qos) children;
 
+	TAILQ_ENTRY(spdk_bdev_qos) tailq;
+
 	/** Link pointer to the sibling QoS list. */
 	TAILQ_ENTRY(spdk_bdev_qos) sibling_link;
 };
 
-struct spdk_bdev_qos_channel;
-
-struct spdk_bdev_qos_poll_group {
-	/** List of QoS I/Os waiting for submission. */
-	bdev_io_tailq_t allowed_io;
-
-	struct spdk_spinlock spinlock;
-
-	TAILQ_HEAD(, spdk_bdev_qos_channel) qos_ch_list;
-};
-
 struct spdk_bdev_qos_channel {
-	/** Borrowed QoS rate limits. */
-	struct bdev_qos_limits_cache limits;
-
 	/** QoS channel implementation provided by QoS module. */
 	struct spdk_bdev_qos_channel_impl *impl;
 
@@ -250,8 +176,6 @@ struct spdk_bdev_qos_channel {
 
 	/** Pointer to parent QoS channel. */
 	struct spdk_bdev_qos_channel *parent_ch;
-
-	TAILQ_ENTRY(spdk_bdev_qos_channel) link;
 };
 
 /**

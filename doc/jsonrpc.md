@@ -3531,6 +3531,49 @@ Example response:
 }
 ~~
 
+### bdev_hybrid_qos_set_limit {#rpc_bdev_hybrid_qos_set_limit}
+
+Set rate limit of a hybrid QoS module-dependent object in a QoS object.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS object name
+ rw_ios_per_sec    | Optional   | number | Number of R/W I/Os per second to allow. 0 means unlimited.
+ rw_mbytes_per_sec | Optional   | number | Number of R/W megabytes per second to allow. 0 means unlimited.
+ r_mbytes_per_sec  | Optional   | number | Number of Read megabytes per second to allow. 0 means unlimited.
+ w_mbytes_per_sec  | Optional   | number | Number of Write megabytes per second to allow. 0 means unlimited.
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_hybrid_qos_set_limit",
+  "params": {
+    "name": "qos_service1",
+    "rw_ios_per_sec": 20000,
+    "rw_mbytes_per_sec": 100,
+    "r_mbytes_per_sec": 50,
+    "w_mbytes_per_sec": 50
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
 Set a bdev to read-only state

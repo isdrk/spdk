@@ -1224,6 +1224,31 @@ def add_parser(subparsers):
     p = subparsers.add_parser('bdev_get_qos_devs', help='Display current QoS list')
     p.set_defaults(func=bdev_get_qos_devs)
 
+    def bdev_hybrid_qos_set_limit(args):
+        rpc.bdev.bdev_hybrid_qos_set_limit(args.client,
+                                           name=args.name,
+                                           rw_ios_per_sec=args.rw_ios_per_sec,
+                                           rw_mbytes_per_sec=args.rw_mbytes_per_sec,
+                                           r_mbytes_per_sec=args.r_mbytes_per_sec,
+                                           w_mbytes_per_sec=args.w_mbytes_per_sec)
+
+    p = subparsers.add_parser('bdev_hybrid_qos_set_limit',
+                              help='Set rate limit of a QoS object')
+    p.add_argument('name', help='QoS object name')
+    p.add_argument('--rw-ios-per-sec',
+                   help='R/W IOs per second limit (>=1000, example: 20000). 0 means unlimited.',
+                   type=int)
+    p.add_argument('--rw-mbytes-per-sec',
+                   help="R/W megabytes per second limit (>=1, example: 100). 0 means unlimited.",
+                   type=int)
+    p.add_argument('--r-mbytes-per-sec',
+                   help="Read megabytes per second limit (>=1, example: 100). 0 means unlimited.",
+                   type=int)
+    p.add_argument('--w-mbytes-per-sec',
+                   help="Write megabytes per second limit (>=1, example: 100). 0 means unlimited.",
+                   type=int)
+    p.set_defaults(func=bdev_hybrid_qos_set_limit)
+
     def bdev_error_inject_error(args):
         rpc.bdev.bdev_error_inject_error(args.client,
                                          name=args.name,

@@ -31,23 +31,6 @@ static uint32_t g_part_ut_io_device;
 static struct bdev_ut_channel *g_bdev_ut_channel;
 static int g_accel_io_device;
 
-DEFINE_STUB(bdev_qos_limits_cache_queue_io, bool, (struct bdev_qos_limits_cache *caches,
-		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io), true);
-DEFINE_STUB(bdev_qos_limits_queue_io, bool, (struct bdev_qos_limits *limits,
-		struct spdk_bdev_io *bdev_io), true);
-DEFINE_STUB_V(bdev_qos_limits_cache_rewind, (struct bdev_qos_limits_cache *caches,
-		struct bdev_qos_limits *limits, struct spdk_bdev_io *bdev_io));
-DEFINE_STUB_V(bdev_qos_limits_reset_quota, (struct bdev_qos_limits *limits, int timeslice_count));
-DEFINE_STUB_V(bdev_qos_limits_update_max_quota_per_timeslice, (struct bdev_qos_limits *limits));
-DEFINE_STUB_V(bdev_qos_limits_init, (struct bdev_qos_limits *limits, uint32_t io_slice,
-				     uint32_t byte_slice));
-DEFINE_STUB(bdev_qos_limit_values_check_disabled, bool, (const uint64_t *limits), true);
-DEFINE_STUB_V(bdev_qos_limits_set, (struct bdev_qos_limits *limits, const uint64_t *values));
-DEFINE_STUB_V(bdev_qos_limits_cache_init, (struct bdev_qos_limits_cache *caches,
-		struct bdev_qos_limits *limits));
-DEFINE_STUB_V(bdev_qos_limits_cache_reset, (struct bdev_qos_limits_cache *caches,
-		struct bdev_qos_limits *limits));
-
 DEFINE_STUB_V(spdk_accel_sequence_finish,
 	      (struct spdk_accel_sequence *seq, spdk_accel_completion_cb cb_fn, void *cb_arg));
 DEFINE_STUB_V(spdk_accel_sequence_abort, (struct spdk_accel_sequence *seq));

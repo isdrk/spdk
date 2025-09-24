@@ -34,9 +34,6 @@
 	spdk_bdev_get_block_size;
 	spdk_bdev_get_write_unit_size;
 	spdk_bdev_get_num_blocks;
-	spdk_bdev_get_qos_rpc_type;
-	spdk_bdev_get_qos_rate_limits;
-	spdk_bdev_set_qos_rate_limits;
 	spdk_bdev_qos_create;
 	spdk_bdev_qos_destroy;
 	spdk_bdev_qos_desc_get_qos;
@@ -244,6 +241,7 @@
 
 	# Public functions in spdk_internal/bdev_qos_module.h
 	spdk_bdev_qos_module_list_add;
+	spdk_bdev_qos_module_fini_done;
 	spdk_bdev_qos_module_allow_io;
 
 	# Everything else

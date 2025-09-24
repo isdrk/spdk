@@ -148,20 +148,6 @@ struct spdk_bdev_enable_histogram_opts {
 } __attribute__((packed));
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_enable_histogram_opts) == 26, "Incorrect size");
 
-/** bdev QoS rate limit type */
-enum spdk_bdev_qos_rate_limit_type {
-	/** IOPS rate limit for both read and write */
-	SPDK_BDEV_QOS_RW_IOPS_RATE_LIMIT = 0,
-	/** Byte per second rate limit for both read and write */
-	SPDK_BDEV_QOS_RW_BPS_RATE_LIMIT,
-	/** Byte per second rate limit for read only */
-	SPDK_BDEV_QOS_R_BPS_RATE_LIMIT,
-	/** Byte per second rate limit for write only */
-	SPDK_BDEV_QOS_W_BPS_RATE_LIMIT,
-	/** Keep last */
-	SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES
-};
-
 /**
  * Block device completion callback.
  *
@@ -860,43 +846,7 @@ uint32_t spdk_bdev_get_write_unit_size(const struct spdk_bdev *bdev);
  */
 uint64_t spdk_bdev_get_num_blocks(const struct spdk_bdev *bdev);
 
-/**
- * Get the string of quality of service rate limit.
- *
- * \param type Type of rate limit to query.
- * \return String of QoS type.
- */
-const char *spdk_bdev_get_qos_rpc_type(enum spdk_bdev_qos_rate_limit_type type);
-
-/**
- * Get the quality of service rate limits on a bdev.
- *
- * \param bdev Block device to query.
- * \param limits Pointer to the QoS rate limits array which holding the limits.
- *
- * The limits are ordered based on the @ref spdk_bdev_qos_rate_limit_type enum.
- */
-void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
-
 typedef void (*spdk_bdev_qos_op_cb)(void *cb_arg, int status);
-
-/**
- * Set the quality of service rate limits on a bdev.
- *
- * This function must be called from the SPDK app thread.
- *
- * The caller of this function must ensure that the bdev is opened until
- * this function completes.
- *
- * \param bdev Block device.
- * \param params Parameters which holds the QoS rate limits.
- * \param cb_fn Callback function to be called when the QoS limit has been updated.
- * \param cb_arg Argument to pass to cb_fn.
- *
- * The limits are ordered based on the @ref spdk_bdev_qos_rate_limit_type enum.
- */
-void spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, const struct spdk_json_val *params,
-				   spdk_bdev_qos_op_cb cb_fn, void *cb_arg);
 
 struct spdk_bdev_qos;
 struct spdk_bdev_qos_desc;

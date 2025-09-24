@@ -181,6 +181,9 @@ DEPDIRS-bdev_virtio := $(BDEV_DEPS_THREAD) virtio
 DEPDIRS-bdev_zone_block := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_xnvme := $(BDEV_DEPS_THREAD)
 
+#module/bdev_qos
+DEPDIRS-bdev_qos_hybrid := $(BDEV_DEPS_THREAD)
+
 # module/fsdev
 DEPDIRS-fsdev_aio := $(FSDEV_DEPS_THREAD)
 
