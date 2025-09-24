@@ -19,9 +19,8 @@ stages:
   - test
 
 unittests-build-job:
-  tags: [k8s, linux, x86_64]
+  tags: [vm_host, x86_64]
   stage: pre-test
-  image: "$FEDORA_IMAGE"
   variables:
   parallel:
     matrix:
