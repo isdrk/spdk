@@ -65,6 +65,24 @@ SPDK_STATIC_ASSERT(NVMF_DEFAULT_MSDBD <= SPDK_NVMF_MAX_SGL_ENTRIES,
 #define DEFAULT_NVMF_RDMA_CQ_SIZE	4096
 #define MAX_WR_PER_QP(queue_depth)	(queue_depth * 3 + 2)
 
+/* SPDK_NVME_ELPE is defined for each ctrlr, subsystem may have many ctrlrs,
+ * so triple it now. In future, it should be configurable.
+ */
+#define SUBSYS_NVME_ELPE (3 * SPDK_NVME_ELPE)
+
+struct nvmf_error_log_entry {
+	uint16_t be_cid;
+	struct spdk_nvme_cpl be_cqe;
+	uint16_t cc_cid;
+	uint16_t cc_nsid; /* Should be uint32_t, but limit by memory */
+	uint64_t cc_lba;
+	uint8_t cc_opcode;
+	enum doca_sta_cqe_notify_type cqe_type;
+	uint16_t param_err_loc;
+	struct spdk_nvme_status status_code;
+	const struct doca_sta_qp_handle *qp_handle;
+};
+
 enum spdk_nvmf_rdma_request_state {
 	/* The request is not currently in use */
 	RDMA_REQUEST_STATE_FREE = 0,
@@ -760,6 +778,8 @@ struct spdk_nvmf_rdma_subsystem {
 	const struct spdk_nvmf_subsystem		*subsystem;
 	struct spdk_nvmf_rdma_transport			*rtransport;
 	struct doca_sta_subs_handle			*handle;
+	struct nvmf_error_log_entry			*err_cqes;
+	uint16_t					err_cqes_idx;
 	TAILQ_HEAD(, spdk_nvmf_rdma_ns)			namespaces;
 	TAILQ_ENTRY(spdk_nvmf_rdma_subsystem)		link;
 };
@@ -4106,51 +4126,123 @@ nvmf_sta_event_eu_err_cb(const struct doca_sta_event_eu_err *event, union doca_d
 }
 
 static void
+nvmf_rdma_qpair_update_error_log(struct spdk_nvmf_offload_qpair *oqpair,
+				 struct nvmf_error_log_entry *err_cqe)
+{
+	struct spdk_nvmf_ctrlr *ctrlr;
+	struct spdk_nvme_error_information_entry error_entry = {};
+
+	ctrlr = oqpair->common.qpair.ctrlr;
+
+	/* Update the error log entry with information from err_cqe */
+	error_entry.sqid = oqpair->common.qpair.qid;
+	error_entry.cid = err_cqe->cc_cid;
+	error_entry.status = err_cqe->status_code;
+	error_entry.error_location = err_cqe->param_err_loc;
+	error_entry.lba = err_cqe->cc_lba;
+	error_entry.nsid = err_cqe->cc_nsid;
+
+	spdk_nvmf_ctrlr_update_error_log(ctrlr, &error_entry);
+}
+
+static int
+nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport,
+				     const struct nvmf_error_log_entry *log)
+{
+	struct spdk_nvmf_offload_qpair *oqpair;
+	union doca_data qp_user_data;
+	doca_error_t drc;
+	struct nvmf_error_log_entry *err_cqe;
+
+	drc = doca_sta_io_qp_get_user_data(log->qp_handle, &qp_user_data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get user data for offload qpair: %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+	oqpair = qp_user_data.ptr;
+
+	if (!oqpair || !oqpair->rsubsystem) {
+		SPDK_ERRLOG("Can not find qpair %p or rsubsystem %p\n",
+			    oqpair, oqpair ? oqpair->rsubsystem : NULL);
+		return -1;
+	}
+
+	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR ||
+	    log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
+		struct spdk_nvmf_rdma_subsystem *rsubsystem = oqpair->rsubsystem;
+		if (spdk_unlikely(!rsubsystem->err_cqes)) {
+			rsubsystem->err_cqes = calloc(SUBSYS_NVME_ELPE, sizeof(struct nvmf_error_log_entry));
+			if (!rsubsystem->err_cqes) {
+				SPDK_ERRLOG("Failed to allocate err_cqes\n");
+				return -1;
+			}
+		}
+		rsubsystem->err_cqes_idx++;
+		err_cqe = &rsubsystem->err_cqes[rsubsystem->err_cqes_idx % SUBSYS_NVME_ELPE];
+	} else {
+		SPDK_ERRLOG("cqe_type %d is not supported\n", log->cqe_type);
+		return -1;
+	}
+
+	memcpy(err_cqe, log, sizeof(*log));
+
+	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
+		nvmf_rdma_qpair_update_error_log(oqpair, err_cqe);
+	}
+
+	return 0;
+}
+
+static void
 nvmf_sta_event_cqe_notify_cb(const struct doca_sta_event_cqe_notify *event,
 			     union doca_data user_data)
 {
 	doca_error_t drc;
-	enum doca_sta_cqe_notify_type error_type;
-	doca_sta_nvme_completion_t cqe;
-	const struct doca_sta_subs_handle *subsystem_handle;
-	const struct doca_sta_qp_handle *qp_handle;
-	uint8_t opcode;
-	uint16_t cid;
-	uint16_t nsid;
-	uint64_t lba;
+	struct nvmf_error_log_entry err_cqe = {};
+	struct spdk_nvmf_rdma_transport *rtransport = user_data.ptr;
 
-	drc = doca_sta_event_cqe_notify_get_cqe_notify_type(event, &error_type);
+	drc = doca_sta_event_cqe_notify_get_cqe_notify_type(event, &err_cqe.cqe_type);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("CQE cqe_error_type occurred\n");
 		return;
 	}
 
-	drc = doca_sta_event_cqe_notify_get_cqe(event, cqe);
+	drc = doca_sta_event_cqe_notify_get_cqe(event, (uint8_t *)&err_cqe.be_cqe);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("CQE cqe_error_get_cqe occurred\n");
 		return;
 	}
 
-	drc = doca_sta_event_cqe_notify_get_subsystem_handle(event, &subsystem_handle);
-	if (DOCA_IS_ERROR(drc)) {
-		SPDK_ERRLOG("CQE cqe_error_get_subsystem_handle occurred\n");
-		return;
-	}
+	err_cqe.status_code = err_cqe.be_cqe.status;
 
-	drc = doca_sta_event_cqe_notify_get_qp_handle(event, &qp_handle);
+	drc = doca_sta_event_cqe_notify_get_qp_handle(event, &err_cqe.qp_handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("CQE cqe_error_get_qp_handle occurred\n");
 		return;
 	}
 
-	drc = doca_sta_event_cqe_notify_get_capsule_params(event, &opcode, &cid, &nsid, &lba);
+	drc = doca_sta_event_cqe_notify_get_capsule_params(event,
+			&err_cqe.cc_opcode,
+			&err_cqe.cc_cid,
+			&err_cqe.cc_nsid,
+			&err_cqe.cc_lba);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("CQE cqe_error_get_capsule_params occurred\n");
 		return;
 	}
 
-	SPDK_NOTICELOG("CQE capsule params: opcode=0x%x, cid=0x%x, nsid=0x%x, lba=0x%lx\n", opcode, cid,
-		       nsid, lba);
+	drc = doca_sta_event_cqe_notify_get_param_err_location(event, &err_cqe.param_err_loc);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("CQE cqe_error_get_param_err_location occurred\n");
+		return;
+	}
+
+	SPDK_DEBUGLOG(rdma_offload,
+		      "CQE: cqe_type %d qp_handle 0x%lx opcode=0x%x, cid=0x%x, nsid=0x%x, lba=0x%lx\n",
+		      err_cqe.cqe_type, (uint64_t)err_cqe.qp_handle, err_cqe.cc_opcode,
+		      err_cqe.cc_cid, err_cqe.cc_nsid, err_cqe.cc_lba);
+
+	nvmf_rdma_transport_update_log_entry(rtransport, &err_cqe);
 }
 
 static void *
@@ -8291,6 +8383,7 @@ nvmf_rdma_subsystem_destroy(struct spdk_nvmf_rdma_subsystem *rsubsystem)
 		}
 	}
 	TAILQ_REMOVE(&rtransport->subsystems, rsubsystem, link);
+	free(rsubsystem->err_cqes);
 	free(rsubsystem);
 	return 0;
 }
