@@ -43,10 +43,7 @@ def add_parser(subparsers):
                                   bdev_io_cache_size=args.bdev_io_cache_size,
                                   bdev_auto_examine=args.bdev_auto_examine,
                                   iobuf_small_cache_size=args.iobuf_small_cache_size,
-                                  iobuf_large_cache_size=args.iobuf_large_cache_size,
-                                  qos_io_slice=args.qos_io_slice,
-                                  qos_byte_slice=args.qos_byte_slice,
-                                  qos_timeslice_us=args.qos_timeslice_us)
+                                  iobuf_large_cache_size=args.iobuf_large_cache_size)
 
     p = subparsers.add_parser('bdev_set_options',
                               help="""Set options of bdev subsystem""")
@@ -57,9 +54,6 @@ def add_parser(subparsers):
     group.add_argument('-d', '--disable-auto-examine', dest='bdev_auto_examine', help='Not allow to auto examine', action='store_false')
     p.add_argument('--iobuf-small-cache-size', help='Size of the small iobuf per thread cache', type=int)
     p.add_argument('--iobuf-large-cache-size', help='Size of the large iobuf per thread cache', type=int)
-    p.add_argument('--qos-io-slice', help='QoS IO slice allocated from global pool to local cache', type=int)
-    p.add_argument('--qos-byte-slice', help='QoS byte slice allocated from global pool to local cache', type=int)
-    p.add_argument('--qos-timeslice-us', help='QoS timeslice in microseconds', type=int)
     p.set_defaults(bdev_auto_examine=True)
     p.set_defaults(func=bdev_set_options)
 
@@ -1231,6 +1225,18 @@ def add_parser(subparsers):
 
     p = subparsers.add_parser('bdev_get_qos_devs', help='Display current QoS list')
     p.set_defaults(func=bdev_get_qos_devs)
+
+    def bdev_hybrid_qos_set_options(args):
+        rpc.bdev.bdev_hybrid_qos_set_options(args.client,
+                                             io_slice=args.io_slice,
+                                             byte_slice=args.byte_slice,
+                                             timeslice_us=args.timeslice_us)
+
+    p = subparsers.add_parser('bdev_hybrid_qos_set_options', help='Set options of hybrid QoS module')
+    p.add_argument('--io-slice', help='QoS IO slice allocated from global pool to local cache', type=int)
+    p.add_argument('--byte-slice', help='QoS byte slice allocated from global pool to local cache', type=int)
+    p.add_argument('--timeslice-us', help='QoS timeslice in microseconds', type=int)
+    p.set_defaults(func=bdev_hybrid_qos_set_options)
 
     def bdev_hybrid_qos_set_limit(args):
         rpc.bdev.bdev_hybrid_qos_set_limit(args.client,

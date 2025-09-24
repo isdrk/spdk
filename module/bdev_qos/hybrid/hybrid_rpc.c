@@ -21,6 +21,39 @@ dummy_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void
 {
 }
 
+static const struct spdk_json_object_decoder rpc_qos_set_opts_decoders[] = {
+	{"io_slice", offsetof(struct bdev_hybrid_qos_opts, io_slice), spdk_json_decode_uint32, true},
+	{"byte_slice", offsetof(struct bdev_hybrid_qos_opts, byte_slice), spdk_json_decode_uint32, true},
+	{"timeslice_us", offsetof(struct bdev_hybrid_qos_opts, timeslice_us), spdk_json_decode_uint32, true},
+};
+
+static void
+rpc_hybrid_qos_set_options(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
+{
+	struct bdev_hybrid_qos_opts opts;
+	int rc;
+
+	bdev_hybrid_qos_get_opts(&opts);
+
+	if (params != NULL) {
+		if (spdk_json_decode_object(params, rpc_qos_set_opts_decoders,
+					    SPDK_COUNTOF(rpc_qos_set_opts_decoders), &opts)) {
+			SPDK_ERRLOG("spdk_json_decode_object() failed\n");
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "Invalid parameters");
+			return;
+		}
+	}
+
+	rc = bdev_hybrid_qos_set_opts(&opts);
+	if (rc == 0) {
+		spdk_jsonrpc_send_bool_response(request, true);
+	} else {
+		spdk_jsonrpc_send_error_response(request, rc, spdk_strerror(-rc));
+	}
+}
+SPDK_RPC_REGISTER("bdev_hybrid_qos_set_options", rpc_hybrid_qos_set_options, SPDK_RPC_STARTUP)
+
 struct rpc_bdev_qos {
 	char	*name;
 };

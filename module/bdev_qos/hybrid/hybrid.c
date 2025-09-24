@@ -22,6 +22,9 @@
 #define SPDK_BDEV_QOS_MIN_BYTE_PER_TIMESLICE	512
 #define SPDK_BDEV_QOS_MIN_IOS_PER_SEC		1000
 #define SPDK_BDEV_QOS_MIN_BYTES_PER_SEC		(1024 * 1024)
+#define SPDK_BDEV_QOS_IO_SLICE			1
+#define SPDK_BDEV_QOS_BYTE_SLICE		512
+#define SPDK_BDEV_QOS_TIMESLICE_IN_USEC		1000
 
 /** bdev QoS rate limit type */
 enum spdk_bdev_qos_rate_limit_type {
@@ -152,6 +155,12 @@ static const char *qos_rpc_type[] = {"rw_ios_per_sec",
 				     "rw_mbytes_per_sec", "r_mbytes_per_sec", "w_mbytes_per_sec"
 				    };
 
+static struct bdev_hybrid_qos_opts g_qos_opts = {
+	.io_slice = SPDK_BDEV_QOS_IO_SLICE,
+	.byte_slice = SPDK_BDEV_QOS_BYTE_SLICE,
+	.timeslice_us = SPDK_BDEV_QOS_TIMESLICE_IN_USEC,
+};
+
 static struct spdk_bdev_hybrid_qos_mgr g_qos_mgr = {
 	.last_timeslice = 0,
 	.timeslice_size = 0,
@@ -169,6 +178,41 @@ static inline struct spdk_bdev_hybrid_qos_channel *
 bdev_hybrid_qos_channel(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
 {
 	return SPDK_CONTAINEROF(qos_ch_impl, struct spdk_bdev_hybrid_qos_channel, base);
+}
+
+void
+bdev_hybrid_qos_get_opts(struct bdev_hybrid_qos_opts *opts)
+{
+	assert(opts != NULL);
+
+	opts->io_slice = g_qos_opts.io_slice;
+	opts->byte_slice = g_qos_opts.byte_slice;
+	opts->timeslice_us = g_qos_opts.timeslice_us;
+}
+
+int
+bdev_hybrid_qos_set_opts(struct bdev_hybrid_qos_opts *opts)
+{
+	if (opts == NULL) {
+		SPDK_ERRLOG("opts cannot be NULL\n");
+		return -1;
+	}
+
+	if (opts->io_slice == 0 || opts->byte_slice == 0) {
+		SPDK_ERRLOG("0 is not allowed for io_slice or byte_slice\n");
+		return -1;
+	}
+
+	if (opts->timeslice_us == 0) {
+		SPDK_ERRLOG("0 is not allowed for timeslice_us\n");
+		return -1;
+	}
+
+	g_qos_opts.io_slice = opts->io_slice;
+	g_qos_opts.byte_slice = opts->byte_slice;
+	g_qos_opts.timeslice_us = opts->timeslice_us;
+
+	return 0;
 }
 
 static bool
@@ -641,7 +685,6 @@ bdev_qos_limit_values_adjust(uint64_t *values)
 static void
 bdev_qos_limit_set(struct bdev_qos_limit *limit, uint64_t value)
 {
-	struct spdk_bdev_opts opts;
 	uint64_t max_per_timeslice;
 
 	if (value == 0) {
@@ -655,9 +698,7 @@ bdev_qos_limit_set(struct bdev_qos_limit *limit, uint64_t value)
 		return;
 	}
 
-	spdk_bdev_get_opts(&opts, sizeof(opts));
-
-	max_per_timeslice = limit->limit * opts.qos_timeslice_us / SPDK_SEC_TO_USEC;
+	max_per_timeslice = limit->limit * g_qos_opts.timeslice_us / SPDK_SEC_TO_USEC;
 
 	limit->max_per_timeslice = spdk_max(max_per_timeslice, limit->min_per_timeslice);
 
@@ -1094,10 +1135,7 @@ bdev_hybrid_qos_channel_put(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
 static struct spdk_bdev_qos_impl *
 bdev_hybrid_qos_get(void)
 {
-	struct spdk_bdev_opts opts;
 	struct spdk_bdev_hybrid_qos *hqos;
-
-	spdk_bdev_get_opts(&opts, sizeof(opts));
 
 	hqos = calloc(1, sizeof(*hqos));
 	if (!hqos) {
@@ -1109,7 +1147,7 @@ bdev_hybrid_qos_get(void)
 	TAILQ_INIT(&hqos->queued_io);
 	spdk_spin_init(&hqos->spinlock);
 
-	bdev_qos_limits_init(&hqos->limits, opts.qos_io_slice, opts.qos_byte_slice);
+	bdev_qos_limits_init(&hqos->limits, g_qos_opts.io_slice, g_qos_opts.byte_slice);
 
 	if (TAILQ_EMPTY(&g_qos_mgr.hqos_list)) {
 		g_qos_mgr.last_timeslice = spdk_get_ticks();
@@ -1255,15 +1293,11 @@ bdev_hybrid_qos_info_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_json_
 static int
 bdev_qos_hybrid_library_init(void)
 {
-	struct spdk_bdev_opts opts;
-
-	spdk_bdev_get_opts(&opts, sizeof(opts));
-
-	g_qos_mgr.timeslice_size = opts.qos_timeslice_us * spdk_get_ticks_hz() /
+	g_qos_mgr.timeslice_size = g_qos_opts.timeslice_us * spdk_get_ticks_hz() /
 				   SPDK_SEC_TO_USEC;
 
 	g_qos_mgr.last_timeslice = spdk_get_ticks();
-	g_qos_mgr.poller = SPDK_POLLER_REGISTER(bdev_poll_hybrid_qos, NULL, opts.qos_timeslice_us);
+	g_qos_mgr.poller = SPDK_POLLER_REGISTER(bdev_poll_hybrid_qos, NULL, g_qos_opts.timeslice_us);
 	spdk_poller_pause(g_qos_mgr.poller);
 
 	spdk_io_device_register(&g_qos_mgr, bdev_hybrid_qos_poll_group_create,

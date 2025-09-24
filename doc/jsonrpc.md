@@ -3531,6 +3531,43 @@ Example response:
 }
 ~~
 
+### bdev_hybrid_qos_set_options {#rpc_bdev_hybrid_qos_set_options}
+
+Set options of the hybrid QoS module. This RPC may only be called before SPDK subsystems have been initialized.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ io_slice          | Optional   | number | QoS IO slice allocated from global pool to local cache
+ byte_slice        | Optional   | number | QoS byte slice allocated from global pool to local cache
+ timeslice_us      | Optional   | number | QoS timeslice in microseconds
+
+#### Example
+
+Example request:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_hybrid_qos_set_options",
+  "id": 1,
+  "params": {
+    "timeslice_us": 10000
+  }
+}
+~~
+
+Example response:
+
+~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~
+
 ### bdev_hybrid_qos_set_limit {#rpc_bdev_hybrid_qos_set_limit}
 
 Set rate limit of a hybrid QoS module-dependent object in a QoS object.

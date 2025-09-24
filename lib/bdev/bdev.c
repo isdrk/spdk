@@ -43,10 +43,6 @@ int __itt_init_ittlib(const char *, __itt_group_id);
 #define BUF_SMALL_CACHE_SIZE			128
 #define BUF_LARGE_CACHE_SIZE			16
 #define NOMEM_THRESHOLD_COUNT			8
-#define SPDK_BDEV_QOS_IO_SLICE			100
-#define SPDK_BDEV_QOS_BYTE_SLICE		40960
-#define SPDK_BDEV_QOS_TIMESLICE_IN_USEC		1000
-
 
 /* The maximum number of children requests for a UNMAP or WRITE ZEROES command
  * when splitting into children requests at a time.
@@ -151,9 +147,6 @@ static struct spdk_bdev_opts	g_bdev_opts = {
 	.bdev_auto_examine = SPDK_BDEV_AUTO_EXAMINE,
 	.iobuf_small_cache_size = BUF_SMALL_CACHE_SIZE,
 	.iobuf_large_cache_size = BUF_LARGE_CACHE_SIZE,
-	.qos_io_slice = SPDK_BDEV_QOS_IO_SLICE,
-	.qos_byte_slice = SPDK_BDEV_QOS_BYTE_SLICE,
-	.qos_timeslice_us = SPDK_BDEV_QOS_TIMESLICE_IN_USEC,
 };
 
 static spdk_bdev_init_cb	g_init_cb_fn = NULL;
@@ -445,13 +438,10 @@ spdk_bdev_get_opts(struct spdk_bdev_opts *opts, size_t opts_size)
 	SET_FIELD(bdev_auto_examine);
 	SET_FIELD(iobuf_small_cache_size);
 	SET_FIELD(iobuf_large_cache_size);
-	SET_FIELD(qos_io_slice);
-	SET_FIELD(qos_byte_slice);
-	SET_FIELD(qos_timeslice_us);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 44, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_opts) == 32, "Incorrect size");
 
 #undef SET_FIELD
 }
@@ -485,16 +475,6 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 		return -1;
 	}
 
-	if (opts->qos_io_slice == 0 || opts->qos_byte_slice == 0) {
-		SPDK_ERRLOG("0 is not allowed for qos_io_slice or qos_byte_slice\n");
-		return -1;
-	}
-
-	if (opts->qos_timeslice_us == 0) {
-		SPDK_ERRLOG("0 is not allowed for qos_timeslice_us\n");
-		return -1;
-	}
-
 #define SET_FIELD(field) \
         if (offsetof(struct spdk_bdev_opts, field) + sizeof(opts->field) <= opts->opts_size) { \
                 g_bdev_opts.field = opts->field; \
@@ -505,9 +485,6 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 	SET_FIELD(bdev_auto_examine);
 	SET_FIELD(iobuf_small_cache_size);
 	SET_FIELD(iobuf_large_cache_size);
-	SET_FIELD(qos_io_slice);
-	SET_FIELD(qos_byte_slice);
-	SET_FIELD(qos_timeslice_us);
 
 	g_bdev_opts.opts_size = opts->opts_size;
 
@@ -2147,9 +2124,6 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_bool(w, "bdev_auto_examine", g_bdev_opts.bdev_auto_examine);
 	spdk_json_write_named_uint32(w, "iobuf_small_cache_size", g_bdev_opts.iobuf_small_cache_size);
 	spdk_json_write_named_uint32(w, "iobuf_large_cache_size", g_bdev_opts.iobuf_large_cache_size);
-	spdk_json_write_named_uint32(w, "qos_io_slice", g_bdev_opts.qos_io_slice);
-	spdk_json_write_named_uint32(w, "qos_byte_slice", g_bdev_opts.qos_byte_slice);
-	spdk_json_write_named_uint32(w, "qos_timeslice_us", g_bdev_opts.qos_timeslice_us);
 	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 

@@ -8,8 +8,7 @@ from .cmd_parser import *
 
 def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
                      bdev_auto_examine=None, iobuf_small_cache_size=None,
-                     iobuf_large_cache_size=None, qos_io_slice=None, qos_byte_slice=None,
-                     qos_timeslice_us=None):
+                     iobuf_large_cache_size=None):
     """Set parameters for the bdev subsystem.
     Args:
         bdev_io_pool_size: number of bdev_io structures in shared buffer pool (optional)
@@ -17,9 +16,6 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         bdev_auto_examine: if set to false, the bdev layer will not examine every disks automatically (optional)
         iobuf_small_cache_size: size of the small iobuf per thread cache
         iobuf_large_cache_size: size of the large iobuf per thread cache
-        qos_io_slice: QoS IO slice allocated from global pool to local cache (optional)
-        qos_byte_slice: QoS byte slice allocated from global pool to local cache (optional)
-        qos_timeslice_us: QoS timeslice in microseconds (optional)
     """
     params = dict()
     if bdev_io_pool_size is not None:
@@ -32,12 +28,6 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         params['iobuf_small_cache_size'] = iobuf_small_cache_size
     if iobuf_large_cache_size is not None:
         params['iobuf_large_cache_size'] = iobuf_large_cache_size
-    if qos_io_slice is not None:
-        params['qos_io_slice'] = qos_io_slice
-    if qos_byte_slice is not None:
-        params['qos_byte_slice'] = qos_byte_slice
-    if qos_timeslice_us is not None:
-        params['qos_timeslice_us'] = qos_timeslice_us
     return client.call('bdev_set_options', params)
 
 
@@ -1708,6 +1698,23 @@ def bdev_get_qos_devs(client):
         List of QoS objects.
     """
     return client.call('bdev_get_qos_devs')
+
+
+def bdev_hybrid_qos_set_options(client, io_slice=None, byte_slice=None, timeslice_us=None):
+    """Set parameters for the hybrid QoS module.
+    Args:
+        io_slice: QoS IO slice allocated from global pool to local cache (optional)
+        byte_slice: QoS byte slice allocated from global pool to local cache (optional)
+        qos_timeslice_us: QoS timeslice in microseconds (optional)
+    """
+    params = dict()
+    if io_slice is not None:
+        params['io_slice'] = io_slice
+    if byte_slice is not None:
+        params['byte_slice'] = byte_slice
+    if timeslice_us is not None:
+        params['timeslice_us'] = timeslice_us
+    return client.call('bdev_hybrid_qos_set_options', params)
 
 
 def bdev_hybrid_qos_set_limit(
