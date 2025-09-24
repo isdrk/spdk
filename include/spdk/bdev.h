@@ -878,6 +878,8 @@ const char *spdk_bdev_get_qos_rpc_type(enum spdk_bdev_qos_rate_limit_type type);
  */
 void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
 
+typedef void (*spdk_bdev_qos_op_cb)(void *cb_arg, int status);
+
 /**
  * Set the quality of service rate limits on a bdev.
  *
@@ -894,7 +896,116 @@ void spdk_bdev_get_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits);
  * The limits are ordered based on the @ref spdk_bdev_qos_rate_limit_type enum.
  */
 void spdk_bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *limits,
-				   void (*cb_fn)(void *cb_arg, int status), void *cb_arg);
+				   spdk_bdev_qos_op_cb cb_fn, void *cb_arg);
+
+struct spdk_bdev_qos;
+struct spdk_bdev_qos_desc;
+
+/**
+ * Create a new QoS object with the specified name.
+ *
+ * This function creates a Quality of Service (QoS) object that can be used to apply
+ * rate limiting across multiple block devices. The QoS object manages I/O rate limits
+ * including IOPS and bandwidth controls for read/write operations.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * This function does an implicit open operation if the _desc parameter is specified. In this case,
+ * the user must call spdk_bdev_qos_close() with the returned descriptor.
+ *
+ * \param name Unique name for the QoS object. Must not conflict with existing QoS objects.
+ * \param _qos Output parameter that will contain the pointer to the created QoS object.
+ * \param _desc Output parameter that will contain the pointer to the created QoS descriptor.
+ *
+ * \return 0 on success, -EEXIST if a QoS object with the same name already exists,
+ *         -ENOMEM if memory allocation failed.
+ */
+int spdk_bdev_qos_create(const char *name, struct spdk_bdev_qos **_qos,
+			 struct spdk_bdev_qos_desc **_desc);
+
+/**
+ * Destroy a QoS object and free its resources.
+ *
+ * This function removes the QoS object from the global QoS list and cleans up all
+ * associated resources.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * All block devices must be removed from the QoS object before calling this function. If there are
+ * open descriptors, the destruction will be deferred until all descriptors are closed.
+ *
+ * \param qos Pointer to the QoS object to destroy.
+ *
+ * \return 0 on success, -EBUSY if the QOS object is still active.
+ */
+int spdk_bdev_qos_destroy(struct spdk_bdev_qos *qos);
+
+/**
+ * Open a QoS object for use in a block device descriptor.
+ *
+ * This function returns a descriptor that can be used to manipulate the QoS object safely.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * \param name Name of the QoS object to associate with the block device.
+ * \param _desc Output parameter that will contain the pointer to the created QoS descriptor.
+ *
+ * \return 0 on success, -ENODEV if any QoS object whose name matches does not exist,
+ *         -ENOMEM if memory allocation failed.
+ */
+int spdk_bdev_qos_open(const char *name, struct spdk_bdev_qos_desc **_desc);
+
+/**
+ *
+ * Close a previously opened QoS object.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * \param desc Pointer to the QoS descriptor to close.
+ */
+void spdk_bdev_qos_close(struct spdk_bdev_qos_desc *desc);
+
+/**
+ * Get the QoS object associated with a QoS descriptor.
+ *
+ * \param desc QoS descriptor
+ * \return QoS object associated with the descriptor
+ */
+struct spdk_bdev_qos *spdk_bdev_qos_desc_get_qos(struct spdk_bdev_qos_desc *desc);
+
+/**
+ * Add a block device to a QoS object for rate limiting.
+ *
+ * This function adds a block device to the specified QoS object, enabling
+ * rate limiting for all I/O operations on that device. The function configures
+ * QoS channels across all threads that have channels open to the block device.
+ * The operation is asynchronous and the callback will be invoked upon completion.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * \param qos Pointer to the QoS object.
+ * \param bdev Pointer to the block device to add.
+ * \param cb_fn Callback function to be called when the operation completes.
+ * \param cb_arg Argument to pass to the callback function.
+ */
+void spdk_bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
+			    spdk_bdev_qos_op_cb cb_fn, void *cb_arg);
+
+/**
+ * Remove a block device from a QoS object.
+ *
+ * This function removes a block device from the QoS object. The block device will no longer
+ * be subject to the I/O rate limits set for the QoS object.
+ *
+ * This function must be called from the SPDK app thread.
+ *
+ * \param qos Pointer to the QoS object.
+ * \param bdev Pointer to the block device to remove.
+ * \param cb_fn Callback function to be called when the block device has been removed.
+ * \param cb_arg Argument to pass to cb_fn.
+ */
+void spdk_bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
+			       spdk_bdev_qos_op_cb cb_fn, void *cb_arg);
 
 /**
  * Get minimum I/O buffer address alignment for a bdev.

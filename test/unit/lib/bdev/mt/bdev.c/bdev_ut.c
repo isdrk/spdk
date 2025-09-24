@@ -1950,7 +1950,7 @@ qos_dynamic_enable(void)
 	CU_ASSERT((bdev_ch[0]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT((bdev_ch[1]->flags & BDEV_CH_QOS_ENABLED) == 0);
 	CU_ASSERT(bdev->internal.qos == NULL);
-	CU_ASSERT(bdev_qos_open(bdev->name, &desc) == -ENODEV);
+	CU_ASSERT(spdk_bdev_qos_open(bdev->name, &desc) == -ENODEV);
 
 	/* Enable QoS. This should succeed now that the disable has completed. */
 	status = -1;
