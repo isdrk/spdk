@@ -113,6 +113,8 @@ struct spdk_bdev_mgr {
 
 	TAILQ_HEAD(, spdk_bdev_open_async_ctx) async_bdev_opens;
 
+	struct spdk_bdev_qos_module *qos_module;
+
 	TAILQ_HEAD(, spdk_bdev_qos) qos_list;
 
 #ifdef SPDK_CONFIG_VTUNE
@@ -133,6 +135,7 @@ static struct spdk_bdev_mgr g_bdev_mgr = {
 	.init_complete = false,
 	.module_init_complete = false,
 	.async_bdev_opens = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.async_bdev_opens),
+	.qos_module = NULL,
 	.qos_list = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.qos_list),
 };
 
@@ -5093,6 +5096,18 @@ spdk_bdev_for_each_qos(void *ctx, spdk_bdev_for_each_qos_fn fn)
 	}
 
 	return rc;
+}
+
+void
+spdk_bdev_qos_module_list_add(struct spdk_bdev_qos_module *module)
+{
+	if (g_bdev_mgr.qos_module != NULL) {
+		SPDK_ERRLOG("ERROR: module '%s' is already registered.\n",
+			    g_bdev_mgr.qos_module->name);
+		assert(false);
+	}
+
+	g_bdev_mgr.qos_module = module;
 }
 
 void

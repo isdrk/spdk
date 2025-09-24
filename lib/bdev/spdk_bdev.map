@@ -243,6 +243,7 @@
 	spdk_bdev_unblock_all_queued_io;
 
 	# Public functions in spdk_internal/bdev_qos_module.h
+	spdk_bdev_qos_module_list_add;
 	spdk_bdev_qos_module_allow_io;
 
 	# Everything else

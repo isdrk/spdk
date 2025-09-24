@@ -7,7 +7,7 @@ SPDK_ROOT_DIR := $(abspath $(CURDIR)/..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-DIRS-y = bdev blob blobfs accel event sock scheduler keyring
+DIRS-y = bdev blob blobfs accel event sock scheduler keyring bdev_qos
 ifeq ($(SPDK_ROOT_DIR)/lib/env_dpdk,$(CONFIG_ENV))
 DIRS-y += env_dpdk
 endif
@@ -28,6 +28,7 @@ DEPDIRS-blobfs := blob
 DEPDIRS-event := bdev blob
 DEPDIRS-vfu_device :=
 DEPDIRS-keyring :=
+DEPDIRS-bdev_qos := bdev
 
 .PHONY: all clean $(DIRS-y)
 
@@ -37,6 +38,7 @@ SOCK_MODULES_PKGCONFIG = $(call pkgconfig_filename,spdk_sock_modules)
 SCHEDULER_MODULES_PKGCONFIG = $(call pkgconfig_filename,spdk_scheduler_modules)
 KEYRING_MODULES_PKGCONFIG = $(call pkgconfig_filename,spdk_keyring_modules)
 SYSLIBS_PKGCONFIG = $(call pkgconfig_filename,spdk_syslibs)
+BDEV_QOS_MODULES_PKGCONFIG = $(call pkgconfig_filename,spdk_bdev_qos_modules)
 
 PRIVATE_SYSLIBS = $(SYS_LIBS)
 ifeq ($(SPDK_ROOT_DIR)/lib/env_dpdk,$(CONFIG_ENV))
@@ -46,6 +48,7 @@ endif
 MODULES_PKGCONFIG = $(BDEV_MODULES_PKGCONFIG) $(ACCEL_MODULES_PKGCONFIG)
 MODULES_PKGCONFIG += $(SOCK_MODULES_PKGCONFIG) $(SYSLIBS_PKGCONFIG)
 MODULES_PKGCONFIG += $(SCHEDULER_MODULES_PKGCONFIG) $(KEYRING_MODULES_PKGCONFIG)
+MODULES_PKGCONFIG += $(BDEV_QOS_MODULES_PKGCONFIG)
 
 CONFIG_MK = $(SPDK_ROOT_DIR)/mk/config.mk
 
@@ -66,6 +69,9 @@ $(KEYRING_MODULES_PKGCONFIG): $(CONFIG_MK)
 
 $(SYSLIBS_PKGCONFIG):
 	$(Q)$(SPDK_ROOT_DIR)/scripts/pc_libs.sh "" "$(PRIVATE_SYSLIBS)" System spdk_syslibs > $@
+
+$(BDEV_QOS_MODULES_PKGCONFIG): $(CONFIG_MK)
+	$(Q)$(SPDK_ROOT_DIR)/scripts/pc_modules.sh bdev_qos "$(BDEV_QOS_MODULES_LIST:%=spdk_%)" > $@
 
 all: $(DIRS-y) $(MODULES_PKGCONFIG)
 
