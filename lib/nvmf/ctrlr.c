@@ -2344,11 +2344,43 @@ static void
 nvmf_get_error_log_page(struct spdk_nvmf_ctrlr *ctrlr, struct iovec *iovs, int iovcnt,
 			uint64_t offset, uint32_t length, uint32_t rae)
 {
+	struct spdk_iov_xfer ix;
+	uint16_t i, slot, slot_offset;
+	uint64_t total_length = sizeof(struct spdk_nvme_error_information_entry) * SPDK_NVME_ELPE;
+
 	if (!rae) {
 		nvmf_ctrlr_unmask_aen(ctrlr, SPDK_NVME_ASYNC_EVENT_ERROR_MASK_BIT);
 	}
 
-	/* TODO: actually fill out log page data */
+	if (!ctrlr->error_log) {
+		return;
+	}
+
+	spdk_iov_xfer_init(&ix, iovs, iovcnt);
+
+	length = spdk_min(length, total_length - offset);
+	slot_offset = offset / sizeof(struct spdk_nvme_error_information_entry);
+	slot = ctrlr->err_counter % SPDK_NVME_ELPE;
+	slot = slot > slot_offset ? slot - slot_offset : SPDK_NVME_ELPE - slot_offset + slot;
+	offset %= sizeof(struct spdk_nvme_error_information_entry);
+
+	for (i = 0; i < SPDK_NVME_ELPE; i++) {
+		size_t copy_len = spdk_min(sizeof(struct spdk_nvme_error_information_entry) - offset, length);
+		struct spdk_nvme_error_information_entry *error_entry = &ctrlr->error_log[slot];
+
+		spdk_iov_xfer_from_buf(&ix, (const char *)error_entry + offset, copy_len);
+		length -= copy_len;
+		if (length == 0) {
+			break;
+		}
+		offset = 0;
+
+		if (slot == 0) {
+			slot = SPDK_NVME_ELPE - 1;
+		} else {
+			slot--;
+		}
+	}
 }
 
 static void
