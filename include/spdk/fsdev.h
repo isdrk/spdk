@@ -940,6 +940,10 @@ struct spdk_fuse_out {
 		struct fuse_getxattr_out *getxattr;
 		struct fuse_statfs_out *statfs;
 		struct spdk_fuse_create_out *create;
+		struct fuse_lseek_out *lseek;
+		struct fuse_lk_out *lk;
+		struct fuse_poll_out *poll;
+		struct fuse_ioctl_out *ioctl;
 	} op;
 	struct iovec *iov;
 	uint32_t iovcnt;
