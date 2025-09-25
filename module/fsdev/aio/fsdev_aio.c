@@ -1434,6 +1434,11 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct aio_fsdev_file_object *fobject = NULL;
 	const char *name = fsdev_io->u_in.lookup.name;
 
+	if (*name == '\0') {
+		SPDK_ERRLOG("Empty name\n");
+		return -ENOENT;
+	}
+
 	/* Don't use is_safe_path_component(), allow "." and ".." for NFS export
 	 * support.
 	 */
@@ -1444,15 +1449,8 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lookup.parent_fobject);
 	if (!parent_fobject) {
-		err = file_object_fill_attr(vfsdev->root, &fsdev_io->u_out.lookup.attr);
-		if (err) {
-			SPDK_DEBUGLOG(fsdev_aio, "file_object_fill_attr(root) failed with err=%d\n", err);
-			return err;
-		}
-
-		file_object_ref(vfsdev->root);
-		fsdev_io->u_out.lookup.fobject = fsdev_aio_get_spdk_fobject(vfsdev, vfsdev->root);
-		return 0;
+		SPDK_ERRLOG("Invalid parent_fobject: %p\n", fsdev_io->u_in.lookup.parent_fobject);
+		return -ENOENT;
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "  name %s\n", name);
