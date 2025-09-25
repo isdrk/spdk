@@ -177,25 +177,18 @@ static spdk_bdev_fini_cb	g_fini_cb_fn = NULL;
 static void			*g_fini_cb_arg = NULL;
 static struct spdk_thread	*g_fini_thread = NULL;
 
-struct spdk_bdev_qos_channel;
-
-typedef void (*spdk_bdev_qos_poll_fn)(struct spdk_bdev_qos *qos, int timeslice_count);
-
 struct spdk_bdev_qos {
 	/** QoS rate limits. */
 	struct bdev_qos_limits limits;
-
-	/** Context for this QoS. */
-	void *ctx;
-
-	/** Function that processes queued I/O commands each time slice. */
-	spdk_bdev_qos_poll_fn poll_fn;
 
 	bdev_io_tailq_t queued_io;
 
 	struct spdk_spinlock spinlock;
 
 	TAILQ_ENTRY(spdk_bdev_qos) tailq;
+
+	/** Name of the QoS object. */
+	char *name;
 };
 
 struct spdk_bdev_qos_channel;
@@ -2449,6 +2442,7 @@ bdev_modules_init(void)
 	return 0;
 }
 
+static void bdev_channel_poll_qos(struct spdk_bdev_qos *qos, int timeslice_count);
 static void bdev_reset_qos(void);
 
 static int
@@ -2474,7 +2468,7 @@ bdev_poll_qos(void *arg)
 	}
 
 	TAILQ_FOREACH(qos, &g_bdev_mgr.qos_list, tailq) {
-		qos->poll_fn(qos, timeslice_count);
+		bdev_channel_poll_qos(qos, timeslice_count);
 	}
 
 	bdev_reset_qos();
@@ -4238,12 +4232,6 @@ bdev_qos_resubmit_all_allowed_io(struct spdk_bdev_qos_poll_group *group)
 static void
 bdev_channel_poll_qos(struct spdk_bdev_qos *qos, int timeslice_count)
 {
-	struct spdk_bdev *bdev = qos->ctx;
-
-	if (spdk_unlikely(bdev == NULL)) {
-		return;
-	}
-
 	/* Reset for next round of rate limiting */
 	bdev_qos_limits_reset_quota(&qos->limits, timeslice_count);
 
@@ -4292,57 +4280,66 @@ bdev_qos_channel_unblock_all_queued_io(struct spdk_bdev_qos_channel *qos_ch,
 	spdk_spin_unlock(&qos->spinlock);
 }
 
-static void
-bdev_qos_unblock_all_queued_io(struct spdk_bdev_channel *bdev_ch)
+static int
+bdev_qos_channel_create(void *io_device, void *ctx_buf)
 {
-	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
-
-	bdev_qos_channel_unblock_all_queued_io(qos_ch, bdev_ch);
-}
-
-static struct spdk_bdev_qos_channel *
-bdev_qos_channel_create(struct spdk_bdev_qos *qos)
-{
-	struct spdk_bdev_qos_channel *qos_ch;
+	struct spdk_bdev_qos *qos = io_device;
+	struct spdk_bdev_qos_channel *qos_ch = ctx_buf;
 	struct spdk_io_channel *pg_io_ch;
-
-	qos_ch = calloc(1, sizeof(*qos_ch));
-	if (!qos_ch) {
-		return NULL;
-	}
 
 	bdev_qos_limits_cache_init(&qos_ch->limits, &qos->limits);
 	qos_ch->qos = qos;
 
 	pg_io_ch = spdk_get_io_channel(&g_qos_mgr);
 	if (!pg_io_ch) {
-		free(qos_ch);
-		return NULL;
+		return -1;
 	}
 	qos_ch->group = spdk_io_channel_get_ctx(pg_io_ch);
 
 	TAILQ_INSERT_TAIL(&qos_ch->group->qos_ch_list, qos_ch, link);
 
-	return qos_ch;
+	return 0;
 }
 
 static void
-bdev_qos_channel_destroy(struct spdk_bdev_qos_channel *qos_ch)
+bdev_qos_channel_destroy(void *io_device, void *ctx_buf)
 {
+	struct spdk_bdev_qos_channel *qos_ch = ctx_buf;
 	struct spdk_bdev_qos_poll_group *group = qos_ch->group;
 
 	TAILQ_REMOVE(&group->qos_ch_list, qos_ch, link);
 
 	spdk_put_io_channel(spdk_io_channel_from_ctx(group));
+}
 
-	free(qos_ch);
+static struct spdk_bdev_qos_channel *
+bdev_get_qos_channel(struct spdk_bdev_qos *qos)
+{
+	struct spdk_io_channel *qos_io_ch;
+
+	qos_io_ch = spdk_get_io_channel(qos);
+	if (qos_io_ch == NULL) {
+		return NULL;
+	}
+	return spdk_io_channel_get_ctx(qos_io_ch);
+}
+
+static void
+bdev_put_qos_channel(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
+
+	bdev_qos_channel_unblock_all_queued_io(qos_ch, bdev_ch);
+
+	spdk_put_io_channel(spdk_io_channel_from_ctx(qos_ch));
+
+	bdev_ch->qos_ch = NULL;
 }
 
 static void
 bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_shared_resource *shared_resource;
-	struct spdk_bdev *bdev;
 	struct lba_range *range;
 
 	bdev_free_io_stat(ch->stat);
@@ -4359,12 +4356,9 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	spdk_put_io_channel(ch->channel);
 	spdk_put_io_channel(ch->accel_channel);
 
-	if (ch->qos_ch != NULL) {
-		bdev = ch->bdev;
-
-		spdk_spin_lock(&bdev->internal.spinlock);
-		bdev_qos_channel_destroy(ch->qos_ch);
-		spdk_spin_unlock(&bdev->internal.spinlock);
+	if (ch->flags & BDEV_CH_QOS_ENABLED) {
+		bdev_put_qos_channel(ch);
+		ch->flags &= ~BDEV_CH_QOS_ENABLED;
 	}
 
 	shared_resource = ch->shared_resource;
@@ -4395,7 +4389,7 @@ bdev_enable_qos(struct spdk_bdev *bdev, struct spdk_bdev_channel *ch)
 	/* Rate limiting on this bdev enabled */
 	if (qos) {
 		if (!(ch->flags & BDEV_CH_QOS_ENABLED)) {
-			ch->qos_ch = bdev_qos_channel_create(qos);
+			ch->qos_ch = bdev_get_qos_channel(qos);
 			if (ch->qos_ch == NULL) {
 				return;
 			}
@@ -4810,7 +4804,7 @@ bdev_abort_buf_io(struct spdk_bdev_mgmt_channel *mgmt_ch, struct spdk_bdev_io *b
 }
 
 static struct spdk_bdev_qos *
-bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
+bdev_qos_create(const char *name)
 {
 	struct spdk_bdev_qos *qos;
 
@@ -4820,11 +4814,14 @@ bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
 		return NULL;
 	}
 
+	qos->name = strdup(name);
+	if (qos->name == NULL) {
+		free(qos);
+		return NULL;
+	}
+
 	TAILQ_INIT(&qos->queued_io);
 	spdk_spin_init(&qos->spinlock);
-
-	qos->ctx = ctx;
-	qos->poll_fn = poll_fn;
 
 	bdev_qos_limits_init(&qos->limits, g_bdev_opts.qos_io_slice,
 			     g_bdev_opts.qos_byte_slice);
@@ -4836,23 +4833,36 @@ bdev_qos_create(void *ctx, spdk_bdev_qos_poll_fn poll_fn)
 
 	TAILQ_INSERT_TAIL(&g_bdev_mgr.qos_list, qos, tailq);
 
+	spdk_io_device_register(qos,
+				bdev_qos_channel_create,
+				bdev_qos_channel_destroy,
+				sizeof(struct spdk_bdev_qos_channel),
+				qos->name);
+
 	return qos;
+}
+
+static void
+bdev_qos_unregister_cb(void *io_device)
+{
+	struct spdk_bdev_qos *qos = io_device;
+
+	SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
+	spdk_spin_destroy(&qos->spinlock);
+	free(qos->name);
+	free(qos);
 }
 
 static void
 bdev_qos_destroy(struct spdk_bdev_qos *qos)
 {
-	qos->ctx = NULL;
-
 	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
 
 	if (TAILQ_EMPTY(&g_bdev_mgr.qos_list) && g_qos_mgr.poller) {
 		spdk_poller_pause(g_qos_mgr.poller);
 	}
 
-	SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
-	spdk_spin_destroy(&qos->spinlock);
-	free(qos);
+	spdk_io_device_unregister(qos, bdev_qos_unregister_cb);
 }
 
 void
@@ -10111,13 +10121,7 @@ bdev_disable_qos_msg(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bdev,
 	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
 
 	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
-		assert(bdev_ch->qos_ch != NULL);
-
-		bdev_qos_unblock_all_queued_io(bdev_ch);
-
-		spdk_spin_lock(&bdev->internal.spinlock);
-		bdev_qos_channel_destroy(bdev_ch->qos_ch);
-		spdk_spin_unlock(&bdev->internal.spinlock);
+		bdev_put_qos_channel(bdev_ch);
 		bdev_ch->qos_ch = NULL;
 
 		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
@@ -10214,7 +10218,7 @@ bdev_set_qos_rate_limits(struct spdk_bdev *bdev, uint64_t *new_limits,
 
 	if (disable_rate_limit == false) {
 		if (bdev->internal.qos == NULL) {
-			bdev->internal.qos = bdev_qos_create(bdev, bdev_channel_poll_qos);
+			bdev->internal.qos = bdev_qos_create(bdev->name);
 			if (bdev->internal.qos == NULL) {
 				spdk_spin_unlock(&bdev->internal.spinlock);
 				bdev_set_qos_limit_done(ctx, -ENOMEM);
