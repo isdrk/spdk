@@ -1573,7 +1573,9 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	int err;
 	struct aio_fsdev_file_object *parent_fobject;
 	struct aio_fsdev_file_object *fobject = NULL;
-	const char *name = fsdev_io->u_in.lookup.name;
+	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+	struct fuse_entry_out *entry_out = fsdev_io->u_out.fuse.op.entry;
 
 	if (*name == '\0') {
 		SPDK_ERRLOG("Empty name\n");
@@ -1588,21 +1590,21 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	parent_fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.lookup.parent_fobject);
+	parent_fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!parent_fobject) {
-		SPDK_ERRLOG("Invalid parent_fobject: %p\n", fsdev_io->u_in.lookup.parent_fobject);
-		return -ENOENT;
+		return -EINVAL;
 	}
+
 
 	SPDK_DEBUGLOG(fsdev_aio, "  name %s\n", name);
 
-	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, &fsdev_io->u_out.lookup.attr, NULL);
+	err = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &fobject, NULL, entry_out);
 	if (err) {
 		SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_do_lookup(%s) failed with err=%d\n", name, err);
 		goto fop_failed;
 	}
 
-	fsdev_io->u_out.lookup.fobject = fsdev_aio_get_spdk_fobject(vfsdev, fobject);
+	out_hdr->len += sizeof(*entry_out);
 	err = 0;
 
 fop_failed:
@@ -2453,13 +2455,11 @@ fsdev_aio_op_readdir_simple(struct spdk_io_channel *ch, struct spdk_fsdev_io *fs
 }
 
 static int
-fsdev_aio_op_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+fsdev_aio_do_forget(struct aio_fsdev *vfsdev, uint64_t nodeid, uint64_t nlookup)
 {
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *fobject;
-	uint64_t nlookup = fsdev_io->u_in.forget.nlookup;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.readdir.fobject);
+	fobject = fsdev_aio_get_fobject_by_nodeid(vfsdev, nodeid);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
@@ -2470,6 +2470,34 @@ fsdev_aio_op_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	file_object_unref(fobject, nlookup + 1 /* + 1 for the fsdev_aio_get_fobject */);
 
 	return 0;
+}
+
+static int
+fsdev_aio_op_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+
+	return fsdev_aio_do_forget(vfsdev, fsdev_io->u_in.fuse.hdr->nodeid,
+				   fsdev_io->u_in.fuse.op.forget->nlookup);
+}
+
+static int
+fsdev_aio_op_batch_forget(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
+	struct fuse_batch_forget_in *batch = fsdev_io->u_in.fuse.op.batch_forget;
+	struct fuse_forget_one *forget = fsdev_io->u_in.fuse.iov[0].iov_base;
+	int ret = 0;
+	uint32_t i;
+
+	for (i = 0; i < batch->count; i++) {
+		int rc;
+
+		rc = fsdev_aio_do_forget(vfsdev, forget[i].nodeid, forget[i].nlookup);
+		ret = (ret != 0) ? ret : rc;
+	}
+
+	return ret;
 }
 
 static uint32_t
@@ -4602,6 +4630,15 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_RELEASEDIR:
 		status = fsdev_aio_op_releasedir(ch, fsdev_io);
 		break;
+	case FUSE_LOOKUP:
+		status = fsdev_aio_op_lookup(ch, fsdev_io);
+		break;
+	case FUSE_FORGET:
+		status = fsdev_aio_op_forget(ch, fsdev_io);
+		break;
+	case FUSE_BATCH_FORGET:
+		status = fsdev_aio_op_batch_forget(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4799,12 +4836,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_UMOUNT:
 		status = fsdev_aio_op_umount(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_LOOKUP:
-		status = fsdev_aio_op_lookup(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FORGET:
-		status = fsdev_aio_op_forget(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_READLINK:
 		status = fsdev_aio_op_readlink(ch, fsdev_io);
 		break;
@@ -4898,6 +4929,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_CREATE:
 	case SPDK_FSDEV_IO_RELEASE:
 	case SPDK_FSDEV_IO_RELEASEDIR:
+	case SPDK_FSDEV_IO_LOOKUP:
+	case SPDK_FSDEV_IO_FORGET:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5364,7 +5397,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	vfsdev->fsdev.supported_fuse_opcodes = (1ULL << FUSE_READ) | (1ULL << FUSE_WRITE) | \
 					       (1ULL << FUSE_GETATTR) | (1ULL << FUSE_SETATTR) | \
 					       (1ULL << FUSE_OPEN) | (1ULL << FUSE_OPENDIR) | (1ULL << FUSE_CREATE) | \
-					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR);
+					       (1ULL << FUSE_RELEASE) | (1ULL << FUSE_RELEASEDIR) | \
+					       (1ULL << FUSE_LOOKUP) | (1ULL << FUSE_FORGET) | (1ULL << FUSE_BATCH_FORGET);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
