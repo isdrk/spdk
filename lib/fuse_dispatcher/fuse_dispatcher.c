@@ -1275,6 +1275,8 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 		return sizeof(struct fuse_rename2_in);
 	case FUSE_WRITE:
 		return sizeof(struct fuse_write_in);
+	case FUSE_IOCTL:
+		return sizeof(struct fuse_ioctl_in);
 	default:
 		return 0;
 	}
