@@ -3574,20 +3574,21 @@ static int
 fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res, saverr;
+	int res;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
-	bool datasync = fsdev_io->u_in.fsync.datasync;
+	struct fuse_fsync_in *fsync_in = fsdev_io->u_in.fuse.op.fsync;
+	bool datasync = fsync_in->fsync_flags & FUSE_FSYNC_FDATASYNC;
 
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsync.fobject);
+	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
 		return -EINVAL;
 	}
 
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsync.fhandle);
+	fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, fsync_in->fh);
 	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		SPDK_ERRLOG("Invalid fhandle: 0x%" PRIx64 "\n", fsync_in->fh);
 		res = -EINVAL;
 		goto fop_failed;
 	}
@@ -3598,10 +3599,8 @@ fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		res = fsync(fhandle->fd);
 	}
 
-	saverr = -errno;
-
 	if (res == -1) {
-		res = saverr;
+		res = -errno;
 		SPDK_ERRLOG("fdatasync/fsync failed for " FOBJECT_FMT " fh=%p (err=%d)\n",
 			    FOBJECT_ARGS(fobject), fhandle, res);
 		goto fop_failed;
@@ -3873,50 +3872,6 @@ fop_failed:
 	if (fd != -1) {
 		close(fd);
 	}
-	file_object_unref(fobject, 1);
-	return res;
-}
-
-static int
-fsdev_aio_op_fsyncdir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
-{
-	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
-	struct aio_fsdev_file_object *fobject;
-	struct aio_fsdev_file_handle *fhandle;
-	bool datasync = fsdev_io->u_in.fsyncdir.datasync;
-
-	fobject = fsdev_aio_get_fobject(vfsdev, fsdev_io->u_in.fsyncdir.fobject);
-	if (!fobject) {
-		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
-		return -EINVAL;
-	}
-
-	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsyncdir.fhandle);
-	if (!fhandle) {
-		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
-		res = -EINVAL;
-		goto fop_failed;
-	}
-
-	if (datasync) {
-		res = fdatasync(fhandle->fd);
-	} else {
-		res = fsync(fhandle->fd);
-	}
-
-	if (res == -1) {
-		res = -errno;
-		SPDK_ERRLOG("%s failed for fh=%p with err=%d\n",
-			    datasync ? "fdatasync" : "fsync", fhandle, res);
-		goto fop_failed;
-	}
-
-	res = 0;
-	SPDK_DEBUGLOG(fsdev_aio, "FSYNCDIR succeeded for " FOBJECT_FMT " fh=%p datasync=%d\n",
-		      FOBJECT_ARGS(fobject), fhandle, datasync);
-
-fop_failed:
 	file_object_unref(fobject, 1);
 	return res;
 }
@@ -4643,6 +4598,10 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	case FUSE_STATFS:
 		status = fsdev_aio_op_statfs(ch, fsdev_io);
 		break;
+	case FUSE_FSYNC:
+	case FUSE_FSYNCDIR:
+		status = fsdev_aio_op_fsync(ch, fsdev_io);
+		break;
 	default:
 		SPDK_ERRLOG("Unsupported opcode: %" PRIu32 "\n", in_hdr->opcode);
 		status = -ENOSYS;
@@ -4834,9 +4793,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_FUSE:
 		status = fsdev_aio_op_fuse(ch, fsdev_io);
 		break;
-	case SPDK_FSDEV_IO_FSYNC:
-		status = fsdev_aio_op_fsync(ch, fsdev_io);
-		break;
 	case SPDK_FSDEV_IO_SETXATTR:
 		status = fsdev_aio_op_setxattr(ch, fsdev_io);
 		break;
@@ -4854,9 +4810,6 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		break;
 	case SPDK_FSDEV_IO_READDIR:
 		status = fsdev_aio_op_readdir(ch, fsdev_io);
-		break;
-	case SPDK_FSDEV_IO_FSYNCDIR:
-		status = fsdev_aio_op_fsyncdir(ch, fsdev_io);
 		break;
 	case SPDK_FSDEV_IO_FLOCK:
 		status = fsdev_aio_op_flock(ch, fsdev_io);
@@ -4913,6 +4866,8 @@ fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 	case SPDK_FSDEV_IO_READLINK:
 	case SPDK_FSDEV_IO_LINK:
 	case SPDK_FSDEV_IO_STATFS:
+	case SPDK_FSDEV_IO_FSYNC:
+	case SPDK_FSDEV_IO_FSYNCDIR:
 		SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
 		assert(false);
 		status = -ENOSYS;
@@ -5385,7 +5340,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 					       (1ULL << FUSE_UNLINK) | (1ULL << FUSE_RMDIR) | \
 					       (1ULL << FUSE_INIT) | (1ULL << FUSE_DESTROY) | \
 					       (1ULL << FUSE_RENAME) | (1ULL << FUSE_RENAME2) | (1ULL << FUSE_READLINK) | \
-					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS);
+					       (1ULL << FUSE_LINK) | (1ULL << FUSE_STATFS) | \
+					       (1ULL << FUSE_FSYNC) | (1ULL << FUSE_FSYNCDIR);
 
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
