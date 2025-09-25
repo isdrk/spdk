@@ -23,6 +23,9 @@
 #include "spdk/tree.h"
 #include "spdk/bit_array.h"
 
+/* ELPE is the number of error log entries per controller */
+#define SPDK_NVME_ELPE 128
+
 /* The spec reserves cntlid values in the range FFF0h to FFFFh. */
 #define NVMF_MIN_CNTLID 1
 #define NVMF_MAX_CNTLID 0xFFEF
@@ -274,6 +277,9 @@ struct spdk_nvmf_ctrlr {
 	bool				dynamic_ctrlr;
 	/* LBA Format Extension Enabled (LBAFEE) */
 	bool				lbafee_enabled;
+
+	struct spdk_nvme_error_information_entry *error_log;
+	uint64_t			err_counter;
 
 	TAILQ_ENTRY(spdk_nvmf_ctrlr)	link;
 };

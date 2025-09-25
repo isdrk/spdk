@@ -39,6 +39,11 @@
 
 #define NVMF_ABORT_COMMAND_LIMIT 3
 
+struct nvmf_ctrlr_error_log {
+	struct spdk_nvmf_ctrlr *ctrlr;
+	struct spdk_nvme_error_information_entry log;
+};
+
 /*
  * Support for custom admin command handlers
  */
@@ -637,6 +642,7 @@ _nvmf_ctrlr_destruct(void *ctx)
 		free(event);
 	}
 	spdk_bit_array_free(&ctrlr->visible_ns);
+	free(ctrlr->error_log);
 	free(ctrlr);
 }
 
@@ -2083,7 +2089,7 @@ nvmf_ctrlr_set_features_number_of_queues(struct spdk_nvmf_request *req)
 	return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 }
 
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_ctrlr) == 4928,
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvmf_ctrlr) == 4944,
 		   "Please check migration fields that need to be added or not");
 
 static void
@@ -2948,7 +2954,7 @@ spdk_nvmf_ctrlr_identify_ctrlr(struct spdk_nvmf_ctrlr *ctrlr, struct spdk_nvme_c
 	cdata->ver = ctrlr->vcprop.vs;
 	cdata->aerl = ctrlr->cdata.aerl;
 	cdata->lpa.edlp = 1;
-	cdata->elpe = 127;
+	cdata->elpe = SPDK_NVME_ELPE - 1;
 	cdata->maxcmd = transport->opts.max_queue_depth;
 	cdata->sgls = ctrlr->cdata.sgls;
 	cdata->fuses = ctrlr->cdata.fuses;
@@ -5180,4 +5186,47 @@ spdk_nvmf_ctrlr_get_id(struct spdk_nvmf_ctrlr *ctrlr)
 struct spdk_nvmf_request *spdk_nvmf_request_get_req_to_abort(struct spdk_nvmf_request *req)
 {
 	return req->req_to_abort;
+}
+
+static void
+_nvmf_ctrlr_update_error_log(void *ctx)
+{
+	struct nvmf_ctrlr_error_log *error_log = ctx;
+	struct spdk_nvmf_ctrlr *ctrlr = error_log->ctrlr;
+	struct spdk_nvme_error_information_entry *error_entry;
+
+	/* Allocate error_log on demand for saving memory */
+	if (spdk_unlikely(!ctrlr->error_log)) {
+		ctrlr->error_log = calloc(SPDK_NVME_ELPE, sizeof(struct spdk_nvme_error_information_entry));
+		if (!ctrlr->error_log) {
+			SPDK_ERRLOG("Failed to allocate error log\n");
+			goto cleanup;
+		}
+	}
+
+	ctrlr->err_counter++;
+	SPDK_DEBUGLOG(nvmf, "ctrlr %p err_counter %lu\n", ctrlr, ctrlr->err_counter);
+	error_entry = &ctrlr->error_log[ctrlr->err_counter % SPDK_NVME_ELPE];
+	memcpy(error_entry, &error_log->log, sizeof(struct spdk_nvme_error_information_entry));
+	error_entry->error_count = ctrlr->err_counter;
+
+cleanup:
+	free(error_log);
+}
+
+void
+spdk_nvmf_ctrlr_update_error_log(struct spdk_nvmf_ctrlr *ctrlr,
+				 struct spdk_nvme_error_information_entry *log)
+{
+	struct nvmf_ctrlr_error_log *error_log;
+
+	error_log = calloc(1, sizeof(struct nvmf_ctrlr_error_log));
+	if (!error_log) {
+		SPDK_ERRLOG("Unable to allocate memory for error log.\n");
+		return;
+	}
+	error_log->ctrlr = ctrlr;
+	memcpy(&error_log->log, log, sizeof(struct spdk_nvme_error_information_entry));
+
+	spdk_thread_send_msg(ctrlr->thread, _nvmf_ctrlr_update_error_log, (void *)error_log);
 }

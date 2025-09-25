@@ -752,6 +752,15 @@ int spdk_nvmf_ctrlr_async_event_error_event(struct spdk_nvmf_ctrlr *ctrlr,
  */
 void spdk_nvmf_ctrlr_abort_aer(struct spdk_nvmf_ctrlr *ctrlr);
 
+/**
+ * Update nvme error information.
+ *
+ * \param ctrlr Controller where to update log.
+ * \param log Nvme error information to be updated.
+ */
+void spdk_nvmf_ctrlr_update_error_log(struct spdk_nvmf_ctrlr *ctrlr,
+				      struct spdk_nvme_error_information_entry *log);
+
 /*
  * Macro used to register new transports.
  */
