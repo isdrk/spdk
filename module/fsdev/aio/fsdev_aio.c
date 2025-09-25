@@ -3559,7 +3559,7 @@ static int
 fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res, saverr, fd;
+	int res, saverr;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle;
 	bool datasync = fsdev_io->u_in.fsync.datasync;
@@ -3571,28 +3571,19 @@ fsdev_aio_op_fsync(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	fhandle = fsdev_aio_get_fhandle(vfsdev, fsdev_io->u_in.fsync.fhandle);
-
 	if (!fhandle) {
-		fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
-		res = -errno;
-		if (fd == -1) {
-			SPDK_ERRLOG("openat failed (errno=%d)\n", res);
-			goto fop_failed;
-		}
-	} else {
-		fd = fhandle->fd;
+		SPDK_ERRLOG("Invalid fhandle: %p\n", fhandle);
+		res = -EINVAL;
+		goto fop_failed;
 	}
 
 	if (datasync) {
-		res = fdatasync(fd);
+		res = fdatasync(fhandle->fd);
 	} else {
-		res = fsync(fd);
+		res = fsync(fhandle->fd);
 	}
 
 	saverr = -errno;
-	if (!fhandle) {
-		close(fd);
-	}
 
 	if (res == -1) {
 		res = saverr;
