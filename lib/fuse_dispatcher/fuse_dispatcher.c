@@ -4315,6 +4315,28 @@ fuse_dispatcher_encode_notify_inval_entry(struct spdk_fuse_dispatcher *disp,
 	return 0;
 }
 
+static int
+fuse_dispatcher_encode_notify_fuse(struct spdk_fuse_dispatcher *disp,
+				   struct fuse_out_header *out_hdr,
+				   size_t buf_size,
+				   const struct spdk_fsdev_notify_data *notify_data)
+{
+	struct spdk_fuse_notify_request *req = notify_data->fuse;
+	struct fuse_out_header *req_out = req->iovs[0].iov_base;
+	uint64_t unique = out_hdr->unique;
+
+	if (req_out->len > buf_size) {
+		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+			    buf_size, req_out->len);
+		return -ENOMEM;
+	}
+
+	spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
+	out_hdr->unique = unique;
+
+	return 0;
+}
+
 int
 spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 				   struct iovec *iov, int iovcnt,
@@ -4346,6 +4368,9 @@ spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 		case SPDK_FSDEV_NOTIFY_INVAL_ENTRY:
 			rc = fuse_dispatcher_encode_notify_inval_entry(disp, out_hdr, buf_size, notify_data);
 			tmp_has_reply = true;
+			break;
+		case SPDK_FSDEV_NOTIFY_FUSE:
+			rc = fuse_dispatcher_encode_notify_fuse(disp, out_hdr, buf_size, notify_data);
 			break;
 		default:
 			SPDK_ERRLOG("Unsupported notify type %d\n", notify_data->type);
