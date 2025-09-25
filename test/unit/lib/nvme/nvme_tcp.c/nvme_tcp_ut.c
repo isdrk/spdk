@@ -69,6 +69,7 @@ struct spdk_nvme_transport_opts g_spdk_nvme_transport_opts = {
 DEFINE_STUB(nvme_transport_poll_group_init, int, (struct spdk_nvme_transport_poll_group *tgroup,
 		uint32_t num_requests), 0);
 DEFINE_STUB_V(nvme_transport_poll_group_deinit, (struct spdk_nvme_transport_poll_group *tgroup));
+DEFINE_STUB_V(nvme_fabric_qpair_poll_cleanup, (struct spdk_nvme_qpair *qpair));
 
 static void
 nvme_transport_ctrlr_disconnect_qpair_done_mocked(struct spdk_nvme_qpair *qpair)
