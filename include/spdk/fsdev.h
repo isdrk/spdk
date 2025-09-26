@@ -571,10 +571,11 @@ struct spdk_fuse_notify_request;
 typedef void (*spdk_fuse_notify_request_cb)(struct spdk_fuse_notify_request *req, int status);
 
 struct spdk_fuse_notify_request {
-	struct spdk_fsdev		*fsdev;
-	struct iovec			*iovs;
-	uint32_t			iovcnt;
-	spdk_fuse_notify_request_cb	cb_fn;
+	struct spdk_fsdev			*fsdev;
+	struct iovec				*iovs;
+	uint32_t				iovcnt;
+	spdk_fuse_notify_request_cb		cb_fn;
+	STAILQ_ENTRY(spdk_fuse_notify_request)	stailq;
 };
 
 struct spdk_fsdev_notify_data {
