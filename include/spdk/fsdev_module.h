@@ -231,6 +231,9 @@ struct spdk_fsdev {
 		/** Filesystem desc responsible for handling notifications. */
 		struct spdk_fsdev_desc *notify_desc;
 
+		/** Thread used for handling notifications */
+		struct spdk_thread *notify_thread;
+
 		TAILQ_ENTRY(spdk_fsdev) link;
 
 		/** Fsdev name used for quick lookup */
