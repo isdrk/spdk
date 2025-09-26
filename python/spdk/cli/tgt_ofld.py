@@ -86,3 +86,20 @@ def add_parser(subparsers):
     all the offload bdevs or specified bdev.""")
     p.add_argument('-b', '--name', help='Name of the offload bdev. Example: Nvme0n1', required=False)
     p.set_defaults(func=tgt_ofld_get_bdev_queue_mapping)
+
+    def tgt_ofld_get_log(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_get_log(args.client,
+                                                 subnqn=args.subnqn,
+                                                 log_type=args.log_type,
+                                                 num_entries=args.num_entries))
+
+    p = subparsers.add_parser('tgt_ofld_get_log', help='Get nvme logs')
+    p.add_argument('-s', '--subnqn', help='Subsystem NQN to filter. If not specified, show logs for all subsystems', required=False)
+    p.add_argument('-t', '--log_type', type=str, choices=['cve', 'pce'],
+                   help='Log type to filter: cve=NVMeoF capsule validation error, '
+                        'pce=NVMe PCI command completion error. Default is cve.',
+                   required=False)
+    p.add_argument('-n', '--num_entries', type=int,
+                   help='Maximum number of log entries per log type per subsystem. If not specified, show all entries',
+                   required=False)
+    p.set_defaults(func=tgt_ofld_get_log)

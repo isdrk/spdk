@@ -4170,6 +4170,7 @@ nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport
 		return -1;
 	}
 
+	pthread_mutex_lock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
 	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR ||
 	    log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
 		struct spdk_nvmf_rdma_subsystem *rsubsystem = oqpair->rsubsystem;
@@ -4183,11 +4184,13 @@ nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport
 		rsubsystem->err_cqes_idx++;
 		err_cqe = &rsubsystem->err_cqes[rsubsystem->err_cqes_idx % SUBSYS_NVME_ELPE];
 	} else {
+		pthread_mutex_unlock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
 		SPDK_ERRLOG("cqe_type %d is not supported\n", log->cqe_type);
 		return -1;
 	}
 
 	memcpy(err_cqe, log, sizeof(*log));
+	pthread_mutex_unlock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
 
 	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
 		nvmf_rdma_qpair_update_error_log(oqpair, err_cqe);
@@ -10448,3 +10451,177 @@ cleanup:
 }
 SPDK_RPC_REGISTER("tgt_ofld_get_bdev_queue_mapping", rpc_tgt_ofld_get_bdev_queue_mapping,
 		  SPDK_RPC_RUNTIME)
+
+static int
+rpc_tgt_ofld_decode_log_type(const struct spdk_json_val *val, void *out)
+{
+	enum doca_sta_cqe_notify_type *type = out;
+
+	if (spdk_json_strequal(val, "cve") == true) {
+		*type = DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR;
+	} else if (spdk_json_strequal(val, "pce") == true) {
+		*type = DOCA_STA_CQE_NOTIF_NVME_COMP_ERR;
+	} else {
+		SPDK_NOTICELOG("Invalid parameter value: type\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+struct rpc_tgt_ofld_get_log {
+	char *subnqn;
+	enum doca_sta_cqe_notify_type log_type;
+	int num_entries;
+};
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_get_log_decoders[] = {
+	{"subnqn", offsetof(struct rpc_tgt_ofld_get_log, subnqn), spdk_json_decode_string, true},
+	{"log_type", offsetof(struct rpc_tgt_ofld_get_log, log_type), rpc_tgt_ofld_decode_log_type, true},
+	{"num_entries", offsetof(struct rpc_tgt_ofld_get_log, num_entries), spdk_json_decode_uint32, true},
+};
+
+static void
+rpc_tgt_ofld_log_entry_dump(struct spdk_json_write_ctx *w,
+			    const struct nvmf_error_log_entry *entry)
+{
+	uint8_t *be_cqe = (uint8_t *)&entry->be_cqe;
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_uint32(w, "be_cid", entry->be_cid);
+	spdk_json_write_named_string_fmt(w, "be_cqe",
+					 "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+					 be_cqe[0], be_cqe[1], be_cqe[2], be_cqe[3],
+					 be_cqe[4], be_cqe[5], be_cqe[6], be_cqe[7],
+					 be_cqe[8], be_cqe[9], be_cqe[10], be_cqe[11],
+					 be_cqe[12], be_cqe[13], be_cqe[14], be_cqe[15]);
+	spdk_json_write_named_uint32(w, "cc_cid", entry->cc_cid);
+	spdk_json_write_named_uint32(w, "cc_nsid", entry->cc_nsid);
+	spdk_json_write_named_uint64(w, "cc_lba", entry->cc_lba);
+	spdk_json_write_named_uint32(w, "cc_opcode", entry->cc_opcode);
+	spdk_json_write_named_uint32(w, "cqe_type", entry->cqe_type);
+	spdk_json_write_named_uint32(w, "param_err_loc", entry->param_err_loc);
+	spdk_json_write_named_string_fmt(w, "status_code", "0x%x", entry->status_code_raw);
+	spdk_json_write_named_string_fmt(w, "qp_handle", "0x%lx", (uint64_t)entry->qp_handle);
+	spdk_json_write_object_end(w);
+}
+
+static void
+rpc_tgt_ofld_log_entries_dump(struct spdk_json_write_ctx *w, const char *name,
+			      uint16_t idx, enum doca_sta_cqe_notify_type log_type,
+			      uint32_t num_entries,
+			      const struct nvmf_error_log_entry *entries)
+{
+	uint32_t i, count = 0;
+
+	spdk_json_write_named_array_begin(w, name);
+	if (entries) {
+		for (i = 0; i < SUBSYS_NVME_ELPE && count < num_entries; i++) {
+			/* Skip empty entries */
+			if (entries[idx].qp_handle == NULL) {
+				break;
+			}
+
+			if (entries[idx].cqe_type == log_type) {
+				rpc_tgt_ofld_log_entry_dump(w, &entries[idx]);
+			}
+
+			if (idx == 0) {
+				idx = SUBSYS_NVME_ELPE - 1;
+			} else {
+				idx--;
+			}
+
+			count++;
+		}
+	}
+	spdk_json_write_array_end(w);
+}
+
+static void
+rpc_tgt_ofld_subsystem_logs_dump(struct spdk_json_write_ctx *w,
+				 struct spdk_nvmf_rdma_subsystem *rsubsystem,
+				 enum doca_sta_cqe_notify_type log_type, uint32_t num_entries)
+{
+	uint16_t idx;
+	const struct nvmf_error_log_entry *entries = NULL;
+	const char *name;
+
+	spdk_json_write_object_begin(w);
+	spdk_json_write_named_string(w, "subnqn", rsubsystem->subsystem->subnqn);
+
+	pthread_mutex_lock((pthread_mutex_t *)&rsubsystem->subsystem->mutex);
+	if (log_type == DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR ||
+	    log_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
+		name = "err_cqes";
+		idx = rsubsystem->err_cqes_idx;
+		entries = rsubsystem->err_cqes;
+	}
+	rpc_tgt_ofld_log_entries_dump(w, name, idx, log_type, num_entries, entries);
+	pthread_mutex_unlock((pthread_mutex_t *)&rsubsystem->subsystem->mutex);
+	spdk_json_write_object_end(w);
+}
+
+static void
+rpc_tgt_ofld_get_log(struct spdk_jsonrpc_request *request,
+		     const struct spdk_json_val *params)
+{
+	struct rpc_tgt_ofld_get_log req = {
+		.num_entries = SUBSYS_NVME_ELPE
+	};
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_subsystem *rsubsystem = NULL;
+	struct spdk_json_write_ctx *w;
+	int rc;
+
+	if (params != NULL) {
+		if (spdk_json_decode_object_relaxed(params, rpc_tgt_ofld_get_log_decoders,
+						    SPDK_COUNTOF(rpc_tgt_ofld_get_log_decoders), &req)) {
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "spdk_json_decode_object failed");
+			goto cleanup;
+		}
+	}
+
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	/* If subnqn is specified, find the specific subsystem */
+	if (req.subnqn) {
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			if (strcmp(rsubsystem->subsystem->subnqn, req.subnqn) == 0) {
+				break;
+			}
+		}
+		if (!rsubsystem) {
+			SPDK_ERRLOG("subsystem is not found (%s)\n", req.subnqn);
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "subsystem not found");
+			goto cleanup;
+		}
+	}
+
+	w = spdk_jsonrpc_begin_result(request);
+	spdk_json_write_array_begin(w);
+
+	if (rsubsystem) {
+		/* Output logs for the specific subsystem */
+		rpc_tgt_ofld_subsystem_logs_dump(w, rsubsystem, req.log_type, req.num_entries);
+	} else {
+		/* Output logs for all subsystems */
+		TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+			rpc_tgt_ofld_subsystem_logs_dump(w, rsubsystem, req.log_type, req.num_entries);
+		}
+	}
+
+	spdk_json_write_array_end(w);
+	spdk_jsonrpc_end_result(request, w);
+
+cleanup:
+	free(req.subnqn);
+}
+
+SPDK_RPC_REGISTER("tgt_ofld_get_log", rpc_tgt_ofld_get_log, SPDK_RPC_RUNTIME)

@@ -128,3 +128,24 @@ def tgt_ofld_get_bdev_queue_mapping(client, name=None):
     if name:
         params['name'] = name
     return client.call('tgt_ofld_get_bdev_queue_mapping', params)
+
+
+def tgt_ofld_get_log(client, subnqn=None, log_type=None, num_entries=None):
+    """Get nvme logs.
+
+    Args:
+        subnqn: Subsystem NQN to filter (optional; if omitted, show logs for all subsystems)
+        log_type: Log type to filter (optional; cve=capsule validation error, pce=PCI command completion error; Default is cve)
+        num_entries: Maximum number of log entries per log type per subsystem (optional; if omitted, show all entries)
+
+    Returns:
+        Log entries for requested subsystems and log types.
+    """
+    params = {}
+    if subnqn:
+        params['subnqn'] = subnqn
+    if log_type is not None:
+        params['log_type'] = log_type
+    if num_entries is not None:
+        params['num_entries'] = num_entries
+    return client.call('tgt_ofld_get_log', params)
