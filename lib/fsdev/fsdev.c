@@ -1177,11 +1177,11 @@ spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_
 		return -EOPNOTSUPP;
 	}
 
-	spdk_spin_lock(&fsdev->internal.spinlock);
 	if (!fsdev->internal.notify_cb) {
 		res = fsdev->fn_table->set_notifications(fsdev->ctxt, true);
 		if (!res) {
 			assert(fsdev->internal.notify_desc == NULL);
+			fsdev->internal.notify_thread = spdk_get_thread();
 			fsdev->internal.notify_desc = desc;
 			fsdev->internal.notify_cb = notify_cb;
 			fsdev->internal.notify_ctx = ctx;
@@ -1189,13 +1189,12 @@ spdk_fsdev_enable_notifications(struct spdk_fsdev_desc *desc, spdk_fsdev_notify_
 	} else {
 		res = -EALREADY;
 	}
-	spdk_spin_unlock(&fsdev->internal.spinlock);
 
 	return res;
 }
 
-static int
-fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
+int
+spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
 {
 	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
 	int rc __attribute__((unused));
@@ -1212,27 +1211,16 @@ fsdev_disable_notifications_unsafe(struct spdk_fsdev_desc *desc)
 		return -EINVAL;
 	}
 
+	assert(spdk_get_thread() == fsdev->internal.notify_thread);
 	rc = fsdev->fn_table->set_notifications(fsdev->ctxt, false);
 	assert(rc == 0);
 
+	fsdev->internal.notify_thread = NULL;
 	fsdev->internal.notify_desc = NULL;
 	fsdev->internal.notify_cb = NULL;
 	fsdev->internal.notify_ctx = NULL;
 
 	return 0;
-}
-
-int
-spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc)
-{
-	struct spdk_fsdev *fsdev = spdk_fsdev_desc_get_fsdev(desc);
-	int res;
-
-	spdk_spin_lock(&fsdev->internal.spinlock);
-	res = fsdev_disable_notifications_unsafe(desc);
-	spdk_spin_unlock(&fsdev->internal.spinlock);
-
-	return res;
 }
 
 uint32_t
@@ -1248,6 +1236,7 @@ fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *noti
 	int res = -ENODEV;
 
 	if (fsdev->internal.notify_cb) {
+		assert(spdk_get_thread() == fsdev->internal.notify_thread);
 		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
 					  reply_cb, reply_ctx);
 		res = 0;
@@ -1295,7 +1284,9 @@ static void
 fsdev_fuse_notify_done(const struct spdk_fsdev_notify_reply_data *reply, void *ctx)
 {
 	struct spdk_fuse_notify_request *req = ctx;
+	struct spdk_fsdev *fsdev = req->fsdev;
 
+	assert(spdk_get_thread() == fsdev->internal.notify_thread);
 	req->cb_fn(req, reply->status);
 }
 
@@ -1951,7 +1942,7 @@ fsdev_close(struct spdk_fsdev *fsdev, struct spdk_fsdev_desc *desc)
 	spdk_spin_lock(&desc->spinlock);
 
 	if (fsdev->internal.notify_desc == desc) {
-		fsdev_disable_notifications_unsafe(desc);
+		spdk_fsdev_disable_notifications(desc);
 	}
 
 	TAILQ_REMOVE(&fsdev->internal.open_descs, desc, link);
