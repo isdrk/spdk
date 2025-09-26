@@ -242,6 +242,12 @@ struct spdk_fsdev {
 		/** true if fsdev reset is in progress */
 		bool reset_in_progress;
 
+		/** Pending notifications */
+		STAILQ_HEAD(, spdk_fuse_notify_request) pending_notifications;
+
+		/** Pending notification polller */
+		struct spdk_poller *notification_poller;
+
 		/** accumulated I/O statistics for previously deleted channels of this fsdev */
 		struct spdk_fsdev_io_stat *hist_stat;
 
