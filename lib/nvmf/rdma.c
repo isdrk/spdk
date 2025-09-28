@@ -238,8 +238,8 @@ struct spdk_nvmf_rdma_request_data {
 struct spdk_nvmf_rdma_request {
 	struct spdk_nvmf_request		req;
 
-	bool					fused_failed;
-	bool					data_transferred;
+	uint8_t					fused_failed : 1;
+	uint8_t					data_transferred : 1;
 
 	struct spdk_nvmf_rdma_wr		data_wr;
 	struct spdk_nvmf_rdma_wr		rsp_wr;
@@ -2071,8 +2071,8 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->req.iovcnt = 0;
 	rdma_req->offset = 0;
 	rdma_req->req.dif_enabled = false;
-	rdma_req->fused_failed = false;
-	rdma_req->data_transferred = false;
+	rdma_req->fused_failed = 0;
+	rdma_req->data_transferred = 0;
 	rdma_req->req.use_accel_seq = false;
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
@@ -2081,7 +2081,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 		 * in the pair, because it is no longer part of a valid pair.  If the pair
 		 * already reached READY_TO_EXECUTE state, we need to kick it.
 		 */
-		rdma_req->fused_pair->fused_failed = true;
+		rdma_req->fused_pair->fused_failed = 1;
 		if (rdma_req->fused_pair->state == RDMA_REQUEST_STATE_READY_TO_EXECUTE) {
 			nvmf_rdma_request_process(rtransport, rdma_req->fused_pair);
 		}
@@ -2125,7 +2125,7 @@ nvmf_rdma_check_fused_ordering(struct spdk_nvmf_rdma_transport *rtransport,
 			return;
 		} else {
 			/* Mark the last req as failed since it wasn't followed by a SECOND. */
-			rqpair->fused_first->fused_failed = true;
+			rqpair->fused_first->fused_failed = 1;
 
 			/* If the last req is in READY_TO_EXECUTE state, then call
 			 * nvmf_rdma_request_process(), otherwise nothing else will kick it.
@@ -2145,7 +2145,7 @@ nvmf_rdma_check_fused_ordering(struct spdk_nvmf_rdma_transport *rtransport,
 		rqpair->fused_first = rdma_req;
 	} else if (next == SPDK_NVME_CMD_FUSE_SECOND) {
 		/* Mark this req failed since it ia SECOND and the last one was not a FIRST. */
-		rdma_req->fused_failed = true;
+		rdma_req->fused_failed = 1;
 	}
 }
 
@@ -5296,7 +5296,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 						/* We need to wait for bdev layer to call req_complete */
 						SPDK_DEBUGLOG(rdma, "req %p, finish data transfer\n", rdma_req);
 						/* Set a flag that data is already transferred, we only need to send the response once bdev completes the req */
-						rdma_req->data_transferred = true;
+						rdma_req->data_transferred = 1;
 						rdma_req->state = RDMA_REQUEST_STATE_EXECUTING;
 						nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
 					}
