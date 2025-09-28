@@ -177,6 +177,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 			   vfsdev_passthru_cpl_cb, fsdev_io);
 
 	memcpy(&child_io->u_in, &fsdev_io->u_in, sizeof(fsdev_io->u_in));
+	memcpy(&child_io->u_out, &fsdev_io->u_out, sizeof(fsdev_io->u_out));
 
 	spdk_fsdev_io_submit(child_io);
 }
@@ -472,6 +473,7 @@ vfsdev_passthru_register(const char *base_name)
 		pt_node->pt_fsdev.ctxt = pt_node;
 		pt_node->pt_fsdev.fn_table = &vfsdev_passthru_fn_table;
 		pt_node->pt_fsdev.module = &passthru_if;
+		pt_node->pt_fsdev.supported_fuse_opcodes = spdk_fsdev_get_supported_fuse_opcodes(fsdev);
 		TAILQ_INSERT_TAIL(&g_pt_nodes, pt_node, link);
 
 		spdk_io_device_register(pt_node, pt_fsdev_ch_create_cb, pt_fsdev_ch_destroy_cb,
