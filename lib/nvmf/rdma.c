@@ -240,6 +240,7 @@ struct spdk_nvmf_rdma_request {
 
 	uint8_t					fused_failed : 1;
 	uint8_t					data_transferred : 1;
+	uint8_t					is_duplicated_aer : 1;
 
 	struct spdk_nvmf_rdma_wr		data_wr;
 	struct spdk_nvmf_rdma_wr		rsp_wr;
@@ -309,6 +310,12 @@ struct spdk_nvmf_rdma_resources {
 
 	/* Queue to track free requests */
 	STAILQ_HEAD(, spdk_nvmf_rdma_request)	free_queue;
+};
+
+struct spdk_nvmf_rdma_aer_req {
+	struct spdk_nvmf_rdma_request		rdma_req;
+	union nvmf_h2c_msg			cmd;
+	union nvmf_c2h_msg			*cpl;
 };
 
 typedef void (*spdk_nvmf_rdma_qpair_ibv_event)(struct spdk_nvmf_rdma_qpair *rqpair);
@@ -578,6 +585,8 @@ static int nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_
 		struct iovec *src_iov, uint32_t src_iovcnt,
 		struct spdk_memory_domain_translation_result *translation,
 		spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_cb_arg);
+
+static int nvmf_rdma_request_free(struct spdk_nvmf_request *req);
 
 static inline enum spdk_nvme_media_error_status_code
 nvmf_rdma_dif_error_to_compl_status(uint8_t err_type) {
@@ -851,6 +860,77 @@ nvmf_rdma_resources_create(struct spdk_nvmf_rdma_resource_opts *opts)
 
 cleanup:
 	nvmf_rdma_resources_destroy(resources);
+	return NULL;
+}
+
+static void
+nvmf_rdma_aer_req_free(struct spdk_nvmf_rdma_request *rdma_req)
+{
+	struct spdk_nvmf_rdma_aer_req *aer_req;
+
+	aer_req = SPDK_CONTAINEROF(rdma_req, struct spdk_nvmf_rdma_aer_req, rdma_req);
+	spdk_free(aer_req->cpl);
+	free(aer_req);
+}
+
+static struct spdk_nvmf_rdma_request *
+nvmf_rdma_aer_req_dup(struct spdk_nvmf_rdma_qpair *rqpair, struct spdk_nvmf_rdma_request *orig_req)
+{
+	struct spdk_nvmf_rdma_aer_req *aer;
+	struct spdk_nvmf_rdma_request *new_req;
+	struct spdk_rdma_utils_memory_translation translation;
+	int rc;
+
+	assert(orig_req->req.cmd->nvme_cmd.opc == SPDK_NVME_OPC_ASYNC_EVENT_REQUEST);
+	assert(orig_req->req.xfer == SPDK_NVME_DATA_NONE);
+
+	aer = calloc(1, sizeof(*aer));
+	if (!aer) {
+		return NULL;
+	}
+	new_req = &aer->rdma_req;
+	new_req->is_duplicated_aer = 1;
+	new_req->req.cmd = &aer->cmd;
+
+	aer->cpl = spdk_zmalloc(sizeof(*aer->cpl), 0, NULL, SPDK_ENV_LCORE_ID_ANY, SPDK_MALLOC_DMA);
+	if (!aer->cpl) {
+		goto err_free_aer;
+	}
+
+	new_req->req.rsp = aer->cpl;
+
+	new_req->rsp.sgl[0].addr = (uintptr_t)aer->cpl;
+	new_req->rsp.sgl[0].length = sizeof(*aer->cpl);
+	rc = spdk_rdma_utils_get_translation(rqpair->device->map, aer->cpl, sizeof(*aer->cpl),
+					     &translation);
+	if (rc) {
+		goto err_free_cpl;
+	}
+	new_req->rsp.sgl[0].lkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
+
+	new_req->rsp_wr.type = RDMA_WR_TYPE_SEND;
+	new_req->rsp.wr.wr_id = (uintptr_t)&new_req->rsp_wr;
+	new_req->rsp.wr.next = NULL;
+	new_req->rsp.wr.opcode = orig_req->rsp.wr.opcode;
+	new_req->rsp.wr.imm_data = orig_req->rsp.wr.imm_data;
+	new_req->rsp.wr.send_flags = IBV_SEND_SIGNALED;
+	new_req->rsp.wr.sg_list = new_req->rsp.sgl;
+	new_req->rsp.wr.num_sge = SPDK_COUNTOF(new_req->rsp.sgl);
+
+	/* Skip new_req->data_wr because xfer is SPDK_NVME_DATA_NONE */
+
+	new_req->req.qpair = orig_req->req.qpair;
+	new_req->receive_tsc = orig_req->receive_tsc;
+	new_req->state = orig_req->state;
+	new_req->req.cmd = &aer->cmd;
+	*new_req->req.cmd = *orig_req->req.cmd;
+	new_req->req.xfer = orig_req->req.xfer;
+
+	return new_req;
+err_free_cpl:
+	spdk_free(aer->cpl);
+err_free_aer:
+	free(aer);
 	return NULL;
 }
 
@@ -1203,12 +1283,13 @@ request_transfer_out(struct spdk_nvmf_request *req, int *data_posted)
 	}
 	rsp->sqhd = qpair->sq_head;
 
-	/* queue the capsule for the recv buffer */
-	assert(rdma_req->recv != NULL);
+	/* Duplicated AER does not have a related receive structure. */
+	if (spdk_likely(rdma_req->recv != NULL)) {
+		/* queue the capsule for the recv buffer */
+		nvmf_rdma_qpair_queue_recv_wrs(rqpair, &rdma_req->recv->wr);
+		rdma_req->recv = NULL;
+	}
 
-	nvmf_rdma_qpair_queue_recv_wrs(rqpair, &rdma_req->recv->wr);
-
-	rdma_req->recv = NULL;
 	assert(rqpair->current_recv_depth > 0);
 	rqpair->current_recv_depth--;
 
@@ -2048,6 +2129,11 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 
 	assert(rdma_req->transfer_cpl_cb == NULL);
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
+	if (spdk_unlikely(rdma_req->is_duplicated_aer)) {
+		nvmf_rdma_aer_req_free(rdma_req);
+		goto done;
+	}
+
 	if (rdma_req->req.data_from_pool) {
 		rgroup = rqpair->poller->group;
 
@@ -2090,8 +2176,9 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	memset(&rdma_req->req.dif, 0, sizeof(rdma_req->req.dif));
 
 	STAILQ_INSERT_HEAD(&rqpair->resources->free_queue, rdma_req, state_link);
-	rqpair->qpair.queue_depth--;
 	rdma_req->state = RDMA_REQUEST_STATE_FREE;
+done:
+	rqpair->qpair.queue_depth--;
 	if (rqpair->qpair.queue_depth == 0) {
 		assert(TAILQ_ENTRY_ENQUEUED(rqpair, active_link));
 		TAILQ_REMOVE_CLEAR(&rqpair->poller->active_qpairs, rqpair, active_link);
@@ -2513,6 +2600,24 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			/* If no data to transfer, ready to execute. */
 			if (rdma_req->req.xfer == SPDK_NVME_DATA_NONE) {
+				if (spdk_unlikely(rqpair->srq &&
+						  rdma_req->req.cmd->nvme_cmd.opc == SPDK_NVME_OPC_ASYNC_EVENT_REQUEST)) {
+					struct spdk_nvmf_rdma_request *aer_req;
+
+					aer_req = nvmf_rdma_aer_req_dup(rqpair, rdma_req);
+					if (!aer_req) {
+						SPDK_WARNLOG("Unable to allocate request structure for AER\n");
+					} else {
+						/*
+						 * Increment queue_depth before freeing the original request to compensate
+						 * for the double decrement that will occur (once when the original request
+						 * is freed and once when the duplicate request is freed later).
+						 */
+						rqpair->qpair.queue_depth++;
+						nvmf_rdma_request_free(&rdma_req->req);
+						rdma_req = aer_req;
+					}
+				}
 				rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
 				break;
 			}
