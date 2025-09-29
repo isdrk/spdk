@@ -152,8 +152,7 @@ external-code-test-job:
 
 test-virtio-fs-app:
   stage: test
-  tags: [k8s, mtr-rdma, x86_64]
-  image: "$FEDORA_IMAGE"
+  tags: [vm_host, x86_64]
   variables:
     VIRTIO_FS_TARGET_REF: main
   script:
