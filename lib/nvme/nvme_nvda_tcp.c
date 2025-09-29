@@ -911,8 +911,6 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 {
 	struct nvme_tcp_qpair *tqpair = (struct nvme_tcp_qpair *)userdata_sq;
 
-	assert(userdata_sq != 0);
-
 	switch (event) {
 	case XLIO_SOCKET_EVENT_ESTABLISHED:
 		SPDK_INFOLOG(nvme_xlio, "Connection established: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
@@ -922,14 +920,8 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 			tqpair->flags.connect_notified = 1;
 		}
 		break;
-	case XLIO_SOCKET_EVENT_TERMINATED:
-		/* This is the last event of a closed socket */
-		SPDK_INFOLOG(nvme_xlio,
-			     "Connection terminated: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
-			     sock, tqpair, tqpair->qpair.id, event, value);
-		tqpair->flags.disconnected = true;
-		break;
 	case XLIO_SOCKET_EVENT_CLOSED:
+	case XLIO_SOCKET_EVENT_TERMINATED:
 	case XLIO_SOCKET_EVENT_ERROR:
 		SPDK_INFOLOG(nvme_xlio,
 			     "Connection closed passively: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
@@ -5272,8 +5264,7 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 			}
 		}
 
-		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED &&
-		    tqpair->flags.disconnected) {
+		if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTED) {
 			disconnected_qpair_cb(qpair, tgroup->group->ctx);
 		}
 	}
