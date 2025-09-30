@@ -4273,8 +4273,8 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	spdk_put_io_channel(ch->accel_channel);
 
 	if (ch->flags & BDEV_CH_QOS_ENABLED) {
-		bdev_put_qos_channels(ch);
 		ch->flags &= ~BDEV_CH_QOS_ENABLED;
+		bdev_put_qos_channels(ch);
 	}
 
 	shared_resource = ch->shared_resource;
@@ -10266,8 +10266,8 @@ static void
 _bdev_channel_disable_qos(struct spdk_bdev_channel *bdev_ch)
 {
 	if (bdev_ch->flags & BDEV_CH_QOS_ENABLED) {
-		bdev_put_qos_channels(bdev_ch);
 		bdev_ch->flags &= ~BDEV_CH_QOS_ENABLED;
+		bdev_put_qos_channels(bdev_ch);
 	}
 }
 
