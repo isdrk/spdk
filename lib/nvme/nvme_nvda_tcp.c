@@ -122,9 +122,7 @@ struct nvme_tcp_qpair {
 
 	size_t					cur_offset;
 
-	/* TODO: Do we need both outstanding_reqs and send_queue queues? */
 	nvme_tcp_req_tailq_t			outstanding_reqs;
-	TAILQ_HEAD(, nvme_tcp_pdu)		send_queue;
 	struct nvme_tcp_pdu			*recv_pdu;
 
 	struct spdk_bit_pool			*cid_pool;
@@ -1595,7 +1593,6 @@ nvme_tcp_alloc_reqs(struct nvme_tcp_qpair *tqpair)
 
 	tqpair->cid_pool = spdk_bit_pool_create(tqpair->num_entries);
 	tqpair->tcp_reqs_lookup = calloc(tqpair->num_entries, sizeof(*tqpair->tcp_reqs_lookup));
-	TAILQ_INIT(&tqpair->send_queue);
 	TAILQ_INIT(&tqpair->outstanding_reqs);
 	TAILQ_INIT(&tqpair->accel_nomem_queue);
 	for (i = 0; i < tqpair->num_entries; i++) {
@@ -1684,9 +1681,6 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 			       tqpair, qpair->id, qpair->outstanding_zcopy_reqs, tqpair->consumed_packets);
 	}
 
-	/* clear the send_queue */
-	TAILQ_INIT(&tqpair->send_queue);
-
 	nvme_tcp_qpair_set_recv_state(tqpair, NVME_TCP_PDU_RECV_STATE_QUIESCING);
 
 	if (need_lock) {
@@ -1773,8 +1767,6 @@ _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err
 		tqpair->flags.pending_events = true;
 	}
 
-	TAILQ_REMOVE(&tqpair->send_queue, pdu, tailq);
-
 	if (spdk_unlikely(err != 0)) {
 		nvme_transport_ctrlr_disconnect_qpair(tqpair->qpair.ctrlr, &tqpair->qpair);
 		return;
@@ -1850,7 +1842,6 @@ nvme_tcp_qpair_write_control_pdu(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 	pdu->has_capsule = 0;
 	pdu->capsule_offset = 0;
 	pdu->ddgst_enable = 0;
-	TAILQ_INSERT_TAIL(&tqpair->send_queue, pdu, tailq);
 	tqpair->stats->submitted_requests++;
 	rc = nvme_tcp_qpair_send_pdu(tqpair, pdu);
 
@@ -2419,8 +2410,6 @@ end:
 	}
 
 	pdu->cb_fn = nvme_tcp_qpair_cmd_send_complete;
-
-	TAILQ_INSERT_TAIL(&tqpair->send_queue, pdu, tailq);
 
 	SPDK_DEBUGLOG(nvme, "tqpair %p %u, xlio_sock 0x%lx, tcp_req %p pdu %p, ordering 0x%x cid %u\n",
 		      tqpair, tqpair->qpair.id, tqpair->xlio_sock, tcp_req, &tcp_req->pdu,
@@ -3632,7 +3621,6 @@ nvme_tcp_accel_seq_finished_h2c_cb(void *cb_arg, int status)
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
 		goto fail_req;
 	}
-	TAILQ_INSERT_TAIL(&tqpair->send_queue, rsp_pdu, tailq);
 	tqpair->stats->submitted_requests++;
 	if (spdk_unlikely(nvme_tcp_qpair_send_pdu(tqpair, rsp_pdu))) {
 		sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
@@ -3862,7 +3850,6 @@ nvme_tcp_send_h2c_data(struct nvme_tcp_req *tcp_req)
 		MAKE_DIGEST_WORD((uint8_t *)rsp_pdu->hdr.raw + rsp_pdu->hdr.common.hlen, crc32c);
 	}
 
-	TAILQ_INSERT_TAIL(&tqpair->send_queue, rsp_pdu, tailq);
 	rsp_pdu->has_mkeys = 1;
 	if (spdk_unlikely(nvme_tcp_fill_data_mkeys(tqpair, tcp_req, rsp_pdu) != 0)) {
 		SPDK_ERRLOG("Failed to fill mkeys\n");
