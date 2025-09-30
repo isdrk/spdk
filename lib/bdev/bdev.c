@@ -4912,6 +4912,9 @@ bdev_qos_unregister_cb(void *io_device)
 	struct spdk_bdev_qos *qos = io_device;
 
 	SPDK_DEBUGLOG(bdev, "Free QoS %p.\n", qos);
+
+	bdev_qos_put_impls(qos);
+
 	free(qos->name);
 	free(qos);
 }
@@ -4926,8 +4929,6 @@ spdk_bdev_qos_destroy(struct spdk_bdev_qos *qos)
 	if (!TAILQ_EMPTY(&qos->bdevs) || !TAILQ_EMPTY(&qos->children)) {
 		return -EBUSY;
 	}
-
-	bdev_qos_put_impls(qos);
 
 	TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
 
