@@ -572,6 +572,10 @@ nvme_qpair_abort_queued_reqs(struct spdk_nvme_qpair *qpair)
 	STAILQ_INIT(&tmp);
 	STAILQ_SWAP(&tmp, &qpair->queued_req, nvme_request);
 
+	if (!STAILQ_EMPTY(&tmp)) {
+		SPDK_NOTICELOG("qpair %p, id %u abort queued reqs\n", qpair, qpair->id);
+	}
+
 	while (!STAILQ_EMPTY(&tmp)) {
 		req = STAILQ_FIRST(&tmp);
 		STAILQ_REMOVE_HEAD(&tmp, stailq);
@@ -598,6 +602,7 @@ _nvme_qpair_complete_abort_queued_reqs(struct spdk_nvme_qpair *qpair)
 		return;
 	}
 
+	SPDK_NOTICELOG("qpair %p, id %u complete queued aborts\n", qpair, qpair->id);
 	STAILQ_INIT(&tmp);
 	STAILQ_SWAP(&tmp, &qpair->aborting_queued_req, nvme_request);
 

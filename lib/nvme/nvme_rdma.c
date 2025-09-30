@@ -401,6 +401,17 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 	print_error = error && print_on_error && !qpair->ctrlr->opts.disable_error_logging;
 
 	if (print_error) {
+		if (req->submit_tick) {
+			uint64_t now = spdk_get_ticks();
+
+			if (now - req->submit_tick > req->timeout_tsc) {
+				SPDK_WARNLOG("qpair %p, id %u, cmd cid %u timed out. Submit tsc %"PRIu64", cur_tsc %"PRIu64"\n",
+					     qpair, qpair->id, req->cmd.cid, req->submit_tick, now);
+			} else {
+				SPDK_NOTICELOG("qpair %p, id %u, cmd cid %u submit tsc %"PRIu64", cur_tsc %"PRIu64"\n",
+					       qpair, qpair->id, req->cmd.cid, req->submit_tick, now);
+			}
+		}
 		spdk_nvme_qpair_print_command(qpair, &req->cmd);
 	}
 
@@ -467,6 +478,9 @@ nvme_rdma_qpair_process_cm_event(struct nvme_rdma_qpair *rqpair)
 			 * work requests in the send qp will be flushed, otherwise, the outstanding
 			 * wrs may not be completed forever.
 			 */
+			SPDK_NOTICELOG("ctrlr %s %s; qpair %p, id %u: CM event disconnected\n",
+				       rqpair->qpair.ctrlr->trid.traddr, rqpair->qpair.ctrlr->trid.trstring, &rqpair->qpair,
+				       rqpair->qpair.id);
 			spdk_rdma_provider_qp_disconnect(rqpair->rdma_qp);
 			rqpair->connected = false;
 			rqpair->qpair.transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_REMOTE;
@@ -2245,6 +2259,9 @@ quiet:
 	}
 	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
 
+	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
+		SPDK_NOTICELOG("qpair %p, id %u aborting outstanding requests\n", rqpair, rqpair->qpair.id);
+	}
 	nvme_rdma_qpair_abort_reqs(&rqpair->qpair, rqpair->qpair.abort_dnr);
 	assert(TAILQ_EMPTY(&rqpair->outstanding_reqs));
 	nvme_rdma_qpair_destroy(rqpair);
@@ -2280,6 +2297,9 @@ nvme_rdma_qpair_wait_until_quiet(struct nvme_rdma_qpair *rqpair)
 	}
 
 	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
+	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
+		SPDK_NOTICELOG("qpair %p, id %u aborting outstanding requests\n", rqpair, rqpair->qpair.id);
+	}
 	nvme_rdma_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	assert(TAILQ_EMPTY(&rqpair->outstanding_reqs));
 	if (!nvme_qpair_is_admin_queue(qpair)) {
@@ -2371,6 +2391,8 @@ nvme_rdma_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme
 		}
 	}
 
+	SPDK_NOTICELOG("ctrlr %s %s; qpair %p, id %u: start disconnect\n", ctrlr->trid.traddr,
+		       ctrlr->trid.trstring, qpair, qpair->id);
 	_nvme_rdma_ctrlr_disconnect_qpair(ctrlr, qpair, nvme_rdma_qpair_disconnected);
 
 	/* If the async mode is disabled, poll the qpair until it is actually disconnected.
@@ -2452,6 +2474,9 @@ nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		assert(rc == 0);
 	}
 
+	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
+		SPDK_NOTICELOG("qpair %p, id %u aborting outstanding requests\n", rqpair, rqpair->qpair.id);
+	}
 	nvme_rdma_qpair_abort_reqs(qpair, qpair->abort_dnr);
 	assert(TAILQ_EMPTY(&rqpair->outstanding_reqs));
 	nvme_qpair_deinit(qpair);
