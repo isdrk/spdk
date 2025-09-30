@@ -103,3 +103,36 @@ def add_parser(subparsers):
                    help='Maximum number of log entries per log type per subsystem. If not specified, show all entries',
                    required=False)
     p.set_defaults(func=tgt_ofld_get_log)
+
+    def tgt_ofld_add_log(args):
+        print_dict(rpc.tgt_ofld.tgt_ofld_add_log(args.client,
+                                                 subnqn=args.subnqn,
+                                                 log_type=args.log_type,
+                                                 qp_handle=args.qp_handle,
+                                                 be_cid=args.be_cid,
+                                                 be_cqe=args.be_cqe,
+                                                 cc_cid=args.cc_cid,
+                                                 cc_nsid=args.cc_nsid,
+                                                 cc_lba=args.cc_lba,
+                                                 cc_opcode=args.cc_opcode,
+                                                 dc_q_id=args.dc_q_id,
+                                                 param_err_loc=args.param_err_loc,
+                                                 status_code=args.status_code))
+
+    p = subparsers.add_parser('tgt_ofld_add_log', help='Manually add a log entry to subsystem')
+    p.add_argument('-s', '--subnqn', help='Subsystem NQN', required=True)
+    p.add_argument('-t', '--log_type', type=str, choices=['cve', 'pce'],
+                   help='Log type to filter: cve=NVMeoF capsule validation error, '
+                        'pce=NVMe PCI command completion error. Default=cve.',
+                   required=False)
+    p.add_argument('-q', '--qp-handle', type=int, help='QP handle', required=False)
+    p.add_argument('--be-cid', type=int, help='Backend CID', required=False)
+    p.add_argument('--be-cqe', help='Backend CQE as hex string (32 characters for 16 bytes)', required=False)
+    p.add_argument('--cc-cid', type=int, help='Original capsule CID', required=False)
+    p.add_argument('--cc-nsid', type=int, help='Original capsule NSID', required=False)
+    p.add_argument('--cc-lba', type=int, help='Original capsule LBA', required=False)
+    p.add_argument('--cc-opcode', type=int, help='Controller Command Opcode', required=False)
+    p.add_argument('--dc-q-id', type=int, help='DC Queue ID', required=False)
+    p.add_argument('--param-err-loc', type=int, help='Parameter Error Location', required=False)
+    p.add_argument('--status-code', type=int, help='Status Code', required=False)
+    p.set_defaults(func=tgt_ofld_add_log)

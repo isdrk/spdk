@@ -4148,6 +4148,39 @@ nvmf_rdma_qpair_update_error_log(struct spdk_nvmf_offload_qpair *oqpair,
 	spdk_nvmf_ctrlr_update_error_log(ctrlr, &error_entry);
 }
 
+static struct nvmf_error_log_entry *
+nvmf_rdma_subsystem_update_log_entry(struct spdk_nvmf_rdma_subsystem *rsubsystem,
+				     const struct nvmf_error_log_entry *log)
+{
+	struct nvmf_error_log_entry *err_cqe = NULL;
+
+	if (!rsubsystem) {
+		SPDK_ERRLOG("rsubsystem is NULL\n");
+		return NULL;
+	}
+
+	pthread_mutex_lock((pthread_mutex_t *)&rsubsystem->subsystem->mutex);
+	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR ||
+	    log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
+		if (spdk_unlikely(!rsubsystem->err_cqes)) {
+			rsubsystem->err_cqes = calloc(SUBSYS_NVME_ELPE, sizeof(struct nvmf_error_log_entry));
+			if (!rsubsystem->err_cqes) {
+				SPDK_ERRLOG("Failed to allocate err_cqes\n");
+				pthread_mutex_unlock((pthread_mutex_t *)&rsubsystem->subsystem->mutex);
+				return NULL;
+			}
+		}
+		rsubsystem->err_cqes_idx++;
+		err_cqe = &rsubsystem->err_cqes[rsubsystem->err_cqes_idx % SUBSYS_NVME_ELPE];
+		memcpy(err_cqe, log, sizeof(*log));
+	} else {
+		SPDK_ERRLOG("cqe_type %d is not supported\n", log->cqe_type);
+	}
+	pthread_mutex_unlock((pthread_mutex_t *)&rsubsystem->subsystem->mutex);
+
+	return err_cqe;
+}
+
 static int
 nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport,
 				     const struct nvmf_error_log_entry *log)
@@ -4164,33 +4197,10 @@ nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport
 	}
 	oqpair = qp_user_data.ptr;
 
-	if (!oqpair || !oqpair->rsubsystem) {
-		SPDK_ERRLOG("Can not find qpair %p or rsubsystem %p\n",
-			    oqpair, oqpair ? oqpair->rsubsystem : NULL);
+	err_cqe = nvmf_rdma_subsystem_update_log_entry(oqpair->rsubsystem, log);
+	if (!err_cqe) {
 		return -1;
 	}
-
-	pthread_mutex_lock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
-	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_OF_VALIDATION_ERR ||
-	    log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
-		struct spdk_nvmf_rdma_subsystem *rsubsystem = oqpair->rsubsystem;
-		if (spdk_unlikely(!rsubsystem->err_cqes)) {
-			rsubsystem->err_cqes = calloc(SUBSYS_NVME_ELPE, sizeof(struct nvmf_error_log_entry));
-			if (!rsubsystem->err_cqes) {
-				SPDK_ERRLOG("Failed to allocate err_cqes\n");
-				return -1;
-			}
-		}
-		rsubsystem->err_cqes_idx++;
-		err_cqe = &rsubsystem->err_cqes[rsubsystem->err_cqes_idx % SUBSYS_NVME_ELPE];
-	} else {
-		pthread_mutex_unlock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
-		SPDK_ERRLOG("cqe_type %d is not supported\n", log->cqe_type);
-		return -1;
-	}
-
-	memcpy(err_cqe, log, sizeof(*log));
-	pthread_mutex_unlock((pthread_mutex_t *)&oqpair->rsubsystem->subsystem->mutex);
 
 	if (log->cqe_type == DOCA_STA_CQE_NOTIF_NVME_COMP_ERR) {
 		nvmf_rdma_qpair_update_error_log(oqpair, err_cqe);
@@ -10625,3 +10635,136 @@ cleanup:
 }
 
 SPDK_RPC_REGISTER("tgt_ofld_get_log", rpc_tgt_ofld_get_log, SPDK_RPC_RUNTIME)
+
+struct rpc_tgt_ofld_add_log {
+	char *subnqn;
+	uint64_t qp_handle;
+	enum doca_sta_cqe_notify_type log_type;
+	uint16_t be_cid;
+	char *be_cqe;
+	uint16_t cc_cid;
+	uint16_t cc_nsid;
+	uint64_t cc_lba;
+	uint8_t cc_opcode;
+	uint16_t param_err_loc;
+	uint16_t status_code;
+};
+
+static const struct spdk_json_object_decoder rpc_tgt_ofld_add_log_decoders[] = {
+	{"subnqn", offsetof(struct rpc_tgt_ofld_add_log, subnqn), spdk_json_decode_string, false},
+	{"qp_handle", offsetof(struct rpc_tgt_ofld_add_log, qp_handle), spdk_json_decode_uint64, true},
+	{"log_type", offsetof(struct rpc_tgt_ofld_add_log, log_type), rpc_tgt_ofld_decode_log_type, true},
+	{"be_cid", offsetof(struct rpc_tgt_ofld_add_log, be_cid), spdk_json_decode_uint32, true},
+	{"be_cqe", offsetof(struct rpc_tgt_ofld_add_log, be_cqe), spdk_json_decode_string, true},
+	{"cc_cid", offsetof(struct rpc_tgt_ofld_add_log, cc_cid), spdk_json_decode_uint32, true},
+	{"cc_nsid", offsetof(struct rpc_tgt_ofld_add_log, cc_nsid), spdk_json_decode_uint32, true},
+	{"cc_lba", offsetof(struct rpc_tgt_ofld_add_log, cc_lba), spdk_json_decode_uint64, true},
+	{"cc_opcode", offsetof(struct rpc_tgt_ofld_add_log, cc_opcode), spdk_json_decode_uint32, true},
+	{"param_err_loc", offsetof(struct rpc_tgt_ofld_add_log, param_err_loc), spdk_json_decode_uint32, true},
+	{"status_code", offsetof(struct rpc_tgt_ofld_add_log, status_code), spdk_json_decode_uint32, true},
+};
+
+static int
+hex_string_to_bytes(const char *hex_str, uint8_t *bytes, size_t bytes_len)
+{
+	size_t str_len = strlen(hex_str);
+	size_t i;
+
+	if (str_len != bytes_len * 2) {
+		return -EINVAL;
+	}
+
+	for (i = 0; i < bytes_len; i++) {
+		unsigned int byte_val;
+		if (sscanf(hex_str + i * 2, "%02x", &byte_val) != 1) {
+			return -EINVAL;
+		}
+		bytes[i] = (uint8_t)byte_val;
+	}
+
+	return 0;
+}
+
+static void
+rpc_tgt_ofld_add_log(struct spdk_jsonrpc_request *request,
+		     const struct spdk_json_val *params)
+{
+	struct rpc_tgt_ofld_add_log req = {};
+	struct spdk_nvmf_rdma_transport *rtransport;
+	struct spdk_nvmf_rdma_subsystem *rsubsystem;
+	struct nvmf_error_log_entry entry = {};
+	int rc;
+
+	if (params == NULL) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "Missing required parameters");
+		goto cleanup;
+	}
+
+	if (spdk_json_decode_object(params, rpc_tgt_ofld_add_log_decoders,
+				    SPDK_COUNTOF(rpc_tgt_ofld_add_log_decoders), &req)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "spdk_json_decode_object failed");
+		goto cleanup;
+	}
+
+	if (!req.subnqn) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "subnqn is required");
+		goto cleanup;
+	}
+
+	rc = rpc_tgt_ofld_get_rtransport(&rtransport);
+	if (rc) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR, spdk_strerror(-rc));
+		goto cleanup;
+	}
+
+	/* Find the subsystem by subnqn */
+	TAILQ_FOREACH(rsubsystem, &rtransport->subsystems, link) {
+		if (strcmp(rsubsystem->subsystem->subnqn, req.subnqn) == 0) {
+			break;
+		}
+	}
+	if (!rsubsystem) {
+		SPDK_ERRLOG("subsystem is not found (%s)\n", req.subnqn);
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "subsystem not found");
+		goto cleanup;
+	}
+
+	/* Fill in the entry */
+	entry.be_cid = req.be_cid;
+	if (req.be_cqe) {
+		rc = hex_string_to_bytes(req.be_cqe, (uint8_t *)&entry.be_cqe, sizeof(entry.be_cqe));
+		if (rc != 0) {
+			SPDK_ERRLOG("Invalid be_cqe hex string\n");
+			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+							 "invalid be_cqe hex string");
+			goto cleanup;
+		}
+	}
+	entry.cc_cid = req.cc_cid;
+	entry.cc_nsid = req.cc_nsid;
+	entry.cc_lba = req.cc_lba;
+	entry.cc_opcode = req.cc_opcode;
+	entry.cqe_type = req.log_type;
+	entry.param_err_loc = req.param_err_loc;
+	entry.status_code_raw = req.status_code;
+	/* When dump log, if qp_handle is not provided, the entry will be invalid, so set it to UINT64_MAX */
+	entry.qp_handle = (struct doca_sta_qp_handle *)(req.qp_handle ? req.qp_handle : UINT64_MAX);
+
+	if (!nvmf_rdma_subsystem_update_log_entry(rsubsystem, &entry)) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INTERNAL_ERROR,
+						 "failed to update log");
+		goto cleanup;
+	}
+
+	spdk_jsonrpc_send_bool_response(request, true);
+
+cleanup:
+	free(req.be_cqe);
+	free(req.subnqn);
+}
+
+SPDK_RPC_REGISTER("tgt_ofld_add_log", rpc_tgt_ofld_add_log, SPDK_RPC_RUNTIME)

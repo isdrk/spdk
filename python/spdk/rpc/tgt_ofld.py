@@ -149,3 +149,54 @@ def tgt_ofld_get_log(client, subnqn=None, log_type=None, num_entries=None):
     if num_entries is not None:
         params['num_entries'] = num_entries
     return client.call('tgt_ofld_get_log', params)
+
+
+def tgt_ofld_add_log(client, subnqn, log_type=None, qp_handle=None, be_cid=None, be_cqe=None,
+                     cc_cid=None, cc_nsid=None, cc_lba=None, cc_opcode=None, dc_q_id=None,
+                     param_err_loc=None, status_code=None):
+    """Manually add a log entry to the subsystem's err_cqes or success_cqes based on cqe_type.
+
+    Args:
+        subnqn: Subsystem NQN (required)
+        log_type: Log type to filter (optional; cve=capsule validation_error, pce=PCI completion_error; Default cve)
+        qp_handle: QP handle
+        be_cid: Backend Command ID (optional)
+        be_cqe: Backend CQE as hex string, 32 characters for 16 bytes (optional)
+        cc_cid: Controller Command ID (optional)
+        cc_nsid: Controller Command Namespace ID (optional)
+        cc_lba: Controller Command LBA (optional)
+        cc_opcode: Controller Command Opcode (optional)
+        dc_q_id: DC Queue ID (optional)
+        param_err_loc: Parameter Error Location (optional)
+        status_code: Status Code (optional)
+
+    Returns:
+        Success message with details about the added entry.
+    """
+    params = {}
+
+    params['subnqn'] = subnqn
+    if log_type:
+        params['log_type'] = log_type
+    if qp_handle is not None:
+        params['qp_handle'] = qp_handle
+    if be_cid is not None:
+        params['be_cid'] = be_cid
+    if be_cqe:
+        params['be_cqe'] = be_cqe
+    if cc_cid is not None:
+        params['cc_cid'] = cc_cid
+    if cc_nsid is not None:
+        params['cc_nsid'] = cc_nsid
+    if cc_lba is not None:
+        params['cc_lba'] = cc_lba
+    if cc_opcode is not None:
+        params['cc_opcode'] = cc_opcode
+    if dc_q_id is not None:
+        params['dc_q_id'] = dc_q_id
+    if param_err_loc is not None:
+        params['param_err_loc'] = param_err_loc
+    if status_code is not None:
+        params['status_code'] = status_code
+
+    return client.call('tgt_ofld_add_log', params)
