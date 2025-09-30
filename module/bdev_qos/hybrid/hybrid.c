@@ -1261,7 +1261,7 @@ bdev_hybrid_qos_config_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_jso
 
 	bdev_hybrid_qos_get_rate_limits(qos_impl, limits);
 
-	spdk_json_write_named_string(w, "method", "bdev_qos_set_limit");
+	spdk_json_write_named_string(w, "method", "bdev_hybrid_qos_set_limit");
 
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_string(w, "name", qos_impl->qos->name);
