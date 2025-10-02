@@ -124,9 +124,13 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 		}
 		spdk_json_write_named_array_begin(w, "memory_domains");
 		for (i = 0; i < rc; i++) {
+			enum spdk_dma_device_type type;
+			const char *name;
+
 			spdk_json_write_object_begin(w);
-			spdk_json_write_named_int32(w, "dma_device_type",
-						    spdk_memory_domain_get_dma_device_type(domains[i]));
+			type = spdk_memory_domain_get_dma_device_type(domains[i]);
+			name = spdk_dma_device_type_get_name(type);
+			spdk_json_write_named_string(w, "dma_device_type", name);
 			spdk_json_write_object_end(w);
 		}
 		spdk_json_write_array_end(w);
