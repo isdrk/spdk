@@ -540,3 +540,20 @@ memory_domain_notify(struct spdk_memory_domain *domain,
 		spdk_thread_send_msg(subscriber->orig_thread, memory_domain_notify_msg, msg);
 	}
 }
+
+const char *
+spdk_dma_device_type_get_name(enum spdk_dma_device_type type)
+{
+	switch (type) {
+	case SPDK_DMA_DEVICE_TYPE_RDMA:
+		return "RDMA";
+	case SPDK_DMA_DEVICE_TYPE_DMA:
+		return "DMA";
+	case SPDK_DMA_DEVICE_TYPE_ACCEL:
+		return "ACCEL";
+	case SPDK_DMA_DEVICE_TYPE_RDMA_TCP:
+		return "RDMA_TCP";
+	default:
+		return "UNKNOWN";
+	}
+}

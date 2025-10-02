@@ -515,6 +515,14 @@ int spdk_memory_domain_update_notification_subscribe(void *user_ctx,
  */
 int spdk_memory_domain_update_notification_unsubscribe(void *user_ctx);
 
+/**
+ * Get a name string for a given DMA device type.
+ *
+ * \param type DMA device type
+ * \return string representing name for the DMA device type
+ */
+const char *spdk_dma_device_type_get_name(enum spdk_dma_device_type type);
+
 #ifdef __cplusplus
 }
 #endif
