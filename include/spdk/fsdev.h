@@ -465,23 +465,24 @@ int spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts);
 int spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size);
 
 /**
- * Get SPDK memory domains used by the given fsdev. If fsdev reports that it uses memory domains
+ * Get SPDK memory domain types used by the given fsdev. If fsdev reports that it uses memory domains
  * that means that it can work with data buffers located in those memory domains.
  *
- * The user can call this function with \b domains set to NULL and \b array_size set to 0 to get the
- * number of memory domains used by fsdev
+ * The user can call this function with \b types set to NULL and \b array_size set to 0 to get the
+ * number of memory domains types used by fsdev
  *
  * \param fsdev filesystem device
- * \param domains pointer to an array of memory domains to be filled by this function. The user should allocate big enough
- * array to keep all memory domains used by fsdev and all underlying fsdevs
- * \param array_size size of \b domains array
- * \return the number of entries in \b domains array or negated errno. If returned value is bigger than \b array_size passed by the user
- * then the user should increase the size of \b domains array and call this function again. There is no guarantees that
- * the content of \b domains array is valid in that case.
+ * \param types pointer to an array of memory domain types to be filled by this function. The user should allocate big enough
+ * array to keep all memory domain types used by fsdev and all underlying fsdevs
+ * \param array_size size of \b types array
+ * \return the number of entries in \b types array or negated errno. If returned value is bigger than \b array_size passed by the user
+ * then the user should increase the size of the array and call this function again. There is no guarantee that
+ * the content of the array is valid in that case.
  *         -EINVAL if input parameters were invalid
  */
-int spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_domain **domains,
-				  int array_size);
+int spdk_fsdev_get_memory_domain_types(struct spdk_fsdev *fsdev,
+				       enum spdk_dma_device_type *types,
+				       int array_size);
 
 /**
  * Output driver-specific information to a JSON stream.

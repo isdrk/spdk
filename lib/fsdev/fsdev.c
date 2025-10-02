@@ -917,15 +917,15 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 }
 
 int
-spdk_fsdev_get_memory_domains(struct spdk_fsdev *fsdev, struct spdk_memory_domain **domains,
-			      int array_size)
+spdk_fsdev_get_memory_domain_types(struct spdk_fsdev *fsdev, enum spdk_dma_device_type *types,
+				   int array_size)
 {
 	if (!fsdev) {
 		return -EINVAL;
 	}
 
-	if (fsdev->fn_table->get_memory_domains) {
-		return fsdev->fn_table->get_memory_domains(fsdev->ctxt, domains, array_size);
+	if (fsdev->fn_table->get_memory_domain_types) {
+		return fsdev->fn_table->get_memory_domain_types(fsdev->ctxt, types, array_size);
 	}
 
 	return 0;

@@ -129,11 +129,8 @@ struct spdk_fsdev_fn_table {
 	 */
 	void (*write_config_json)(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx *w);
 
-	/** Get memory domains used by fsdev. Optional - may be NULL.
-	 * Vfsdev module implementation should call \ref spdk_fsdev_get_memory_domains for underlying fsdev.
-	 * Vfsdev module must inspect types of memory domains returned by base fsdev and report only those
-	 * memory domains that it can work with. */
-	int (*get_memory_domains)(void *ctx, struct spdk_memory_domain **domains, int array_size);
+	/** Get memory domain types used by fsdev. Optional - may be NULL. */
+	int (*get_memory_domain_types)(void *ctx, enum spdk_dma_device_type *types, int array_size);
 
 	/**
 	 * Perform an asynchronous device reset. Optional - may be NULL. NULL means that the device cannot be reset.

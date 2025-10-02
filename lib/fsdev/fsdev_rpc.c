@@ -108,7 +108,7 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 {
 	struct spdk_json_write_ctx *w = ctx;
 	const char *fsdev_name = spdk_fsdev_get_name(fsdev);
-	struct spdk_memory_domain *domains[16];
+	enum spdk_dma_device_type types[16];
 	int i, rc;
 
 	spdk_json_write_object_begin(w);
@@ -116,20 +116,18 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 	spdk_json_write_named_string(w, "name", fsdev_name);
 
 	spdk_json_write_named_string(w, "module_name", spdk_fsdev_get_module_name(fsdev));
-	rc = spdk_fsdev_get_memory_domains(fsdev, domains, SPDK_COUNTOF(domains));
+	rc = spdk_fsdev_get_memory_domain_types(fsdev, types, SPDK_COUNTOF(types));
 	if (rc > 0) {
-		if (rc > (int)SPDK_COUNTOF(domains)) {
-			SPDK_ERRLOG("Unexpected high number (%d) of memory domains, listing only "
-				    "first %d.\n", rc, (int)SPDK_COUNTOF(domains));
+		if (rc > (int)SPDK_COUNTOF(types)) {
+			SPDK_ERRLOG("Unexpected high number (%d) of memory domain types, listing only "
+				    "first %d.\n", rc, (int)SPDK_COUNTOF(types));
 		}
 		spdk_json_write_named_array_begin(w, "memory_domains");
 		for (i = 0; i < rc; i++) {
-			enum spdk_dma_device_type type;
 			const char *name;
 
 			spdk_json_write_object_begin(w);
-			type = spdk_memory_domain_get_dma_device_type(domains[i]);
-			name = spdk_dma_device_type_get_name(type);
+			name = spdk_dma_device_type_get_name(types[i]);
 			spdk_json_write_named_string(w, "dma_device_type", name);
 			spdk_json_write_object_end(w);
 		}

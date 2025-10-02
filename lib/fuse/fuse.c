@@ -1005,7 +1005,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 
 	fsdev = spdk_fsdev_desc_get_fsdev(mnt->fsdev_desc);
 	if (SPDK_GET_FIELD(opts, fake_memory_domain, false)) {
-		if (spdk_fsdev_get_memory_domains(fsdev, NULL, 0) <= 0) {
+		if (spdk_fsdev_get_memory_domain_types(fsdev, NULL, 0) <= 0) {
 			SPDK_ERRLOG("%s: fsdev doesn't support memory domains\n", name);
 			rc = -EINVAL;
 			goto error;
