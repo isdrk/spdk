@@ -184,8 +184,7 @@ ut_fsdev_write_config_json(struct spdk_fsdev *fsdev, struct spdk_json_write_ctx 
 }
 
 static int
-ut_fsdev_get_memory_domains(void *ctx, struct spdk_memory_domain **domains,
-			    int array_size)
+ut_fsdev_get_memory_domain_types(void *ctx, enum spdk_dma_device_type *types, int array_size)
 {
 	return 0;
 }
@@ -223,7 +222,7 @@ static const struct spdk_fsdev_fn_table ut_fdev_fn_table = {
 	.submit_request		= ut_fsdev_submit_request,
 	.get_io_channel		= ut_fsdev_get_io_channel,
 	.write_config_json	= ut_fsdev_write_config_json,
-	.get_memory_domains	= ut_fsdev_get_memory_domains,
+	.get_memory_domain_types = ut_fsdev_get_memory_domain_types,
 	.reset			= ut_fsdev_reset,
 	.set_notifications	= ut_fsdev_set_notifications,
 };
