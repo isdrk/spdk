@@ -1308,9 +1308,13 @@ fsdev_pending_notification_poller(void *ctx)
 	while (!STAILQ_EMPTY(&pending_requests)) {
 		req = STAILQ_FIRST(&pending_requests);
 		STAILQ_REMOVE_HEAD(&pending_requests, stailq);
-		rc = spdk_fsdev_notify_fuse(req);
-		if (rc != 0) {
-			req->cb_fn(req, rc);
+		if (req->internal.status != -ENOMEM) {
+			req->cb_fn(req, req->internal.status);
+		} else {
+			rc = spdk_fsdev_notify_fuse(req);
+			if (rc != 0) {
+				req->cb_fn(req, rc);
+			}
 		}
 
 		count++;
@@ -1326,13 +1330,15 @@ fsdev_fuse_notify_done(const struct spdk_fsdev_notify_reply_data *reply, void *c
 	struct spdk_fsdev *fsdev = req->fsdev;
 
 	assert(spdk_get_thread() == fsdev->internal.notify_thread);
-	if (reply->status == -ENOMEM) {
+	req->internal.status = reply->status;
+
+	if (reply->status == -ENOMEM || req->internal.flags.in_submit_notify) {
 		STAILQ_INSERT_TAIL(&fsdev->internal.pending_notifications, req, stailq);
 		spdk_poller_resume(fsdev->internal.notification_poller);
 		return;
 	}
 
-	req->cb_fn(req, reply->status);
+	req->cb_fn(req, req->internal.status);
 }
 
 int
@@ -1342,8 +1348,16 @@ spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
 		.type = SPDK_FSDEV_NOTIFY_FUSE,
 		.fuse = req,
 	};
+	int rc;
 
-	return fsdev_notify(req->fsdev, &notify_data, fsdev_fuse_notify_done, req);
+	req->internal.status = 0;
+	req->internal.flags.raw = 0;
+
+	req->internal.flags.in_submit_notify = 1;
+	rc =  fsdev_notify(req->fsdev, &notify_data, fsdev_fuse_notify_done, req);
+	req->internal.flags.in_submit_notify = 0;
+
+	return rc;
 }
 
 void
