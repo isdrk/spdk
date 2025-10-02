@@ -108,6 +108,7 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 {
 	struct spdk_json_write_ctx *w = ctx;
 	const char *fsdev_name = spdk_fsdev_get_name(fsdev);
+	struct spdk_memory_domain *domains[16];
 	int i, rc;
 
 	spdk_json_write_object_begin(w);
@@ -115,34 +116,27 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 	spdk_json_write_named_string(w, "name", fsdev_name);
 
 	spdk_json_write_named_string(w, "module_name", spdk_fsdev_get_module_name(fsdev));
-	rc = spdk_fsdev_get_memory_domains(fsdev, NULL, 0);
+	rc = spdk_fsdev_get_memory_domains(fsdev, domains, SPDK_COUNTOF(domains));
 	if (rc > 0) {
-		struct spdk_memory_domain **domains = calloc(rc, sizeof(struct spdk_memory_domain *));
-		if (domains) {
-			i = spdk_fsdev_get_memory_domains(fsdev, domains, rc);
-			if (i == rc) {
-				spdk_json_write_named_array_begin(w, "memory_domains");
-				for (i = 0; i < rc; i++) {
-					const char *domain_id = spdk_memory_domain_get_dma_device_id(domains[i]);
-					spdk_json_write_object_begin(w);
-					if (domain_id) {
-						spdk_json_write_named_string(w, "dma_device_id", domain_id);
-					} else {
-						spdk_json_write_named_null(w, "dma_device_id");
-					}
-					spdk_json_write_named_int32(w, "dma_device_type",
-								    spdk_memory_domain_get_dma_device_type(domains[i]));
-					spdk_json_write_object_end(w);
-				}
-				spdk_json_write_array_end(w);
-			} else {
-				SPDK_ERRLOG("Unexpected number of memory domains %d (should be %d)\n", i, rc);
-			}
-
-			free(domains);
-		} else {
-			SPDK_ERRLOG("Memory allocation failed\n");
+		if (rc > (int)SPDK_COUNTOF(domains)) {
+			SPDK_ERRLOG("Unexpected high number (%d) of memory domains, listing only "
+				    "first %d.\n", rc, (int)SPDK_COUNTOF(domains));
 		}
+		spdk_json_write_named_array_begin(w, "memory_domains");
+		for (i = 0; i < rc; i++) {
+			const char *domain_id = spdk_memory_domain_get_dma_device_id(domains[i]);
+
+			spdk_json_write_object_begin(w);
+			if (domain_id) {
+				spdk_json_write_named_string(w, "dma_device_id", domain_id);
+			} else {
+				spdk_json_write_named_null(w, "dma_device_id");
+			}
+			spdk_json_write_named_int32(w, "dma_device_type",
+						    spdk_memory_domain_get_dma_device_type(domains[i]));
+			spdk_json_write_object_end(w);
+		}
+		spdk_json_write_array_end(w);
 	}
 
 	spdk_json_write_named_object_begin(w, "module_specific");
