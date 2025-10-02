@@ -574,6 +574,17 @@ struct spdk_fuse_notify_request {
 	struct spdk_fsdev			*fsdev;
 	struct iovec				*iovs;
 	uint32_t				iovcnt;
+	struct {
+		union {
+			struct {
+				uint8_t		in_submit_notify : 1;
+				uint8_t		reserved : 7;
+			};
+			uint8_t			raw;
+		} flags;
+		uint8_t				reserved[3];
+		int				status;
+	} internal;
 	spdk_fuse_notify_request_cb		cb_fn;
 	STAILQ_ENTRY(spdk_fuse_notify_request)	stailq;
 };
