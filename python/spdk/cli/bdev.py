@@ -1269,6 +1269,37 @@ def add_parser(subparsers):
                    type=int)
     p.set_defaults(func=bdev_hybrid_qos_set_limit)
 
+    def bdev_burst_qos_set_options(args):
+        rpc.bdev.bdev_burst_qos_set_options(args.client,
+                                            tick_period_us=args.tick_period_us,
+                                            max_io_withdraw_batch_size=args.max_io_withdraw_batch_size,
+                                            io_additive_increase_step=args.io_additive_increase_step,
+                                            max_byte_withdraw_batch_size=args.max_byte_withdraw_batch_size,
+                                            byte_additive_increase_step=args.byte_additive_increase_step)
+
+    p = subparsers.add_parser('bdev_burst_qos_set_options', help='Set options of burst QoS module')
+    p.add_argument('--tick-period-us', help='The period of a single tickn microseconds', type=int)
+    p.add_argument('--max-io-withdraw-batch-size', help='Max batch size to withdraw for IOPS limit', type=int)
+    p.add_argument('--io-additive-increase-step', help='Step size to increase withdraw for IOPS limit', type=int)
+    p.add_argument('--max-byte-withdraw-batch-size', help='Max batch size to withdraw for BW limit', type=int)
+    p.add_argument('--byte-additive-increase-step', help='Step size to increase withdraw for BW limit', type=int)
+    p.set_defaults(func=bdev_burst_qos_set_options)
+
+    def bdev_burst_qos_set_limit(args):
+        rpc.bdev.bdev_burst_qos_set_limit(args.client,
+                                          name=args.name,
+                                          qos_metric=args.qos_metric,
+                                          avg_rate=args.avg_rate,
+                                          qos_mode=args.qos_mode)
+
+    p = subparsers.add_parser('bdev_burst_qos_set_limit',
+                              help='Set rate limit for a QoS metric on a QoS device')
+    p.add_argument('name', help='QoS device name')
+    p.add_argument('qos_metric', help='Metric controlled by QoS rate limit')
+    p.add_argument('avg_rate', help='Average rate for this metric', type=int)
+    p.add_argument('-m', '--qos-mode', help='Operating mode (strict or burst_ready)')
+    p.set_defaults(func=bdev_burst_qos_set_limit)
+
     def bdev_error_inject_error(args):
         rpc.bdev.bdev_error_inject_error(args.client,
                                          name=args.name,

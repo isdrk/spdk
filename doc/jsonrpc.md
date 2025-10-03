@@ -3308,6 +3308,85 @@ Example response:
 }
 ~~
 
+### bdev_burst_qos_set_options {#rpc_bdev_burst_qos_set_options}
+
+Set options of the burst QoS module. This RPC may only be called before SPDK subsystems have been initialized.
+
+#### Parameters
+
+ Name                         | Optional   | Type   | Description
+----------------------------- | ---------- | ------ | ------------------------------------------------------------------
+ tick_period_us               | Optional   | number | The period of a single tick in microseconds.
+ max_io_withdraw_batch_size   | Optional   | number | Max batch size to withdraw for IOPS limit.
+ io_additive_increase_step    | Optional   | number | Step size to increase withdraw for IOPS limit.
+ max_byte_withdraw_batch_size | Optional   | number | Max batch size to withdraw for BW limit.
+ byte_additive_increase_step  | Optional   | number | Step size to increase withdraw for BW limit.
+
+#### Example
+
+Example request:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "method": "bdev_burst_qos_set_options",
+  "id": 1,
+  "params": {
+    "tick_period_us": 10000
+  }
+}
+~
+
+Example response:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~
+
+### bdev_burst_qos_set_limit {#rpc_bdev_burst_qos_set_limit}
+
+Set rate limit for a QoS metric on a QoS device.
+
+#### Parameters
+
+ Name              | Optional   | Type   | Description
+------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name              | Required   | string | QoS device name
+ qos_metric        | Required   | string | Metric controlled by QoS rate limit.
+ avg_rate          | Required   | number | Average rate for this metric. 0 means unlimited.
+ qos_mode          | Optinal    | string | Operating mode (strict or burst_ready). (Default is strict.)
+
+#### Example
+
+Example request:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "bdev_burst_qos_set_limit",
+  "params": {
+    "name": "qos_service1",
+    "qos_metric": "rw_ios_per_sec",
+    "avg_rate": 20000
+  }
+}
+~
+
+Example response:
+
+~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~
+
 ### bdev_set_ro {#rpc_bdev_set_ro}
 
 Set a bdev to read-only state

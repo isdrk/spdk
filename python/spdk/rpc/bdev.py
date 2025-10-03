@@ -1751,6 +1751,57 @@ def bdev_hybrid_qos_set_limit(
     return client.call('bdev_hybrid_qos_set_limit', params)
 
 
+def bdev_burst_qos_set_options(
+        client,
+        tick_period_us=None,
+        max_io_withdraw_batch_size=None,
+        io_additive_increase_step=None,
+        max_byte_withdraw_batch_size=None,
+        byte_additive_increase_step=None):
+    """Set parameters for the burst QoS module.
+    Args:
+        tick_period_us: The period of a single tick in microseconds. (optional)
+        max_io_withdraw_batch_size: Max batch size to withdraw for IOPS limit. (optional)
+        io_additive_increase_step: Step size to increase withdraw for IOPS limit. (optional)
+        max_byte_withdraw_batch_size: Max batch size to withdraw for BW limit. (optional)
+        byte_additive_increase_step: Step size to increase withdraw for BW limit. (optional)
+    """
+    params = dict()
+    if tick_period_us is not None:
+        params['tick_period_us'] = tick_period_us
+    if max_io_withdraw_batch_size is not None:
+        params['max_io_withdraw_batch_size'] = max_io_withdraw_batch_size
+    if io_additive_increase_step is not None:
+        params['io_additive_increase_step'] = io_additive_increase_step
+    if max_byte_withdraw_batch_size is not None:
+        params['max_byte_withdraw_batch_size'] = max_byte_withdraw_batch_size
+    if byte_additive_increase_step is not None:
+        params['byte_additive_increase_step'] = byte_additive_increase_step
+    return client.call('bdev_burst_qos_set_options', params)
+
+
+def bdev_burst_qos_set_limit(
+        client,
+        name,
+        qos_metric,
+        avg_rate,
+        qos_mode):
+    """Set rate limit for a QoS metric on a QoS device.
+    Args:
+        name: name of a QoS device.
+        qos_metric: Metric controlled by QoS rate limit (rw_iops, rw_mbps, r_mbps, or w_mps).
+        avg_rate: Average rate for this metric.
+        qos_mode: Operating mode (strict or burst_ready). (optional)
+    """
+    params = dict()
+    params['name'] = name
+    params['qos_metric'] = qos_metric
+    params['avg_rate'] = avg_rate
+    if qos_mode is not None:
+        params['qos_mode'] = qos_mode
+    return client.call('bdev_burst_qos_set_limit', params)
+
+
 def bdev_nvme_apply_firmware(client, bdev_name, filename):
     """Download and commit firmware to NVMe device.
     Args:
