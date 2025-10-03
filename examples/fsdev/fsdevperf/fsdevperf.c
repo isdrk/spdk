@@ -203,7 +203,11 @@ struct fsdevperf_job {
 	void					*buf;
 	struct fsdevperf_job_ops		ops;
 	TAILQ_HEAD(, fsdevperf_task)		tasks;
-	TAILQ_ENTRY(fsdevperf_job)		tailq;
+	TAILQ_HEAD(, fsdevperf_job)		children;
+	struct {
+		TAILQ_ENTRY(fsdevperf_job)	app;
+		TAILQ_ENTRY(fsdevperf_job)	child;
+	} tailq;
 };
 
 struct fsdevperf_app {
@@ -241,6 +245,10 @@ struct fsdevperf_app {
 #define fsdevperf_errmsg(fmt, ...) \
 	fprintf(stderr, "%s: " fmt, g_app.name, ## __VA_ARGS__)
 
+#define fsdevperf_foreach_leaf_job(job) \
+	for ((job) = fsdevperf_first_leaf_job(); (job) != NULL; \
+	     (job) = fsdevperf_next_leaf_job(job))
+
 struct fsdevperf_aux_io_type {
 	const char	*name;
 	int		value;
@@ -249,6 +257,33 @@ struct fsdevperf_aux_io_type {
 	{ "randread", FUSE_READ, true },
 	{ "randwrite", FUSE_WRITE, true },
 };
+
+static struct fsdevperf_job *
+fsdevperf_next_leaf_job(struct fsdevperf_job *job)
+{
+	for (job = TAILQ_NEXT(job, tailq.app);
+	     job != NULL;
+	     job = TAILQ_NEXT(job, tailq.app)) {
+		if (TAILQ_EMPTY(&job->children)) {
+			return job;
+		}
+	}
+
+	return NULL;
+}
+
+static struct fsdevperf_job *
+fsdevperf_first_leaf_job(void)
+{
+	struct fsdevperf_job *job;
+
+	job = TAILQ_FIRST(&g_app.jobs);
+	if (TAILQ_EMPTY(&job->children)) {
+		return job;
+	}
+
+	return fsdevperf_next_leaf_job(job);
+}
 
 static int
 fsdevperf_get_fsdev_name(const char *path, char *name, size_t len)
@@ -473,7 +508,7 @@ fsdevperf_init_filesystems(void)
 	char name[PATH_MAX];
 	int rc;
 
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		rc = fsdevperf_get_fsdev_name(job->path, name, sizeof(name));
 		if (rc != 0) {
 			fsdevperf_errmsg("%s\n", spdk_strerror(-rc));
@@ -735,6 +770,7 @@ fsdevperf_job_alloc(const char *name, const struct fsdevperf_job_ops *ops, uint3
 	job->ops = *ops;
 
 	TAILQ_INIT(&job->tasks);
+	TAILQ_INIT(&job->children);
 
 	return job;
 }
@@ -829,7 +865,7 @@ fsdevperf_init_jobs(void)
 	struct fsdevperf_job *job;
 	int rc;
 
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		rc = fsdevperf_job_init(job);
 		if (rc != 0) {
 			return rc;
@@ -854,7 +890,7 @@ fsdevperf_dump_stats(void)
 	total_iops = 0;
 	total_mbps = 0;
 
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		job_iops = 0;
 		job_mbps = 0;
 
@@ -908,7 +944,7 @@ fsdevperf_rpc_done(void)
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_int32(w, "status", g_app.status);
 	spdk_json_write_named_array_begin(w, "jobs");
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		spdk_json_write_object_begin(w);
 		spdk_json_write_named_string(w, "name", job->name);
 		spdk_json_write_named_string(w, "pattern",
@@ -987,7 +1023,7 @@ fsdevperf_done(void)
 	}
 
 	while ((job = TAILQ_FIRST(&g_app.jobs))) {
-		TAILQ_REMOVE(&g_app.jobs, job, tailq);
+		TAILQ_REMOVE(&g_app.jobs, job, tailq.app);
 		fsdevperf_job_cleanup(job);
 		fsdevperf_job_free(job);
 	}
@@ -1876,13 +1912,13 @@ fsdevperf_task_sync_job(void *ctx)
 	size_t num_ready = 0, num_tasks = 0;
 
 	job->num_ready++;
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		num_ready += job->num_ready;
 		num_tasks += job->num_tasks;
 	}
 
 	if (num_ready == num_tasks) {
-		TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+		fsdevperf_foreach_leaf_job(job) {
 			TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 				spdk_thread_send_msg(task->thread->thread,
 						     fsdevperf_task_do_start, task);
@@ -1947,7 +1983,7 @@ fsdevperf_start_jobs(void)
 {
 	struct fsdevperf_job *job;
 
-	TAILQ_FOREACH(job, &g_app.jobs, tailq) {
+	fsdevperf_foreach_leaf_job(job) {
 		fsdevperf_job_start(job);
 		g_app.num_active++;
 	}
@@ -1956,7 +1992,7 @@ fsdevperf_start_jobs(void)
 static void
 fsdevperf_setup_job_done(struct fsdevperf_job *job, int status)
 {
-	TAILQ_REMOVE(&g_app.jobs, job, tailq);
+	TAILQ_REMOVE(&g_app.jobs, job, tailq.app);
 	fsdevperf_job_cleanup(job);
 	fsdevperf_job_free(job);
 
@@ -1992,7 +2028,7 @@ fsdevperf_setup_files(void)
 	job->io_pattern = SPDK_FSDEV_IO_WRITE;
 	job->io_depth = 1;
 	job->io_size = 1024 * 1024;
-	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
 
 	job->buf = spdk_zmalloc(job->io_depth * job->io_size, 4096, NULL,
 				SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
@@ -2181,7 +2217,8 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 	job->runtime = orig_job->runtime;
 	job->flags = orig_job->flags;
 
-	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
+	TAILQ_INSERT_TAIL(&orig_job->children, job, tailq.child);
 
 	return 0;
 }
@@ -2189,10 +2226,10 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 static int
 fsdevperf_create_jobs(void)
 {
-	struct fsdevperf_job *job, *tjob;
+	struct fsdevperf_job *job;
 	int rc;
 
-	TAILQ_FOREACH_SAFE(job, &g_app.jobs, tailq, tjob) {
+	TAILQ_FOREACH(job, &g_app.jobs, tailq.app) {
 		if (!fsdevperf_job_is_multi(job)) {
 			continue;
 		}
@@ -2202,8 +2239,10 @@ fsdevperf_create_jobs(void)
 			return rc;
 		}
 
-		TAILQ_REMOVE(&g_app.jobs, job, tailq);
-		fsdevperf_job_free(job);
+		if (TAILQ_EMPTY(&job->children)) {
+			fsdevperf_errmsg("could not find fsdev(s) for job: %s\n", job->name);
+			return -ENODEV;
+		}
 	}
 
 	if (TAILQ_EMPTY(&g_app.jobs)) {
@@ -2548,7 +2587,7 @@ fsdevperf_load_jobs(const char *filename)
 			goto error;
 		}
 
-		TAILQ_INSERT_TAIL(&jobs, job, tailq);
+		TAILQ_INSERT_TAIL(&jobs, job, tailq.app);
 
 		for (i = 0; i < SPDK_COUNTOF(g_options); i++) {
 			/* Skip the command-line-only options */
@@ -2577,12 +2616,12 @@ fsdevperf_load_jobs(const char *filename)
 	}
 
 	while ((job = TAILQ_FIRST(&jobs))) {
-		TAILQ_REMOVE(&jobs, job, tailq);
-		TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq);
+		TAILQ_REMOVE(&jobs, job, tailq.app);
+		TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
 	}
 error:
 	while ((job = TAILQ_FIRST(&jobs))) {
-		TAILQ_REMOVE(&jobs, job, tailq);
+		TAILQ_REMOVE(&jobs, job, tailq.app);
 		fsdevperf_job_free(job);
 	}
 
@@ -2790,7 +2829,7 @@ main(int argc, char **argv)
 			return EXIT_FAILURE;
 		}
 
-		TAILQ_INSERT_TAIL(&g_app.jobs, g_app.main_job, tailq);
+		TAILQ_INSERT_TAIL(&g_app.jobs, g_app.main_job, tailq.app);
 	} else {
 		fsdevperf_job_free(g_app.main_job);
 		g_app.main_job = NULL;
