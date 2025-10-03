@@ -99,23 +99,43 @@ enum spdk_nvmf_rdma_request_state {
 	RDMA_REQUEST_NUM_STATES,
 };
 
+/* NVMe-of RDMA Offload tracepoint definitions */
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEW					SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x0)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x1)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING	SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x2)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER	SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x3)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_EXECUTE			SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x4)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTING				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x5)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTED				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x6)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING		SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x7)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE			SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x8)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST	SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x9)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETING				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0xA)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETED				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0xB)
+#define TRACE_RDMA_OFFLOAD_QP_CREATE						SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0xC)
+#define TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT					SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0xD)
+#define TRACE_RDMA_OFFLOAD_CM_ASYNC_EVENT					SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0xE)
+#define TRACE_RDMA_OFFLOAD_QP_DISCONNECT					SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x10)
+#define TRACE_RDMA_OFFLOAD_QP_DESTROY						SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x11)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE_PENDING		SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x12)
+
 static void
-nvmf_trace(void)
+nvmf_rdma_offload_trace(void)
 {
-	spdk_trace_register_object(OBJECT_NVMF_RDMA_IO, 'r');
+	spdk_trace_register_object(OBJECT_NVMF_RDMA_OFFLOAD_IO, 'r');
 
 	struct spdk_trace_tpoint_opts opts[] = {
 		{
-			"RDMA_REQ_NEW", TRACE_RDMA_REQUEST_STATE_NEW,
-			OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 1,
+			"RDMA_REQ_NEW", TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEW,
+			OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 1,
 			{
 				{ "qpair", SPDK_TRACE_ARG_TYPE_PTR, 8 },
 				{ "qd", SPDK_TRACE_ARG_TYPE_INT, 4 }
 			}
 		},
 		{
-			"RDMA_REQ_COMPLETED", TRACE_RDMA_REQUEST_STATE_COMPLETED,
-			OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+			"RDMA_REQ_COMPLETED", TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETED,
+			OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 			{
 				{ "qpair", SPDK_TRACE_ARG_TYPE_PTR, 8 },
 				{ "qd", SPDK_TRACE_ARG_TYPE_INT, 4 }
@@ -124,70 +144,71 @@ nvmf_trace(void)
 	};
 
 	spdk_trace_register_description_ext(opts, SPDK_COUNTOF(opts));
-	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER", TRACE_RDMA_REQUEST_STATE_NEED_BUFFER,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER",
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
-					TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_H2C",
-					TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_H2C",
-					TRACE_RDMA_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_RDY_TO_EXECUTE",
-					TRACE_RDMA_REQUEST_STATE_READY_TO_EXECUTE,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_EXECUTE,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_EXECUTING",
-					TRACE_RDMA_REQUEST_STATE_EXECUTING,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTING,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_EXECUTED",
-					TRACE_RDMA_REQUEST_STATE_EXECUTED,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTED,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_RDY2COMPL_PEND",
-					TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE_PENDING,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_RDY_TO_COMPL",
-					TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_COMPLETING_C2H",
-					TRACE_RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_COMPLETING",
-					TRACE_RDMA_REQUEST_STATE_COMPLETING,
-					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETING,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 
-	spdk_trace_register_description("RDMA_QP_CREATE", TRACE_RDMA_QP_CREATE,
+	spdk_trace_register_description("RDMA_QP_CREATE", TRACE_RDMA_OFFLOAD_QP_CREATE,
 					OWNER_TYPE_NONE, OBJECT_NONE, 0,
 					SPDK_TRACE_ARG_TYPE_INT, "");
-	spdk_trace_register_description("RDMA_IBV_ASYNC_EVENT", TRACE_RDMA_IBV_ASYNC_EVENT,
+	spdk_trace_register_description("RDMA_IBV_ASYNC_EVENT", TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT,
 					OWNER_TYPE_NONE, OBJECT_NONE, 0,
 					SPDK_TRACE_ARG_TYPE_INT, "type");
-	spdk_trace_register_description("RDMA_CM_ASYNC_EVENT", TRACE_RDMA_CM_ASYNC_EVENT,
+	spdk_trace_register_description("RDMA_CM_ASYNC_EVENT", TRACE_RDMA_OFFLOAD_CM_ASYNC_EVENT,
 					OWNER_TYPE_NONE, OBJECT_NONE, 0,
 					SPDK_TRACE_ARG_TYPE_INT, "type");
-	spdk_trace_register_description("RDMA_QP_DISCONNECT", TRACE_RDMA_QP_DISCONNECT,
+	spdk_trace_register_description("RDMA_QP_DISCONNECT", TRACE_RDMA_OFFLOAD_QP_DISCONNECT,
 					OWNER_TYPE_NONE, OBJECT_NONE, 0,
 					SPDK_TRACE_ARG_TYPE_INT, "");
-	spdk_trace_register_description("RDMA_QP_DESTROY", TRACE_RDMA_QP_DESTROY,
+	spdk_trace_register_description("RDMA_QP_DESTROY", TRACE_RDMA_OFFLOAD_QP_DESTROY,
 					OWNER_TYPE_NONE, OBJECT_NONE, 0,
 					SPDK_TRACE_ARG_TYPE_INT, "");
 
-	spdk_trace_tpoint_register_relation(TRACE_BDEV_IO_START, OBJECT_NVMF_RDMA_IO, 1);
-	spdk_trace_tpoint_register_relation(TRACE_BDEV_IO_DONE, OBJECT_NVMF_RDMA_IO, 0);
+	spdk_trace_tpoint_register_relation(TRACE_BDEV_IO_START, OBJECT_NVMF_RDMA_OFFLOAD_IO, 1);
+	spdk_trace_tpoint_register_relation(TRACE_BDEV_IO_DONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0);
 }
-SPDK_TRACE_REGISTER_FN(nvmf_trace, "nvmf_rdma", TRACE_GROUP_NVMF_RDMA)
+SPDK_TRACE_REGISTER_FN(nvmf_rdma_offload_trace, "nvmf_rdma_offload", TRACE_GROUP_NVMF_RDMA_OFFLOAD)
 
 enum spdk_nvmf_rdma_wr_type {
 	RDMA_WR_TYPE_RECV,
@@ -935,7 +956,7 @@ nvmf_rdma_qpair_destroy(struct spdk_nvmf_rdma_qpair *rqpair)
 	struct ibv_recv_wr		*bad_recv_wr = NULL;
 	int				rc;
 
-	spdk_trace_record(TRACE_RDMA_QP_DESTROY, 0, 0, (uintptr_t)rqpair);
+	spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_DESTROY, 0, 0, (uintptr_t)rqpair);
 
 	if (rqpair->qpair.queue_depth != 0) {
 		struct spdk_nvmf_qpair *qpair = &rqpair->qpair;
@@ -1103,7 +1124,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	rqpair->max_send_depth = spdk_min((uint32_t)(rqpair->max_queue_depth * 2),
 					  qp_init_attr.cap.max_send_wr);
 	rqpair->max_send_sge = spdk_min(NVMF_DEFAULT_TX_SGE, qp_init_attr.cap.max_send_sge);
-	spdk_trace_record(TRACE_RDMA_QP_CREATE, 0, 0, (uintptr_t)rqpair);
+	spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_CREATE, 0, 0, (uintptr_t)rqpair);
 	SPDK_DEBUGLOG(rdma_offload, "New RDMA Connection: %p\n", qpair);
 
 	if (rqpair->poller->srq == NULL) {
@@ -2280,7 +2301,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			 * to escape this state. */
 			break;
 		case RDMA_REQUEST_STATE_NEW:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_NEW, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEW, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair, rqpair->qpair.queue_depth);
 			rdma_recv = rdma_req->recv;
 
@@ -2358,7 +2379,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			nvmf_rdma_poll_group_insert_need_buffer_req(rgroup, rdma_req);
 			break;
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_NEED_BUFFER, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			assert(rdma_req->req.xfer != SPDK_NVME_DATA_NONE);
@@ -2398,7 +2419,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_EXECUTE;
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			if (rdma_req != STAILQ_FIRST(&rqpair->pending_rdma_read_queue)) {
@@ -2431,13 +2452,13 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			break;
 		case RDMA_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			/* Some external code must kick a request into RDMA_REQUEST_STATE_READY_TO_EXECUTE
 			 * to escape this state. */
 			break;
 		case RDMA_REQUEST_STATE_READY_TO_EXECUTE:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_READY_TO_EXECUTE, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_EXECUTE, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			if (spdk_unlikely(rdma_req->req.dif_enabled)) {
@@ -2512,13 +2533,13 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 			break;
 		case RDMA_REQUEST_STATE_EXECUTING:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_EXECUTING, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTING, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			/* Some external code must kick a request into RDMA_REQUEST_STATE_EXECUTED
 			 * to escape this state. */
 			break;
 		case RDMA_REQUEST_STATE_EXECUTED:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_EXECUTED, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_EXECUTED, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			if (rsp->status.sc == SPDK_NVME_SC_SUCCESS &&
 			    rdma_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
@@ -2564,7 +2585,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			if (rdma_req != STAILQ_FIRST(&rqpair->pending_rdma_write_queue)) {
@@ -2589,7 +2610,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
 			break;
 		case RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE_PENDING, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			if (rdma_req != STAILQ_FIRST(&rqpair->pending_rdma_send_queue)) {
@@ -2613,7 +2634,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE;
 			break;
 		case RDMA_REQUEST_STATE_READY_TO_COMPLETE:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_READY_TO_COMPLETE, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			rc = request_transfer_out(&rdma_req->req, &data_posted);
 			assert(rc == 0); /* No good way to handle this currently */
@@ -2625,19 +2646,19 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 			break;
 		case RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			/* Some external code must kick a request into RDMA_REQUEST_STATE_COMPLETED
 			 * to escape this state. */
 			break;
 		case RDMA_REQUEST_STATE_COMPLETING:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_COMPLETING, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETING, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 			/* Some external code must kick a request into RDMA_REQUEST_STATE_COMPLETED
 			 * to escape this state. */
 			break;
 		case RDMA_REQUEST_STATE_COMPLETED:
-			spdk_trace_record(TRACE_RDMA_REQUEST_STATE_COMPLETED, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_COMPLETED, 0, 0,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair, rqpair->qpair.queue_depth);
 
 			rqpair->poller->stat.request_latency += spdk_get_ticks() - rdma_req->receive_tsc;
@@ -3701,7 +3722,7 @@ nvmf_rdma_disconnect(struct rdma_cm_event *evt, bool *event_acked)
 
 	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
 
-	spdk_trace_record(TRACE_RDMA_QP_DISCONNECT, 0, 0, (uintptr_t)rqpair);
+	spdk_trace_record(TRACE_RDMA_OFFLOAD_QP_DISCONNECT, 0, 0, (uintptr_t)rqpair);
 
 	spdk_nvmf_qpair_disconnect(&rqpair->qpair);
 
@@ -3865,7 +3886,7 @@ nvmf_process_cm_events(struct spdk_nvmf_transport *transport, uint32_t max_event
 
 		SPDK_DEBUGLOG(rdma_offload, "Acceptor Event: %s\n", CM_EVENT_STR[event->event]);
 
-		spdk_trace_record(TRACE_RDMA_CM_ASYNC_EVENT, 0, 0, 0, event->event);
+		spdk_trace_record(TRACE_RDMA_OFFLOAD_CM_ASYNC_EVENT, 0, 0, 0, event->event);
 
 		switch (event->event) {
 		case RDMA_CM_EVENT_ADDR_RESOLVED:
@@ -4037,7 +4058,7 @@ nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 		switch (event.event_type) {
 		case IBV_EVENT_QP_FATAL:
 			SPDK_ERRLOG("Fatal event received for rqpair %p\n", rqpair);
-			spdk_trace_record(TRACE_RDMA_IBV_ASYNC_EVENT, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT, 0, 0,
 					  (uintptr_t)rqpair, event.event_type);
 			rqpair->ibv_in_error_state = true;
 			spdk_nvmf_qpair_disconnect(&rqpair->qpair);
@@ -4058,7 +4079,7 @@ nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 		case IBV_EVENT_PATH_MIG_ERR:
 			SPDK_NOTICELOG("Async QP event: %s\n",
 				       ibv_event_type_str(event.event_type));
-			spdk_trace_record(TRACE_RDMA_IBV_ASYNC_EVENT, 0, 0,
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT, 0, 0,
 					  (uintptr_t)rqpair, event.event_type);
 			rqpair->ibv_in_error_state = true;
 			break;
@@ -4085,7 +4106,7 @@ nvmf_process_ib_event(struct spdk_nvmf_rdma_device *device)
 	default:
 		SPDK_NOTICELOG("Async event: %s\n",
 			       ibv_event_type_str(event.event_type));
-		spdk_trace_record(TRACE_RDMA_IBV_ASYNC_EVENT, 0, 0, 0, event.event_type);
+		spdk_trace_record(TRACE_RDMA_OFFLOAD_IBV_ASYNC_EVENT, 0, 0, 0, event.event_type);
 		break;
 	}
 	ibv_ack_async_event(&event);

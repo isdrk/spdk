@@ -36,6 +36,7 @@
 #define OBJECT_BLOB_CB_ARG      0xB0
 #define OBJECT_BDEV_RAID_IO     0xC0
 #define OBJECT_NVME_NVDA_TCP_REQ	0xF0
+#define OBJECT_NVMF_RDMA_OFFLOAD_IO	0xF1
 
 /* Trace group definitions */
 #define TRACE_GROUP_ISCSI	0x1
@@ -58,6 +59,7 @@
 #define TRACE_GROUP_SCHEDULER	0x12
 #define TRACE_GROUP_NVME_NVDA_TCP	0x13
 #define TRACE_GROUP_FSDEV	0x14
+#define TRACE_GROUP_NVMF_RDMA_OFFLOAD	0x15
 
 /* Bdev tracepoint definitions */
 #define TRACE_BDEV_IO_START		SPDK_TPOINT_ID(TRACE_GROUP_BDEV, 0x0)
