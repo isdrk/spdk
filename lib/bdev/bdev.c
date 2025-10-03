@@ -2099,9 +2099,7 @@ bdev_qos_config_json(struct spdk_bdev_qos *qos, struct spdk_json_write_ctx *w)
 	}
 
 	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
-		spdk_json_write_object_begin(w);
 		qos_impl->module->config_json(qos_impl, w);
-		spdk_json_write_object_end(w);
 	}
 }
 

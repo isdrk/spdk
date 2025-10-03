@@ -1261,6 +1261,8 @@ bdev_hybrid_qos_config_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_jso
 
 	bdev_hybrid_qos_get_rate_limits(qos_impl, limits);
 
+	spdk_json_write_object_begin(w);
+
 	spdk_json_write_named_string(w, "method", "bdev_hybrid_qos_set_limit");
 
 	spdk_json_write_named_object_begin(w, "params");
@@ -1270,6 +1272,8 @@ bdev_hybrid_qos_config_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_jso
 			spdk_json_write_named_uint64(w, qos_rpc_type[i], limits[i]);
 		}
 	}
+	spdk_json_write_object_end(w);
+
 	spdk_json_write_object_end(w);
 }
 
@@ -1281,12 +1285,16 @@ bdev_hybrid_qos_info_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_json_
 
 	bdev_hybrid_qos_get_rate_limits(qos_impl, limits);
 
+	spdk_json_write_object_begin(w);
+
 	spdk_json_write_named_string(w, "name", "hybrid");
 
 	spdk_json_write_named_object_begin(w, "assigned_rate_limits");
 	for (i = 0; i < SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES; i++) {
 		spdk_json_write_named_uint64(w, qos_rpc_type[i], limits[i]);
 	}
+	spdk_json_write_object_end(w);
+
 	spdk_json_write_object_end(w);
 }
 
