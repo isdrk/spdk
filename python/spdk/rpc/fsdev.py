@@ -170,9 +170,3 @@ def fsdev_aio_set_options(client, max_io_depth: int = None, enable_io_uring: boo
     if enable_io_uring is not None:
         params['enable_io_uring'] = enable_io_uring
     return client.call('fsdev_aio_set_options', params)
-
-
-def fsdev_aio_get_options(client):
-    """Get aio filesystem options.
-    """
-    return client.call('fsdev_aio_get_options')

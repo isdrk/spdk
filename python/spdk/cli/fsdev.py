@@ -80,12 +80,6 @@ def add_parser(subparsers):
     p.add_argument('-e', '--enable-io-uring', help='Enable IO uring', action='store_true', default=None)
     p.set_defaults(func=fsdev_aio_set_options)
 
-    def fsdev_aio_get_options(args):
-        print_json(rpc.fsdev.fsdev_aio_get_options(args.client))
-
-    p = subparsers.add_parser('fsdev_aio_get_options', help='Get the aio filesystem options')
-    p.set_defaults(func=fsdev_aio_get_options)
-
     def fsdev_aio_create(args):
         print(rpc.fsdev.fsdev_aio_create(args.client, name=args.name, root_path=args.root_path,
                                          enable_xattr=args.enable_xattr, enable_writeback_cache=args.enable_writeback_cache,
