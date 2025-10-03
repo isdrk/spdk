@@ -297,7 +297,7 @@ fsdevperf_job_check_path(struct fsdevperf_job *job)
 }
 
 static bool
-fsdevperf_job_is_wildcard(struct fsdevperf_job *job)
+fsdevperf_job_is_multi(struct fsdevperf_job *job)
 {
 	char name[PATH_MAX];
 	int rc;
@@ -307,7 +307,7 @@ fsdevperf_job_is_wildcard(struct fsdevperf_job *job)
 		return false;
 	}
 
-	return strcmp(name, "*") == 0;
+	return strcmp(name, "*") == 0 || strstr(name, ",") != NULL;
 }
 
 static bool
@@ -2125,12 +2125,37 @@ static const struct fsdevperf_job_ops g_default_job_ops = {
 	.job_done = fsdevperf_user_job_done,
 };
 
+static bool
+fsdevperf_multi_job_check_fsdev(struct fsdevperf_job *job, struct spdk_fsdev *fsdev)
+{
+	char name[PATH_MAX], *tok, *sp = NULL;
+
+	fsdevperf_get_fsdev_name(job->path, name, sizeof(name));
+	if (strcmp(name, "*") == 0) {
+		return true;
+	}
+
+	for (tok = strtok_r(name, ",", &sp);
+	     tok != NULL;
+	     tok = strtok_r(NULL, ",", &sp)) {
+		if (strcmp(tok, spdk_fsdev_get_name(fsdev)) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 static int
 fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 {
 	struct fsdevperf_job *job, *orig_job = ctx;
 	const char *filename = fsdevperf_get_filename(orig_job->path);
 	char name[256];
+
+	if (!fsdevperf_multi_job_check_fsdev(orig_job, fsdev)) {
+		return 0;
+	}
 
 	snprintf(name, sizeof(name), "%s-%s", orig_job->name, spdk_fsdev_get_name(fsdev));
 	job = fsdevperf_job_alloc(name, &g_default_job_ops, 0);
@@ -2168,7 +2193,7 @@ fsdevperf_create_jobs(void)
 	int rc;
 
 	TAILQ_FOREACH_SAFE(job, &g_app.jobs, tailq, tjob) {
-		if (!fsdevperf_job_is_wildcard(job)) {
+		if (!fsdevperf_job_is_multi(job)) {
 			continue;
 		}
 
