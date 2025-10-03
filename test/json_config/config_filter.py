@@ -40,6 +40,7 @@ def filter_methods(do_remove_global_rpcs):
         'bdev_nvme_set_options',
         'bdev_nvme_set_hotplug',
         'bdev_hybrid_qos_set_options',
+        'bdev_burst_qos_set_options',
         'sock_impl_set_options',
         'sock_set_default_impl',
         'framework_set_scheduler',
