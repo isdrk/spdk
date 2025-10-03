@@ -25,7 +25,7 @@
 
 #include "spdk_internal/trace_defs.h"
 
-const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma;
+const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload;
 
 /*
  RDMA Connection Resource Defaults
@@ -2852,7 +2852,7 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 	TAILQ_INIT(&rtransport->poll_groups);
 	TAILQ_INIT(&rtransport->retry_ports);
 
-	rtransport->transport.ops = &spdk_nvmf_transport_rdma;
+	rtransport->transport.ops = &spdk_nvmf_transport_rdma_offload;
 	rtransport->rdma_opts.num_cqe = DEFAULT_NVMF_RDMA_CQ_SIZE;
 	rtransport->rdma_opts.max_srq_depth = SPDK_NVMF_RDMA_DEFAULT_SRQ_DEPTH;
 	rtransport->rdma_opts.no_srq = SPDK_NVMF_RDMA_DEFAULT_NO_SRQ;
@@ -5438,9 +5438,9 @@ nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 	spdk_json_write_array_end(w);
 }
 
-const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma = {
-	.name = "RDMA",
-	.type = SPDK_NVME_TRANSPORT_RDMA,
+const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma_offload = {
+	.name = "RDMA_OFFLOAD",
+	.type = SPDK_NVME_TRANSPORT_CUSTOM_FABRICS,
 	.opts_init = nvmf_rdma_opts_init,
 	.create = nvmf_rdma_create,
 	.dump_opts = nvmf_rdma_dump_opts,
@@ -5471,5 +5471,5 @@ const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma = {
 	.poll_group_dump_stat = nvmf_rdma_poll_group_dump_stat,
 };
 
-SPDK_NVMF_TRANSPORT_REGISTER(rdma, &spdk_nvmf_transport_rdma);
+SPDK_NVMF_TRANSPORT_REGISTER(rdma_offload, &spdk_nvmf_transport_rdma_offload);
 SPDK_LOG_REGISTER_COMPONENT(rdma)
