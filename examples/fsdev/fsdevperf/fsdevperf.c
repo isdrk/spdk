@@ -202,6 +202,7 @@ struct fsdevperf_job {
 	size_t					num_ready;
 	void					*buf;
 	struct fsdevperf_job_ops		ops;
+	struct fsdevperf_job			*parent;
 	TAILQ_HEAD(, fsdevperf_task)		tasks;
 	TAILQ_HEAD(, fsdevperf_job)		children;
 	struct {
@@ -249,6 +250,15 @@ struct fsdevperf_app {
 	for ((job) = fsdevperf_first_leaf_job(); (job) != NULL; \
 	     (job) = fsdevperf_next_leaf_job(job))
 
+#define fsdevperf_foreach_root_job(job) \
+	for ((job) = fsdevperf_first_root_job(); (job) != NULL; \
+	     (job) = fsdevperf_next_root_job(job))
+
+#define fsdevperf_foreach_child_job(parent, job) \
+	for ((job) = TAILQ_EMPTY(&(parent)->children) ? (parent) : TAILQ_FIRST(&(parent)->children); \
+	     (job) != NULL; \
+	     (job) = (job) != (parent) ? TAILQ_NEXT((job), tailq.child) : NULL)
+
 struct fsdevperf_aux_io_type {
 	const char	*name;
 	int		value;
@@ -279,6 +289,33 @@ fsdevperf_first_leaf_job(void)
 
 	job = TAILQ_FIRST(&g_app.jobs);
 	if (TAILQ_EMPTY(&job->children)) {
+		return job;
+	}
+
+	return fsdevperf_next_leaf_job(job);
+}
+
+static struct fsdevperf_job *
+fsdevperf_next_root_job(struct fsdevperf_job *job)
+{
+	for (job = TAILQ_NEXT(job, tailq.app);
+	     job != NULL;
+	     job = TAILQ_NEXT(job, tailq.app)) {
+		if (job->parent == NULL) {
+			return job;
+		}
+	}
+
+	return NULL;
+}
+
+static struct fsdevperf_job *
+fsdevperf_first_root_job(void)
+{
+	struct fsdevperf_job *job;
+
+	job = TAILQ_FIRST(&g_app.jobs);
+	if (job->parent == NULL) {
 		return job;
 	}
 
@@ -878,42 +915,47 @@ fsdevperf_init_jobs(void)
 static void
 fsdevperf_dump_stats(void)
 {
-	struct fsdevperf_job *job;
+	struct fsdevperf_job *root_job, *job;
 	struct fsdevperf_task *task;
 	struct fsdevperf_filesystem *fs;
 	double task_iops, job_iops, total_iops;
 	double task_mbps, job_mbps, total_mbps;
 	double runtime;
 	char path[PATH_MAX];
-	size_t num_jobs = 0;
+	size_t num_jobs = 0, num_tasks;
 
 	total_iops = 0;
 	total_mbps = 0;
 
-	fsdevperf_foreach_leaf_job(job) {
+	fsdevperf_foreach_root_job(root_job) {
 		job_iops = 0;
 		job_mbps = 0;
+		num_tasks = 0;
 
 		printf("%s (pattern=%s, iosize=%zu, iodepth=%zu, nrfiles=%zu):\n",
-		       job->name, fsdevperf_job_get_io_pattern_name(job), job->io_size,
-		       job->io_depth, job->num_files);
+		       root_job->name, fsdevperf_job_get_io_pattern_name(root_job),
+		       root_job->io_size, root_job->io_depth, root_job->num_files);
 		printf("  %30s %4s %10s %10s %10s\n", "filename", "core", "runtime", "IOPS", "MiB/s");
-		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
-			fs = task->fs;
-			snprintf(path, sizeof(path), "/%s/%s",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 task->file->name);
-			runtime = (double)(task->tsc_finish - task->tsc_start) / spdk_get_ticks_hz();
-			task_iops = (double)task->stats.num_ios / runtime;
-			task_mbps = (double)task->stats.num_bytes / (1024 * 1024 * runtime);
-			printf("  %30s %4u %10.2f %10.2f %10.2f\n", path, task->thread->core,
-			       runtime, task_iops, task_mbps);
 
-			job_iops += task_iops;
-			job_mbps += task_mbps;
+		fsdevperf_foreach_child_job(root_job, job) {
+			TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+				fs = task->fs;
+				snprintf(path, sizeof(path), "/%s/%s",
+					 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
+					 task->file->name);
+				runtime = (double)(task->tsc_finish - task->tsc_start) / spdk_get_ticks_hz();
+				task_iops = (double)task->stats.num_ios / runtime;
+				task_mbps = (double)task->stats.num_bytes / (1024 * 1024 * runtime);
+				printf("  %30s %4u %10.2f %10.2f %10.2f\n", path, task->thread->core,
+				       runtime, task_iops, task_mbps);
+
+				job_iops += task_iops;
+				job_mbps += task_mbps;
+				num_tasks++;
+			}
 		}
 
-		if (job->num_tasks > 1) {
+		if (num_tasks > 1) {
 			printf("  %30s %4s %10s %10.2f %10.2f\n", "", "", "",
 			       job_iops, job_mbps);
 		}
@@ -934,7 +976,7 @@ fsdevperf_rpc_done(void)
 {
 	struct spdk_jsonrpc_request *request = g_app.rpc.request;
 	struct spdk_json_write_ctx *w;
-	struct fsdevperf_job *job;
+	struct fsdevperf_job *root_job, *job;
 	struct fsdevperf_task *task;
 	struct fsdevperf_filesystem *fs;
 	char path[PATH_MAX];
@@ -944,28 +986,30 @@ fsdevperf_rpc_done(void)
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_int32(w, "status", g_app.status);
 	spdk_json_write_named_array_begin(w, "jobs");
-	fsdevperf_foreach_leaf_job(job) {
+	fsdevperf_foreach_root_job(root_job) {
 		spdk_json_write_object_begin(w);
-		spdk_json_write_named_string(w, "name", job->name);
+		spdk_json_write_named_string(w, "name", root_job->name);
 		spdk_json_write_named_string(w, "pattern",
-					     fsdevperf_job_get_io_pattern_name(job));
-		spdk_json_write_named_uint64(w, "iosize", job->io_size);
-		spdk_json_write_named_uint64(w, "iodepth", job->io_depth);
+					     fsdevperf_job_get_io_pattern_name(root_job));
+		spdk_json_write_named_uint64(w, "iosize", root_job->io_size);
+		spdk_json_write_named_uint64(w, "iodepth", root_job->io_depth);
 		spdk_json_write_named_array_begin(w, "tasks");
-		TAILQ_FOREACH(task, &job->tasks, tailq.job) {
-			fs = task->fs;
-			snprintf(path, sizeof(path), "/%s/%s",
-				 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
-				 task->file->name);
-			runtime = (task->tsc_finish - task->tsc_start) * SPDK_SEC_TO_USEC /
-				  spdk_get_ticks_hz();
-			spdk_json_write_object_begin(w);
-			spdk_json_write_named_string(w, "filename", path);
-			spdk_json_write_named_uint32(w, "core", task->thread->core);
-			spdk_json_write_named_uint64(w, "runtime", runtime);
-			spdk_json_write_named_uint64(w, "num_ios", task->stats.num_ios);
-			spdk_json_write_named_uint64(w, "num_bytes", task->stats.num_bytes);
-			spdk_json_write_object_end(w);
+		fsdevperf_foreach_child_job(root_job, job) {
+			TAILQ_FOREACH(task, &job->tasks, tailq.job) {
+				fs = task->fs;
+				snprintf(path, sizeof(path), "/%s/%s",
+					 spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(fs->fsdev_desc)),
+					 task->file->name);
+				runtime = (task->tsc_finish - task->tsc_start) * SPDK_SEC_TO_USEC /
+					  spdk_get_ticks_hz();
+				spdk_json_write_object_begin(w);
+				spdk_json_write_named_string(w, "filename", path);
+				spdk_json_write_named_uint32(w, "core", task->thread->core);
+				spdk_json_write_named_uint64(w, "runtime", runtime);
+				spdk_json_write_named_uint64(w, "num_ios", task->stats.num_ios);
+				spdk_json_write_named_uint64(w, "num_bytes", task->stats.num_bytes);
+				spdk_json_write_object_end(w);
+			}
 		}
 		spdk_json_write_array_end(w);
 		spdk_json_write_object_end(w);
@@ -2216,6 +2260,7 @@ fsdevperf_for_each_fsdev_create_job(void *ctx, struct spdk_fsdev *fsdev)
 	job->num_files = orig_job->num_files;
 	job->runtime = orig_job->runtime;
 	job->flags = orig_job->flags;
+	job->parent = orig_job;
 
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
 	TAILQ_INSERT_TAIL(&orig_job->children, job, tailq.child);
