@@ -2069,7 +2069,7 @@ fsdevperf_setup_files(void)
 		goto error;
 	}
 
-	job->io_pattern = SPDK_FSDEV_IO_WRITE;
+	job->io_pattern = FUSE_WRITE;
 	job->io_depth = 1;
 	job->io_size = 1024 * 1024;
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
