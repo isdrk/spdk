@@ -701,9 +701,7 @@ rpc_dump_bdev_info(void *ctx, struct spdk_bdev *bdev)
 		spdk_json_write_named_array_begin(w, "module_specific");
 
 		TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
-			spdk_json_write_object_begin(w);
 			qos_impl->module->info_json(qos_impl, w);
-			spdk_json_write_object_end(w);
 		}
 
 		spdk_json_write_array_end(w);
@@ -1194,9 +1192,7 @@ rpc_bdev_qos_dump_info(void *ctx, struct spdk_bdev_qos *qos)
 	spdk_json_write_named_array_begin(w, "module_specific");
 
 	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
-		spdk_json_write_object_begin(w);
 		qos_impl->module->info_json(qos_impl, w);
-		spdk_json_write_object_end(w);
 	}
 
 	spdk_json_write_array_end(w);
