@@ -26,7 +26,6 @@
 
 #include "spdk_internal/trace_defs.h"
 
-struct spdk_nvme_rdma_hooks g_nvmf_hooks = {};
 const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma;
 
 /*
@@ -3096,12 +3095,7 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 	TAILQ_INSERT_TAIL(&rtransport->devices, device, link);
 	SPDK_DEBUGLOG(rdma, "New device %p is added to RDMA transport\n", device);
 
-	if (g_nvmf_hooks.get_ibv_pd) {
-		device->pd = g_nvmf_hooks.get_ibv_pd(NULL, device->context);
-	} else {
-		device->pd = spdk_rdma_utils_get_pd(device->context);
-	}
-
+	device->pd = spdk_rdma_utils_get_pd(device->context);
 	if (!device->pd) {
 		SPDK_ERRLOG("Unable to allocate protection domain.\n");
 		destroy_ib_device(rtransport, device);
@@ -3110,7 +3104,7 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 
 	assert(device->map == NULL);
 
-	device->map = spdk_rdma_utils_create_mem_map(device->pd, &g_nvmf_hooks, IBV_ACCESS_LOCAL_WRITE);
+	device->map = spdk_rdma_utils_create_mem_map(device->pd, NULL, IBV_ACCESS_LOCAL_WRITE);
 	if (!device->map) {
 		SPDK_ERRLOG("Unable to allocate memory map for listen address\n");
 		destroy_ib_device(rtransport, device);
@@ -3379,9 +3373,7 @@ destroy_ib_device(struct spdk_nvmf_rdma_transport *rtransport,
 	TAILQ_REMOVE(&rtransport->devices, device, link);
 	spdk_rdma_utils_free_mem_map(&device->map);
 	if (device->pd) {
-		if (!g_nvmf_hooks.get_ibv_pd) {
-			spdk_rdma_utils_put_pd(device->pd);
-		}
+		spdk_rdma_utils_put_pd(device->pd);
 	}
 	SPDK_DEBUGLOG(rdma, "IB device [%p] is destroyed.\n", device);
 	free(device);
@@ -5740,12 +5732,6 @@ nvmf_rdma_qpair_get_listen_trid(struct spdk_nvmf_qpair *qpair,
 	rqpair = SPDK_CONTAINEROF(qpair, struct spdk_nvmf_rdma_qpair, qpair);
 
 	return nvmf_rdma_trid_from_cm_id(rqpair->listen_id, trid, false);
-}
-
-void
-spdk_nvmf_rdma_init_hooks(struct spdk_nvme_rdma_hooks *hooks)
-{
-	g_nvmf_hooks = *hooks;
 }
 
 static void
