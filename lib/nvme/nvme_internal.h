@@ -2,6 +2,7 @@
  *   Copyright (C) 2015 Intel Corporation. All rights reserved.
  *   Copyright (c) 2020, 2021 Mellanox Technologies LTD. All rights reserved.
  *   Copyright (c) 2021-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ *   Copyright (c) 2025 Dell Inc. or its subsidiaries. All Rights Reserved
  */
 
 #ifndef __NVME_INTERNAL_H__
@@ -509,6 +510,9 @@ struct spdk_nvme_qpair {
 
 	uint8_t					in_connect_poll : 1;
 
+	/* Flag for enabling/disabling statistics collection */
+	uint8_t					collect_stats: 1;
+
 	/* Number of IO outstanding at transport level */
 	uint16_t				queue_depth;
 
@@ -520,6 +524,8 @@ struct spdk_nvme_qpair {
 	nvme_request_stailq_t			err_req_head;
 
 	void					*poll_group_tailq_head;
+
+	struct spdk_nvme_qpair_io_stats		io_stats;
 
 	struct nvme_completion_poll_status	*fabric_poll_status;
 
@@ -1593,6 +1599,10 @@ nvme_complete_request(spdk_nvme_cmd_cb cb_fn, void *cb_arg, struct spdk_nvme_qpa
 {
 	struct spdk_nvme_cpl            err_cpl;
 	struct nvme_error_cmd           *cmd;
+
+	if (spdk_unlikely(qpair->collect_stats)) {
+		spdk_nvme_qpair_io_stats_update(&qpair->io_stats, &req->cmd, req->payload_size);
+	}
 
 	if (spdk_unlikely(req->accel_sequence != NULL)) {
 		assert(qpair->poll_group != NULL);
