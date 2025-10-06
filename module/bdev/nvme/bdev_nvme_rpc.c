@@ -336,6 +336,7 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_attach_controller_dec
 	{"fabrics_connect_timeout_us", offsetof(struct rpc_bdev_nvme_attach_controller, drv_opts.fabrics_connect_timeout_us), spdk_json_decode_uint64, true},
 	{"multipath", offsetof(struct rpc_bdev_nvme_attach_controller, multipath), bdev_nvme_decode_multipath, true},
 	{"num_io_queues", offsetof(struct rpc_bdev_nvme_attach_controller, drv_opts.num_io_queues), spdk_json_decode_uint32, true},
+	{"max_p2p_io_queues", offsetof(struct rpc_bdev_nvme_attach_controller, drv_opts.max_p2p_io_queues), spdk_json_decode_uint32, true},
 	{"ctrlr_loss_timeout_sec", offsetof(struct rpc_bdev_nvme_attach_controller, bdev_opts.ctrlr_loss_timeout_sec), spdk_json_decode_int32, true},
 	{"reconnect_delay_sec", offsetof(struct rpc_bdev_nvme_attach_controller, bdev_opts.reconnect_delay_sec), spdk_json_decode_uint32, true},
 	{"fast_io_fail_timeout_sec", offsetof(struct rpc_bdev_nvme_attach_controller, bdev_opts.fast_io_fail_timeout_sec), spdk_json_decode_uint32, true},
@@ -610,6 +611,13 @@ rpc_bdev_nvme_attach_controller(struct spdk_jsonrpc_request *request,
 		spdk_jsonrpc_send_error_response_fmt(request, -EINVAL,
 						     "num_io_queues out of bounds, min: %u max: %u",
 						     1, UINT16_MAX + 1);
+		goto cleanup;
+	}
+
+	if (ctx->req.drv_opts.max_p2p_io_queues > ctx->req.drv_opts.num_io_queues) {
+		spdk_jsonrpc_send_error_response_fmt(request, -EINVAL,
+						     "max_p2p_io_queues out of bounds, min: %u, max: %u",
+						     1, ctx->req.drv_opts.num_io_queues);
 		goto cleanup;
 	}
 

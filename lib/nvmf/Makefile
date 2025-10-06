@@ -52,6 +52,15 @@ CFLAGS += -I$(CONFIG_FC_PATH)
 endif
 endif
 
+ifeq ($(CONFIG_RDMA),y)
+ifeq ($(CONFIG_DOCA),y)
+ifeq ($(CONFIG_FLEXIO),y)
+C_SRCS += rdma_offload.c
+LOCAL_SYS_LIBS += -ldoca_sta -ldoca_dpa -ldoca_rdma -ldoca_comch -ldoca_common
+endif
+endif
+endif
+
 SPDK_MAP_FILE = $(abspath $(CURDIR)/spdk_nvmf.map)
 
 include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk

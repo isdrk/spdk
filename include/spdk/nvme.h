@@ -325,8 +325,13 @@ struct spdk_nvme_ctrlr_opts {
 	 * VLAN tag for sockets.
 	 */
 	int vlan_tag;
+
+	/**
+	 * Maximum number of P2P I/O queues to use for offload operations
+	 */
+	uint32_t max_p2p_io_queues;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 864, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ctrlr_opts) == 872, "Incorrect size");
 
 /**
  * NVMe acceleration operation callback.

@@ -14,6 +14,7 @@ from . import nbd
 from . import ublk
 from . import notify
 from . import nvmf
+from . import tgt_ofld
 from . import trace
 from . import vhost
 from . import vmd

@@ -68,6 +68,7 @@ def create_parser():
     cli.ublk.add_parser(subparsers)
     cli.notify.add_parser(subparsers)
     cli.nvmf.add_parser(subparsers)
+    cli.tgt_ofld.add_parser(subparsers)
     cli.trace.add_parser(subparsers)
     cli.vhost.add_parser(subparsers)
     cli.vmd.add_parser(subparsers)

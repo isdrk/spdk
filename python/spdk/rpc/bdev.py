@@ -668,7 +668,7 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
                                 multipath=None, num_io_queues=None, ctrlr_loss_timeout_sec=None,
                                 reconnect_delay_sec=None, fast_io_fail_timeout_sec=None,
                                 psk=None, max_bdevs=None, dhchap_key=None, dhchap_ctrlr_key=None,
-                                allow_unrecognized_csi=None):
+                                allow_unrecognized_csi=None, max_p2p_io_queues=None):
     """Construct block device for each NVMe namespace in the attached controller.
     Args:
         name: bdev name prefix; "n" + namespace ID will be appended to create unique names
@@ -688,6 +688,7 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
         fabrics_connect_timeout_us: Fabrics connect timeout in us (optional)
         multipath: The behavior when multiple paths are created ("disable", "failover", or "multipath"; failover if not specified)
         num_io_queues: The number of IO queues to request during initialization. (optional)
+        max_p2p_io_queues: The maximum number of P2P IO queues to use for offload operations. (optional)
         ctrlr_loss_timeout_sec: Time to wait until ctrlr is reconnected before deleting ctrlr.
         -1 means infinite reconnect retries. 0 means no reconnect retry.
         If reconnect_delay_sec is zero, ctrlr_loss_timeout_sec has to be zero.
@@ -743,6 +744,8 @@ def bdev_nvme_attach_controller(client, name, trtype, traddr, adrfam=None, trsvc
         params['multipath'] = multipath
     if num_io_queues is not None:
         params['num_io_queues'] = num_io_queues
+    if max_p2p_io_queues is not None:
+        params['max_p2p_io_queues'] = max_p2p_io_queues
     if ctrlr_loss_timeout_sec is not None:
         params['ctrlr_loss_timeout_sec'] = ctrlr_loss_timeout_sec
     if reconnect_delay_sec is not None:
