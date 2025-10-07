@@ -114,43 +114,6 @@ struct nvme_rdma_ctrlr {
 	struct nvme_rdma_cm_event_entry		*cm_events;
 };
 
-struct nvme_rdma_poller_stats {
-	uint64_t polls;
-	uint64_t idle_polls;
-	uint64_t queued_requests;
-	uint64_t completions;
-	struct spdk_rdma_provider_qp_stats rdma_stats;
-};
-
-struct nvme_rdma_poll_group;
-struct nvme_rdma_rsps;
-
-struct nvme_rdma_poller {
-	struct ibv_context		*device;
-	struct spdk_rdma_provider_cq	*cq;
-	struct spdk_rdma_provider_srq	*srq;
-	struct nvme_rdma_rsps		*rsps;
-	struct ibv_pd			*pd;
-	struct spdk_rdma_utils_mem_map	*mr_map;
-	uint32_t			refcnt;
-	int				required_num_wc;
-	int				current_num_wc;
-	struct nvme_rdma_poller_stats	stats;
-	struct nvme_rdma_poll_group	*group;
-	STAILQ_ENTRY(nvme_rdma_poller)	link;
-};
-
-struct nvme_rdma_qpair;
-
-struct nvme_rdma_poll_group {
-	struct spdk_nvme_transport_poll_group		group;
-	STAILQ_HEAD(, nvme_rdma_poller)			pollers;
-	uint32_t					num_pollers;
-	uint32_t					num_active_qpairs;
-	TAILQ_HEAD(, nvme_rdma_qpair)			connecting_qpairs;
-	TAILQ_HEAD(, nvme_rdma_qpair)			active_qpairs;
-};
-
 enum nvme_rdma_qpair_state {
 	NVME_RDMA_QPAIR_STATE_INVALID = 0,
 	NVME_RDMA_QPAIR_STATE_STALE_CONN,
@@ -164,27 +127,9 @@ enum nvme_rdma_qpair_state {
 	NVME_RDMA_QPAIR_STATE_EXITED,
 };
 
+struct nvme_rdma_qpair;
+
 typedef int (*nvme_rdma_cm_event_cb)(struct nvme_rdma_qpair *rqpair, int ret);
-
-struct nvme_rdma_rsp_opts {
-	uint16_t				num_entries;
-	struct nvme_rdma_qpair			*rqpair;
-	struct spdk_rdma_provider_srq		*srq;
-	struct spdk_rdma_utils_mem_map		*mr_map;
-};
-
-struct nvme_rdma_rsps {
-	/* Parallel arrays of response buffers + response SGLs of size num_entries */
-	struct ibv_sge				*rsp_sgls;
-	struct spdk_nvme_rdma_rsp		*rsps;
-
-	struct ibv_recv_wr			*rsp_recv_wrs;
-
-	/* Count of outstanding recv objects */
-	uint16_t				current_num_recvs;
-
-	uint16_t				num_entries;
-};
 
 /* NVMe RDMA qpair extensions for spdk_nvme_qpair */
 struct nvme_rdma_qpair {
@@ -246,6 +191,61 @@ struct nvme_rdma_qpair {
 	bool					need_destroy;
 	bool					connected;
 	TAILQ_ENTRY(nvme_rdma_qpair)		link_connecting;
+};
+
+struct nvme_rdma_poller_stats {
+	uint64_t polls;
+	uint64_t idle_polls;
+	uint64_t queued_requests;
+	uint64_t completions;
+	struct spdk_rdma_provider_qp_stats rdma_stats;
+};
+
+struct nvme_rdma_poll_group;
+struct nvme_rdma_rsps;
+
+struct nvme_rdma_poller {
+	struct ibv_context		*device;
+	struct spdk_rdma_provider_cq	*cq;
+	struct spdk_rdma_provider_srq	*srq;
+	struct nvme_rdma_rsps		*rsps;
+	struct ibv_pd			*pd;
+	struct spdk_rdma_utils_mem_map	*mr_map;
+	uint32_t			refcnt;
+	int				required_num_wc;
+	int				current_num_wc;
+	struct nvme_rdma_poller_stats	stats;
+	struct nvme_rdma_poll_group	*group;
+	STAILQ_ENTRY(nvme_rdma_poller)	link;
+};
+
+struct nvme_rdma_poll_group {
+	struct spdk_nvme_transport_poll_group		group;
+	STAILQ_HEAD(, nvme_rdma_poller)			pollers;
+	uint32_t					num_pollers;
+	uint32_t					num_active_qpairs;
+	TAILQ_HEAD(, nvme_rdma_qpair)			connecting_qpairs;
+	TAILQ_HEAD(, nvme_rdma_qpair)			active_qpairs;
+};
+
+struct nvme_rdma_rsp_opts {
+	uint16_t				num_entries;
+	struct nvme_rdma_qpair			*rqpair;
+	struct spdk_rdma_provider_srq		*srq;
+	struct spdk_rdma_utils_mem_map		*mr_map;
+};
+
+struct nvme_rdma_rsps {
+	/* Parallel arrays of response buffers + response SGLs of size num_entries */
+	struct ibv_sge				*rsp_sgls;
+	struct spdk_nvme_rdma_rsp		*rsps;
+
+	struct ibv_recv_wr			*rsp_recv_wrs;
+
+	/* Count of outstanding recv objects */
+	uint16_t				current_num_recvs;
+
+	uint16_t				num_entries;
 };
 
 enum NVME_RDMA_COMPLETION_FLAGS {
