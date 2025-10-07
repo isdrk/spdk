@@ -23,6 +23,7 @@
 #include "spdk/config.h"
 
 #include "nvme_internal.h"
+#include "spdk/tree.h"
 #include "spdk_internal/rdma_provider.h"
 #include "spdk_internal/rdma_utils.h"
 
@@ -167,11 +168,14 @@ struct nvme_rdma_qpair {
 
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	free_reqs;
 	TAILQ_HEAD(, spdk_nvme_rdma_req)	outstanding_reqs;
+	RB_ENTRY(nvme_rdma_qpair)		node;
 
 	/* Count of outstanding send objects */
 	uint16_t				current_num_sends;
 	/* Number of requests submitted to accel FW */
 	uint16_t				num_active_accel_reqs;
+
+	int32_t					qp_num;
 
 	TAILQ_ENTRY(nvme_rdma_qpair)		link_active;
 
@@ -211,6 +215,7 @@ struct nvme_rdma_poller {
 	struct nvme_rdma_rsps		*rsps;
 	struct ibv_pd			*pd;
 	struct spdk_rdma_utils_mem_map	*mr_map;
+	RB_HEAD(nvme_rdma_qpairs_tree, nvme_rdma_qpair) qpairs;
 	uint32_t			refcnt;
 	int				required_num_wc;
 	int				current_num_wc;
@@ -303,6 +308,14 @@ static const char *rdma_cm_event_str[] = {
 	"RDMA_CM_EVENT_TIMEWAIT_EXIT"
 };
 
+static int
+nvme_rdma_qpair_compare(struct nvme_rdma_qpair *rqpair1, struct nvme_rdma_qpair *rqpair2)
+{
+	return rqpair1->qp_num - rqpair2->qp_num;
+}
+
+RB_GENERATE_STATIC(nvme_rdma_qpairs_tree, nvme_rdma_qpair, node, nvme_rdma_qpair_compare);
+
 static struct nvme_rdma_poller *nvme_rdma_poll_group_get_poller(struct nvme_rdma_poll_group *group,
 		struct ibv_context *device);
 static void nvme_rdma_poll_group_put_poller(struct nvme_rdma_poll_group *group,
@@ -322,6 +335,9 @@ static inline int nvme_rdma_memory_domain_transfer_data(struct spdk_memory_domai
 
 static inline int _nvme_rdma_qpair_submit_request(struct nvme_rdma_qpair *rqpair,
 		struct spdk_nvme_rdma_req *rdma_req);
+
+static struct nvme_rdma_qpair *nvme_rdma_poller_srq_find_qpair(struct nvme_rdma_poller *poller,
+		int qp_num);
 
 static inline struct nvme_rdma_qpair *
 nvme_rdma_qpair(struct spdk_nvme_qpair *qpair)
@@ -725,7 +741,12 @@ nvme_rdma_qpair_release_poller(struct nvme_rdma_qpair *rqpair)
 
 	assert(group);
 
-	if (!poller->srq) {
+	if (poller->srq) {
+		/* There is a chance that a qpair is destroyed before it is added to the tree, so first check if it exists. */
+		if (nvme_rdma_poller_srq_find_qpair(poller, rqpair->qp_num)) {
+			RB_REMOVE(nvme_rdma_qpairs_tree, &poller->qpairs, rqpair);
+		}
+	} else {
 		SPDK_DEBUGLOG(nvme, "cq %p required_wc %d, reduce by %d\n", rqpair->poller->cq,
 			      rqpair->poller->required_num_wc, num_wc_decrement);
 		poller->required_num_wc -= num_wc_decrement;
@@ -808,6 +829,13 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 	/* ibv_create_qp will change the values in attr.cap. Make sure we store the proper value. */
 	rqpair->max_send_sge = spdk_min(NVME_RDMA_DEFAULT_TX_SGE, attr.cap.max_send_sge);
 	rqpair->current_num_sends = 0;
+	assert(rqpair->rdma_qp->qp->qp_num <= INT_MAX);
+	rqpair->qp_num = (int32_t)rqpair->rdma_qp->qp->qp_num;
+
+	if (rqpair->srq) {
+		/* qp_num is known, add to RB tree for fast lookup. */
+		RB_INSERT(nvme_rdma_qpairs_tree, &rqpair->poller->qpairs, rqpair);
+	}
 
 	rqpair->cm_id->context = rqpair;
 
@@ -2858,6 +2886,18 @@ nvme_rdma_poll_group_find_qpair(struct nvme_rdma_poll_group *group, uint32_t qp_
 	return NULL;
 }
 
+static struct nvme_rdma_qpair *
+nvme_rdma_poller_srq_find_qpair(struct nvme_rdma_poller *poller, int qp_num)
+{
+	struct nvme_rdma_qpair find;
+
+	assert(poller->srq);
+
+	find.qp_num = qp_num;
+
+	return RB_FIND(nvme_rdma_qpairs_tree, &poller->qpairs, &find);
+}
+
 static inline void
 nvme_rdma_log_wc_status(struct nvme_rdma_qpair *rqpair, struct ibv_wc *wc)
 {
@@ -2888,7 +2928,9 @@ nvme_rdma_process_recv_completion(struct nvme_rdma_poller *poller, struct ibv_wc
 	rdma_rsp = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_rsp, rdma_wr);
 
 	if (poller && poller->srq) {
-		rqpair = nvme_rdma_poll_group_find_qpair(poller->group, wc->qp_num);
+		assert(wc->qp_num <= INT_MAX);
+
+		rqpair = nvme_rdma_poller_srq_find_qpair(poller, wc->qp_num);
 		if (spdk_unlikely(!rqpair)) {
 			/* Since we do not handle the LAST_WQE_REACHED event, we do not know when
 			 * a Receive Queue in a QP, that is associated with an SRQ, is flushed.
@@ -3429,6 +3471,8 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 	group->num_pollers++;
 	poller->current_num_wc = num_cqe;
 	poller->required_num_wc = 0;
+	RB_INIT(&poller->qpairs);
+
 	return poller;
 
 fail:
