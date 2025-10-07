@@ -259,13 +259,15 @@ struct fsdevperf_app {
 	     (job) != NULL; \
 	     (job) = (job) != (parent) ? TAILQ_NEXT((job), tailq.child) : NULL)
 
+#define FSDEVPERF_IO_TYPE_FLAGS_MASK (FSDEVPERF_JOB_RANDOM)
+
 struct fsdevperf_aux_io_type {
 	const char	*name;
 	int		value;
-	bool		random;
+	int		flags;
 } g_aux_io_types[] = {
-	{ "randread", FUSE_READ, true },
-	{ "randwrite", FUSE_WRITE, true },
+	{ "randread", FUSE_READ, FSDEVPERF_JOB_RANDOM },
+	{ "randwrite", FUSE_WRITE, FSDEVPERF_JOB_RANDOM },
 };
 
 static struct fsdevperf_job *
@@ -394,6 +396,12 @@ fsdevperf_job_is_internal(struct fsdevperf_job *job)
 	return job->flags & FSDEVPERF_JOB_INTERNAL;
 }
 
+static int
+fsdevperf_job_get_io_type_flags(struct fsdevperf_job *job)
+{
+	return job->flags & FSDEVPERF_IO_TYPE_FLAGS_MASK;
+}
+
 static const char *
 fsdevperf_get_filename(const char *path)
 {
@@ -406,12 +414,12 @@ fsdevperf_get_filename(const char *path)
 }
 
 static int
-fsdevperf_parse_io_pattern(const char *pattern, bool *random)
+fsdevperf_parse_io_pattern(const char *pattern, int *flags)
 {
 	const char *name;
 	int i;
 
-	*random = false;
+	*flags = 0;
 	for (i = 0; i < SPDK_FSDEV_MAX_FUSE_OPC; i++) {
 		name = spdk_fsdev_get_opcode_name(i);
 		if (name != NULL && strcmp(name, pattern) == 0) {
@@ -421,7 +429,7 @@ fsdevperf_parse_io_pattern(const char *pattern, bool *random)
 
 	for (i = 0; i < (int)SPDK_COUNTOF(g_aux_io_types); i++) {
 		if (strcmp(g_aux_io_types[i].name, pattern) == 0) {
-			*random = g_aux_io_types[i].random;
+			*flags = g_aux_io_types[i].flags;
 			return g_aux_io_types[i].value;
 		}
 	}
@@ -436,7 +444,7 @@ fsdevperf_job_get_io_pattern_name(struct fsdevperf_job *job)
 
 	for (i = 0; i < SPDK_COUNTOF(g_aux_io_types); i++) {
 		if (g_aux_io_types[i].value == job->io_pattern &&
-		    g_aux_io_types[i].random == fsdevperf_job_is_random(job)) {
+		    g_aux_io_types[i].flags == fsdevperf_job_get_io_type_flags(job)) {
 			return g_aux_io_types[i].name;
 		}
 	}
@@ -2689,8 +2697,7 @@ static int
 fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 {
 	uint64_t u64;
-	bool random;
-	int ival;
+	int ival, flags;
 
 	switch (ch) {
 	case FSDEVPERF_OPT_PATH:
@@ -2704,13 +2711,13 @@ fsdevperf_job_parse_option(struct fsdevperf_job *job, int ch, char *arg)
 		}
 		break;
 	case FSDEVPERF_OPT_PATTERN:
-		ival = fsdevperf_parse_io_pattern(arg, &random);
+		ival = fsdevperf_parse_io_pattern(arg, &flags);
 		if (ival < 0) {
 			fsdevperf_errmsg("%s: invalid pattern argument: %s\n", job->name, arg);
 			return -EINVAL;
 		}
 		job->io_pattern = ival;
-		job->flags |= random ? FSDEVPERF_JOB_RANDOM : 0;
+		job->flags |= flags;
 		break;
 	case FSDEVPERF_OPT_JOBS:
 		if (job->path != NULL) {
