@@ -6843,9 +6843,7 @@ spdk_bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts)
 	}
 
 	spdk_nvme_transport_get_opts(&drv_opts, sizeof(drv_opts));
-	if (opts->rdma_srq_size != 0) {
-		drv_opts.rdma_srq_size = opts->rdma_srq_size;
-	}
+	drv_opts.rdma_srq_size = opts->rdma_srq_size;
 	if (opts->rdma_max_cq_size != 0) {
 		drv_opts.rdma_max_cq_size = opts->rdma_max_cq_size;
 	}
