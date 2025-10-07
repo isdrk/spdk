@@ -183,6 +183,7 @@ struct fsdevperf_job_ops {
 #define FSDEVPERF_JOB_DIRECT			(1 << 4)
 #define FSDEVPERF_JOB_FAKE_MEMORY_DOMAIN	(1 << 5)
 #define FSDEVPERF_JOB_SKIP_COPY			(1 << 6)
+#define FSDEVPERF_JOB_RWMIX			(1 << 7)
 
 struct fsdevperf_job {
 	int					io_pattern;
@@ -259,7 +260,7 @@ struct fsdevperf_app {
 	     (job) != NULL; \
 	     (job) = (job) != (parent) ? TAILQ_NEXT((job), tailq.child) : NULL)
 
-#define FSDEVPERF_IO_TYPE_FLAGS_MASK (FSDEVPERF_JOB_RANDOM)
+#define FSDEVPERF_IO_TYPE_FLAGS_MASK (FSDEVPERF_JOB_RANDOM | FSDEVPERF_JOB_RWMIX)
 
 struct fsdevperf_aux_io_type {
 	const char	*name;
@@ -268,6 +269,8 @@ struct fsdevperf_aux_io_type {
 } g_aux_io_types[] = {
 	{ "randread", FUSE_READ, FSDEVPERF_JOB_RANDOM },
 	{ "randwrite", FUSE_WRITE, FSDEVPERF_JOB_RANDOM },
+	{ "rw", FUSE_READ, FSDEVPERF_JOB_RWMIX },
+	{ "randrw", FUSE_READ, FSDEVPERF_JOB_RWMIX | FSDEVPERF_JOB_RANDOM },
 };
 
 static struct fsdevperf_job *
@@ -1750,6 +1753,18 @@ fsdevperf_request_generate_data(struct fsdevperf_request *request, uint64_t id)
 	}
 }
 
+static int
+fsdevperf_task_current_io_pattern(struct fsdevperf_task *task)
+{
+	struct fsdevperf_job *job = task->job;
+
+	if (!(job->flags & FSDEVPERF_JOB_RWMIX)) {
+		return job->io_pattern;
+	}
+
+	return rand_r(&task->seed) % 100 < 50 ? FUSE_READ : FUSE_WRITE;
+}
+
 static void
 fsdevperf_request_submit(struct fsdevperf_request *request)
 {
@@ -1758,7 +1773,7 @@ fsdevperf_request_submit(struct fsdevperf_request *request)
 
 	offset = fsdevperf_task_get_offset(task);
 	id = fsdevperf_task_next_id(task);
-	switch (task->io_pattern) {
+	switch (fsdevperf_task_current_io_pattern(task)) {
 	case FUSE_READ:
 		fsdevperf_request_submit_read(request, id, task->fobj, task->fh, offset,
 					      task->io_size, request->iovs, request->iovcnt,
@@ -2834,7 +2849,7 @@ fsdevperf_usage(void)
 	printf(" -q, --iodepth=<iodepth>              I/O depth\n");
 	printf(" -S, --iosegment-size                 I/O segment size\n");
 	printf("     --size=<size>                    total size of I/O to perform on each file/thread\n");
-	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite)\n");
+	printf(" -w, --pattern=<pattern>              I/O pattern (read, write, randread, randwrite, rw, randrw)\n");
 	printf(" -t, --runtime=<runtime>              runtime in seconds\n");
 	printf(" -j, --jobs=<file>                    job configuration file\n");
 	printf(" -z, --wait-for-start                 don't start the test immediately, wait for the perform_tests\n");
