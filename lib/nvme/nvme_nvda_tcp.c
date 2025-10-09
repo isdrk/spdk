@@ -2242,12 +2242,6 @@ nvme_tcp_qpair_cmd_send_complete(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_
 
 		SPDK_DEBUGLOG(nvme, "tqpair %p, req %p cpl in disconnecting\n", tqpair, tcp_req);
 
-		nvme_request_put_zcopy_iovs(&tcp_req->req.zcopy);
-		if (tcp_req->sock_buf) {
-			xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
-			tcp_req->sock_buf = NULL;
-		}
-
 		nvme_tcp_req_complete(tcp_req, tqpair, &cpl, true);
 		return;
 	}
@@ -2606,6 +2600,10 @@ _nvme_tcp_req_complete(struct nvme_tcp_req *tcp_req,
 	req = &tcp_req->req;
 	qpair = req->qpair;
 
+	nvme_request_put_zcopy_iovs(&req->zcopy);
+	xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
+	tcp_req->sock_buf = NULL;
+
 	TAILQ_REMOVE(&tqpair->outstanding_reqs, tcp_req, link);
 	assert(tqpair->stats->outstanding_reqs > 0);
 	tqpair->stats->outstanding_reqs--;
@@ -2635,20 +2633,14 @@ nvme_tcp_req_accel_seq_complete_cb(void *arg, int status)
 {
 	struct nvme_tcp_req	*tcp_req = arg;
 	struct nvme_tcp_qpair	*tqpair = nvme_tcp_qpair(tcp_req->req.qpair);
-	struct nvme_request	*req;
 
 	SPDK_DEBUGLOG(nvme, "Accel sequence completed: tcp_req %p, status %d\n", tcp_req, status);
 
-	req = &tcp_req->req;
-
 	assert(tcp_req->ordering.bits.in_progress_accel);
 	tcp_req->ordering.bits.in_progress_accel = 0;
-	nvme_request_put_zcopy_iovs(&req->zcopy);
-	xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
 	tcp_req->pdu.iovcnt = 0;
 	tcp_req->pdu.data_iovcnt = 0;
 	tcp_req->pdu.data_len = 0;
-	tcp_req->sock_buf = NULL;
 
 	if (spdk_unlikely(status)) {
 		SPDK_ERRLOG("tqpair %p, req %p, accel sequence status %d\n", tqpair, tcp_req, status);
@@ -2763,7 +2755,6 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 							       NULL, NULL, NULL, NULL);
 			if (spdk_unlikely(rc)) {
 				SPDK_ERRLOG("Failed to append copy accel task, rc %d\n", rc);
-				nvme_request_put_zcopy_iovs(&req->zcopy);
 				goto out;
 			}
 
@@ -2776,12 +2767,9 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 
 out:
 	if (xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
-		nvme_request_put_zcopy_iovs(&req->zcopy);
-		xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
 		tcp_req->pdu.data_iovcnt = 0;
 		tcp_req->pdu.iovcnt = 0;
 		tcp_req->pdu.data_len = 0;
-		tcp_req->sock_buf = NULL;
 	}
 
 	_nvme_tcp_req_complete(tcp_req, tqpair, rsp);
@@ -2838,11 +2826,6 @@ nvme_tcp_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr)
 			      tqpair, qpair->id, tqpair->xlio_sock, tcp_req, tcp_req->ordering.raw);
 		if (tcp_req->ordering.bits.in_progress_accel) {
 			continue;
-		}
-		nvme_request_put_zcopy_iovs(&tcp_req->req.zcopy);
-		if (tcp_req->sock_buf) {
-			xlio_sock_free_bufs(tqpair, tcp_req->sock_buf);
-			tcp_req->sock_buf = NULL;
 		}
 		nvme_tcp_req_complete(tcp_req, tqpair, &cpl, true);
 	}
