@@ -655,7 +655,6 @@ static void xlio_sock_free_packet(struct nvme_tcp_qpair *tqpair, struct xlio_soc
 static void
 nvme_qpair_disconnect_release_xlio_packets(struct nvme_tcp_qpair *tqpair)
 {
-	tqpair->flags.stop_receiving = 1;
 	while (!STAILQ_EMPTY(&tqpair->received_packets)) {
 		struct xlio_sock_packet *packet = STAILQ_FIRST(&tqpair->received_packets);
 
@@ -1682,12 +1681,14 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	}
 
 	nvme_tcp_qpair_print_reqs_info(tqpair);
-	nvme_qpair_disconnect_release_xlio_packets(tqpair);
+	tqpair->flags.stop_receiving = 1;
 
-	if (qpair->outstanding_zcopy_reqs == 0 && tqpair->consumed_packets == 0 &&
-	    tqpair->zcopy_tx_pdus == 0) {
+	if (tqpair->zcopy_tx_pdus == 0) {
 		nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
-		xlio_sock_close(tqpair);
+		if (qpair->outstanding_zcopy_reqs == 0 && tqpair->consumed_packets == 0) {
+			nvme_qpair_disconnect_release_xlio_packets(tqpair);
+			xlio_sock_close(tqpair);
+		}
 	} else {
 		SPDK_DEBUGLOG(nvme,
 			      "qpair %p %u: defer close, %u zcopy reqs, consumed_packets %u, zcopy_tx_pdus %u\n",
@@ -5261,16 +5262,24 @@ nvme_tcp_poll_group_process_completions(struct spdk_nvme_transport_poll_group *t
 
 	STAILQ_FOREACH_SAFE(qpair, &tgroup->disconnected_qpairs, poll_group_stailq, tmp_qpair) {
 		tqpair = nvme_tcp_qpair(qpair);
-		if (qpair->outstanding_zcopy_reqs > 0 || tqpair->consumed_packets > 0 ||
-		    tqpair->zcopy_tx_pdus > 0) {
+		if (tqpair->zcopy_tx_pdus > 0) {
 			SPDK_DEBUGLOG(nvme,
-				      "qpair %p %u, sock 0x%lx: defer close, zcopy_reqs %u, consumed_packets %u zcopy_tx_pdus %u\n",
-				      tqpair, qpair->id, tqpair->xlio_sock, qpair->outstanding_zcopy_reqs, tqpair->consumed_packets,
-				      tqpair->zcopy_tx_pdus);
+				      "qpair %p %u, sock 0x%lx: defer close, zcopy_tx_pdus %u\n",
+				      tqpair, qpair->id, tqpair->xlio_sock, tqpair->zcopy_tx_pdus);
 			continue;
 		}
 
 		nvme_tcp_qpair_abort_reqs(qpair, qpair->abort_dnr);
+
+		if (qpair->outstanding_zcopy_reqs > 0 || tqpair->consumed_packets > 0) {
+			SPDK_DEBUGLOG(nvme,
+				      "qpair %p %u, sock 0x%lx: defer close, zcopy_reqs %u, consumed_packets %u\n",
+				      tqpair, qpair->id, tqpair->xlio_sock, qpair->outstanding_zcopy_reqs,
+				      tqpair->consumed_packets);
+			continue;
+		}
+
+		nvme_qpair_disconnect_release_xlio_packets(tqpair);
 
 		if (!tqpair->flags.closed) {
 			int rc = xlio_sock_close(tqpair);
