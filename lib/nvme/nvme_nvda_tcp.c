@@ -649,8 +649,11 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 
 static void xlio_sock_free_packet(struct nvme_tcp_qpair *tqpair, struct xlio_sock_packet *packet);
 
+/* Do not call this function, if part of data in received_packets list is using (i.e., is consumed),
+ * that is, the data has been read and not freed yet.
+ */
 static void
-xlio_sock_release_packets(struct nvme_tcp_qpair *tqpair)
+nvme_qpair_disconnect_release_xlio_packets(struct nvme_tcp_qpair *tqpair)
 {
 	tqpair->flags.stop_receiving = 1;
 	while (!STAILQ_EMPTY(&tqpair->received_packets)) {
@@ -778,6 +781,12 @@ xlio_sock_free_packet(struct nvme_tcp_qpair *tqpair, struct xlio_sock_packet *pa
 	} else {
 		free(packet);
 	}
+}
+
+static void
+xlio_sock_free_consumed_packet(struct nvme_tcp_qpair *tqpair, struct xlio_sock_packet *packet)
+{
+	xlio_sock_free_packet(tqpair, packet);
 
 	assert(tqpair->consumed_packets > 0);
 	tqpair->consumed_packets--;
@@ -803,8 +812,9 @@ packets_advance(struct nvme_tcp_qpair *tqpair, size_t len)
 			/* Next packet */
 			tqpair->cur_offset = 0;
 			STAILQ_REMOVE_HEAD(&tqpair->received_packets, link);
+			tqpair->consumed_packets++;
 			if (--cur_packet->refs == 0) {
-				xlio_sock_free_packet(tqpair, cur_packet);
+				xlio_sock_free_consumed_packet(tqpair, cur_packet);
 			}
 		}
 	}
@@ -996,7 +1006,6 @@ xlio_socket_rx_cb(xlio_socket_t sock, uintptr_t userdata_sq, void *data, size_t 
 	packet->iov.iov_base = data;
 	assert(len != 0);
 	packet->iov.iov_len = len;
-	tqpair->consumed_packets++;
 	if (spdk_unlikely(tqpair->flags.stop_receiving)) {
 		xlio_sock_free_packet(tqpair, packet);
 	} else {
@@ -1337,7 +1346,7 @@ xlio_sock_free_bufs(struct nvme_tcp_qpair *tqpair, struct xlio_sock_buf *sock_bu
 			bufs_count = 0;
 		}
 		if (--packet->refs == 0) {
-			xlio_sock_free_packet(tqpair, packet);
+			xlio_sock_free_consumed_packet(tqpair, packet);
 		}
 
 		sock_buf = next;
@@ -1673,7 +1682,7 @@ nvme_tcp_ctrlr_disconnect_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 	}
 
 	nvme_tcp_qpair_print_reqs_info(tqpair);
-	xlio_sock_release_packets(tqpair);
+	nvme_qpair_disconnect_release_xlio_packets(tqpair);
 
 	if (qpair->outstanding_zcopy_reqs == 0 && tqpair->consumed_packets == 0 &&
 	    tqpair->zcopy_tx_pdus == 0) {
