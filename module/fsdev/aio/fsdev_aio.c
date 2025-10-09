@@ -316,6 +316,14 @@ struct aio_io_channel {
 	} u;
 };
 
+struct aio_fsdev_notify_request {
+	struct spdk_fuse_notify_request		base;
+	struct iovec				iov;
+	struct fuse_out_header			out;
+	struct fuse_notify_inval_entry_out	entry;
+	char data[];
+};
+
 static TAILQ_HEAD(, aio_fsdev) g_aio_fsdev_head = TAILQ_HEAD_INITIALIZER(
 			g_aio_fsdev_head);
 
@@ -1274,14 +1282,14 @@ fsdev_aio_get_fobject_by_linux_fh(struct aio_fsdev *vfsdev, const struct file_ha
 }
 
 static void
-fsdev_aio_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
-			  void *reply_ctx)
+fsdev_aio_notify_reply_cb(struct spdk_fuse_notify_request *req, int status)
 {
-	struct aio_fsdev *vfsdev = reply_ctx;
+	struct aio_fsdev_notify_request *aio_req = SPDK_CONTAINEROF(req, struct aio_fsdev_notify_request,
+			base);
 
 	SPDK_INFOLOG(fsdev_aio, "Notify reply: status %d, ctx %p\n",
-		     notify_reply_data->status, reply_ctx);
-	spdk_fsdev_notify_reply_add_stat(&vfsdev->fsdev, SPDK_FSDEV_NOTIFY_INVAL_ENTRY);
+		     status, aio_req);
+	free(aio_req);
 }
 
 static void
@@ -1292,13 +1300,43 @@ fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, struct file_han
 
 	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, file_handle);
 	if (fobject) {
+		struct aio_fsdev_notify_request *req;
+		uint64_t parent_nodeid = fsdev_aio_fobject_to_nodeid(fobject->vfsdev, fobject);
+		int rc;
+
 		SPDK_INFOLOG(fsdev_aio, "Notify inval entry: parent " FOBJECT_FMT
 			     ", parent fd %d, name %s\n",
 			     FOBJECT_ARGS(fobject), fobject->fd, file_name);
-		spdk_fsdev_notify_inval_entry(&vfsdev->fsdev,
-					      fsdev_aio_get_spdk_fobject(vfsdev, fobject),
-					      file_name, fsdev_aio_notify_reply_cb, vfsdev);
 		file_object_unref(fobject, 1);
+
+		req = calloc(1, sizeof(*req) + strlen(file_name) + 1);
+		if (req == NULL) {
+			SPDK_ERRLOG("Cannot allocate notify request\n");
+			return;
+		}
+
+		req->entry.flags = 0;
+		req->out.error = FUSE_NOTIFY_INVAL_ENTRY;
+		req->out.unique = 0;
+		req->base.iovcnt = 1;
+		req->base.iovs = &req->iov;
+		req->base.fsdev = &vfsdev->fsdev;
+		req->base.cb_fn = fsdev_aio_notify_reply_cb;
+		req->entry.parent = parent_nodeid;
+		req->entry.namelen = strlen(file_name);
+		req->out.len = sizeof(req->out) + sizeof(req->entry) + req->entry.namelen + 1;
+		memcpy(req->data, file_name, req->entry.namelen + 1);
+		req->iov.iov_base = &req->out;
+		req->iov.iov_len = sizeof(req->out) + sizeof(req->entry) + req->entry.namelen + 1;
+		/* Upper layer guarantees that reply cb is eventually called.
+		 * So, we don't store in-flight notifications in fsdev_aio.
+		 */
+		rc = spdk_fsdev_notify_fuse(&req->base);
+		if (rc) {
+			SPDK_ERRLOG("spdk_fsdev_notify_fuse failed with %d\n", rc);
+			free(req);
+			return;
+		}
 	} else {
 		SPDK_INFOLOG(fsdev_aio, "Fobject not found for parent of %s\n", file_name);
 	}
