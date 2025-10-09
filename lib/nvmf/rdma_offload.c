@@ -3549,7 +3549,7 @@ nvmf_sta_io_non_offload_request_process(struct nvmf_non_offload_request *non_off
 		 */
 		rsp->status.sct = SPDK_NVME_SCT_GENERIC;
 		rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-		if (non_offload_req->state != RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING) {
+		if (non_offload_req->state != RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING) {
 			STAILQ_INSERT_TAIL(&oqpair->pending_rdma_send_queue, non_offload_req, state_link);
 			non_offload_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
 		}
