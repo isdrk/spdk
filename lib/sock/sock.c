@@ -974,9 +974,15 @@ static int
 sock_group_impl_register_interrupt(struct spdk_fd_group *fgrp,
 				   struct spdk_sock_group_impl *group_impl)
 {
-	struct spdk_net_impl *impl = group_impl->net_impl;
+	struct spdk_net_impl *impl;
 	int fd;
 
+	if (group_impl == NULL) {
+		errno = EINVAL;
+		return -1;
+	}
+
+	impl = group_impl->net_impl;
 	if (impl == NULL) {
 		errno = EINVAL;
 		return -1;
