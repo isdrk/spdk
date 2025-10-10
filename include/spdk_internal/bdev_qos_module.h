@@ -46,6 +46,11 @@ struct spdk_bdev_qos_module {
 	void (*module_fini)(void);
 
 	/**
+	 * Output RPC configuration to a JSON stream for the QoS module.
+	 */
+	void (*module_config_json)(struct spdk_json_write_ctx *w);
+
+	/**
 	 * Allocate a module-dependent object per QoS device.
 	 */
 	struct spdk_bdev_qos_impl *(*get_impl)(void);

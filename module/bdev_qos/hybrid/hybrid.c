@@ -1254,6 +1254,22 @@ _bdev_hybrid_qos_check_disabled(struct spdk_bdev_qos_impl *qos_impl)
 }
 
 static void
+bdev_qos_hybrid_library_config_json(struct spdk_json_write_ctx *w)
+{
+	spdk_json_write_object_begin(w);
+
+	spdk_json_write_named_string(w, "method", "bdev_hybrid_qos_set_options");
+
+	spdk_json_write_named_object_begin(w, "params");
+	spdk_json_write_named_uint64(w, "io_slice", g_qos_opts.io_slice);
+	spdk_json_write_named_uint64(w, "byte_slice", g_qos_opts.byte_slice);
+	spdk_json_write_named_uint64(w, "timeslice_us", g_qos_opts.timeslice_us);
+	spdk_json_write_object_end(w);
+
+	spdk_json_write_object_end(w);
+}
+
+static void
 bdev_hybrid_qos_config_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_json_write_ctx *w)
 {
 	uint64_t limits[SPDK_BDEV_QOS_NUM_RATE_LIMIT_TYPES] = {};
@@ -1334,6 +1350,7 @@ static struct spdk_bdev_qos_module hybrid_if = {
 	.name = "hybrid",
 	.module_init = bdev_qos_hybrid_library_init,
 	.module_fini = bdev_qos_hybrid_library_fini,
+	.module_config_json = bdev_qos_hybrid_library_config_json,
 	.get_impl = bdev_hybrid_qos_get,
 	.put_impl = bdev_hybrid_qos_put,
 	.impl_config_json = bdev_hybrid_qos_config_json,
