@@ -837,16 +837,16 @@ ut_fsdev_test_notifications(void)
 	memset(&stat, 0, sizeof(stat));
 	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
 	poll_threads();
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_DATA].count == 1);
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_ENTRY].count == 1);
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_DATA].replies == 0);
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_ENTRY].replies == 0);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].count == 1);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].count == 1);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].replies == 0);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].replies == 0);
 
 	spdk_fsdev_notify_reply_add_stat(&utfsdev->fsdev, SPDK_FSDEV_NOTIFY_INVAL_DATA);
 	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
 	poll_threads();
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_DATA].replies == 1);
-	CU_ASSERT(stat.notify[SPDK_FSDEV_NOTIFY_INVAL_ENTRY].replies == 0);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].replies == 1);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].replies == 0);
 
 	/* Disable notifications */
 	ut_calls_reset();

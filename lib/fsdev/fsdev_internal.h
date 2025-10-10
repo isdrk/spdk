@@ -54,6 +54,6 @@ struct spdk_fsdev_channel {
 	uint32_t		delayed_99_count;
 };
 
-const char *fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type);
+const char *fsdev_notify_type_get_name(int type);
 
 #endif /* SPDK_FSDEV_INT_H */
