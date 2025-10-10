@@ -2108,6 +2108,7 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
 	struct spdk_bdev_module *bdev_module;
 	struct spdk_bdev *bdev;
+	struct spdk_bdev_qos_module *qos_module;
 	struct spdk_bdev_qos *qos;
 
 	assert(w != NULL);
@@ -2141,6 +2142,12 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 		}
 
 		bdev_enable_histogram_config_json(bdev, w);
+	}
+
+	TAILQ_FOREACH(qos_module, &g_bdev_mgr.qos_modules, link) {
+		if (qos_module->module_config_json != NULL) {
+			qos_module->module_config_json(w);
+		}
 	}
 
 	TAILQ_FOREACH(qos, &g_bdev_mgr.qos_list, tailq) {
