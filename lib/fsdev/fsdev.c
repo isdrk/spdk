@@ -1264,18 +1264,20 @@ fsdev_notify_get_type(const struct spdk_fsdev_notify_data *notify_data)
 
 static int
 fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,
-	     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
+	     bool is_retry, spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
 {
 	int type, res = -ENODEV;
 
 	if (fsdev->internal.notify_cb) {
 		assert(spdk_get_thread() == fsdev->internal.notify_thread);
-		type = fsdev_notify_get_type(notify_data);
 		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
 					  reply_cb, reply_ctx);
 		res = 0;
-		__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].count, 1,
-				   __ATOMIC_RELAXED);
+		if (!is_retry) {
+			type = fsdev_notify_get_type(notify_data);
+			__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].count, 1,
+					   __ATOMIC_RELAXED);
+		}
 	}
 
 	return res;
@@ -1295,7 +1297,7 @@ spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
 		.inval_data.size = size
 	};
 
-	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+	return fsdev_notify(fsdev, &notify_data, false, reply_cb, reply_ctx);
 }
 
 int
@@ -1311,7 +1313,7 @@ spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 		.inval_entry.name = name
 	};
 
-	return fsdev_notify(fsdev, &notify_data, reply_cb, reply_ctx);
+	return fsdev_notify(fsdev, &notify_data, false, reply_cb, reply_ctx);
 }
 
 static void
@@ -1325,6 +1327,8 @@ fsdev_fuse_notify_request_done(struct spdk_fuse_notify_request *req, int status)
 	__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].replies, 1, __ATOMIC_RELAXED);
 	req->cb_fn(req, status);
 }
+
+static int fsdev_notify_fuse(struct spdk_fuse_notify_request *req, bool is_retry);
 
 static int
 fsdev_pending_notification_poller(void *ctx)
@@ -1345,7 +1349,7 @@ fsdev_pending_notification_poller(void *ctx)
 		if (req->internal.status != -ENOMEM) {
 			fsdev_fuse_notify_request_done(req, req->internal.status);
 		} else {
-			rc = spdk_fsdev_notify_fuse(req);
+			rc = fsdev_notify_fuse(req, true);
 			if (rc != 0) {
 				fsdev_fuse_notify_request_done(req, rc);
 			}
@@ -1375,8 +1379,8 @@ fsdev_fuse_notify_done(const struct spdk_fsdev_notify_reply_data *reply, void *c
 	fsdev_fuse_notify_request_done(req, req->internal.status);
 }
 
-int
-spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
+static int
+fsdev_notify_fuse(struct spdk_fuse_notify_request *req, bool is_retry)
 {
 	struct spdk_fsdev_notify_data notify_data = {
 		.type = SPDK_FSDEV_NOTIFY_FUSE,
@@ -1388,10 +1392,16 @@ spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
 	req->internal.flags.raw = 0;
 
 	req->internal.flags.in_submit_notify = 1;
-	rc =  fsdev_notify(req->fsdev, &notify_data, fsdev_fuse_notify_done, req);
+	rc =  fsdev_notify(req->fsdev, &notify_data, is_retry, fsdev_fuse_notify_done, req);
 	req->internal.flags.in_submit_notify = 0;
 
 	return rc;
+}
+
+int
+spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
+{
+	return fsdev_notify_fuse(req, false);
 }
 
 void
