@@ -185,25 +185,25 @@ struct fsdevperf_job_ops {
 #define FSDEVPERF_JOB_SKIP_COPY			(1 << 6)
 
 struct fsdevperf_job {
-	int				io_pattern;
-	int				status;
-	size_t				io_size;
-	size_t				io_depth;
-	size_t				io_segment_size;
-	size_t				filesize;
-	size_t				size;
-	size_t				num_files;
-	uint32_t			runtime;
-	uint32_t			flags;
-	char				*name;
-	char				*path;
-	size_t				num_active;
-	size_t				num_tasks;
-	size_t				num_ready;
-	void				*buf;
-	struct fsdevperf_job_ops	ops;
-	TAILQ_HEAD(, fsdevperf_task)	tasks;
-	TAILQ_ENTRY(fsdevperf_job)	tailq;
+	int					io_pattern;
+	int					status;
+	size_t					io_size;
+	size_t					io_depth;
+	size_t					io_segment_size;
+	size_t					filesize;
+	size_t					size;
+	size_t					num_files;
+	uint32_t				runtime;
+	uint32_t				flags;
+	char					*name;
+	char					*path;
+	size_t					num_active;
+	size_t					num_tasks;
+	size_t					num_ready;
+	void					*buf;
+	struct fsdevperf_job_ops		ops;
+	TAILQ_HEAD(, fsdevperf_task)		tasks;
+	TAILQ_ENTRY(fsdevperf_job)		tailq;
 };
 
 struct fsdevperf_app {
