@@ -919,7 +919,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 			  int fd, mode_t mode, const char *name)
 {
 	struct aio_fsdev_file_object *fobject;
-	uint64_t mount_id, lut_key = SPDK_LUT_INVALID_KEY;
+	uint64_t mount_id = 0, lut_key = SPDK_LUT_INVALID_KEY;
 	int rc, dummy;
 
 	fobject = calloc(1, sizeof(*fobject));
@@ -1254,7 +1254,7 @@ fsdev_aio_op_getattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		SPDK_ERRLOG("Cannot fill attr for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), res);
 		goto fop_failed;
 	}
-
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(struct fuse_attr_out);
 
 	SPDK_DEBUGLOG(fsdev_aio, "GETATTR succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
@@ -1317,6 +1317,7 @@ fsdev_aio_op_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	SPDK_DEBUGLOG(fsdev_aio, "OPENDIR succeeded for " FOBJECT_FMT " (fh=%p)\n",
 		      FOBJECT_ARGS(fobject), fhandle);
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_open_out);
 	memset(fsdev_io->u_out.fuse.op.open, 0, sizeof(*fsdev_io->u_out.fuse.op.open));
 	fsdev_io->u_out.fuse.op.open->fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
@@ -1708,6 +1709,7 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 #endif
 
 	fsdev_aio_set_init_opts(vfsdev, init_in, init_out);
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(*init_out);
 	file_object_ref(vfsdev->root);
 
@@ -1847,6 +1849,7 @@ fsdev_aio_op_lookup(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(*entry_out);
 	err = 0;
 
@@ -1932,6 +1935,7 @@ fsdev_aio_op_lseek(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	SPDK_DEBUGLOG(fsdev_aio, "LSEEK succeeded for " FOBJECT_FMT "\n", FOBJECT_ARGS(fobject));
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_lseek_out);
 	lseek_out->offset = offset;
 	res = 0;
@@ -1987,6 +1991,7 @@ fsdev_aio_do_poll(struct aio_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	if (res > 0) {
+		assert(fsdev_io->u_out.fuse.hdr != NULL);
 		fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_poll_out);
 		poll_out->revents = fds.revents;
 		res = 0;
@@ -2200,6 +2205,7 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	memset(ioctl_out, 0, sizeof(*ioctl_out));
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_ioctl_out);
 
 	switch (ioctl_in->cmd) {
@@ -2375,6 +2381,7 @@ fsdev_aio_op_getlk(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len = sizeof(struct fuse_lk_out);
 	res = 0;
 
@@ -2688,6 +2695,7 @@ continue_readdir:
 		      FOBJECT_ARGS(fobject), simple, fhandle, read_in->offset, offset);
 fop_failed:
 	if (!res || res == -EAGAIN) {
+		assert(fsdev_io->u_out.fuse.hdr != NULL);
 		fsdev_io->u_out.fuse.hdr->len += bytes_written;
 		res = 0;
 	}
@@ -2818,6 +2826,7 @@ fsdev_aio_op_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += sizeof(struct fuse_open_out);
 	fsdev_io->u_out.fuse.op.open->fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
 	fsdev_io->u_out.fuse.op.open->open_flags = 0;
@@ -3051,6 +3060,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(struct fuse_attr_out);
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "SETATTR succeeded for " FOBJECT_FMT "\n",
@@ -3143,6 +3153,7 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	SPDK_DEBUGLOG(fsdev_aio, "CREATE: succeeded (name=%s " FOBJECT_FMT " fh=%p)\n",
 		      name, FOBJECT_ARGS(fobject), fhandle);
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += sizeof(*create_out);
 	create_out->open.fh = fsdev_aio_get_fuse_fh(vfsdev, fhandle);
 	create_out->entry.attr.mode = (mode & ~umask);
@@ -3226,9 +3237,9 @@ fsdev_aio_op_read(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 
 	if (vfsdev->opts.skip_rw) {
 		uint32_t i;
-
 		vfsdev_io->status = 0;
 
+		assert(fsdev_io->u_out.fuse.hdr != NULL);
 		for (i = 0; i < iovcnt; i++, iovs++) {
 			fsdev_io->u_out.fuse.hdr->len += iovs->iov_len;
 		}
@@ -3370,6 +3381,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 		uint32_t i;
 		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 
+		assert(out_hdr != NULL);
 		out_hdr->len += sizeof(struct fuse_write_out);
 		fsdev_io->u_out.fuse.op.write->size = 0;
 		vfsdev_io->status = 0;
@@ -3440,6 +3452,7 @@ fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	}
 
 	buf[res] = 0;
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += res + 1;
 	res = 0;
 
@@ -3500,6 +3513,7 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	statfs_out->st.namelen = stbuf.f_namemax;
 	statfs_out->st.frsize = stbuf.f_frsize;
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(*statfs_out);
 	res = 0;
 
@@ -3596,6 +3610,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 	SPDK_DEBUGLOG(fsdev_aio, "fsdev_aio_mknod_symlink(%s " FOBJECT_FMT ") -> " FOBJECT_FMT ")\n",
 		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(fobject));
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(*entry_out);
 	res = 0;
 
@@ -3676,6 +3691,7 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
 		return -EIO;
 	}
+	assert(fobject != NULL);
 
 	fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
 	if (fd < 0) {
@@ -3913,6 +3929,7 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto fop_failed;
 	}
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(*entry_out);
 	res = 0;
 
@@ -4117,6 +4134,7 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		goto fop_failed;
 	}
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += value_size;
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio,
@@ -4171,6 +4189,7 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		goto fop_failed;
 	}
 
+	assert(fsdev_io->u_out.fuse.hdr != NULL);
 	fsdev_io->u_out.fuse.hdr->len += data_size;
 	res = 0;
 	SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " data_size=%zu\n",
@@ -4374,6 +4393,7 @@ fsdev_aio_op_copy_file_range(struct spdk_io_channel *ch, struct spdk_fsdev_io *f
 		      (uint64_t)off_out, len, flags);
 
 
+	assert(out_hdr != NULL);
 	out_hdr->len += sizeof(struct fuse_write_out);
 	write_out->size = res;
 	res = 0;
