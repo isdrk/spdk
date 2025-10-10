@@ -603,8 +603,6 @@ struct spdk_nvmf_offload_qpair {
 
 	STAILQ_HEAD(, nvmf_non_offload_request)	pending_rdma_send_queue;
 
-	/* Number of requests not in the free state */
-	uint32_t				qd;
 	/*
 	 * io_channel which is used to destroy qpair when it is removed from poll group
 	 */
@@ -6481,7 +6479,7 @@ nvmf_sta_io_non_offload_cb(struct doca_sta_qp_handle *qp_handle,
 	req->receive_tsc = receive_tsc;
 	req->state = RDMA_REQUEST_STATE_NEW;
 	STAILQ_INSERT_HEAD(&opoller->resources->incoming_queue, req, state_link);
-	oqpair->qd++;
+	oqpair->common.qpair.queue_depth++;
 
 	nvmf_offload_qpair_process_pending(oqpair, false);
 }
@@ -7207,9 +7205,11 @@ nvmf_non_offload_request_free(struct nvmf_non_offload_request *non_offload_req)
 
 	STAILQ_INSERT_HEAD(&oqpair->opoller->resources->free_queue, non_offload_req, state_link);
 	non_offload_req->state = RDMA_REQUEST_STATE_FREE;
-	oqpair->qd--;
+	assert(oqpair->common.qpair.queue_depth > 0);
+	oqpair->common.qpair.queue_depth--;
 
-	if (spdk_unlikely(oqpair->state == SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINING && oqpair->qd == 0)) {
+	if (spdk_unlikely(oqpair->state == SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINING &&
+			  oqpair->common.qpair.queue_depth == 0)) {
 		oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINED;
 		nvmf_rdma_offload_qpair_close_process(oqpair);
 	}
@@ -7331,7 +7331,7 @@ nvmf_rdma_offload_qpair_drain(struct spdk_nvmf_offload_qpair *oqpair)
 {
 	nvmf_offload_qpair_process_pending(oqpair, true);
 
-	if (oqpair->qd == 0) {
+	if (oqpair->common.qpair.queue_depth == 0) {
 		oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_DRAINED;
 		return;
 	}
