@@ -177,12 +177,19 @@ static uint32_t fsdev_io_fuse_opc_values[__SPDK_FSDEV_IO_LAST] = {
 };
 
 static const char *fsdev_notify_type_names[] = {
-	"inval_data",
-	"inval_entry",
-	"fuse"
+	[FUSE_NOTIFY_POLL] = "poll",
+	[FUSE_NOTIFY_INVAL_INODE] = "inval_inode",
+	[FUSE_NOTIFY_INVAL_ENTRY] = "inval_entry",
+	[FUSE_NOTIFY_STORE] = "store",
+	[FUSE_NOTIFY_RETRIEVE] = "retrieve",
+	[FUSE_NOTIFY_DELETE] = "delete",
+	[FUSE_NOTIFY_RESEND] = "resend",
 };
-SPDK_STATIC_ASSERT(SPDK_COUNTOF(fsdev_notify_type_names) == SPDK_FSDEV_NOTIFY_NUM_TYPES,
-		   "Incorrect size");
+
+static uint32_t fsdev_notify_fuse_values[SPDK_FSDEV_NOTIFY_NUM_TYPES] = {
+	[SPDK_FSDEV_NOTIFY_INVAL_DATA] = FUSE_NOTIFY_INVAL_INODE,
+	[SPDK_FSDEV_NOTIFY_INVAL_ENTRY] = FUSE_NOTIFY_INVAL_ENTRY,
+};
 
 static struct spdk_fsdev_module *g_resume_fsdev_module = NULL;
 
@@ -1242,18 +1249,33 @@ spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev)
 }
 
 static int
+fsdev_notify_get_type(const struct spdk_fsdev_notify_data *notify_data)
+{
+	struct fuse_out_header *out;
+
+	if (notify_data->type == SPDK_FSDEV_NOTIFY_FUSE) {
+		out = notify_data->fuse->iovs[0].iov_base;
+		return out->error;
+	}
+
+	assert(notify_data->type < SPDK_COUNTOF(fsdev_notify_fuse_values));
+	return fsdev_notify_fuse_values[notify_data->type];
+}
+
+static int
 fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,
 	     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
 {
-	int res = -ENODEV;
+	int type, res = -ENODEV;
 
 	if (fsdev->internal.notify_cb) {
 		assert(spdk_get_thread() == fsdev->internal.notify_thread);
+		type = fsdev_notify_get_type(notify_data);
 		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
 					  reply_cb, reply_ctx);
 		res = 0;
-		__atomic_add_fetch(&fsdev->internal.hist_stat->notify[notify_data->type].count,
-				   1, __ATOMIC_RELAXED);
+		__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].count, 1,
+				   __ATOMIC_RELAXED);
 	}
 
 	return res;
@@ -1295,6 +1317,12 @@ spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
 static void
 fsdev_fuse_notify_request_done(struct spdk_fuse_notify_request *req, int status)
 {
+	struct spdk_fsdev *fsdev = req->fsdev;
+	struct fuse_out_header *out = req->iovs[0].iov_base;
+	int type = out->error;
+
+	assert(type < (int)SPDK_COUNTOF(fsdev->internal.hist_stat->notify));
+	__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].replies, 1, __ATOMIC_RELAXED);
 	req->cb_fn(req, status);
 }
 
@@ -1367,8 +1395,10 @@ spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
 }
 
 void
-spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type type)
+spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type fsdev_type)
 {
+	int type = fsdev_notify_fuse_values[fsdev_type];
+
 	__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].replies, 1, __ATOMIC_RELAXED);
 }
 
@@ -2146,10 +2176,10 @@ spdk_fsdev_get_opcode_name(uint32_t opc)
 }
 
 const char *
-fsdev_notify_type_get_name(enum spdk_fsdev_notify_type type)
+fsdev_notify_type_get_name(int type)
 {
-	assert(type < SPDK_FSDEV_NOTIFY_NUM_TYPES);
-	return (type < SPDK_COUNTOF(fsdev_notify_type_names)) ? fsdev_notify_type_names[type] : NULL;
+	return (type < (int)SPDK_COUNTOF(fsdev_notify_type_names)) ?
+	       fsdev_notify_type_names[type] : NULL;
 }
 
 int

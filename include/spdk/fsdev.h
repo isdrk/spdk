@@ -240,6 +240,13 @@ enum spdk_fsdev_notify_type {
 	SPDK_FSDEV_NOTIFY_NUM_TYPES
 };
 
+#define SPDK_FSDEV_MAX_NOTIFY_OPC 16
+
+/* We define it ourselves a bit higher than FUSE_NOTIFY_CODE_MAX to avoid
+ * changing ABI as new notification types are added.
+ */
+SPDK_STATIC_ASSERT(SPDK_FSDEV_MAX_NOTIFY_OPC >= FUSE_NOTIFY_CODE_MAX, "max notify opc");
+
 /**
  * fsdev IO statistics
  */
@@ -267,7 +274,7 @@ struct spdk_fsdev_io_stat {
 		uint64_t count;
 		/** Number of received notification replies */
 		uint64_t replies;
-	} notify[SPDK_FSDEV_NOTIFY_NUM_TYPES];
+	} notify[SPDK_FSDEV_MAX_NOTIFY_OPC];
 };
 
 /**
