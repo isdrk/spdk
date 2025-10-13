@@ -183,6 +183,10 @@ export SPDK_TEST_NVME_INTERRUPT
 export SPDK_TEST_XLIO
 : ${SPDK_TEST_FSDEV=0}
 export SPDK_TEST_FSDEV
+: ${SPDK_XFSTESTS_DIR:=}
+export SPDK_XFSTESTS_DIR
+: ${SPDK_PJDFSTESTS_DIR:=}
+export SPDK_PJDFSTESTS_DIR
 
 # always test with SPDK shared objects.
 export SPDK_LIB_DIR="$rootdir/build/lib"

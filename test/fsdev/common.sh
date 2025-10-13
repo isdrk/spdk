@@ -18,24 +18,11 @@ _get_pkgmgr() {
 	return 1
 }
 
-# TODO: remove this once the image is provision with these dependencies
-_install_xfstests_deps() {
-	source "$rootdir/test/common/config/pkgdep/$(_get_pkgmgr)"
-	install "${xfstests_packages[@]}"
-}
-
-# TODO: remove this once the image is provision with these dependencies
-_install_pjd_deps() {
-	source "$rootdir/test/common/config/pkgdep/$(_get_pkgmgr)"
-	install "${pjdfstest_packages[@]}"
-}
-
 _install_xfstests() {
 	local -g _xfsdir
 
 	[[ "$1" == "$SPDK_XFSTESTS_DIR" ]] && return 0
 	_xfsdir="$1"
-	_install_xfstests_deps
 	git clone https://git.kernel.org/pub/scm/fs/xfs/xfstests-dev.git "$_xfsdir"
 	git -C "$_xfsdir" checkout "$SPDK_XFSTESTS_VERSION"
 	make -j$(nproc) -C "$_xfsdir"
@@ -51,7 +38,6 @@ _install_pjdfstests() {
 
 	[[ "$1" == "$SPDK_PJDFSTESTS_DIR" ]] && return 0
 	_pjddir="$1"
-	_install_pjd_deps
 	git clone https://github.com/pjd/pjdfstest.git "$_pjddir"
 	git -C "$_pjddir" checkout "$SPDK_PJDFSTESTS_VERSION"
 	(
