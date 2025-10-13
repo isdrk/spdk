@@ -827,6 +827,7 @@ nvme_rdma_qpair_init(struct nvme_rdma_qpair *rqpair)
 
 	if (rqpair->srq) {
 		/* qp_num is known, add to RB tree for fast lookup. */
+		assert(rqpair->poller != NULL);
 		RB_INSERT(nvme_rdma_qpairs_tree, &rqpair->poller->qpairs, rqpair);
 	}
 
