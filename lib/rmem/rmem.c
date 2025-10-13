@@ -18,7 +18,6 @@
 
 #define NUM_RMEM_POOL_VERSION		1
 #define NUM_RMEM_POOL_BUCKETS		10
-#define MAX_RMEM_POOL_NAME_LEN		31
 #define RMEM_POOL_DEFAULT_BACKEND_DIR	"/dev/shm"
 
 #define RMEM_POOL_ALIGNMENT		8 /* bytes */
@@ -80,7 +79,7 @@ struct spdk_rmem_pool {
 		uint64_t size;
 	} mapped;
 	TAILQ_ENTRY(spdk_rmem_pool) link;
-	char name[MAX_RMEM_POOL_NAME_LEN + 1];
+	char name[NAME_MAX + 1];
 	TAILQ_HEAD(, spdk_rmem_entry) active_entries;
 	TAILQ_HEAD(, spdk_rmem_entry) free_entries;
 	struct spdk_rmem_entry **mirror_entries;
