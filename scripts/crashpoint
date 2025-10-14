@@ -5,6 +5,7 @@
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from elftools.elf.elffile import ELFFile
+import math
 import os
 import subprocess
 import sys
@@ -118,8 +119,9 @@ def count_lines(library, symbol, verbose):
     if verbose:
         lines = open(sym.locations[0].file, 'r').read().split('\n')
         filename = os.path.basename(sym.locations[0].file)
-        for loc in sym.locations:
-            sys.stderr.write(f'{loc.addr:6x} {filename}:{loc.line} ' +
+        isz = int(math.log10(len(sym.locations))) + 1
+        for i, loc in enumerate(sym.locations):
+            sys.stderr.write(f'{i:{isz}}{loc.addr:6x} {filename}:{loc.line} ' +
                              f'{lines[loc.line - 1]}\n')
         sys.stderr.flush()
     print(len(sym.locations))
