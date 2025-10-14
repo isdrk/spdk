@@ -115,12 +115,15 @@ def crash(pid, library, symbol, location, skip, verbose):
 
 
 def _show_symbol(symbol, file):
-    lines = open(symbol.locations[0].file, 'r').read().split('\n')
+    try:
+        lines = open(symbol.locations[0].file, 'r').read().split('\n')
+    except FileNotFoundError:
+        lines = None
     filename = os.path.basename(symbol.locations[0].file)
     isz = int(math.log10(len(symbol.locations))) + 1
     for i, loc in enumerate(symbol.locations):
-        file.write(f'{i:{isz}}{loc.addr:6x} {filename}:{loc.line} ' +
-                   f'{lines[loc.line - 1]}\n')
+        source = f' {lines[loc.line - 1]}' if lines is not None else ''
+        file.write(f'{i:{isz}}{loc.addr:6x} {filename}:{loc.line}{source}\n')
     file.flush()
 
 
