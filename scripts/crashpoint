@@ -119,8 +119,8 @@ def count_lines(library, symbol, verbose):
         lines = open(sym.locations[0].file, 'r').read().split('\n')
         filename = os.path.basename(sym.locations[0].file)
         for loc in sym.locations:
-            sys.stderr.write('{:6x} {}:{} {}\n'.format(loc.addr, filename, loc.line,
-                                                       lines[loc.line - 1]))
+            sys.stderr.write(f'{loc.addr:6x} {filename}:{loc.line} ' +
+                             f'{lines[loc.line - 1]}\n')
         sys.stderr.flush()
     print(len(sym.locations))
     return 0
