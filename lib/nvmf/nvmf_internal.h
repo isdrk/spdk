@@ -7,8 +7,6 @@
 #ifndef __NVMF_INTERNAL_H__
 #define __NVMF_INTERNAL_H__
 
-#include <doca_sta_be.h>
-
 #include "spdk/stdinc.h"
 
 #include "spdk/keyring.h"
@@ -203,11 +201,6 @@ struct spdk_nvmf_ns {
 	/* Namespace id of the underlying device, used for passthrough commands */
 	uint32_t passthru_nsid;
 	struct spdk_nvmf_ns_opts opts;
-	/* Offload backend */
-	union {
-		struct spdk_nvmf_ns_offload_be_nvme *nvme;
-		struct spdk_nvmf_ns_offload_be_null *null;
-	} offload_be;
 };
 
 /*
