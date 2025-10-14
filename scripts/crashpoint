@@ -114,16 +114,25 @@ def crash(pid, library, symbol, location, skip, verbose):
     return 0
 
 
+def _show_symbol(symbol, file):
+    lines = open(symbol.locations[0].file, 'r').read().split('\n')
+    filename = os.path.basename(symbol.locations[0].file)
+    isz = int(math.log10(len(symbol.locations))) + 1
+    for i, loc in enumerate(symbol.locations):
+        file.write(f'{i:{isz}}{loc.addr:6x} {filename}:{loc.line} ' +
+                   f'{lines[loc.line - 1]}\n')
+    file.flush()
+
+
+def show_symbol(library, symbol):
+    _show_symbol(Symbol.find(library, symbol), sys.stdout)
+    return 0
+
+
 def count_lines(library, symbol, verbose):
     sym = Symbol.find(library, symbol)
     if verbose:
-        lines = open(sym.locations[0].file, 'r').read().split('\n')
-        filename = os.path.basename(sym.locations[0].file)
-        isz = int(math.log10(len(sym.locations))) + 1
-        for i, loc in enumerate(sym.locations):
-            sys.stderr.write(f'{i:{isz}}{loc.addr:6x} {filename}:{loc.line} ' +
-                             f'{lines[loc.line - 1]}\n')
-        sys.stderr.flush()
+        _show_symbol(sym, sys.stderr)
     print(len(sym.locations))
     return 0
 
@@ -141,11 +150,14 @@ def main():
     parser.add_argument('-p', '--pid', help='PID of the process to trace', type=int)
     parser.add_argument('-z', '--skip', help='skip COUNT hits before crashing', type=int,
                         default=0, metavar='COUNT')
+    parser.add_argument('-S', '--show', help='Show available crash locations', action='store_true')
     parser.add_argument('-v', '--verbose', help='enable verbose logging', action='store_true')
     args = parser.parse_args()
     try:
         if args.count:
             return count_lines(args.file, args.symbol, args.verbose)
+        elif args.show:
+            return show_symbol(args.file, args.symbol)
         else:
             if args.pid is None:
                 raise ValueError('Missing argument: -p, --pid')
