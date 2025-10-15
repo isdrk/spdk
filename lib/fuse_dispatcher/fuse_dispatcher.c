@@ -4062,12 +4062,13 @@ fuse_dispatcher_init_rmem(struct spdk_fuse_dispatcher *disp, bool recovery_mode)
 }
 
 struct spdk_fuse_dispatcher *
-spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
+spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 			    spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
 			    void *notify_reply_cb_arg)
 {
 	struct spdk_fuse_dispatcher *disp;
 	struct spdk_fsdev *fsdev;
+	bool recovery_mode = false;
 
 	disp = calloc(1, sizeof(*disp));
 	if (!disp) {
@@ -4081,6 +4082,15 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc, bool recovery_mode,
 	disp->notify_reply_cb = notify_reply_cb;
 	disp->notify_reply_cb_arg = notify_reply_cb_arg;
 	disp->use_readdir_simple = 1;
+
+	if (spdk_fsdev_is_recovered(fsdev)) {
+		SPDK_NOTICELOG("fsdev device %s was recovered. FUSE dispatcher recovery will be attempted\n",
+			       fuse_dispatcher_name(disp));
+		recovery_mode = true;
+	} else {
+		SPDK_NOTICELOG("fsdev device %s was not recovered. FUSE dispatcher recovery won't be attempted\n",
+			       fuse_dispatcher_name(disp));
+	}
 
 	if (!fuse_dispatcher_init_rmem(disp, recovery_mode)) {
 		SPDK_ERRLOG("could not create or restore rmem pool for %s\n", fuse_dispatcher_name(disp));

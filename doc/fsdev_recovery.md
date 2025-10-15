@@ -34,14 +34,7 @@ An fsdev module might support recovery. The fsdev module that supports recovery:
 
 ## FUSE dispatcher recovery {#fuse_dispatcher_recovery}
 
-The FUSE dispatcher supports the recovery.
+The FUSE dispatcher supports recovery.
 
-The FUSE dispatcher recovery is controlled by the `recovery_mode` param of the `spdk_fuse_dispatcher_create` API.
-If `recovery_mode` == `true`, the FUSE dispatcher will attempt to restore its state and will not fallback to the normal creation in case of failure.
-
-An application that uses FUSE dispatcher and supports recovery would probably act along the following lines:
-
-* create a desired fsdev
-* check if the fsdev has been recovered (`spdk_fsdev_is_recovered`)
-* if the fsdev has been recovered, call the `spdk_fuse_dispatcher_create` with `recovery_mode` == `true`, so both are recovered
-* otherwise, call the `spdk_fuse_dispatcher_create` with `recovery_mode` == `false`, so both are created
+Upon creation (`spdk_fuse_dispatcher_create`), the FUSE dispatcher uses the `spdk_fsdev_is_recovered` API
+to check whether the underlying fsdev has been recovered and acts accordingly.
