@@ -2081,6 +2081,12 @@ bdev_qos_config_json(struct spdk_bdev_qos *qos, struct spdk_json_write_ctx *w)
 		spdk_json_write_named_string(w, "parent_name", qos->parent->name);
 	}
 
+	spdk_json_write_named_array_begin(w, "modules");
+	TAILQ_FOREACH(qos_impl, &qos->impl_list, link) {
+		spdk_json_write_string(w, qos_impl->module->name);
+	}
+	spdk_json_write_array_end(w);
+
 	spdk_json_write_object_end(w);
 
 	spdk_json_write_object_end(w);
