@@ -1195,7 +1195,7 @@ def add_parser(subparsers):
     p = subparsers.add_parser('bdev_qos_create', help='Create a QoS object')
     p.add_argument('name', help='QoS object name')
     p.add_argument('-p', '--parent-name', help='Name of immediate parent')
-    p.add_argument('-m', dest='modules', help="""Whitespace-separated list of modules to enable selectively.
+    p.add_argument('-m', '--modules', dest='modules', help="""Whitespace-separated list of modules to enable selectively.
     If this parameter is omitted or no module name is specified, all modules are enabled.""")
     p.set_defaults(func=bdev_qos_create)
 

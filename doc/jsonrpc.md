@@ -3059,6 +3059,7 @@ Create a QoS device.
 ------------------ | ---------- | ------ | ------------------------------------------------------------------
  name              | Required   | string | QoS device name
  parent_name       | Optional   | string | Immediate parent QoS device name
+ modules           | Optional   | array  | Restrict QoS modules to the specified list. (If not specified, all QoS modules are enabled)
 
 #### Example
 
