@@ -2820,6 +2820,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 	bool				progress = false;
 	int				data_posted;
 	uint32_t			num_blocks, num_rdma_reads_available, qdepth;
+	bool				is_duplicated_aer;
 
 	rqpair = nvmf_rdma_qpair_get(rdma_req->common.req.qpair);
 	device = rqpair->device;
@@ -3236,7 +3237,12 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 					  (uintptr_t)rdma_req, (uintptr_t)rqpair, rqpair->common.qpair.queue_depth);
 
 			rqpair->poller->stat.request_latency += spdk_get_ticks() - rdma_req->receive_tsc;
+			is_duplicated_aer = rdma_req->is_duplicated_aer;
 			_nvmf_rdma_request_free(rdma_req, rtransport);
+			if (spdk_unlikely(is_duplicated_aer)) {
+				/* rdma_req is freed above because it's duplicated aer */
+				return true;
+			}
 			break;
 		case RDMA_REQUEST_NUM_STATES:
 		default:
