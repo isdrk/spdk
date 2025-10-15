@@ -40,6 +40,7 @@
 #define TIME_GRAN (1)
 #define DEFAULT_WRITEBACK_CACHE false
 #define DEFAULT_MAX_XFER_SIZE 0x00020000
+#define MAXIMUM_MAX_XFER_SIZE 0x00020000
 #define DEFAULT_MAX_READAHEAD 0x00020000
 #define DEFAULT_XATTR_ENABLED false
 #define DEFAULT_SKIP_RW false
@@ -5139,6 +5140,12 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 {
 	struct aio_fsdev *vfsdev;
 	int rc;
+
+	if (opts->max_xfer_size > MAXIMUM_MAX_XFER_SIZE) {
+		SPDK_ERRLOG("max_xfer_size %" PRIu32 " bigger than maximum allowed %" PRIu32 "\n",
+			    opts->max_xfer_size, MAXIMUM_MAX_XFER_SIZE);
+		return -EINVAL;
+	}
 
 	vfsdev = calloc(1, sizeof(*vfsdev));
 	if (!vfsdev) {
