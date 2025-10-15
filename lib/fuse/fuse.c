@@ -1021,7 +1021,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		spdk_memory_domain_set_translation(mnt->domain, fsdev_fuse_translate_addr);
 	}
 
-	mnt->dispatcher = spdk_fuse_dispatcher_create(mnt->fsdev_desc, false, NULL, NULL);
+	mnt->dispatcher = spdk_fuse_dispatcher_create(mnt->fsdev_desc, NULL, NULL);
 	if (mnt->dispatcher == NULL) {
 		rc = -ENOMEM;
 		goto error;

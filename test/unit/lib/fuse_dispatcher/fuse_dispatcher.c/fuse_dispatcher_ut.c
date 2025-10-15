@@ -38,6 +38,7 @@ DEFINE_STUB(spdk_fsdev_reset, int, (struct spdk_fsdev_desc *desc, spdk_fsdev_res
 DEFINE_STUB(spdk_fsdev_reset_supported, bool, (struct spdk_fsdev *fsdev), true);
 DEFINE_STUB(spdk_fsdev_get_notify_max_data_size, uint32_t, (const struct spdk_fsdev *fsdev), 0);
 DEFINE_STUB(spdk_fsdev_get_name, const char *, (const struct spdk_fsdev *fsdev), NULL);
+DEFINE_STUB(spdk_fsdev_is_recovered, bool, (struct spdk_fsdev *fsdev), false);
 DEFINE_STUB(spdk_rmem_get_backend_dir, const char *, (void), NULL);
 DEFINE_STUB(spdk_rmem_set_backend_dir, int, (const char *backend_dir_name), 0);
 DEFINE_STUB(spdk_rmem_pool_create, struct spdk_rmem_pool *, (const char *name, uint32_t entry_size,
@@ -115,7 +116,7 @@ ut_fuse_disp_test_create_delete(void)
 {
 	struct spdk_fuse_dispatcher *disp;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	spdk_fuse_dispatcher_delete(disp);
@@ -163,7 +164,7 @@ ut_fuse_disp_test_init_destroy(void)
 	void *cb_arg;
 	int rc;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	/* FUSE_INIT 7.34 */
@@ -226,7 +227,7 @@ ut_fuse_disp_test_init_destroy(void)
 	CU_ASSERT(init_out.init.congestion_threshold == 0xFFFF);
 	CU_ASSERT(init_out.init.max_write == 131072);
 	CU_ASSERT(init_out.init.time_gran == 1);
-	CU_ASSERT(init_out.init.max_pages == 131072 / 4096);
+	CU_ASSERT(init_out.init.max_pages == 131072 / PAGE_SIZE);
 	CU_ASSERT(init_out.init.map_alignment == 0);
 
 	/* FUSE_DESTROY */
@@ -280,7 +281,7 @@ ut_fuse_disp_test_encode_notify(void)
 	bool has_reply;
 	int rc;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, NULL);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, notify_reply_cb, NULL);
 	CU_ASSERT(disp != NULL);
 
 	/* INVAL INODE notification */
@@ -342,7 +343,7 @@ ut_fuse_disp_test_notify_reply(void)
 	struct fuse_in notify_reply;
 	int rc;
 
-	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, false, notify_reply_cb, &notify_cb_arg);
+	disp = spdk_fuse_dispatcher_create(g_ut_fsdev_desc, notify_reply_cb, &notify_cb_arg);
 	CU_ASSERT(disp != NULL);
 
 	/* Successful reply */
