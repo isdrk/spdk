@@ -4086,6 +4086,12 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 	disp->notify_reply_cb_arg = notify_reply_cb_arg;
 	disp->use_readdir_simple = 1;
 
+	if (disp->supported_fuse_opcodes == UINT64_MAX) {
+		SPDK_NOTICELOG("fsdev %s is fully FUSE API based. No need for FUSE dispatcher recovery.\n",
+			       fuse_dispatcher_name(disp));
+		goto skip_rmem;
+	}
+
 	if (spdk_fsdev_is_recovered(fsdev)) {
 		SPDK_NOTICELOG("fsdev device %s was recovered. FUSE dispatcher recovery will be attempted\n",
 			       fuse_dispatcher_name(disp));
@@ -4101,6 +4107,7 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 		return NULL;
 	}
 
+skip_rmem:
 	return disp;
 }
 
