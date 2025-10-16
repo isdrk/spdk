@@ -1111,6 +1111,9 @@ fuse_dispatcher_passthrough_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_i
 	if (fuse_io->hdr.opcode == FUSE_DESTROY) {
 		fuse_dispatcher_reset(fuse_io->disp);
 	} else if (fuse_io->hdr.opcode == FUSE_INIT) {
+		struct fuse_init_out *init_out = fsdev_io->u_out.fuse.op.init;
+		fuse_io->disp->proto_major = init_out->major;
+		fuse_io->disp->proto_minor = init_out->minor;
 		fuse_io->disp->root_fobject = (struct spdk_fsdev_file_object *)(uintptr_t)FUSE_ROOT_ID;
 		fuse_dispatcher_update_rmem(fuse_io->disp);
 	}
