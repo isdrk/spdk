@@ -2207,10 +2207,6 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 			TAILQ_REMOVE_CLEAR(&group->needs_poll, tqpair, link_poll);
 		}
 	} else {
-		if (qpair->ctrlr->timeout_enabled) {
-			nvme_tcp_qpair_check_timeout(qpair);
-		}
-
 		if (tqpair->sock_group) {
 			if (nvme_qpair_is_admin_queue(qpair)) {
 				pthread_mutex_lock(&g_admin_poll_group_mutex);
@@ -2236,6 +2232,10 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 
 				goto fail;
 			}
+		}
+
+		if (qpair->ctrlr->timeout_enabled) {
+			nvme_tcp_qpair_check_timeout(qpair);
 		}
 	}
 
