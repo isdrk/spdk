@@ -4233,6 +4233,12 @@ accel_mlx5_find_task_by_mkey(struct accel_mlx5_dev *dev, struct spdk_mlx5_mkey_p
 		}
 	}
 
+	STAILQ_FOREACH(task, &dev->qp.in_hw, link) {
+		if (task->qp == &dev->qp) {
+			return task;
+		}
+	}
+
 	return NULL;
 }
 
@@ -4251,6 +4257,16 @@ accel_mlx5_process_sigerr_cpl(struct accel_mlx5_dev *dev, uint32_t mkey_id,
 	if (task != NULL) {
 		struct spdk_mlx5_sig_err *sigerr = &err->sigerr;
 		struct spdk_dif_error *accel_err = task->base.dif.err;
+
+		if (!(task->base.op_code == SPDK_ACCEL_OPC_DIF_VERIFY ||
+		      task->base.op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY ||
+		      task->base.op_code == SPDK_ACCEL_OPC_DIF_GENERATE ||
+		      task->base.op_code == SPDK_ACCEL_OPC_DIF_GENERATE_COPY ||
+		      task->base.op_code == SPDK_ACCEL_OPC_DIX_GENERATE ||
+		      task->base.op_code == SPDK_ACCEL_OPC_DIX_VERIFY)) {
+			SPDK_DEBUGLOG(accel_mlx5, "op_code %d\n", task->base.op_code);
+			return;
+		}
 
 		accel_err->err_offset = sigerr->offset;
 
