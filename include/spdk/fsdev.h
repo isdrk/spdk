@@ -78,6 +78,8 @@ struct spdk_fsdev_opts {
 	 * Recovery enabled.
 	 */
 	uint8_t recovery_enabled;
+	/** Verify source_unique values */
+	bool verify_source_unique;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 16, "Incorrect size");
 

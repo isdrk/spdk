@@ -20,7 +20,8 @@ def add_parser(subparsers):
 
     def fsdev_set_opts(args):
         print(rpc.fsdev.fsdev_set_opts(args.client, max_source_id=args.max_source_id,
-                                       disable_recovery=args.disable_recovery))
+                                       disable_recovery=args.disable_recovery,
+                                       verify_source_unique=args.verify_source_unique))
 
     p = subparsers.add_parser('fsdev_set_opts', help='Set the fsdev subsystem options')
     p.add_argument('-s', '--max-source-id', help='Max source ID (1-4096)',
@@ -30,6 +31,8 @@ def add_parser(subparsers):
                                  default=None)
     recovery_parser.add_argument('--enable-recovery', help='Enable recovery',
                                  dest='disable_recovery', action='store_false')
+    p.add_argument('--verify-source-unique', help='Verify source_unique values',
+                   action='store_true')
     p.set_defaults(func=fsdev_set_opts)
 
     def fsdev_get_fsdevs(args):
