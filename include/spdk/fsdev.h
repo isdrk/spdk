@@ -62,10 +62,10 @@ enum spdk_fsdev_status {
 /** fsdev library options */
 struct spdk_fsdev_opts {
 	/**
-	 * The size of spdk_fsdev_opts according to the caller of this library is used for ABI
-	 * compatibility.  The library uses this field to know how many fields in this
-	 * structure are valid. And the library will populate any remaining fields with default values.
-	 * New added fields should be put at the end of the struct.
+	 * The size of spdk_fsdev_opts (obtained by SPDK_SIZEOF(opts, last_member)) according to the
+	 * caller of this library is used for ABI compatibility.  The library uses this field to know
+	 * how many fields in this structure are valid. And the library will populate any remaining
+	 * fields with default values. New added fields should be put at the end of the struct.
 	 */
 	uint32_t opts_size;
 	uint32_t reserved1;
@@ -78,8 +78,8 @@ struct spdk_fsdev_opts {
 	 * Recovery enabled.
 	 */
 	uint8_t recovery_enabled;
-} __attribute__((packed));
-SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 15, "Incorrect size");
+};
+SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 16, "Incorrect size");
 
 /** fsdev mount options */
 struct spdk_fsdev_mount_opts {

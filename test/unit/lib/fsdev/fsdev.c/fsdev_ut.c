@@ -391,11 +391,11 @@ ut_fsdev_test_set_opts(void)
 	rc = spdk_fsdev_set_opts(&new_opts);
 	CU_ASSERT(rc == -EINVAL);
 
-	old_opts.opts_size = sizeof(old_opts);
+	old_opts.opts_size = SPDK_SIZEOF(&old_opts, recovery_enabled);
 	rc = spdk_fsdev_get_opts(&old_opts, sizeof(old_opts));
 	CU_ASSERT(rc == 0);
 
-	new_opts.opts_size = sizeof(new_opts);
+	new_opts.opts_size = SPDK_SIZEOF(&new_opts, recovery_enabled);
 	new_opts.max_source_id = old_opts.max_source_id / 2;
 	rc = spdk_fsdev_set_opts(&new_opts);
 	CU_ASSERT(rc == 0);

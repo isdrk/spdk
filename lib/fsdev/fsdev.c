@@ -21,6 +21,7 @@
 #define SPDK_FSDEV_MAX_SOURCE_ID 4096
 
 static struct spdk_fsdev_opts g_fsdev_opts = {
+	.opts_size = SPDK_SIZEOF(&g_fsdev_opts, recovery_enabled),
 	.max_source_id = SPDK_FSDEV_MAX_SOURCE_ID / 4, /* default is 1/4 of limit */
 	.recovery_enabled = true, /* enabled by default */
 };
@@ -910,7 +911,7 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
-	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 15, "Incorrect size");
+	SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_opts) == 16, "Incorrect size");
 
 #undef SET_FIELD
 	return 0;
