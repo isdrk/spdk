@@ -1459,6 +1459,7 @@ static int
 xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 {
 	struct spdk_xlio_sock_group *group = __xlio_group(_group);
+	struct spdk_xlio_stream_segment *segment;
 	struct spdk_xlio_sock *sock, *tmp;
 
 	if (!STAILQ_EMPTY(&group->pending_rx)) {
@@ -1469,6 +1470,12 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 		STAILQ_REMOVE_HEAD(&group->pending_accept, link);
 		xlio_socket_destroy(sock->xlio_sock);
 		free(sock);
+	}
+
+	while (!STAILQ_EMPTY(&group->segment_pool)) {
+		segment = STAILQ_FIRST(&group->segment_pool);
+		STAILQ_REMOVE_HEAD(&group->segment_pool, link);
+		free(segment);
 	}
 
 	return xlio_poll_group_destroy(group->xlio_group);
