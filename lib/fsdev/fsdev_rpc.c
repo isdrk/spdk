@@ -16,7 +16,9 @@ static void
 rpc_fsdev_get_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_val *params)
 {
 	struct spdk_json_write_ctx *w;
-	struct spdk_fsdev_opts opts = {};
+	struct spdk_fsdev_opts opts = {
+		.opts_size = SPDK_SIZEOF(&opts, recovery_enabled),
+	};
 	int rc;
 
 	if (params) {
@@ -68,7 +70,7 @@ rpc_fsdev_set_opts(struct spdk_jsonrpc_request *request, const struct spdk_json_
 {
 	int rc;
 	struct spdk_fsdev_opts opts = {
-		.opts_size = sizeof(opts),
+		.opts_size = SPDK_SIZEOF(&opts, recovery_enabled),
 	};
 
 	rc = spdk_fsdev_get_opts(&opts, sizeof(opts));
