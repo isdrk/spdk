@@ -708,6 +708,7 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 		if (shared_resource == NULL) {
 			spdk_put_io_channel(ch->channel);
 			spdk_put_io_channel(mgmt_io_ch);
+			free(ch->stat);
 			return -1;
 		}
 
