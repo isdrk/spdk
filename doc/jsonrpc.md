@@ -14337,10 +14337,11 @@ Set fsdev module options.
 
 #### Parameters
 
- Name             | Optional   | Type    | Description
------------------ | ---------- | ------- | ---------------------------
- max_source_id    | Optional   | int     | Max source ID.
- disable_recovery | Optional   | boolean | `true` to disable recovery.
+ Name                 | Optional   | Type    | Description
+--------------------- | ---------- | ------- | ---------------------------
+ max_source_id        | Optional   | int     | Max source ID.
+ disable_recovery     | Optional   | boolean | `true` to disable recovery.
+ verify_source_unique | Optional   | boolean | `true` to verify `source_unique` values.
 
 NOTE: Recovery is enabled by default.
 When recovery is enabled, fsdev modules that support recovery will first attempt to recover during

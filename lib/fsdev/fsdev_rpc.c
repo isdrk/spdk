@@ -63,6 +63,7 @@ rpc_decode_disable_recovery(const struct spdk_json_val *val, void *out)
 static const struct spdk_json_object_decoder rpc_fsdev_set_opts_decoders[] = {
 	{"max_source_id", offsetof(struct spdk_fsdev_opts, max_source_id), spdk_json_decode_uint16, true},
 	{"disable_recovery", offsetof(struct spdk_fsdev_opts, recovery_enabled), rpc_decode_disable_recovery, true},
+	{"verify_source_unique", offsetof(struct spdk_fsdev_opts, verify_source_unique), spdk_json_decode_bool, true},
 };
 
 static void

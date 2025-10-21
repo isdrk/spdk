@@ -52,6 +52,8 @@ struct spdk_fsdev_channel {
 	fsdev_io_tailq_t	delayed_complete;
 	fsdev_io_tailq_t	delayed_99_complete;
 	uint32_t		delayed_99_count;
+
+	uint64_t		*last_source_unique;
 };
 
 const char *fsdev_notify_type_get_name(int type);

@@ -24,6 +24,7 @@ static struct spdk_fsdev_opts g_fsdev_opts = {
 	.opts_size = SPDK_SIZEOF(&g_fsdev_opts, recovery_enabled),
 	.max_source_id = SPDK_FSDEV_MAX_SOURCE_ID / 4, /* default is 1/4 of limit */
 	.recovery_enabled = true, /* enabled by default */
+	.verify_source_unique = false,
 };
 
 TAILQ_HEAD(spdk_fsdev_list, spdk_fsdev);
@@ -244,6 +245,7 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_uint32(w, "max_source_id", g_fsdev_opts.max_source_id);
 	spdk_json_write_named_bool(w, "disable_recovery", !g_fsdev_opts.recovery_enabled);
+	spdk_json_write_named_bool(w, "verify_source_unique", g_fsdev_opts.verify_source_unique);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
 
@@ -583,6 +585,37 @@ clear_delayed_io(struct spdk_fsdev_channel *ch)
 	}
 }
 
+static const char *
+fsdev_io_get_opcode_name(struct spdk_fsdev_io *fsdev_io)
+{
+	return spdk_fsdev_get_opcode_name(fsdev_io->u_in.fuse.hdr->opcode);
+}
+
+static void
+fsdev_verify_source_unique(struct spdk_fsdev_channel *ch, struct spdk_fsdev_io *fsdev_io)
+{
+	uint64_t source_unique, last_source_unique;
+	uint16_t source_id;
+
+	if (!g_fsdev_opts.verify_source_unique) {
+		return;
+	}
+
+	source_unique = spdk_fsdev_io_get_source_unique(fsdev_io);
+	source_id = spdk_fsdev_io_get_source_id(fsdev_io);
+	assert(source_id < g_fsdev_opts.max_source_id);
+
+	last_source_unique = ch->last_source_unique[source_id];
+	if (spdk_unlikely(source_unique < last_source_unique)) {
+		SPDK_ERRLOG("FATAL: received out of order source_unique: %"PRIu64" < %"PRIu64", "
+			    "source_id: %u, opcode: %s\n", source_unique, last_source_unique,
+			    source_id, fsdev_io_get_opcode_name(fsdev_io));
+		assert(false);
+		return;
+	}
+
+	ch->last_source_unique[source_id] = source_unique;
+}
 void
 spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 {
@@ -604,6 +637,7 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	shared_resource->io_outstanding++;
 	spdk_trace_record_tsc(current_tsc, TRACE_FSDEV_IO_START, ch->trace_id, 0, (uintptr_t)fsdev_io,
 			      opc, ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
+	fsdev_verify_source_unique(ch, fsdev_io);
 
 	if (spdk_unlikely(!TAILQ_EMPTY(&ch->delayed_submit))) {
 		/* We must always submit I/O the fsdev module in source unique order. So if there are
@@ -681,8 +715,18 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 		return -1;
 	}
 
+	if (g_fsdev_opts.verify_source_unique) {
+		ch->last_source_unique = calloc(g_fsdev_opts.max_source_id,
+						sizeof(*ch->last_source_unique));
+		if (!ch->last_source_unique) {
+			free(ch->stat);
+			return -1;
+		}
+	}
+
 	ch->channel = fsdev->fn_table->get_io_channel(fsdev->ctxt);
 	if (!ch->channel) {
+		free(ch->last_source_unique);
 		free(ch->stat);
 		return -1;
 	}
@@ -690,6 +734,7 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 	mgmt_io_ch = spdk_get_io_channel(&g_fsdev_mgr);
 	if (!mgmt_io_ch) {
 		spdk_put_io_channel(ch->channel);
+		free(ch->last_source_unique);
 		free(ch->stat);
 		return -1;
 	}
@@ -708,6 +753,7 @@ fsdev_channel_create(void *io_device, void *ctx_buf)
 		if (shared_resource == NULL) {
 			spdk_put_io_channel(ch->channel);
 			spdk_put_io_channel(mgmt_io_ch);
+			free(ch->last_source_unique);
 			free(ch->stat);
 			return -1;
 		}
@@ -774,6 +820,7 @@ fsdev_channel_destroy(void *io_device, void *ctx_buf)
 	spdk_poller_unregister(&ch->poller);
 
 	free(ch->stat);
+	free(ch->last_source_unique);
 	fsdev_channel_destroy_resource(ch);
 }
 
@@ -844,6 +891,7 @@ spdk_fsdev_set_opts(const struct spdk_fsdev_opts *opts)
 
 	SET_FIELD(opts->max_source_id != 0, max_source_id);
 	SET_FIELD(true, recovery_enabled);
+	SET_FIELD(true, verify_source_unique);
 
 	g_fsdev_opts.opts_size = opts->opts_size;
 
@@ -874,6 +922,7 @@ spdk_fsdev_get_opts(struct spdk_fsdev_opts *opts, size_t opts_size)
 
 	SET_FIELD(max_source_id);
 	SET_FIELD(recovery_enabled);
+	SET_FIELD(verify_source_unique);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
