@@ -1461,6 +1461,7 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 	struct spdk_xlio_sock_group *group = __xlio_group(_group);
 	struct spdk_xlio_stream_segment *segment;
 	struct spdk_xlio_sock *sock, *tmp;
+	int rc;
 
 	if (!STAILQ_EMPTY(&group->pending_rx)) {
 		return -EBUSY;
@@ -1478,7 +1479,13 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 		free(segment);
 	}
 
-	return xlio_poll_group_destroy(group->xlio_group);
+	rc = xlio_poll_group_destroy(group->xlio_group);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to destroy XLIO poll group: %d\n", rc);
+	}
+
+	free(group);
+	return 0;
 }
 
 static int
