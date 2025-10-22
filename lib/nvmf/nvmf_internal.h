@@ -465,6 +465,7 @@ struct spdk_key *nvmf_subsystem_get_dhchap_key(struct spdk_nvmf_subsystem *subsy
 struct spdk_nvmf_subsystem_listener *nvmf_subsystem_find_listener(
 	struct spdk_nvmf_subsystem *subsystem,
 	const struct spdk_nvme_transport_id *trid);
+bool nvmf_subsystem_listener_is_active(const struct spdk_nvmf_subsystem_listener *listener);
 bool nvmf_subsystem_zone_append_supported(struct spdk_nvmf_subsystem *subsystem);
 struct spdk_nvmf_listener *nvmf_transport_find_listener(
 	struct spdk_nvmf_transport *transport,
