@@ -957,7 +957,9 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 		if (!tqpair->flags.connect_notified) {
 			nvme_tcp_qpair_connect_sock_done(tqpair, -1);
 			tqpair->flags.connect_notified = 1;
-		} else if (spdk_likely(tqpair->group) && !tqpair->flags.closed && !tqpair->flags.pending_events) {
+		}
+
+		if (spdk_likely(tqpair->group) && !tqpair->flags.closed && !tqpair->flags.pending_events) {
 			/* "disconnected" flag is only checked when reading pdu. We may have nothing to read.
 			 * So, add qpair to pending events list to quickly detect disconnect.
 			 */
