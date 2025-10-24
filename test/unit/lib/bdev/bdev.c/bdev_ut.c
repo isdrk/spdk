@@ -327,7 +327,6 @@ static void
 stub_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_io)
 {
 	struct bdev_ut_channel *ch = spdk_io_channel_get_ctx(_ch);
-	struct spdk_bdev_desc *desc = bdev_io->internal.desc;
 	struct ut_expected_io *expected_io;
 	struct iovec *iov, *expected_iov;
 	struct spdk_bdev_io *bio_to_abort;
@@ -432,7 +431,8 @@ stub_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_io)
 
 	if (bdev_io->internal.f.has_metadata) {
 		if (bdev_io->internal.f.has_bounce_buf == true) {
-			if (!desc->accel_sequence_supported[bdev_io->type] || bdev_io->internal.f.split) {
+			if (!(bdev_io->bdev->accel_sequence_supported & (1u << bdev_io->type)) ||
+			    bdev_io->internal.f.split) {
 				CU_ASSERT(bdev_io->u.bdev.accel_sequence == NULL);
 				CU_ASSERT(bdev_io->type == SPDK_BDEV_IO_TYPE_WRITE ||
 					  bdev_io->type == SPDK_BDEV_IO_TYPE_READ);

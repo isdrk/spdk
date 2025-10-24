@@ -672,6 +672,9 @@ struct spdk_bdev {
 		int32_t id : 31;
 	} numa;
 
+	/** Bitmap of supported io types */
+	uint32_t accel_sequence_supported;
+
 	/**
 	 * Pointer to the bdev module that registered this bdev.
 	 */
