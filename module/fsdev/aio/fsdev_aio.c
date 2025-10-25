@@ -172,15 +172,6 @@ struct fsdev_aio_cred {
 	gid_t egid;
 };
 
-/** Inode number type */
-typedef uint64_t spdk_ino_t;
-
-struct fsdev_aio_key {
-	ino_t ino;
-	dev_t dev;
-	RB_ENTRY(fsdev_aio_key) link;
-};
-
 struct aio_fsdev_fhdr {
 	uint64_t is_fobject : 1;
 	uint64_t lut_key : 63;
@@ -238,18 +229,16 @@ union aio_fsdev_fh {
 	char fh_buf[sizeof(struct file_handle) + MAX_HANDLE_SZ];
 };
 
-#define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 " ino=%" PRIu64 " dev=%" PRIu64 ")"
-#define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
+#define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 ")"
+#define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key)
 struct aio_fsdev_file_object {
 	struct aio_fsdev_fhdr hdr;
 	mode_t mode;
 	int fd;
 	char *fd_str;
-	struct fsdev_aio_key key;
 	union aio_fsdev_fh fh;
 	struct aio_fsdev_linux_fh linux_fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
-	RB_HEAD(aio_fsdev_file_object_tree, fsdev_aio_key) leafs;
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
 	struct aio_fsdev *vfsdev;
 };
@@ -265,25 +254,6 @@ fsdev_aio_fobject_is_dir(struct aio_fsdev_file_object *fobject)
 {
 	return S_ISDIR(fobject->mode);
 }
-
-static int
-aio_fsdev_file_object_cmp(struct fsdev_aio_key *fo1, struct fsdev_aio_key *fo2)
-{
-	if (fo1->dev != fo2->dev) {
-		assert(false);
-		return -1;
-	}
-
-	if (fo1->ino < fo2->ino) {
-		return -1;
-	} else if (fo1->ino > fo2->ino) {
-		return 1;
-	} else {
-		return 0;
-	}
-}
-
-RB_GENERATE_STATIC(aio_fsdev_file_object_tree, fsdev_aio_key, link, aio_fsdev_file_object_cmp);
 
 struct aio_fsdev {
 	struct spdk_fsdev fsdev;
@@ -635,7 +605,7 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	 * file operations are performed on a fobject while it's being referenced by the app.
 	 * However, there's a race here in cases when the last reference is being removed. The fobject can be
 	 * obtained by fsdev_aio_do_lookup after the reference counter has been decreased and checked and before we take
-	 * the lock to remove the fobject from its parent's leafs list.
+	 * the lock to remove the fobject from the fobject tree.
 	 * Thus we have to check the value of the reference counter once again to avoid deleting the fobject while
 	 * it's in use.
 	 */
@@ -646,30 +616,12 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 		return refcount;
 	}
 
-	if (spdk_unlikely(!parent_fobject)) {
-		assert(fobject == fobject->vfsdev->root);
-
-		spdk_spin_lock(&vfsdev->lock);
-		refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
-		if (!refcount) {
-			spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
-		}
-		spdk_spin_unlock(&vfsdev->lock);
-
-		if (!refcount) {
-			SPDK_DEBUGLOG(fsdev_aio, "root fobject removed %p\n", fobject);
-			file_object_destroy(fobject);
-		}
-		return 0;
-	}
-
 	spdk_spin_lock(&vfsdev->lock);
 
 	refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
 		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
 		RB_REMOVE(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
-		RB_REMOVE(aio_fsdev_file_object_tree, &parent_fobject->leafs, &fobject->key);
 	}
 
 	spdk_spin_unlock(&vfsdev->lock);
@@ -683,7 +635,9 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 
 	file_object_destroy(fobject);
 
-	file_object_unref(parent_fobject, 1); /* unref by the leaf */
+	if (parent_fobject != NULL) {
+		file_object_unref(parent_fobject, 1);
+	}
 
 	return 0;
 }
@@ -787,7 +741,7 @@ fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
 
 static struct aio_fsdev_file_object *
 file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobject,
-			  int fd, ino_t ino, dev_t dev, mode_t mode, const char *name)
+			  int fd, mode_t mode, const char *name)
 {
 	struct aio_fsdev_file_object *fobject;
 	uint64_t lut_key = SPDK_LUT_INVALID_KEY;
@@ -828,15 +782,11 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->hdr.is_fobject = true;
 	fobject->hdr.lut_key = lut_key;
 	fobject->hdr.refcount = 1; /* ref by caller */
-
 	fobject->fd = fd;
-	fobject->key.ino = ino;
-	fobject->key.dev = dev;
 	fobject->vfsdev = vfsdev;
 	fobject->mode = mode;
 
 	TAILQ_INIT(&fobject->handles);
-	RB_INIT(&fobject->leafs);
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* Root is marked on mount */
@@ -850,8 +800,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	RB_INSERT(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
-		RB_INSERT(aio_fsdev_file_object_tree, &parent_fobject->leafs, &fobject->key);
-		file_object_ref(parent_fobject); /* ref by leaf */
+		file_object_ref(parent_fobject);
 	}
 
 	SPDK_DEBUGLOG(fsdev_aio, "fobject created %p (lut=0x%" PRIx64 ")\n", fobject,
@@ -1078,45 +1027,51 @@ utimensat_empty(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
 }
 
 static void
-fsdev_free_leafs(struct aio_fsdev_file_object *fobject, bool unref_fobject)
+fsdev_aio_free_fobjects(struct aio_fsdev *vfsdev, bool unref_root)
 {
+	struct aio_fsdev_file_object *fobject;
+	struct aio_fsdev_linux_fh *lfh, *tmp;
 	uint64_t refcount;
-	struct fsdev_aio_key *key, *tmp;
-	/* ref to make sure it's not deleted when the last reference by a handle or a leaf removed */
-	file_object_ref(fobject);
 
-	while (!TAILQ_EMPTY(&fobject->handles)) {
-		struct aio_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
-		file_handle_invalidate(fhandle);
-		file_handle_destroy(fhandle);
-#ifdef __clang_analyzer__
-		/*
-		 * scan-build fails to comprehend that file_handle_destroy() removes the fhandle
-		 * from the queue, so it thinks it's remained accessible and throws the "Use of
-		 * memory after it is freed" error here.
-		 * The loop below "teaches" the scan-build that the freed fhandle is not on the
-		 * list anymore and suppresses the error in this way.
+	RB_FOREACH_SAFE(lfh, aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, tmp) {
+		fobject = SPDK_CONTAINEROF(lfh, struct aio_fsdev_file_object, linux_fh_entry);
+
+		/* Child fobjects unref their parents when they're destroyed and we don't track
+		 * children in parent fobject, so we might free a parent before a child.  To avoid
+		 * unreffing a freed fobject, clear all parent pointers here.  The refcounts don't
+		 * matter at this point, as we want to destroy all fobjects anyway.
 		 */
-		struct aio_fsdev_file_handle *tmp;
-		TAILQ_FOREACH(tmp, &fobject->handles, link) {
-			assert(tmp != fhandle);
-		}
+		fobject->parent_fobject = NULL;
+
+		/* ref to make sure it's not deleted when the last reference by a handle removed */
+		file_object_ref(fobject);
+		while (!TAILQ_EMPTY(&fobject->handles)) {
+			struct aio_fsdev_file_handle *fhandle = TAILQ_FIRST(&fobject->handles);
+			file_handle_invalidate(fhandle);
+			file_handle_destroy(fhandle);
+#ifdef __clang_analyzer__
+			/*
+			 * scan-build fails to comprehend that file_handle_destroy() removes the
+			 * fhandle from the queue, so it thinks it's remained accessible and throws
+			 * the "Use of memory after it is freed" error here.  The loop below
+			 * "teaches" the scan-build that the freed fhandle is not on the list
+			 * anymore and suppresses the error in this way.
+			 */
+			struct aio_fsdev_file_handle *tmp;
+			TAILQ_FOREACH(tmp, &fobject->handles, link) {
+				assert(tmp != fhandle);
+			}
 #endif
-	}
+		}
 
-	RB_FOREACH_SAFE(key, aio_fsdev_file_object_tree, &fobject->leafs, tmp) {
-		struct aio_fsdev_file_object *leaf_fobject = SPDK_CONTAINEROF(key, struct aio_fsdev_file_object,
-				key);
-		/* We free (unref) the fobject's leafs in any case as the unref_fobject is only related to the fobject */
-		fsdev_free_leafs(leaf_fobject, true);
-	}
-
-	refcount = file_object_unref(fobject, 1); /* a ref that we took at the beginning of this function */
-	if (refcount && unref_fobject) {
-		/* if still referenced - unref by refcount */
-		refcount = file_object_unref(fobject, refcount);
-		assert(refcount == 0);
-		UNUSED(refcount);
+		/* a ref that we took at the beginning of this function */
+		refcount = file_object_unref(fobject, 1);
+		if (refcount && (fobject != vfsdev->root || unref_root)) {
+			/* if still referenced - unref by refcount */
+			refcount = file_object_unref(fobject, refcount);
+			assert(refcount == 0);
+			UNUSED(refcount);
+		}
 	}
 }
 
@@ -1544,7 +1499,7 @@ fsdev_aio_do_destroy(struct aio_fsdev *vfsdev)
 	}
 #endif
 
-	fsdev_free_leafs(vfsdev->root, false);
+	fsdev_aio_free_fobjects(vfsdev, false);
 
 	/* Reset removes the root from the LUT, so we re-insert it after the reset */
 	assert(vfsdev->root->hdr.lut_key == 0); /* The root should be the first element in the LUT */
@@ -1640,7 +1595,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 	fobject = fsdev_aio_get_fobject_by_linux_fh_unsafe(vfsdev, mount_id, &fh.fh);
 	is_new = (fobject == NULL);
 	if (fobject == NULL) {
-		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd, stat.st_ino, stat.st_dev,
+		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd,
 						    stat.st_mode, name);
 	}
 	spdk_spin_unlock(&vfsdev->lock);
@@ -4882,7 +4837,7 @@ fsdev_aio_destruct(void *ctx)
 
 	TAILQ_REMOVE(&g_aio_fsdev_head, vfsdev, tailq);
 
-	fsdev_free_leafs(vfsdev->root, true);
+	fsdev_aio_free_fobjects(vfsdev, true);
 	vfsdev->root = NULL;
 
 	fsdev_aio_free(vfsdev);
@@ -4970,7 +4925,7 @@ struct fsdev_aio_reset_ctx {
 static void
 fsdev_aio_reset_done(struct fsdev_aio_reset_ctx *ctx, int status)
 {
-	fsdev_free_leafs(ctx->vfsdev->root, false);
+	fsdev_aio_free_fobjects(ctx->vfsdev, false);
 
 	ctx->cb(ctx->cb_arg, status);
 
@@ -5224,7 +5179,7 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
-	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_ino, stat.st_dev, stat.st_mode,
+	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_mode,
 			"/");
 	if (!vfsdev->root) {
 		SPDK_ERRLOG("Cannot alloc root\n");
