@@ -556,16 +556,7 @@ static int
 fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
 {
 	struct aio_fsdev *vfsdev = fobject->vfsdev;
-	int mount_id;
 	int rc;
-
-	fobject->linux_fh.handle_bytes = MAX_HANDLE_SZ;
-	rc = name_to_handle_at(parent_fd, name, &fobject->linux_fh, &mount_id, 0);
-	if (rc) {
-		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
-			    errno, parent_fd, name);
-		return rc;
-	}
 
 	rc = fanotify_mark(vfsdev->fanotify_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, FANOTIFY_MASK,
 			   parent_fd, name);
@@ -576,7 +567,6 @@ fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, con
 		return rc;
 	}
 
-	fobject->linux_fh_entry.fh = &fobject->linux_fh;
 	RB_INSERT(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
 
 	SPDK_DEBUGLOG(fsdev_aio, "Added fobject to fanotify: fd %d, name %s\n",
@@ -715,6 +705,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 {
 	struct aio_fsdev_file_object *fobject;
 	uint64_t lut_key = SPDK_LUT_INVALID_KEY;
+	int rc, mount_id;
 
 	fobject = calloc(1, sizeof(*fobject));
 	if (!fobject) {
@@ -731,6 +722,15 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	lut_key = spdk_lut_insert(vfsdev->lut, fobject);
 	if (lut_key == SPDK_LUT_INVALID_KEY) {
 		SPDK_ERRLOG("Cannot insert fobject into lookup table\n");
+		goto err;
+	}
+
+	fobject->linux_fh_entry.fh = &fobject->linux_fh;
+	fobject->linux_fh.handle_bytes = MAX_HANDLE_SZ;
+	rc = name_to_handle_at(fd, "", &fobject->linux_fh, &mount_id, AT_EMPTY_PATH);
+	if (rc) {
+		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
+			    errno, parent_fobject->fd, name);
 		goto err;
 	}
 
