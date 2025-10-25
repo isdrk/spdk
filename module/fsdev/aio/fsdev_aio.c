@@ -219,6 +219,11 @@ aio_fsdev_linux_fh_cmp(struct aio_fsdev_linux_fh *fh1, struct aio_fsdev_linux_fh
 RB_HEAD(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh);
 RB_GENERATE_STATIC(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh, node, aio_fsdev_linux_fh_cmp);
 
+union aio_fsdev_fh {
+	struct file_handle fh;
+	char fh_buf[sizeof(struct file_handle) + MAX_HANDLE_SZ];
+};
+
 #define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 " ino=%" PRIu64 " dev=%" PRIu64 ")"
 #define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), ((uint64_t)(fo)->key.ino), ((uint64_t)(fo)->key.dev)
 struct aio_fsdev_file_object {
@@ -227,10 +232,7 @@ struct aio_fsdev_file_object {
 	int fd;
 	char *fd_str;
 	struct fsdev_aio_key key;
-	union {
-		struct file_handle linux_fh;
-		char fh_buf[sizeof(struct file_handle) + MAX_HANDLE_SZ];
-	};
+	union aio_fsdev_fh fh;
 	struct aio_fsdev_linux_fh linux_fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
 	RB_HEAD(aio_fsdev_file_object_tree, fsdev_aio_key) leafs;
@@ -725,9 +727,9 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		goto err;
 	}
 
-	fobject->linux_fh_entry.fh = &fobject->linux_fh;
-	fobject->linux_fh.handle_bytes = MAX_HANDLE_SZ;
-	rc = name_to_handle_at(fd, "", &fobject->linux_fh, &mount_id, AT_EMPTY_PATH);
+	fobject->linux_fh_entry.fh = &fobject->fh.fh;
+	fobject->fh.fh.handle_bytes = MAX_HANDLE_SZ;
+	rc = name_to_handle_at(fd, "", &fobject->fh.fh, &mount_id, AT_EMPTY_PATH);
 	if (rc) {
 		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
 			    errno, parent_fobject->fd, name);
