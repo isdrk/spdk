@@ -3357,6 +3357,8 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 			     FOBJECT_ARGS(parent_fobject), name, res);
 	}
 
+	SPDK_DEBUGLOG(fsdev_aio, "UNLINK succeeded for " FOBJECT_FMT " (name=%s)\n",
+		      FOBJECT_ARGS(fobject), name);
 	file_object_unref(fobject, 1);
 	return res;
 }
