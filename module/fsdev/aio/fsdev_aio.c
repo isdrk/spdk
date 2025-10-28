@@ -522,6 +522,21 @@ is_safe_path_component(const char *path)
 	return !is_dot_or_dotdot(path);
 }
 
+static int
+fsdev_aio_fobject_open(struct aio_fsdev_file_object *fobject, int flags)
+{
+	struct aio_fsdev_fs *fs = fobject->fh_entry.fs;
+	int rc;
+
+	rc = open_by_handle_at(fs->fd, &fobject->fh.fh, flags);
+	if (rc < 0) {
+		rc = -errno;
+		SPDK_ERRLOG("Failed to open " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), rc);
+	}
+
+	return rc;
+}
+
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 static int
 fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
@@ -929,13 +944,18 @@ static int
 fsdev_aio_fill_attr(struct aio_fsdev_file_object *fobject, struct fuse_attr *attr)
 {
 	struct stat stbuf;
-	int res;
+	int res, fd;
 
-	res = fstatat(fobject->fd, "", &stbuf, AT_EMPTY_PATH);
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		return fd;
+	}
+
+	res = fstatat(fd, "", &stbuf, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("fstatat() failed with %d\n", res);
-		return res;
+		goto out;
 	}
 
 	attr->ino = stbuf.st_ino;
@@ -953,8 +973,9 @@ fsdev_aio_fill_attr(struct aio_fsdev_file_object *fobject, struct fuse_attr *att
 	attr->gid = stbuf.st_gid;
 	attr->rdev = stbuf.st_rdev;
 	attr->blksize = stbuf.st_blksize;
-
-	return 0;
+out:
+	close(fd);
+	return res;
 }
 
 static inline uint64_t
