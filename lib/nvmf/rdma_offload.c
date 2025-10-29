@@ -7383,7 +7383,11 @@ nvmf_rdma_offload_qpair_close_process(struct spdk_nvmf_offload_qpair *oqpair)
 
 		switch (oqpair->state) {
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_UNINITIALIZED:
-			oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_REJECT;
+			if (oqpair->cm_id) {
+				oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_REJECT;
+			} else {
+				oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_PENDING_TO_CLOSE;
+			}
 			break;
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_REJECT:
 			assert(oqpair->cm_id);
