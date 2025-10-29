@@ -164,8 +164,8 @@ run_test "nvmf_shutdown_tc2" nvmf_shutdown_tc2
 run_test "nvmf_shutdown_tc3" nvmf_shutdown_tc3
 
 # Temporarily disable for tcp due to issue #3522
-#if [[ "$TEST_TRANSPORT" != "tcp" ]]; then
-#	run_test "nvmf_shutdown_tc4" nvmf_shutdown_tc4
-#fi
+if [[ "$TEST_TRANSPORT" != "tcp" ]]; then
+	run_test "nvmf_shutdown_tc4" nvmf_shutdown_tc4
+fi
 
 trap - SIGINT SIGTERM EXIT
