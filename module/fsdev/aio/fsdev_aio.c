@@ -3763,10 +3763,9 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY);
+	if (fd < 0) {
+		res = fd;
 		goto fop_failed;
 	}
 
@@ -3795,7 +3794,7 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		}
 
 		new_mode = entry_out.attr.mode & ~S_ISGID;
-		res = fchmod(fobject->fd, new_mode);
+		res = fchmod(fd, new_mode);
 		if (res == -1) {
 			SPDK_WARNLOG("Failed to clean SGID on behalf of changed '%s' with errno=%d - ignoring.\n",
 				     acl_access_name, -errno);
@@ -3846,10 +3845,9 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY);
+	if (fd < 0) {
+		res = fd;
 		goto fop_failed;
 	}
 
@@ -3904,10 +3902,9 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY);
+	if (fd < 0) {
+		res = fd;
 		goto fop_failed;
 	}
 
@@ -3954,10 +3951,9 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		return -EINVAL;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDONLY);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("openat failed (errno=%d)\n", -res);
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY);
+	if (fd < 0) {
+		res = fd;
 		goto fop_failed;
 	}
 
