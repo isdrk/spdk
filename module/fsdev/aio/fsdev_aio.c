@@ -202,14 +202,14 @@ struct aio_fsdev_fs {
 
 struct aio_fsdev;
 
-struct aio_fsdev_linux_fh {
+struct aio_fsdev_fh_entry {
 	const struct file_handle *fh;
 	struct aio_fsdev_fs *fs;
-	RB_ENTRY(aio_fsdev_linux_fh) node;
+	RB_ENTRY(aio_fsdev_fh_entry) node;
 };
 
 static int
-aio_fsdev_linux_fh_cmp(struct aio_fsdev_linux_fh *fh1, struct aio_fsdev_linux_fh *fh2)
+aio_fsdev_fh_entry_cmp(struct aio_fsdev_fh_entry *fh1, struct aio_fsdev_fh_entry *fh2)
 {
 	if (fh1->fs->id < fh2->fs->id) {
 		return -1;
@@ -221,8 +221,8 @@ aio_fsdev_linux_fh_cmp(struct aio_fsdev_linux_fh *fh1, struct aio_fsdev_linux_fh
 	return memcmp(fh1->fh, fh2->fh, sizeof(*fh1->fh) + fh1->fh->handle_bytes);
 }
 
-RB_HEAD(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh);
-RB_GENERATE_STATIC(aio_fsdev_linux_fh_tree, aio_fsdev_linux_fh, node, aio_fsdev_linux_fh_cmp);
+RB_HEAD(aio_fsdev_fh_tree, aio_fsdev_fh_entry);
+RB_GENERATE_STATIC(aio_fsdev_fh_tree, aio_fsdev_fh_entry, node, aio_fsdev_fh_entry_cmp);
 
 union aio_fsdev_fh {
 	struct file_handle fh;
@@ -237,7 +237,7 @@ struct aio_fsdev_file_object {
 	int fd;
 	char *fd_str;
 	union aio_fsdev_fh fh;
-	struct aio_fsdev_linux_fh linux_fh_entry;
+	struct aio_fsdev_fh_entry fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
 	TAILQ_HEAD(, aio_fsdev_file_handle) handles;
 	struct aio_fsdev *vfsdev;
@@ -266,7 +266,7 @@ struct aio_fsdev {
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
 	struct spdk_spinlock lock;
-	struct aio_fsdev_linux_fh_tree linux_fhs;
+	struct aio_fsdev_fh_tree fhs;
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	int fanotify_fd;
 	struct spdk_poller *fanotify_poller;
@@ -621,7 +621,7 @@ file_object_unref(struct aio_fsdev_file_object *fobject, uint32_t count)
 	refcount = __atomic_load_n(&fobject->hdr.refcount, __ATOMIC_RELAXED);
 	if (!refcount) {
 		spdk_lut_remove(fobject->vfsdev->lut, fobject->hdr.lut_key);
-		RB_REMOVE(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
+		RB_REMOVE(aio_fsdev_fh_tree, &vfsdev->fhs, &fobject->fh_entry);
 	}
 
 	spdk_spin_unlock(&vfsdev->lock);
@@ -765,7 +765,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		goto err;
 	}
 
-	fobject->linux_fh_entry.fh = &fobject->fh.fh;
+	fobject->fh_entry.fh = &fobject->fh.fh;
 	fobject->fh.fh.handle_bytes = MAX_HANDLE_SZ;
 	rc = name_to_handle_at(fd, "", &fobject->fh.fh, &mount_id, AT_EMPTY_PATH);
 	if (rc) {
@@ -774,8 +774,8 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		goto err;
 	}
 
-	fobject->linux_fh_entry.fs = fsdev_aio_get_fs_unsafe(vfsdev, mount_id);
-	if (fobject->linux_fh_entry.fs == NULL) {
+	fobject->fh_entry.fs = fsdev_aio_get_fs_unsafe(vfsdev, mount_id);
+	if (fobject->fh_entry.fs == NULL) {
 		goto err;
 	}
 
@@ -797,7 +797,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		}
 	}
 #endif
-	RB_INSERT(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &fobject->linux_fh_entry);
+	RB_INSERT(aio_fsdev_fh_tree, &vfsdev->fhs, &fobject->fh_entry);
 	if (parent_fobject) {
 		fobject->parent_fobject = parent_fobject;
 		file_object_ref(parent_fobject);
@@ -1030,11 +1030,11 @@ static void
 fsdev_aio_free_fobjects(struct aio_fsdev *vfsdev, bool unref_root)
 {
 	struct aio_fsdev_file_object *fobject;
-	struct aio_fsdev_linux_fh *lfh, *tmp;
+	struct aio_fsdev_fh_entry *lfh, *tmp;
 	uint64_t refcount;
 
-	RB_FOREACH_SAFE(lfh, aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, tmp) {
-		fobject = SPDK_CONTAINEROF(lfh, struct aio_fsdev_file_object, linux_fh_entry);
+	RB_FOREACH_SAFE(lfh, aio_fsdev_fh_tree, &vfsdev->fhs, tmp) {
+		fobject = SPDK_CONTAINEROF(lfh, struct aio_fsdev_file_object, fh_entry);
 
 		/* Child fobjects unref their parents when they're destroyed and we don't track
 		 * children in parent fobject, so we might free a parent before a child.  To avoid
@@ -1306,8 +1306,8 @@ static struct aio_fsdev_file_object *
 fsdev_aio_get_fobject_by_linux_fh_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id,
 		const struct file_handle *file_handle)
 {
-	struct aio_fsdev_linux_fh find = { .fh = file_handle };
-	struct aio_fsdev_linux_fh *res;
+	struct aio_fsdev_fh_entry find = { .fh = file_handle };
+	struct aio_fsdev_fh_entry *res;
 	struct aio_fsdev_file_object *fobject = NULL;
 
 	find.fs = fsdev_aio_find_fs_unsafe(vfsdev, mount_id);
@@ -1315,9 +1315,9 @@ fsdev_aio_get_fobject_by_linux_fh_unsafe(struct aio_fsdev *vfsdev, uint64_t moun
 		return NULL;
 	}
 
-	res = RB_FIND(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &find);
+	res = RB_FIND(aio_fsdev_fh_tree, &vfsdev->fhs, &find);
 	if (res) {
-		fobject = SPDK_CONTAINEROF(res, struct aio_fsdev_file_object, linux_fh_entry);
+		fobject = SPDK_CONTAINEROF(res, struct aio_fsdev_file_object, fh_entry);
 		file_object_ref(fobject);
 	}
 
@@ -5268,7 +5268,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	vfsdev->fanotify_fd = -1;
 #endif
-	RB_INIT(&vfsdev->linux_fhs);
+	RB_INIT(&vfsdev->fhs);
 	STAILQ_INIT(&vfsdev->fss);
 	spdk_spin_init(&vfsdev->lock);
 
