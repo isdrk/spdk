@@ -1028,25 +1028,6 @@ fsdev_aio_fill_entry_out(struct aio_fsdev_file_object *fobject, struct fuse_entr
 	return 0;
 }
 
-static int
-utimensat_empty(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
-		const struct timespec *tv)
-{
-	int res;
-
-	if (fsdev_aio_fobject_is_symlink(fobject)) {
-		res = utimensat(fobject->fd, "", tv, AT_EMPTY_PATH);
-		if (res == -1 && errno == EINVAL) {
-			/* Sorry, no race free way to set times on symlink. */
-			errno = EPERM;
-		}
-	} else {
-		res = utimensat(vfsdev->proc_self_fd, fobject->fd_str, tv, 0);
-	}
-
-	return res;
-}
-
 static void
 fsdev_aio_free_fobjects(struct aio_fsdev *vfsdev, bool unref_root)
 {
@@ -2723,18 +2704,36 @@ fop_failed:
 }
 
 static int
-fsdev_fchmodat(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject, uint32_t mode)
+fsdev_fchmodat(int fd, struct aio_fsdev_file_object *fobject, uint32_t mode)
 {
 	int res;
 
-	res = fchmodat(fobject->fd, "", mode, AT_EMPTY_PATH);
-	if (res == -1) {
-		if (errno == EINVAL) {
-			/* Linux only gained support for AT_EMPTY_PATH in fchmodat recently. We'll use a fallback option. */
-			res = fchmodat(vfsdev->proc_self_fd, fobject->fd_str, mode, 0);
-		}
+	res = fchmodat(fd, "", mode, AT_EMPTY_PATH);
+	if (res == 0) {
+		return 0;
 	}
 
+	if (errno != EINVAL) {
+		return -errno;
+	}
+
+	/* Linux only gained support for AT_EMPTY_PATH in fchmodat recently. We'll use a fallback
+	 * option.
+	 *
+	 * Also, we must open the file on non-blocking mode, because it might be a named pipe, which
+	 * would block on open() if it wasn't opened with O_NONBLOCK.
+	 */
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY | O_NONBLOCK);
+	if (fd < 0) {
+		return fd;
+	}
+
+	res = fchmod(fd, mode);
+	if (res != 0) {
+		res = -errno;
+	}
+
+	close(fd);
 	return res;
 }
 
@@ -2742,7 +2741,7 @@ static int
 fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
+	int res, fd;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_handle *fhandle = NULL;
 	struct fuse_setattr_in *setattr;
@@ -2759,6 +2758,12 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	setattr = fsdev_io->u_in.fuse.op.setattr;
 	valid = setattr->valid;
 
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		res = fd;
+		goto fop_failed;
+	}
+
 	if (valid & FATTR_FH) {
 		fhandle = fsdev_aio_get_fhandle_by_fuse_fh(vfsdev, setattr->fh);
 		if (!fhandle) {
@@ -2771,12 +2776,14 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (valid & FATTR_MODE) {
 		if (fhandle) {
 			res = fchmod(fhandle->fd, setattr->mode);
+			if (res != 0) {
+				res = -errno;
+			}
 		} else {
-			res = fsdev_fchmodat(vfsdev, fobject, setattr->mode);
+			res = fsdev_fchmodat(fd, fobject, setattr->mode);
 		}
 		if (res == -1) {
-			res = -errno;
-			SPDK_ERRLOG("fchmod failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
+			SPDK_ERRLOG("fchmodat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
 			goto fop_failed;
 		}
 		fobject->mode = setattr->mode;
@@ -2786,7 +2793,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		uid_t uid = (valid & FATTR_UID) ? setattr->uid : (uid_t) -1;
 		gid_t gid = (valid & FATTR_GID) ? setattr->gid : (gid_t) -1;
 
-		res = fchownat(fobject->fd, "", uid, gid, AT_EMPTY_PATH);
+		res = fchownat(fd, "", uid, gid, AT_EMPTY_PATH);
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fchownat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
@@ -2800,9 +2807,9 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		if (fhandle) {
 			truncfd = fhandle->fd;
 		} else {
-			truncfd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
+			truncfd = fsdev_aio_fobject_open(fobject, O_RDWR);
 			if (truncfd < 0) {
-				res = -errno;
+				res = truncfd;
 				SPDK_ERRLOG("openat failed for " FOBJECT_FMT " with %d\n", FOBJECT_ARGS(fobject), res);
 				goto fop_failed;
 			}
@@ -2847,11 +2854,15 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		if (fhandle) {
 			res = futimens(fhandle->fd, tv);
 		} else {
-			res = utimensat_empty(vfsdev, fobject, tv);
+			res = utimensat(fd, "", tv, AT_EMPTY_PATH);
+			if (res == -1 && errno == EINVAL && fsdev_aio_fobject_is_symlink(fobject)) {
+				/* Sorry, no race free way to set times on symlink. */
+				errno = EPERM;
+			}
 		}
 		if (res == -1) {
 			res = -errno;
-			SPDK_ERRLOG("futimens/utimensat_empty failed for " FOBJECT_FMT " with %d\n",
+			SPDK_ERRLOG("futimens failed for " FOBJECT_FMT " with %d\n",
 				    FOBJECT_ARGS(fobject), res);
 			goto fop_failed;
 		}
@@ -2871,6 +2882,7 @@ fsdev_aio_op_setattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 fop_failed:
 	file_object_unref(fobject, 1);
+	close(fd);
 	return res;
 }
 
@@ -3355,7 +3367,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 	 * for POSIX compliance.
 	 */
 	if (!S_ISLNK(mode)) {
-		res = fsdev_fchmodat(vfsdev, fobject, (mode & ~umask));
+		res = fchmodat(parent_fobject->fd, name, (mode & ~umask), 0);
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("fsdev_aio_mknod_symlink mode fixup failed with %d\n", res);
