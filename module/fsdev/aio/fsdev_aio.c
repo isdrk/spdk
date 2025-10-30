@@ -1125,10 +1125,9 @@ fsdev_aio_op_opendir(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	fd = openat(fobject->fd, ".", O_RDONLY);
-	if (fd == -1) {
-		error = -errno;
-		SPDK_ERRLOG("openat failed for " FOBJECT_FMT " (err=%d)\n", FOBJECT_ARGS(fobject), error);
+	fd = fsdev_aio_fobject_open(fobject, O_RDONLY);
+	if (fd < 0) {
+		error = fd;
 		goto do_return;
 	}
 
@@ -1927,14 +1926,11 @@ static int
 fsdev_aio_do_fsioc_ioctl(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject,
 			 uint32_t request, void *buf)
 {
-	int fd;
-	int res;
+	int res, fd;
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("Failed to open fd %d\n", fobject->fd);
-		return res;
+	fd = fsdev_aio_fobject_open(fobject, O_RDWR);
+	if (fd < 0) {
+		return fd;
 	}
 
 	res = ioctl(fd, request, buf);
@@ -2631,12 +2627,9 @@ fsdev_aio_op_open(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	}
 
 	flags = update_open_flags(vfsdev, flags);
-
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, flags & ~O_NOFOLLOW);
-	if (fd == -1) {
-		res = -errno;
-		SPDK_ERRLOG("openat(%d, %s, 0x%08" PRIx32 ") failed with err=%d\n",
-			    vfsdev->proc_self_fd, fobject->fd_str, flags, res);
+	fd = fsdev_aio_fobject_open(fobject, flags & ~O_NOFOLLOW);
+	if (fd < 0) {
+		res = fd;
 		goto fop_failed;
 	}
 
@@ -2896,7 +2889,7 @@ static int
 fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int fd = -1;
+	int fd = -1, parent_fd = -1;
 	int err;
 	struct aio_fsdev_file_object *parent_fobject;
 	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
@@ -2922,6 +2915,12 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
+	parent_fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		err = parent_fd;
+		goto fop_failed;
+	}
+
 	err = fsdev_aio_change_cred(&new_cred, &old_cred);
 	if (err) {
 		SPDK_ERRLOG("CREATE: cannot change credentials\n");
@@ -2930,7 +2929,7 @@ fsdev_aio_op_create(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 	flags = update_open_flags(vfsdev, flags);
 
-	fd = openat(parent_fobject->fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, (mode & ~umask));
+	fd = openat(parent_fd, name, (flags | O_CREAT) & ~O_NOFOLLOW, (mode & ~umask));
 	err = fd == -1 ? -errno : 0;
 	fsdev_aio_restore_cred(&old_cred);
 
@@ -2978,6 +2977,7 @@ fop_failed:
 		close(fd);
 	}
 	file_object_unref(parent_fobject, 1);
+	close(parent_fd);
 	return err;
 }
 
@@ -3107,9 +3107,9 @@ clear_suid_sgid(struct aio_fsdev_io *vfsdev_io)
 		goto out;
 	}
 
-	fd = openat(vfsdev->proc_self_fd, fobject->fd_str, O_RDWR);
-	if (fd == -1) {
-		error = -errno;
+	fd = fsdev_aio_fobject_open(fobject, 0);
+	if (fd < 0) {
+		error = fd;
 		goto out;
 	}
 
@@ -3231,7 +3231,7 @@ fsdev_aio_op_write(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 static int
 fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int res;
+	int res, fd = -1;
 	struct aio_fsdev_file_object *fobject;
 	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
 	char *buf = out_iov->iov_base;
@@ -3242,7 +3242,13 @@ fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		return -EINVAL;
 	}
 
-	res = readlinkat(fobject->fd, "", buf, out_iov->iov_len);
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		res = fd;
+		goto fop_failed;
+	}
+
+	res = readlinkat(fd, "", buf, out_iov->iov_len);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("readlinkat failed for " FOBJECT_FMT " with %d\n",
@@ -3262,13 +3268,14 @@ fsdev_aio_op_readlink(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 
 fop_failed:
 	file_object_unref(fobject, 1);
+	close(fd);
 	return res;
 }
 
 static int
 fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int res;
+	int res, fd = -1;
 	struct aio_fsdev_file_object *fobject;
 	struct statvfs stbuf;
 	struct fuse_statfs_out *statfs_out = fsdev_io->u_out.fuse.op.statfs;
@@ -3280,7 +3287,13 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	res = fstatvfs(fobject->fd, &stbuf);
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		res = fd;
+		goto fop_failed;
+	}
+
+	res = fstatvfs(fd, &stbuf);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("fstatvfs failed with %d\n", res);
@@ -3302,6 +3315,7 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 fop_failed:
 	file_object_unref(fobject, 1);
+	close(fd);
 	return res;
 }
 
@@ -3456,7 +3470,7 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 {
 	/* fobject must be initialized to avoid a scan-build false positive */
 	struct aio_fsdev_file_object *fobject = NULL;
-	int res;
+	int res, fd = -1;
 
 	if (!parent_fobject) {
 		SPDK_ERRLOG("Invalid parent_fobject: %p\n", parent_fobject);
@@ -3474,7 +3488,13 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		return -EIO;
 	}
 
-	res = unlinkat(parent_fobject->fd, name, is_dir ? AT_REMOVEDIR : 0);
+	fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (fd < 0) {
+		res = fd;
+		goto out;
+	}
+
+	res = unlinkat(fd, name, is_dir ? AT_REMOVEDIR : 0);
 	if (res) {
 		res = -errno;
 		SPDK_WARNLOG("unlinkat(" FOBJECT_FMT " %s) failed (err=%d)\n",
@@ -3483,7 +3503,9 @@ fsdev_aio_do_unlink(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 
 	SPDK_DEBUGLOG(fsdev_aio, "UNLINK succeeded for " FOBJECT_FMT " (name=%s)\n",
 		      FOBJECT_ARGS(fobject), name);
+out:
 	file_object_unref(fobject, 1);
+	close(fd);
 	return res;
 }
 
