@@ -1554,7 +1554,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		    const char *name, struct aio_fsdev_file_object **pfobject,
 		    struct fuse_entry_out *entry_out)
 {
-	int newfd;
+	int newfd, parent_fd = -1;
 	int res, mount_id;
 	bool is_new;
 	struct stat stat;
@@ -1566,12 +1566,17 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		name = ".";
 	}
 
-	newfd = openat(parent_fobject->fd, name, O_PATH | O_NOFOLLOW);
+	parent_fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		return parent_fd;
+	}
+
+	newfd = openat(parent_fd, name, O_PATH | O_NOFOLLOW);
 	if (newfd == -1) {
 		res = -errno;
 		SPDK_DEBUGLOG(fsdev_aio, "openat( " FOBJECT_FMT " %s) failed with %d\n",
 			      FOBJECT_ARGS(parent_fobject), name, res);
-		return res;
+		goto out;
 	}
 
 	res = fstatat(newfd, "", &stat, AT_EMPTY_PATH);
@@ -1579,17 +1584,16 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		res = -errno;
 		SPDK_ERRLOG("fstatat(%s) failed with %d\n", name, res);
 		close(newfd);
-		return res;
+		goto out;
 	}
 
 	fh.fh.handle_bytes = MAX_HANDLE_SZ;
 	res = name_to_handle_at(newfd, "", &fh.fh, &mount_id, AT_EMPTY_PATH);
 	if (res) {
 		res = -errno;
-		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
-			    errno, parent_fobject->fd, name);
+		SPDK_ERRLOG("Failed to get file handle: errno %d, name %s\n", errno, name);
 		close(newfd);
-		return res;
+		goto out;
 	}
 
 	spdk_spin_lock(&vfsdev->lock);
@@ -1606,7 +1610,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 	if (!fobject) {
 		SPDK_ERRLOG("Cannot create file object\n");
 		close(newfd);
-		return -ENOMEM;
+		goto out;
 	}
 	if (!is_new) {
 		close(newfd);
@@ -1617,15 +1621,17 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		if (res) {
 			SPDK_ERRLOG("fill_entry_out(%s) failed with %d\n", name, res);
 			file_object_unref(fobject, 1);
-			return res;
+			goto out;
 		}
 	}
 
 	*pfobject = fobject;
 
-	SPDK_DEBUGLOG(fsdev_aio, "lookup(%s) in dir " FOBJECT_FMT ": "  FOBJECT_FMT " fd=%d\n",
-		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(fobject), fobject->fd);
-	return 0;
+	SPDK_DEBUGLOG(fsdev_aio, "lookup(%s) in dir " FOBJECT_FMT ": "  FOBJECT_FMT "\n",
+		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(fobject));
+out:
+	close(parent_fd);
+	return res;
 }
 
 static int
