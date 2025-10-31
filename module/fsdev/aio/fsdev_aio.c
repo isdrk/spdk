@@ -3288,9 +3288,30 @@ fop_failed:
 }
 
 static int
+fsdev_aio_fobject_statvfs(struct aio_fsdev_file_object *fobject, struct statvfs *stbuf)
+{
+	int rc, fd, errsv;
+
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		return fd;
+	}
+
+	rc = fstatvfs(fd, stbuf);
+	if (rc != 0) {
+		errsv = errno;
+		SPDK_ERRLOG("fstatvfs failed with %d\n", errsv);
+		rc = -errsv;
+	}
+
+	close(fd);
+	return rc;
+}
+
+static int
 fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int res, fd = -1;
+	int res;
 	struct aio_fsdev_file_object *fobject;
 	struct statvfs stbuf;
 	struct fuse_statfs_out *statfs_out = fsdev_io->u_out.fuse.op.statfs;
@@ -3302,16 +3323,8 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	fd = fsdev_aio_fobject_open(fobject, O_PATH);
-	if (fd < 0) {
-		res = fd;
-		goto fop_failed;
-	}
-
-	res = fstatvfs(fd, &stbuf);
-	if (res == -1) {
-		res = -errno;
-		SPDK_ERRLOG("fstatvfs failed with %d\n", res);
+	res = fsdev_aio_fobject_statvfs(fobject, &stbuf);
+	if (res != 0) {
 		goto fop_failed;
 	}
 
@@ -3330,7 +3343,6 @@ fsdev_aio_op_statfs(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 
 fop_failed:
 	file_object_unref(fobject, 1);
-	close(fd);
 	return res;
 }
 
@@ -5404,11 +5416,8 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		/* Check if filesystem supports fanotify. According to fanotify_mark(2)
 		 * it doesn't work for filesystems that report fsid 0.
 		 */
-		rc = fstatvfs(vfsdev->root->fd, &stat);
+		rc = fsdev_aio_fobject_statvfs(vfsdev->root, &stat);
 		if (rc) {
-			rc = -errno;
-			SPDK_ERRLOG("Failed to get filesystem statistics, fsdev %s, root_fd %d, errno %d\n",
-				    vfsdev->fsdev.name, vfsdev->root->fd, errno);
 			fsdev_aio_free(vfsdev);
 			return rc;
 		}
