@@ -187,6 +187,7 @@ static size_t g_ctx_sz = 0;
  * SPDK application is required.
  */
 static uint64_t g_thread_id = 1;
+static uint64_t g_poll_warning_threshold;
 
 enum spin_error {
 	SPIN_ERR_NONE,
@@ -362,6 +363,7 @@ _thread_lib_init(size_t ctx_sz, size_t msg_mempool_sz)
 	char mempool_name[SPDK_MAX_MEMZONE_NAME_LEN];
 
 	g_ctx_sz = ctx_sz;
+	g_poll_warning_threshold = 1 * spdk_get_ticks_hz();
 
 	snprintf(mempool_name, sizeof(mempool_name), "msgpool_%d", getpid());
 	g_spdk_msg_mempool = spdk_mempool_create(mempool_name, msg_mempool_sz,
@@ -969,15 +971,21 @@ static inline void
 thread_update_stats(struct spdk_thread *thread, uint64_t end,
 		    uint64_t start, int rc)
 {
+	uint64_t runtime_ms, runtime = end - start;
+
 	if (rc == 0) {
 		/* Poller status idle */
-		thread->stats.idle_tsc += end - start;
+		thread->stats.idle_tsc += runtime;
 	} else if (rc > 0) {
 		/* Poller status busy */
-		thread->stats.busy_tsc += end - start;
+		thread->stats.busy_tsc += runtime;
 	}
 	/* Store end time to use it as start time of the next spdk_thread_poll(). */
 	thread->tsc_last = end;
+	if (spdk_unlikely(runtime >= g_poll_warning_threshold)) {
+		runtime_ms = runtime * SPDK_SEC_TO_MSEC / spdk_get_ticks_hz();
+		SPDK_WARNLOG("Thread %s took over %"PRIu64"ms to poll\n", thread->name, runtime_ms);
+	}
 }
 
 static inline int
