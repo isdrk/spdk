@@ -258,7 +258,6 @@ struct aio_fsdev {
 	struct spdk_fsdev_mount_opts mount_opts;
 	struct spdk_fsdev_aio_opts opts;
 	char *root_path;
-	int proc_self_fd;
 	struct aio_fsdev_file_object *root;
 	STAILQ_HEAD(, aio_fsdev_fs) fss;
 	TAILQ_ENTRY(aio_fsdev) tailq;
@@ -4896,10 +4895,6 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 {
 	struct aio_fsdev_fs *fs;
 
-	if (vfsdev->proc_self_fd != -1) {
-		close(vfsdev->proc_self_fd);
-	}
-
 	if (vfsdev->root) {
 		uint64_t refcount = file_object_unref(vfsdev->root, 1);
 		assert(refcount == 0);
@@ -5288,20 +5283,6 @@ setup_root(struct aio_fsdev *vfsdev)
 	return 0;
 }
 
-static int
-setup_proc_self_fd(struct aio_fsdev *vfsdev)
-{
-	vfsdev->proc_self_fd = open("/proc/self/fd", O_PATH);
-	if (vfsdev->proc_self_fd == -1) {
-		int saverr = -errno;
-		SPDK_ERRLOG("Failed to open procfs fd dir with %d\n", saverr);
-		return saverr;
-	}
-
-	SPDK_DEBUGLOG(fsdev_aio, "procfs fd dir opened (fd=%d)\n", vfsdev->proc_self_fd);
-	return 0;
-}
-
 void
 spdk_fsdev_aio_get_default_opts(struct spdk_fsdev_aio_opts *opts)
 {
@@ -5338,8 +5319,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 		return -ENOMEM;
 	}
 
-	vfsdev->proc_self_fd = -1;
-
 	vfsdev->fsdev.name = strdup(name);
 	if (!vfsdev->fsdev.name) {
 		SPDK_ERRLOG("Could not strdup fsdev name: %s\n", name);
@@ -5372,13 +5351,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	rc = setup_root(vfsdev);
 	if (rc) {
 		SPDK_ERRLOG("Could not setup root: %s (err=%d)\n", root_path, rc);
-		fsdev_aio_free(vfsdev);
-		return rc;
-	}
-
-	rc = setup_proc_self_fd(vfsdev);
-	if (rc) {
-		SPDK_ERRLOG("Could not setup proc_self_fd (err=%d)\n", rc);
 		fsdev_aio_free(vfsdev);
 		return rc;
 	}
