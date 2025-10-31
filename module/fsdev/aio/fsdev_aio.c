@@ -3515,7 +3515,7 @@ static int
 fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t flags)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
+	int res, parent_fd = -1, new_parent_fd = -1;
 	/* old_fobject must be initialized to avoid a scan-build false positive */
 	struct aio_fsdev_file_object *old_fobject = NULL;
 	struct aio_fsdev_file_object *parent_fobject;
@@ -3557,6 +3557,18 @@ fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t fl
 		goto bad_new_parent_fobject;
 	}
 
+	parent_fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		res = parent_fd;
+		goto fop_failed;
+	}
+
+	new_parent_fd = fsdev_aio_fobject_open(new_parent_fobject, O_PATH);
+	if (new_parent_fd < 0) {
+		res = new_parent_fd;
+		goto fop_failed;
+	}
+
 	res = fsdev_aio_do_lookup(vfsdev, parent_fobject, name, &old_fobject, NULL);
 	if (res) {
 		SPDK_ERRLOG("can't find '%s' under " FOBJECT_FMT "\n", name, FOBJECT_ARGS(parent_fobject));
@@ -3570,8 +3582,7 @@ fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t fl
 		res = -ENOTSUP;
 		goto fop_failed;
 #else
-		res = syscall(SYS_renameat2, parent_fobject->fd, name, new_parent_fobject->fd,
-			      new_name, flags);
+		res = syscall(SYS_renameat2, parent_fd, name, new_parent_fd, new_name, flags);
 		if (res == -1 && errno == ENOSYS) {
 			SPDK_ERRLOG("SYS_renameat2 returned ENOSYS\n");
 			res = -ENOSYS;
@@ -3583,7 +3594,7 @@ fsdev_aio_do_rename(struct spdk_fsdev_io *fsdev_io, uint64_t newdir, uint32_t fl
 		}
 #endif
 	} else {
-		res = renameat(parent_fobject->fd, name, new_parent_fobject->fd, new_name);
+		res = renameat(parent_fd, name, new_parent_fd, new_name);
 		if (res == -1) {
 			res = -errno;
 			SPDK_ERRLOG("renameat failed (err=%d)\n", res);
@@ -3598,6 +3609,8 @@ fop_failed:
 	file_object_unref(new_parent_fobject, 1);
 bad_new_parent_fobject:
 	file_object_unref(parent_fobject, 1);
+	close(new_parent_fd);
+	close(parent_fd);
 	return res;
 }
 
