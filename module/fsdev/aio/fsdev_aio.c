@@ -3306,7 +3306,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
 	struct aio_fsdev_file_object *parent_fobject;
 	struct aio_fsdev_file_object *fobject = NULL;
-	int res;
+	int res, parent_fd = -1;
 	int saverr;
 	struct fsdev_aio_cred old_cred, new_cred = {
 		.euid = fsdev_io->u_in.fuse.hdr->uid,
@@ -3326,6 +3326,12 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 		return -EINVAL;
 	}
 
+	parent_fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		res = parent_fd;
+		goto fop_failed;
+	}
+
 	res = fsdev_aio_change_cred(&new_cred, &old_cred);
 	if (res) {
 		SPDK_ERRLOG("cannot change cred (err=%d)\n", res);
@@ -3333,18 +3339,18 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 	}
 
 	if (S_ISDIR(mode)) {
-		res = mkdirat(parent_fobject->fd, name, (mode & ~umask));
+		res = mkdirat(parent_fd, name, (mode & ~umask));
 	} else if (S_ISLNK(mode)) {
 		if (link) {
-			res = symlinkat(link, parent_fobject->fd, name);
+			res = symlinkat(link, parent_fd, name);
 		} else {
 			SPDK_ERRLOG("NULL link pointer\n");
 			errno = EINVAL;
 		}
 	} else if (S_ISFIFO(mode)) {
-		res = mkfifoat(parent_fobject->fd, name, (mode & ~umask));
+		res = mkfifoat(parent_fd, name, (mode & ~umask));
 	} else {
-		res = mknodat(parent_fobject->fd, name, (mode & ~umask), rdev);
+		res = mknodat(parent_fd, name, (mode & ~umask), rdev);
 	}
 	saverr = -errno;
 
@@ -3367,10 +3373,11 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 	 * for POSIX compliance.
 	 */
 	if (!S_ISLNK(mode)) {
-		res = fchmodat(parent_fobject->fd, name, (mode & ~umask), 0);
+		res = fchmodat(parent_fd, name, (mode & ~umask), 0);
 		if (res == -1) {
 			res = -errno;
-			SPDK_ERRLOG("fsdev_aio_mknod_symlink mode fixup failed with %d\n", res);
+			SPDK_ERRLOG("fsdev_aio_mknod_symlink mode fixup failed with %d\n",
+				    res);
 			file_object_unref(fobject, 1);
 			goto fop_failed;
 		}
@@ -3385,6 +3392,7 @@ fsdev_aio_mknod_symlink(struct spdk_fsdev_io *fsdev_io, const char *name, mode_t
 
 fop_failed:
 	file_object_unref(parent_fobject, 1);
+	close(parent_fd);
 	return res;
 }
 
