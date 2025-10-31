@@ -539,7 +539,7 @@ fsdev_aio_fobject_open(struct aio_fsdev_file_object *fobject, int flags)
 
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 static int
-fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
+fsdev_aio_fanotify_addat(struct aio_fsdev_file_object *fobject, int parent_fd, const char *name)
 {
 	struct aio_fsdev *vfsdev = fobject->vfsdev;
 	int rc;
@@ -547,16 +547,28 @@ fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject, int parent_fd, con
 	rc = fanotify_mark(vfsdev->fanotify_fd, FAN_MARK_ADD | FAN_MARK_ONLYDIR, FANOTIFY_MASK,
 			   parent_fd, name);
 	if (rc) {
-		SPDK_ERRLOG("Failed to add fobject to fanotify: errno %d, fd %d, "
-			    "parent fd %d, name %s\n",
-			    errno, fobject->fd, parent_fd, name);
+		SPDK_ERRLOG("Failed to add fobject to fanotify: errno %d, name %s\n", errno, name);
 		return rc;
 	}
 
-	SPDK_DEBUGLOG(fsdev_aio, "Added fobject to fanotify: fd %d, name %s\n",
-		      fobject->fd, name);
-
+	SPDK_DEBUGLOG(fsdev_aio, "Added fobject to fanotify: name %s\n", name);
 	return 0;
+}
+
+static int
+fsdev_aio_fanotify_add(struct aio_fsdev_file_object *fobject,
+		       struct aio_fsdev_file_object *parent_fobject, const char *name)
+{
+	int rc, parent_fd;
+
+	parent_fd = fsdev_aio_fobject_open(parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		return parent_fd;
+	}
+
+	rc = fsdev_aio_fanotify_addat(fobject, parent_fd, name);
+	close(parent_fd);
+	return rc;
 }
 
 static void
@@ -564,25 +576,29 @@ fsdev_aio_fanotify_remove(struct aio_fsdev_file_object *fobject)
 {
 	struct aio_fsdev *vfsdev = fobject->vfsdev;
 	const char *name;
-	int fd;
+	int fd = -1;
 	int rc;
 
 	if (fobject == vfsdev->root) {
 		fd = AT_FDCWD;
 		name = vfsdev->root_path;
 	} else {
-		fd = fobject->fd;
+		fd = fsdev_aio_fobject_open(fobject, O_PATH);
+		if (fd < 0) {
+			return;
+		}
 		name = ".";
 	}
 
 	rc = fanotify_mark(vfsdev->fanotify_fd, FAN_MARK_REMOVE | FAN_MARK_ONLYDIR, FANOTIFY_MASK,
 			   fd, name);
 	if (rc) {
-		SPDK_ERRLOG("Failed to remove fobject from fanotify: errno %d, fd %d, name %s\n",
-			    errno, fd, name);
+		SPDK_ERRLOG("Failed to remove fobject from fanotify: errno %d, name %s\n",
+			    errno, name);
 	} else {
-		SPDK_DEBUGLOG(fsdev_aio, "Removed fobject from fanotify: fd %d, name %s\n", fd, name);
+		SPDK_DEBUGLOG(fsdev_aio, "Removed fobject from fanotify: name %s\n", name);
 	}
+	close(fd);
 }
 #endif
 
@@ -806,7 +822,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	/* Root is marked on mount */
 	if (vfsdev->fanotify_fd != -1 && fsdev_aio_fobject_is_dir(fobject) && parent_fobject) {
-		int rc = fsdev_aio_fanotify_add(fobject, parent_fobject->fd, name);
+		int rc = fsdev_aio_fanotify_add(fobject, parent_fobject, name);
 		if (rc) {
 			goto err;
 		}
@@ -1371,9 +1387,8 @@ fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd,
 		uint64_t parent_nodeid = fsdev_aio_fobject_to_nodeid(fobject->vfsdev, fobject);
 		int rc;
 
-		SPDK_INFOLOG(fsdev_aio, "Notify inval entry: parent " FOBJECT_FMT
-			     ", parent fd %d, name %s\n",
-			     FOBJECT_ARGS(fobject), fobject->fd, file_name);
+		SPDK_INFOLOG(fsdev_aio, "Notify inval entry: parent " FOBJECT_FMT ", name %s\n",
+			     FOBJECT_ARGS(fobject), file_name);
 		file_object_unref(fobject, 1);
 
 		req = calloc(1, sizeof(*req) + strlen(file_name) + 1);
@@ -1522,7 +1537,7 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (vfsdev->fanotify_fd != -1) {
 		int rc;
 		spdk_spin_lock(&vfsdev->lock);
-		rc = fsdev_aio_fanotify_add(vfsdev->root, AT_FDCWD, vfsdev->root_path);
+		rc = fsdev_aio_fanotify_addat(vfsdev->root, AT_FDCWD, vfsdev->root_path);
 		spdk_spin_unlock(&vfsdev->lock);
 		if (rc) {
 			return rc;
