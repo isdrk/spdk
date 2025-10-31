@@ -3635,7 +3635,7 @@ static int
 fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
 	struct aio_fsdev *vfsdev = fsdev_to_aio_fsdev(fsdev_io->fsdev);
-	int res;
+	int res, fd = -1, parent_fd = -1;
 	struct aio_fsdev_file_object *fobject;
 	struct aio_fsdev_file_object *new_parent_fobject;
 	const char *name = fsdev_aio_io_fuse_get_name(fsdev_io);
@@ -3662,7 +3662,19 @@ fsdev_aio_op_link(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		goto bad_new_parent_fobject;
 	}
 
-	res = linkat(fobject->fd, "", new_parent_fobject->fd, name, AT_EMPTY_PATH);
+	fd = fsdev_aio_fobject_open(fobject, O_PATH);
+	if (fd < 0) {
+		res = fd;
+		goto fop_failed;
+	}
+
+	parent_fd = fsdev_aio_fobject_open(new_parent_fobject, O_PATH);
+	if (parent_fd < 0) {
+		res = parent_fd;
+		goto fop_failed;
+	}
+
+	res = linkat(fd, "", parent_fd, name, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("linkat failed " FOBJECT_FMT " -> " FOBJECT_FMT " name=%s (err=%d)\n",
@@ -3686,6 +3698,8 @@ fop_failed:
 	file_object_unref(new_parent_fobject, 1);
 bad_new_parent_fobject:
 	file_object_unref(fobject, 1);
+	close(parent_fd);
+	close(fd);
 	return res;
 }
 
