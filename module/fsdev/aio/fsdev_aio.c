@@ -203,16 +203,30 @@ struct aio_fsdev_file_handle {
 	TAILQ_ENTRY(aio_fsdev_file_handle) link;
 };
 
+struct aio_fsdev_fs {
+	uint64_t id;
+	int fd;
+	STAILQ_ENTRY(aio_fsdev_fs) link;
+};
+
 struct aio_fsdev;
 
 struct aio_fsdev_linux_fh {
 	const struct file_handle *fh;
+	struct aio_fsdev_fs *fs;
 	RB_ENTRY(aio_fsdev_linux_fh) node;
 };
 
 static int
 aio_fsdev_linux_fh_cmp(struct aio_fsdev_linux_fh *fh1, struct aio_fsdev_linux_fh *fh2)
 {
+	if (fh1->fs->id < fh2->fs->id) {
+		return -1;
+	}
+	if (fh1->fs->id > fh2->fs->id) {
+		return 1;
+	}
+
 	return memcmp(fh1->fh, fh2->fh, sizeof(*fh1->fh) + fh1->fh->handle_bytes);
 }
 
@@ -278,6 +292,7 @@ struct aio_fsdev {
 	char *root_path;
 	int proc_self_fd;
 	struct aio_fsdev_file_object *root;
+	STAILQ_HEAD(, aio_fsdev_fs) fss;
 	TAILQ_ENTRY(aio_fsdev) tailq;
 	struct spdk_lut *lut;
 	struct spdk_spinlock lock;
@@ -701,6 +716,96 @@ file_object_ref(struct aio_fsdev_file_object *fobject)
 	__atomic_add_fetch(&fobject->hdr.refcount, 1, __ATOMIC_RELAXED);
 }
 
+static int
+fsdev_aio_get_mount_fd(uint64_t id)
+{
+	FILE *file;
+	char *line = NULL;
+	char path[PATH_MAX + 1];
+	size_t len = 0;
+	uint64_t curid;
+	int rc, fd;
+
+	file = fopen("/proc/self/mountinfo", "r");
+	if (file == NULL) {
+		rc = -errno;
+		SPDK_ERRLOG("Failed to open /proc/self/mouninfo: %s\n", spdk_strerror(-rc));
+		return rc;
+	}
+
+	fd = -1;
+	do {
+		if (getline(&line, &len, file) < 0) {
+			break;
+		}
+
+		rc = sscanf(line, "%"PRIu64" %*s %*s %*s %s", &curid, path);
+		if (rc != 2) {
+			fd = -errno;
+			SPDK_ERRLOG("Failed to scan /proc/self/mountinfo: %s\n",
+				    spdk_strerror(-rc));
+			goto out;
+		}
+
+		if ((uint64_t)curid == id) {
+			fd = open(path, O_RDONLY);
+			if (fd < 0) {
+				fd = -errno;
+				SPDK_ERRLOG("Failed to open %s: %s\n", path, spdk_strerror(-fd));
+				goto out;
+			}
+
+			break;
+		}
+	} while (1);
+out:
+	fclose(file);
+	free(line);
+
+	return fd;
+}
+
+static struct aio_fsdev_fs *
+fsdev_aio_find_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
+{
+	struct aio_fsdev_fs *fs;
+
+	STAILQ_FOREACH(fs, &vfsdev->fss, link) {
+		if (fs->id == mount_id) {
+			return fs;
+		}
+	}
+
+	return NULL;
+}
+
+static struct aio_fsdev_fs *
+fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
+{
+	struct aio_fsdev_fs *fs;
+
+	fs = fsdev_aio_find_fs_unsafe(vfsdev, mount_id);
+	if (fs != NULL) {
+		return fs;
+	}
+
+	fs = calloc(1, sizeof(*fs));
+	if (fs == NULL) {
+		SPDK_ERRLOG("Failed to allocate filesystem\n");
+		return NULL;
+	}
+
+	fs->id = mount_id;
+	fs->fd = fsdev_aio_get_mount_fd(mount_id);
+	if (fs->fd < 0) {
+		free(fs);
+		return NULL;
+	}
+
+	STAILQ_INSERT_TAIL(&vfsdev->fss, fs, link);
+	return fs;
+}
+
 static struct aio_fsdev_file_object *
 file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *parent_fobject,
 			  int fd, ino_t ino, dev_t dev, mode_t mode, const char *name)
@@ -733,6 +838,11 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	if (rc) {
 		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
 			    errno, parent_fobject->fd, name);
+		goto err;
+	}
+
+	fobject->linux_fh_entry.fs = fsdev_aio_get_fs_unsafe(vfsdev, mount_id);
+	if (fobject->linux_fh_entry.fs == NULL) {
 		goto err;
 	}
 
@@ -1267,18 +1377,35 @@ fsdev_aio_fanotify_close(struct aio_fsdev *vfsdev)
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 
 static struct aio_fsdev_file_object *
-fsdev_aio_get_fobject_by_linux_fh(struct aio_fsdev *vfsdev, const struct file_handle *file_handle)
+fsdev_aio_get_fobject_by_linux_fh_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id,
+		const struct file_handle *file_handle)
 {
 	struct aio_fsdev_linux_fh find = { .fh = file_handle };
 	struct aio_fsdev_linux_fh *res;
 	struct aio_fsdev_file_object *fobject = NULL;
 
-	spdk_spin_lock(&vfsdev->lock);
+	find.fs = fsdev_aio_find_fs_unsafe(vfsdev, mount_id);
+	if (find.fs == NULL) {
+		return NULL;
+	}
+
 	res = RB_FIND(aio_fsdev_linux_fh_tree, &vfsdev->linux_fhs, &find);
 	if (res) {
 		fobject = SPDK_CONTAINEROF(res, struct aio_fsdev_file_object, linux_fh_entry);
 		file_object_ref(fobject);
 	}
+
+	return fobject;
+}
+
+static struct aio_fsdev_file_object *
+fsdev_aio_get_fobject_by_linux_fh(struct aio_fsdev *vfsdev, uint64_t mount_id,
+				  const struct file_handle *file_handle)
+{
+	struct aio_fsdev_file_object *fobject;
+
+	spdk_spin_lock(&vfsdev->lock);
+	fobject = fsdev_aio_get_fobject_by_linux_fh_unsafe(vfsdev, mount_id, file_handle);
 	spdk_spin_unlock(&vfsdev->lock);
 
 	return fobject;
@@ -1296,12 +1423,21 @@ fsdev_aio_notify_reply_cb(struct spdk_fuse_notify_request *req, int status)
 }
 
 static void
-fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, struct file_handle *file_handle,
-				       const char *file_name)
+fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd,
+				       struct file_handle *file_handle, const char *file_name)
 {
 	struct aio_fsdev_file_object *fobject;
+	struct statx stx;
+	int rc;
 
-	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, file_handle);
+	rc = statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &stx);
+	if (rc != 0) {
+		SPDK_INFOLOG(fsdev_aio, "Couldn't statx %s (fd=%d): %s\n", file_name, fd,
+			     spdk_strerror(errno));
+		return;
+	}
+
+	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, stx.stx_mnt_id, file_handle);
 	if (fobject) {
 		struct aio_fsdev_notify_request *req;
 		uint64_t parent_nodeid = fsdev_aio_fobject_to_nodeid(fobject->vfsdev, fobject);
@@ -1377,8 +1513,10 @@ fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
 		hdr = (struct fanotify_event_info_header *)((char *)hdr + hdr->len);
 	}
 
-	if ((metadata->mask & FAN_ATTRIB) && file_name && file_handle) {
-		fsdev_aio_fanotify_attrib_event_handle(vfsdev, file_handle, file_name);
+	if ((metadata->mask & FAN_ATTRIB) && (metadata->fd != FAN_NOFD) &&
+	    file_name && file_handle) {
+		fsdev_aio_fanotify_attrib_event_handle(vfsdev, metadata->fd,
+						       file_handle, file_name);
 	}
 
 	if (metadata->fd != FAN_NOFD) {
@@ -4722,6 +4860,8 @@ SPDK_FSDEV_MODULE_REGISTER(aio, &aio_fsdev_module);
 static void
 fsdev_aio_free(struct aio_fsdev *vfsdev)
 {
+	struct aio_fsdev_fs *fs;
+
 	if (vfsdev->proc_self_fd != -1) {
 		close(vfsdev->proc_self_fd);
 	}
@@ -4738,6 +4878,13 @@ fsdev_aio_free(struct aio_fsdev *vfsdev)
 	if (vfsdev->lut) {
 		spdk_lut_free(vfsdev->lut);
 		spdk_spin_destroy(&vfsdev->lock);
+	}
+
+	while (!STAILQ_EMPTY(&vfsdev->fss)) {
+		fs = STAILQ_FIRST(&vfsdev->fss);
+		STAILQ_REMOVE_HEAD(&vfsdev->fss, link);
+		close(fs->fd);
+		free(fs);
 	}
 
 	free(vfsdev->fsdev.name);
@@ -5186,6 +5333,7 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	RB_INIT(&vfsdev->linux_fhs);
 #endif
 
+	STAILQ_INIT(&vfsdev->fss);
 	spdk_spin_init(&vfsdev->lock);
 
 	rc = setup_root(vfsdev);
