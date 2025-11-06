@@ -234,8 +234,6 @@ union aio_fsdev_fh {
 struct aio_fsdev_file_object {
 	struct aio_fsdev_fhdr hdr;
 	mode_t mode;
-	int fd;
-	char *fd_str;
 	union aio_fsdev_fh fh;
 	struct aio_fsdev_fh_entry fh_entry;
 	struct aio_fsdev_file_object *parent_fobject;
@@ -614,9 +612,6 @@ file_object_destroy(struct aio_fsdev_file_object *fobject)
 		fsdev_aio_fanotify_remove(fobject);
 	}
 #endif
-
-	close(fobject->fd);
-	free(fobject->fd_str);
 	free(fobject);
 }
 
@@ -784,12 +779,6 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		return NULL;
 	}
 
-	fobject->fd_str = spdk_sprintf_alloc("%d", fd);
-	if (!fobject->fd_str) {
-		SPDK_ERRLOG("Cannot alloc fd_str\n");
-		goto err;
-	}
-
 	lut_key = spdk_lut_insert(vfsdev->lut, fobject);
 	if (lut_key == SPDK_LUT_INVALID_KEY) {
 		SPDK_ERRLOG("Cannot insert fobject into lookup table\n");
@@ -800,8 +789,7 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->fh.fh.handle_bytes = MAX_HANDLE_SZ;
 	rc = name_to_handle_at(fd, "", &fobject->fh.fh, &mount_id, AT_EMPTY_PATH);
 	if (rc) {
-		SPDK_ERRLOG("Failed to get file handle: errno %d, parent fd %d, name %s\n",
-			    errno, parent_fobject->fd, name);
+		SPDK_ERRLOG("Failed to get file handle: errno %d, name %s\n", errno, name);
 		goto err;
 	}
 
@@ -813,7 +801,6 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 	fobject->hdr.is_fobject = true;
 	fobject->hdr.lut_key = lut_key;
 	fobject->hdr.refcount = 1; /* ref by caller */
-	fobject->fd = fd;
 	fobject->vfsdev = vfsdev;
 	fobject->mode = mode;
 
@@ -844,7 +831,6 @@ err:
 		spdk_lut_remove(vfsdev->lut, lut_key);
 	}
 
-	free(fobject->fd_str);
 	free(fobject);
 	return NULL;
 }
@@ -1568,9 +1554,8 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		    const char *name, struct aio_fsdev_file_object **pfobject,
 		    struct fuse_entry_out *entry_out)
 {
-	int newfd, parent_fd = -1;
+	int fd = -1, parent_fd = -1;
 	int res, mount_id;
-	bool is_new;
 	struct stat stat;
 	struct aio_fsdev_file_object *fobject;
 	union aio_fsdev_fh fh;
@@ -1585,49 +1570,41 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		return parent_fd;
 	}
 
-	newfd = openat(parent_fd, name, O_PATH | O_NOFOLLOW);
-	if (newfd == -1) {
+	fd = openat(parent_fd, name, O_PATH | O_NOFOLLOW);
+	if (fd == -1) {
 		res = -errno;
 		SPDK_DEBUGLOG(fsdev_aio, "openat( " FOBJECT_FMT " %s) failed with %d\n",
 			      FOBJECT_ARGS(parent_fobject), name, res);
 		goto out;
 	}
 
-	res = fstatat(newfd, "", &stat, AT_EMPTY_PATH);
+	res = fstatat(fd, "", &stat, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;
 		SPDK_ERRLOG("fstatat(%s) failed with %d\n", name, res);
-		close(newfd);
 		goto out;
 	}
 
 	fh.fh.handle_bytes = MAX_HANDLE_SZ;
-	res = name_to_handle_at(newfd, "", &fh.fh, &mount_id, AT_EMPTY_PATH);
+	res = name_to_handle_at(fd, "", &fh.fh, &mount_id, AT_EMPTY_PATH);
 	if (res) {
 		res = -errno;
 		SPDK_ERRLOG("Failed to get file handle: errno %d, name %s\n", errno, name);
-		close(newfd);
 		goto out;
 	}
 
 	spdk_spin_lock(&vfsdev->lock);
 
 	fobject = fsdev_aio_get_fobject_by_linux_fh_unsafe(vfsdev, mount_id, &fh.fh);
-	is_new = (fobject == NULL);
 	if (fobject == NULL) {
-		fobject = file_object_create_unsafe(vfsdev, parent_fobject, newfd,
+		fobject = file_object_create_unsafe(vfsdev, parent_fobject, fd,
 						    stat.st_mode, name);
 	}
 	spdk_spin_unlock(&vfsdev->lock);
 
-	/* Just in case close() can block, let's keep it out of spinlock. */
 	if (!fobject) {
 		SPDK_ERRLOG("Cannot create file object\n");
-		close(newfd);
 		goto out;
-	}
-	if (!is_new) {
-		close(newfd);
 	}
 
 	if (entry_out) {
@@ -1645,6 +1622,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		      name, FOBJECT_ARGS(parent_fobject), FOBJECT_ARGS(fobject));
 out:
 	close(parent_fd);
+	close(fd);
 	return res;
 }
 
