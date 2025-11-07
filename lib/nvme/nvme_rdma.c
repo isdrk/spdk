@@ -8,6 +8,7 @@
  * NVMe over RDMA transport
  */
 
+#include "spdk/env.h"
 #include "spdk/stdinc.h"
 
 #include "spdk/assert.h"
@@ -412,13 +413,8 @@ nvme_rdma_req_complete(struct spdk_nvme_rdma_req *rdma_req,
 		if (req->submit_tick) {
 			uint64_t now = spdk_get_ticks();
 
-			if (now - req->submit_tick > req->timeout_tsc) {
-				SPDK_WARNLOG("qpair %p, id %u, cmd cid %u timed out. Submit tsc %"PRIu64", cur_tsc %"PRIu64"\n",
-					     qpair, qpair->id, req->cmd.cid, req->submit_tick, now);
-			} else {
-				SPDK_NOTICELOG("qpair %p, id %u, cmd cid %u submit tsc %"PRIu64", cur_tsc %"PRIu64"\n",
-					       qpair, qpair->id, req->cmd.cid, req->submit_tick, now);
-			}
+			SPDK_NOTICELOG("qpair %p, id %u, cmd cid %u submit tsc %"PRIu64", cur_tsc %"PRIu64", rate %"PRIu64"\n",
+				       qpair, qpair->id, req->cmd.cid, req->submit_tick, now, spdk_get_ticks_hz());
 		}
 		spdk_nvme_qpair_print_command(qpair, &req->cmd);
 	}
