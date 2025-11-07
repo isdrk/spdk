@@ -659,10 +659,16 @@ test_nvme_rdma_poller_create(void)
 static void
 test_nvme_rdma_qpair_process_cm_event(void)
 {
-	struct nvme_rdma_qpair rqpair = {};
+	struct nvme_rdma_ctrlr ctrlr = {};
+	struct nvme_rdma_qpair rqpair = { .qpair.ctrlr = &ctrlr.ctrlr, };
 	struct rdma_cm_event	 event = {};
 	struct spdk_nvmf_rdma_accept_private_data	accept_data = {};
 	int rc = 0;
+
+	snprintf(ctrlr.ctrlr.trid.traddr, sizeof(ctrlr.ctrlr.trid.traddr), "%s", "127.0.0.1");
+	snprintf(ctrlr.ctrlr.trid.trstring, sizeof(ctrlr.ctrlr.trid.trstring), "%s", "test_rdma");
+	snprintf(ctrlr.ctrlr.trid.trsvcid, sizeof(ctrlr.ctrlr.trid.trsvcid), "%s", "4420");
+	ctrlr.ctrlr.trid.adrfam = SPDK_NVMF_ADRFAM_IPV4;
 
 	/* case1: event == RDMA_CM_EVENT_ADDR_RESOLVED */
 	rqpair.evt = &event;
