@@ -18,6 +18,7 @@
 #endif
 #include <sys/ioctl.h>
 #include <linux/fs.h>
+#include <linux/mount.h>
 
 #define FSDEV_AIO_FUSE_KERNEL_MINOR_VERSION 34
 
@@ -265,6 +266,7 @@ struct aio_fsdev {
 	struct spdk_lut *lut;
 	struct spdk_spinlock lock;
 	struct aio_fsdev_fh_tree fhs;
+	bool has_unique_mount_id;
 #ifdef SPDK_CONFIG_HAVE_FANOTIFY
 	int fanotify_fd;
 	struct spdk_poller *fanotify_poller;
@@ -698,7 +700,7 @@ file_object_ref(struct aio_fsdev_file_object *fobject)
 }
 
 static int
-fsdev_aio_get_mount_fd(uint64_t id)
+fsdev_aio_get_mount_fd_compat(uint64_t id)
 {
 	FILE *file;
 	char *line = NULL;
@@ -747,18 +749,99 @@ out:
 }
 
 static int
-fsdev_aio_get_mount_id(int fd, uint64_t *mount_id)
+fsdev_aio_do_get_mount_id(int fd, uint64_t *mount_id, unsigned int type)
 {
 	struct statx stxbuf;
 	int rc;
 
-	rc = statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &stxbuf);
+	rc = statx(fd, "", AT_EMPTY_PATH, type, &stxbuf);
 	if (rc != 0) {
 		return -errno;
 	}
 
 	*mount_id = stxbuf.stx_mnt_id;
 	return 0;
+}
+
+static int
+fsdev_aio_get_mount_id_compat(int fd, uint64_t *mount_id)
+{
+	return fsdev_aio_do_get_mount_id(fd, mount_id, STATX_MNT_ID);
+}
+
+#ifdef SPDK_CONFIG_HAVE_MNT_ID_UNIQUE
+static int
+fsdev_aio_get_mount_id_unique(int fd, uint64_t *mount_id)
+{
+	return fsdev_aio_do_get_mount_id(fd, mount_id, STATX_MNT_ID_UNIQUE);
+}
+
+static int
+fsdev_aio_do_statmount(uint64_t mnt_id, uint64_t mask, struct statmount *buf, size_t bufsize)
+{
+	struct mnt_id_req req = {
+		.size = SPDK_SIZEOF(&req, param),
+		.mnt_id = mnt_id,
+		.param = mask,
+	};
+
+	return syscall(__NR_statmount, &req, buf, bufsize, 0);
+}
+
+static int
+fsdev_aio_get_mount_fd_unique(int fd, uint64_t mount_id)
+{
+	struct {
+		struct statmount st;
+		char str[PATH_MAX];
+	} stmnt = {};
+	int rc, errsv;
+
+	rc = fsdev_aio_do_statmount(mount_id, STATMOUNT_MNT_POINT, &stmnt.st, sizeof(stmnt));
+	if (rc != 0) {
+		errsv = errno;
+		SPDK_ERRLOG("Failed to statmount(STATMOUNT_MNT_POINT): %s\n", spdk_strerror(errsv));
+		return -errsv;
+	}
+
+	/* Should never happen, but let's check it just in case */
+	if (stmnt.st.mnt_point >= SPDK_COUNTOF(stmnt.str) ||
+	    stmnt.str[SPDK_COUNTOF(stmnt.str) - 1] != '\0') {
+		SPDK_ERRLOG("FATAL: received malformed path from statmount()\n");
+		return -EINVAL;
+	}
+
+	rc = open(&stmnt.str[stmnt.st.mnt_point], O_RDONLY);
+	if (rc < 0) {
+		errsv = errno;
+		SPDK_ERRLOG("Failed to open(%s): %s\n", stmnt.str, spdk_strerror(errsv));
+		return -errsv;
+	}
+
+	return rc;
+}
+#endif
+
+static int
+fsdev_aio_get_mount_fd(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
+{
+#ifdef SPDK_CONFIG_HAVE_MNT_ID_UNIQUE
+	if (vfsdev->has_unique_mount_id) {
+		return fsdev_aio_get_mount_fd_unique(fd, mount_id);
+	}
+#endif
+	return fsdev_aio_get_mount_fd_compat(mount_id);
+}
+
+static int
+fsdev_aio_get_mount_id(struct aio_fsdev *vfsdev, int fd, uint64_t *mount_id)
+{
+#ifdef SPDK_CONFIG_HAVE_MNT_ID_UNIQUE
+	if (vfsdev->has_unique_mount_id) {
+		return fsdev_aio_get_mount_id_unique(fd, mount_id);
+	}
+#endif
+	return fsdev_aio_get_mount_id_compat(fd, mount_id);
 }
 
 static struct aio_fsdev_fs *
@@ -776,7 +859,7 @@ fsdev_aio_find_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
 }
 
 static struct aio_fsdev_fs *
-fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
+fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
 {
 	struct aio_fsdev_fs *fs;
 
@@ -791,13 +874,16 @@ fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
 		return NULL;
 	}
 
+	/* Unique mount ids start from INT_MAX to distinguish between regular mount ids */
+	assert(!vfsdev->has_unique_mount_id || mount_id > INT_MAX);
 	fs->id = mount_id;
-	fs->fd = fsdev_aio_get_mount_fd(mount_id);
+	fs->fd = fsdev_aio_get_mount_fd(vfsdev, fd, mount_id);
 	if (fs->fd < 0) {
 		free(fs);
 		return NULL;
 	}
 
+	SPDK_INFOLOG(fsdev_aio, "Found new mount_id: %"PRIx64"\n", fs->id);
 	STAILQ_INSERT_TAIL(&vfsdev->fss, fs, link);
 	return fs;
 }
@@ -830,14 +916,14 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 		goto err;
 	}
 
-	rc = fsdev_aio_get_mount_id(fd, &mount_id);
+	rc = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
 	if (rc != 0) {
 		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s: %s\n", name,
 			     spdk_strerror(-rc));
 		goto err;
 	}
 
-	fobject->fh_entry.fs = fsdev_aio_get_fs_unsafe(vfsdev, mount_id);
+	fobject->fh_entry.fs = fsdev_aio_get_fs_unsafe(vfsdev, fd, mount_id);
 	if (fobject->fh_entry.fs == NULL) {
 		goto err;
 	}
@@ -1401,10 +1487,10 @@ fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd,
 				       struct file_handle *file_handle, const char *file_name)
 {
 	struct aio_fsdev_file_object *fobject;
-	uint64_t mount_id;
+	uint64_t mount_id = 0;
 	int rc;
 
-	rc = fsdev_aio_get_mount_id(fd, &mount_id);
+	rc = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
 	if (rc != 0) {
 		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s (fd=%d): %s\n", file_name, fd,
 			     spdk_strerror(-rc));
@@ -1603,7 +1689,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 	struct stat stat;
 	struct aio_fsdev_file_object *fobject;
 	union aio_fsdev_fh fh;
-	uint64_t mount_id;
+	uint64_t mount_id = 0;
 
 	/* Do not allow escaping root directory */
 	if (parent_fobject == vfsdev->root && strcmp(name, "..") == 0) {
@@ -1638,7 +1724,7 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		goto out;
 	}
 
-	res = fsdev_aio_get_mount_id(fd, &mount_id);
+	res = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
 	if (res != 0) {
 		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s: %s\n", name,
 			     spdk_strerror(-res));
@@ -5316,6 +5402,11 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
+#ifdef SPDK_CONFIG_HAVE_MNT_ID_UNIQUE
+	uint64_t mount_id;
+
+	vfsdev->has_unique_mount_id = fsdev_aio_get_mount_id_unique(fd, &mount_id) == 0;
+#endif
 	res = fstatat(fd, "", &stat, AT_EMPTY_PATH);
 	if (res == -1) {
 		res = -errno;

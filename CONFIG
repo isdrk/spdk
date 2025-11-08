@@ -268,3 +268,6 @@ CONFIG_AIO_HAVE_RW_FLAGS=n
 
 # fanotify is supported by the kernel
 CONFIG_HAVE_FANOTIFY=n
+
+# Kernel supports unique mount IDs (STATX_MNT_ID_UNIQUE, statmount(), etc.)
+CONFIG_HAVE_MNT_ID_UNIQUE=n
