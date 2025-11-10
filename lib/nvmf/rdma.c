@@ -3303,7 +3303,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			rqpair->poller->stat.request_latency += spdk_get_ticks() - rdma_req->receive_tsc;
 			is_duplicated_aer = rdma_req->is_duplicated_aer;
-			_nvmf_rdma_request_free(rdma_req, rtransport);
+			nvmf_rdma_request_free(&rdma_req->req);
 			if (spdk_unlikely(is_duplicated_aer)) {
 				/* rdma_req is freed above because it's duplicated aer */
 				return true;
