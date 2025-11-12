@@ -36,6 +36,7 @@ static const struct spdk_json_object_decoder rpc_mlx5_module_decoder[] = {
 	{"enable_module", offsetof(struct accel_mlx5_attr, enable_module), spdk_json_decode_bool, true},
 	{"disable_signature", offsetof(struct accel_mlx5_attr, disable_signature), spdk_json_decode_bool, true},
 	{"disable_crypto", offsetof(struct accel_mlx5_attr, disable_crypto), spdk_json_decode_bool, true},
+	{"umr_memory_buffer", offsetof(struct accel_mlx5_attr, umr_memory_buffer), spdk_json_decode_bool, true},
 	{"siglast", 0, decode_siglast, true},
 };
 

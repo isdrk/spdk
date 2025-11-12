@@ -27,8 +27,10 @@
 #define ACCEL_MLX5_NUM_MKEYS (2048u)
 #define ACCEL_MLX5_RECOVER_POLLER_PERIOD_US (10000)
 #define ACCEL_MLX5_MAX_SGE (16u)
+#define ACCEL_MLX5_SGE_SIZE (16u)
 #define ACCEL_MLX5_MAX_WC (32u)
 #define ACCEL_MLX5_MAX_MKEYS_IN_TASK (16u)
+#define ACCEL_MLX5_MAX_UMR_MB (1u)
 
 /* Assume we have up to 16 devices */
 #define ACCEL_MLX5_ALLOWED_DEVS_MAX_LEN ((SPDK_MLX5_DEV_MAX_NAME_LEN + 1) * 16)
@@ -60,6 +62,7 @@ struct accel_mlx5_dev_ctx {
 	struct ibv_pd *pd;
 	struct spdk_memory_domain *domain;
 	struct spdk_mlx5_psv_pool *psv_pool;
+	struct spdk_mlx5_umr_mb_pool *umr_mb_pool;
 	struct spdk_rdma_utils_mem_map *map;
 	TAILQ_ENTRY(accel_mlx5_dev_ctx) link;
 	bool mkeys;
@@ -197,9 +200,11 @@ struct accel_mlx5_task {
 	/* for crypto op - number of allocated mkeys
 	 * for crypto and copy - number of operations allowed to be submitted to qp */
 	uint16_t num_ops;
+	uint16_t num_mbs;
 	/* Keep this array last since not all elements might be accessed, this reduces amount of data to be
 	 * cached */
 	struct spdk_mlx5_mkey_pool_obj *mkeys[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
+	struct spdk_mlx5_umr_mb_pool_obj *umr_mb[ACCEL_MLX5_MAX_UMR_MB];
 };
 
 SPDK_STATIC_ASSERT(ACCEL_MLX5_MAX_MKEYS_IN_TASK <= UINT8_MAX, "uint8_t is used to iterate mkeys");
@@ -359,6 +364,39 @@ accel_mlx5_sge_unwind(struct ibv_sge *sge, uint32_t sge_count, uint32_t step)
 	assert(step == 0);
 
 	return 0;
+}
+
+static inline int
+accel_mlx5_task_alloc_umr_mb(struct accel_mlx5_task *task, uint32_t count)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+	int rc;
+
+	assert(g_accel_mlx5.attr.umr_memory_buffer);
+	assert(count <= SPDK_COUNTOF(task->umr_mb));
+
+	rc = spdk_mlx5_umr_mb_pool_get_bulk(dev->dev_ctx->umr_mb_pool, task->umr_mb, count);
+	if (rc != 0) {
+		return rc;
+	}
+
+	task->num_mbs = count;
+	return 0;
+}
+
+static inline void
+accel_mlx5_task_free_umr_mb(struct accel_mlx5_task *task)
+{
+	struct accel_mlx5_qp *qp = task->qp;
+	struct accel_mlx5_dev *dev = qp->dev;
+
+	if (task->num_mbs == 0) {
+		return;
+	}
+
+	spdk_mlx5_umr_mb_pool_put_bulk(dev->dev_ctx->umr_mb_pool, task->umr_mb, task->num_mbs);
+	task->num_mbs = 0;
 }
 
 static inline void
@@ -4680,6 +4718,7 @@ accel_mlx5_get_default_attr(struct accel_mlx5_attr *attr)
 	attr->enable_module = true;
 	attr->disable_signature = false;
 	attr->disable_crypto = false;
+	attr->umr_memory_buffer = false;
 }
 
 static void
@@ -4808,6 +4847,9 @@ accel_mlx5_free_resources(void)
 
 	for (i = 0; i < g_accel_mlx5.num_ctxs; i++) {
 		dev_ctx = &g_accel_mlx5.dev_ctxs[i];
+		if (dev_ctx->umr_mb_pool) {
+			spdk_mlx5_umr_mb_pool_destroy(dev_ctx->umr_mb_pool);
+		}
 		if (dev_ctx->psv_pool) {
 			spdk_mlx5_psv_pool_destroy(dev_ctx->psv_pool);
 		}
@@ -4913,6 +4955,23 @@ accel_mlx5_psvs_create(struct accel_mlx5_dev_ctx *dev_ctx)
 	return 0;
 }
 
+static int
+accel_mlx5_umr_mb_create(struct accel_mlx5_dev_ctx *dev_ctx)
+{
+	struct spdk_mlx5_umr_mb_pool_param params = {
+		.mb_count = g_accel_mlx5.attr.num_requests,
+		.map = dev_ctx->map,
+		.mb_size = SPDK_ALIGN_CEIL(ACCEL_MLX5_MAX_SGE * ACCEL_MLX5_SGE_SIZE, 64)
+	};
+
+	dev_ctx->umr_mb_pool = spdk_mlx5_umr_mb_pool_create(&params, dev_ctx->pd);
+	if (!dev_ctx->umr_mb_pool) {
+		SPDK_ERRLOG("Failed to create UMR Memory Buffer pool\n");
+		return -1;
+	}
+
+	return 0;
+}
 
 static int
 accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *dev,
@@ -4955,6 +5014,13 @@ accel_mlx5_dev_ctx_init(struct accel_mlx5_dev_ctx *dev_ctx, struct ibv_context *
 		if (rc) {
 			SPDK_ERRLOG("Failed to create crypto mkeys pool, rc %d, dev %s\n", rc, dev->device->name);
 			return rc;
+		}
+		if (g_accel_mlx5.attr.umr_memory_buffer) {
+			rc = accel_mlx5_umr_mb_create(dev_ctx);
+			if (rc) {
+				SPDK_ERRLOG("Failed to create UMR MB pool, rc %d, dev %s\n", rc, dev->device->name);
+				return rc;
+			}
 		}
 		dev_ctx->crypto_mkeys = true;
 	}
@@ -5205,6 +5271,7 @@ accel_mlx5_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_named_bool(w, "qp_per_domain", g_accel_mlx5.attr.qp_per_domain);
 		spdk_json_write_named_bool(w, "disable_signature", g_accel_mlx5.attr.disable_signature);
 		spdk_json_write_named_bool(w, "disable_crypto", g_accel_mlx5.attr.disable_crypto);
+		spdk_json_write_named_bool(w, "umr_memory_buffer", g_accel_mlx5.attr.umr_memory_buffer);
 	} else {
 		spdk_json_write_named_bool(w, "enable_module", g_accel_mlx5.enabled);
 	}
@@ -6046,7 +6113,8 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 		.num_requests = ACCEL_MLX5_NUM_MKEYS,
 		.crypto_split_blocks = 0,
 		.disable_signature = false,
-		.disable_crypto = false
+		.disable_crypto = false,
+		.umr_memory_buffer = false,
 	},
 	.enabled = true,
 };

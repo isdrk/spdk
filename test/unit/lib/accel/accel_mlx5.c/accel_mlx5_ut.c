@@ -93,6 +93,13 @@ DEFINE_STUB_V(spdk_mlx5_psv_pool_destroy, (struct spdk_mlx5_psv_pool *pool));
 DEFINE_STUB(spdk_mlx5_psv_pool_get, struct spdk_mlx5_psv_pool_obj *,
 	    (struct spdk_mlx5_psv_pool *pool), NULL);
 DEFINE_STUB_V(spdk_mlx5_psv_pool_put, (struct spdk_mlx5_psv_pool_obj **ppsv));
+DEFINE_STUB(spdk_mlx5_umr_mb_pool_create, struct spdk_mlx5_umr_mb_pool *,
+	    (struct spdk_mlx5_umr_mb_pool_param *params, struct ibv_pd *pd), NULL);
+DEFINE_STUB_V(spdk_mlx5_umr_mb_pool_destroy, (struct spdk_mlx5_umr_mb_pool *pool));
+DEFINE_STUB(spdk_mlx5_umr_mb_pool_get_bulk, int, (struct spdk_mlx5_umr_mb_pool *pool,
+		struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count), 0);
+DEFINE_STUB_V(spdk_mlx5_umr_mb_pool_put_bulk, (struct spdk_mlx5_umr_mb_pool *pool,
+		struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count));
 
 DEFINE_STUB_V(spdk_mlx5_umr_implementer_register, (bool registered));
 DEFINE_STUB_V(spdk_accel_module_list_add, (struct spdk_accel_module_if *accel_module));

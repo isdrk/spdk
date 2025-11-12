@@ -26,6 +26,8 @@ struct accel_mlx5_attr {
 	bool disable_signature;
 	/* Disable crypto capabilities */
 	bool disable_crypto;
+	/* Enable UMR Memory Buffer */
+	bool umr_memory_buffer;
 };
 
 enum accel_mlx5_dump_state_level {
