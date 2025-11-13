@@ -229,8 +229,9 @@ union aio_fsdev_fh {
 	char fh_buf[sizeof(struct file_handle) + MAX_HANDLE_SZ];
 };
 
-#define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 ")"
-#define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key)
+#define FOBJECT_FMT "fobj=%p (lut=0x%" PRIx64 " fh=%s)"
+#define FOBJECT_ARGS(fo) (fo), ((uint64_t)(fo)->hdr.lut_key), fsdev_aio_get_fhstr(fo)
+
 struct aio_fsdev_file_object {
 	struct aio_fsdev_fhdr hdr;
 	mode_t mode;
@@ -343,6 +344,28 @@ fsdev_aio_io_fuse_get_name(struct spdk_fsdev_io *fsdev_io)
 	 * takes care of the first one.
 	 */
 	return fsdev_io->u_in.fuse.iov[0].iov_base;
+}
+
+static const char *
+fsdev_aio_get_fhstr(struct aio_fsdev_file_object *fobject)
+{
+#define FSDEV_AIO_FHSTR_PER_THREAD 2
+	static __thread char fhstr[FSDEV_AIO_FHSTR_PER_THREAD][MAX_HANDLE_SZ * 2 + 1];
+	static __thread int fhstr_id;
+	unsigned char *fh = fobject->fh.fh.f_handle;
+	char *buf;
+	unsigned int i;
+
+	/* We alternate between fhstr[0] and fhstr[1] to allow printing two fhs in the same log */
+	fhstr_id = (fhstr_id + 1) % FSDEV_AIO_FHSTR_PER_THREAD;
+	buf = fhstr[fhstr_id];
+
+	buf[0] = '\0';
+	for (i = 0; i < fobject->fh.fh.handle_bytes; i++) {
+		snprintf(&buf[i * 2], sizeof(fhstr[0]) - i * 2, "%02x", fh[i]);
+	}
+
+	return buf;
 }
 
 static int clear_suid_sgid(struct aio_fsdev_io *vfsdev_io);
