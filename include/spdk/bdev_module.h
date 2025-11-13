@@ -684,8 +684,6 @@ struct spdk_bdev {
 		/** Quality of service parameters */
 		struct spdk_bdev_qos *qos;
 
-		struct spdk_bdev_group *group;
-
 		/** Trace ID for this bdev. */
 		uint16_t trace_id;
 
