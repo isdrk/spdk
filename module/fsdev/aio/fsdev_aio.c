@@ -746,6 +746,21 @@ out:
 	return fd;
 }
 
+static int
+fsdev_aio_get_mount_id(int fd, uint64_t *mount_id)
+{
+	struct statx stxbuf;
+	int rc;
+
+	rc = statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &stxbuf);
+	if (rc != 0) {
+		return -errno;
+	}
+
+	*mount_id = stxbuf.stx_mnt_id;
+	return 0;
+}
+
 static struct aio_fsdev_fs *
 fsdev_aio_find_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
 {
@@ -792,8 +807,8 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 			  int fd, mode_t mode, const char *name)
 {
 	struct aio_fsdev_file_object *fobject;
-	uint64_t lut_key = SPDK_LUT_INVALID_KEY;
-	int rc, mount_id;
+	uint64_t mount_id, lut_key = SPDK_LUT_INVALID_KEY;
+	int rc, dummy;
 
 	fobject = calloc(1, sizeof(*fobject));
 	if (!fobject) {
@@ -809,9 +824,16 @@ file_object_create_unsafe(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object
 
 	fobject->fh_entry.fh = &fobject->fh.fh;
 	fobject->fh.fh.handle_bytes = MAX_HANDLE_SZ;
-	rc = name_to_handle_at(fd, "", &fobject->fh.fh, &mount_id, AT_EMPTY_PATH);
+	rc = name_to_handle_at(fd, "", &fobject->fh.fh, &dummy, AT_EMPTY_PATH);
 	if (rc) {
 		SPDK_ERRLOG("Failed to get file handle: errno %d, name %s\n", errno, name);
+		goto err;
+	}
+
+	rc = fsdev_aio_get_mount_id(fd, &mount_id);
+	if (rc != 0) {
+		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s: %s\n", name,
+			     spdk_strerror(-rc));
 		goto err;
 	}
 
@@ -1379,17 +1401,17 @@ fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd,
 				       struct file_handle *file_handle, const char *file_name)
 {
 	struct aio_fsdev_file_object *fobject;
-	struct statx stx;
+	uint64_t mount_id;
 	int rc;
 
-	rc = statx(fd, "", AT_EMPTY_PATH, STATX_MNT_ID, &stx);
+	rc = fsdev_aio_get_mount_id(fd, &mount_id);
 	if (rc != 0) {
-		SPDK_INFOLOG(fsdev_aio, "Couldn't statx %s (fd=%d): %s\n", file_name, fd,
-			     spdk_strerror(errno));
+		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s (fd=%d): %s\n", file_name, fd,
+			     spdk_strerror(-rc));
 		return;
 	}
 
-	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, stx.stx_mnt_id, file_handle);
+	fobject = fsdev_aio_get_fobject_by_linux_fh(vfsdev, mount_id, file_handle);
 	if (fobject) {
 		struct aio_fsdev_notify_request *req;
 		uint64_t parent_nodeid = fsdev_aio_fobject_to_nodeid(fobject->vfsdev, fobject);
@@ -1577,10 +1599,11 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 		    struct fuse_entry_out *entry_out)
 {
 	int fd = -1, parent_fd = -1;
-	int res, mount_id;
+	int res, dummy;
 	struct stat stat;
 	struct aio_fsdev_file_object *fobject;
 	union aio_fsdev_fh fh;
+	uint64_t mount_id;
 
 	/* Do not allow escaping root directory */
 	if (parent_fobject == vfsdev->root && strcmp(name, "..") == 0) {
@@ -1608,10 +1631,17 @@ fsdev_aio_do_lookup(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *pare
 	}
 
 	fh.fh.handle_bytes = MAX_HANDLE_SZ;
-	res = name_to_handle_at(fd, "", &fh.fh, &mount_id, AT_EMPTY_PATH);
+	res = name_to_handle_at(fd, "", &fh.fh, &dummy, AT_EMPTY_PATH);
 	if (res) {
 		res = -errno;
 		SPDK_ERRLOG("Failed to get file handle: errno %d, name %s\n", errno, name);
+		goto out;
+	}
+
+	res = fsdev_aio_get_mount_id(fd, &mount_id);
+	if (res != 0) {
+		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s: %s\n", name,
+			     spdk_strerror(-res));
 		goto out;
 	}
 
