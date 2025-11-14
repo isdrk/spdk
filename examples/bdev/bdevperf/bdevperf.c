@@ -169,6 +169,7 @@ struct bdevperf_job {
 	bool				write_zeroes;
 	bool				flush;
 	bool				abort;
+	bool				throttled;
 	int				queue_depth;
 	uint64_t			seed;
 
@@ -191,6 +192,7 @@ struct bdevperf_job {
 	struct spdk_bit_array		*outstanding;
 	struct spdk_zipf		*zipf;
 	TAILQ_HEAD(, bdevperf_task)	task_list;
+	TAILQ_HEAD(, bdevperf_task)	throttled_task_list;
 	uint64_t			run_time_in_usec;
 
 	/* keep channel's histogram data before being destroyed */
@@ -959,6 +961,11 @@ clean:
 			bdevperf_task_free(task);
 		}
 
+		TAILQ_FOREACH_SAFE(task, &job->throttled_task_list, link, ttmp) {
+			TAILQ_REMOVE(&job->throttled_task_list, task, link);
+			bdevperf_task_free(task);
+		}
+
 		bdevperf_job_free(job);
 	}
 
@@ -1314,11 +1321,11 @@ bdevperf_generate_dif(struct bdevperf_task *task)
 	return rc;
 }
 
+static void bdevperf_submit_task(void *arg);
+
 static void
-bdevperf_submit_task(void *arg)
+_bdevperf_submit_task(struct bdevperf_job *job, struct bdevperf_task *task)
 {
-	struct bdevperf_task	*task = arg;
-	struct bdevperf_job	*job = task->job;
 	struct spdk_bdev_desc	*desc;
 	struct spdk_io_channel	*ch;
 	spdk_bdev_io_completion_cb cb_fn;
@@ -1407,6 +1414,53 @@ bdevperf_submit_task(void *arg)
 	}
 
 	job->current_queue_depth++;
+}
+
+static void
+bdevperf_submit_task(void *arg)
+{
+	struct bdevperf_task	*task = arg;
+	struct bdevperf_job	*job = task->job;
+
+	if (spdk_unlikely(job->throttled || !TAILQ_EMPTY(&job->throttled_task_list))) {
+		TAILQ_INSERT_TAIL(&job->throttled_task_list, task, link);
+		return;
+	}
+
+	_bdevperf_submit_task(job, task);
+}
+
+static void
+bdevperf_job_resumed(struct spdk_io_channel *ch, void *cb_arg)
+{
+	struct bdevperf_job *job = cb_arg;
+	TAILQ_HEAD(, bdevperf_task) tmp_head;
+	struct bdevperf_task *task, *ttmp;
+
+	TAILQ_INIT(&tmp_head);
+	TAILQ_SWAP(&tmp_head, &job->throttled_task_list, bdevperf_task, link);
+
+	job->throttled = false;
+
+	TAILQ_FOREACH_SAFE(task, &tmp_head, link, ttmp) {
+		if (!job->throttled) {
+			TAILQ_REMOVE(&tmp_head, task, link);
+			_bdevperf_submit_task(job, task);
+		} else {
+			break;
+		}
+	}
+
+	TAILQ_SWAP(&tmp_head, &job->throttled_task_list, bdevperf_task, link);
+	TAILQ_CONCAT(&job->throttled_task_list, &tmp_head, link);
+}
+
+static void
+bdevperf_job_throttled(struct spdk_io_channel *ch, void *cb_arg)
+{
+	struct bdevperf_job *job = cb_arg;
+
+	job->throttled = true;
 }
 
 static void
@@ -1949,6 +2003,10 @@ static void
 _bdevperf_construct_job(void *ctx)
 {
 	struct bdevperf_job *job = ctx;
+	struct spdk_bdev_io_channel_flow_control_callbacks flow_control_cbs = {
+		.throttle_cb = bdevperf_job_throttled,
+		.resume_cb = bdevperf_job_resumed,
+	};
 
 	if (g_zcopy) {
 		if (!spdk_bdev_io_type_supported(job->bdev, SPDK_BDEV_IO_TYPE_ZCOPY)) {
@@ -1964,6 +2022,8 @@ _bdevperf_construct_job(void *ctx)
 		g_run_rc = -ENOMEM;
 		goto end;
 	}
+
+	spdk_bdev_io_channel_register_flow_control_callbacks(job->ch, &flow_control_cbs, job);
 
 end:
 	spdk_thread_send_msg(g_main_thread, _bdevperf_construct_job_done, NULL);
@@ -2137,6 +2197,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	}
 
 	TAILQ_INIT(&job->task_list);
+	TAILQ_INIT(&job->throttled_task_list);
 
 	if (g_random_map) {
 		if (job->size_in_ios >= UINT32_MAX) {
