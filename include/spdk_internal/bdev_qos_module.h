@@ -226,4 +226,54 @@ struct spdk_bdev_qos_channel {
  */
 void spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io);
 
+static inline bool
+spdk_bdev_io_is_read_io(struct spdk_bdev_io *bdev_io)
+{
+	switch (bdev_io->type) {
+	case SPDK_BDEV_IO_TYPE_NVME_IO:
+	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
+		/* Bit 1 (0x2) set for read operation */
+		if (bdev_io->u.nvme_passthru.cmd.opc & SPDK_NVME_OPC_READ) {
+			return true;
+		} else {
+			return false;
+		}
+	case SPDK_BDEV_IO_TYPE_READ:
+		return true;
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		/* Populate to read from disk */
+		if (bdev_io->u.bdev.zcopy.populate) {
+			return true;
+		} else {
+			return false;
+		}
+	default:
+		return false;
+	}
+}
+
+static inline uint64_t
+spdk_bdev_io_get_io_size_in_bytes(struct spdk_bdev_io *bdev_io)
+{
+	uint32_t blocklen = spdk_bdev_io_get_block_size(bdev_io);
+
+	switch (bdev_io->type) {
+	case SPDK_BDEV_IO_TYPE_NVME_IO:
+	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
+		return bdev_io->u.nvme_passthru.nbytes;
+	case SPDK_BDEV_IO_TYPE_READ:
+	case SPDK_BDEV_IO_TYPE_WRITE:
+		return bdev_io->u.bdev.num_blocks * blocklen;
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		/* Track the data in the start phase only */
+		if (bdev_io->u.bdev.zcopy.start) {
+			return bdev_io->u.bdev.num_blocks * blocklen;
+		} else {
+			return 0;
+		}
+	default:
+		return 0;
+	}
+}
+
 #endif /* SPDK_INTERNAL_BDEV_QOS_MODULE_H */
