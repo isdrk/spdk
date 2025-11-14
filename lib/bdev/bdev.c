@@ -8855,7 +8855,7 @@ _remove_notify(void *arg)
 	_event_notify(desc, SPDK_BDEV_EVENT_REMOVE);
 }
 
-static void bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev);
+static int bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev);
 
 /* returns: 0 - bdev removed and ready to be destructed.
  *          -EBUSY - bdev can't be destructed yet.  */
@@ -10321,18 +10321,28 @@ bdev_qos_has_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev)
 	return false;
 }
 
-static void
+static int
 bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev)
 {
+	if (!bdev_qos_has_bdev(qos, bdev)) {
+		return -ENODEV;
+	}
+
 	TAILQ_REMOVE(&qos->bdevs, bdev, internal.qos_link);
 	bdev->internal.qos = NULL;
+	return 0;
 }
 
-static void
+static int
 bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev)
 {
+	if (bdev_qos_has_bdev(qos, bdev)) {
+		return -EEXIST;
+	}
+
 	TAILQ_INSERT_TAIL(&qos->bdevs, bdev, internal.qos_link);
 	bdev->internal.qos = qos;
+	return 0;
 }
 
 struct qos_add_remove_bdev_ctx {
@@ -10380,6 +10390,10 @@ bdev_qos_add_bdev_failed(struct spdk_bdev *bdev, void *_ctx, int status)
 {
 	struct qos_add_remove_bdev_ctx *ctx = _ctx;
 
+	spdk_spin_lock(&bdev->internal.spinlock);
+	bdev_qos_remove_bdev(ctx->qos, bdev);
+	spdk_spin_unlock(&bdev->internal.spinlock);
+
 	ctx->cb_fn(ctx->cb_arg, ctx->status);
 	free(ctx);
 }
@@ -10390,10 +10404,6 @@ bdev_qos_add_bdev_done(struct spdk_bdev *bdev, void *_ctx, int status)
 	struct qos_add_remove_bdev_ctx *ctx = _ctx;
 
 	if (status == 0) {
-		spdk_spin_lock(&bdev->internal.spinlock);
-		bdev_qos_add_bdev(ctx->qos, bdev);
-		spdk_spin_unlock(&bdev->internal.spinlock);
-
 		ctx->cb_fn(ctx->cb_arg, 0);
 		free(ctx);
 	} else {
@@ -10408,7 +10418,7 @@ spdk_bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 		       spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
 	struct qos_add_remove_bdev_ctx *ctx;
-
+	int rc;
 
 	if (!spdk_thread_is_app_thread(NULL)) {
 		cb_fn(cb_arg, -EINVAL);
@@ -10419,12 +10429,6 @@ spdk_bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 		cb_fn(cb_arg, -EBUSY);
 		return;
 	}
-
-	if (bdev_qos_has_bdev(qos, bdev)) {
-		cb_fn(cb_arg, -EEXIST);
-		return;
-	}
-
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
 		cb_fn(cb_arg, -ENOMEM);
@@ -10434,6 +10438,16 @@ spdk_bdev_qos_add_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 	ctx->qos = qos;
 	ctx->cb_fn = cb_fn;
 	ctx->cb_arg = cb_arg;
+
+	spdk_spin_lock(&bdev->internal.spinlock);
+	rc = bdev_qos_add_bdev(qos, bdev);
+	spdk_spin_unlock(&bdev->internal.spinlock);
+
+	if (rc != 0) {
+		free(ctx);
+		cb_fn(cb_arg, rc);
+		return;
+	}
 
 	spdk_bdev_for_each_channel(bdev,
 				   bdev_channel_enable_qos,
@@ -10446,14 +10460,10 @@ spdk_bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 			  spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
 	struct qos_add_remove_bdev_ctx *ctx;
+	int rc;
 
 	if (!spdk_thread_is_app_thread(NULL)) {
 		cb_fn(cb_arg, -EINVAL);
-		return;
-	}
-
-	if (!bdev_qos_has_bdev(qos, bdev)) {
-		cb_fn(cb_arg, -ENODEV);
 		return;
 	}
 
@@ -10468,8 +10478,14 @@ spdk_bdev_qos_remove_bdev(struct spdk_bdev_qos *qos, struct spdk_bdev *bdev,
 	ctx->cb_arg = cb_arg;
 
 	spdk_spin_lock(&bdev->internal.spinlock);
-	bdev_qos_remove_bdev(qos, bdev);
+	rc = bdev_qos_remove_bdev(qos, bdev);
 	spdk_spin_unlock(&bdev->internal.spinlock);
+
+	if (rc != 0) {
+		free(ctx);
+		cb_fn(cb_arg, rc);
+		return;
+	}
 
 	spdk_bdev_for_each_channel(bdev,
 				   bdev_channel_disable_qos,
