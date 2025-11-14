@@ -95,7 +95,7 @@ DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
 DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma
-DEPDIRS-fuse_dispatcher := log thread util fsdev rmem
+DEPDIRS-fuse_dispatcher := log util fsdev
 DEPDIRS-rmem := log $(JSON_LIBS)
 DEPDIRS-fuse := dma fsdev fuse_dispatcher log thread util
 ifeq ($(CONFIG_RDMA),y)
