@@ -2848,6 +2848,26 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 	}
 }
 
+static inline bool
+bdev_io_is_qos_controlled(struct spdk_bdev_io *bdev_io)
+{
+	switch (bdev_io->type) {
+	case SPDK_BDEV_IO_TYPE_NVME_IO:
+	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
+	case SPDK_BDEV_IO_TYPE_READ:
+	case SPDK_BDEV_IO_TYPE_WRITE:
+		return true;
+	case SPDK_BDEV_IO_TYPE_ZCOPY:
+		if (bdev_io->u.bdev.zcopy.start) {
+			return true;
+		} else {
+			return false;
+		}
+	default:
+		return false;
+	}
+}
+
 static inline void bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch,
 		struct spdk_bdev_io *bdev_io);
 
@@ -2900,6 +2920,11 @@ bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev
 static void
 bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
 {
+	if (spdk_unlikely(!bdev_io_is_qos_controlled(bdev_io))) {
+		bdev_io_do_submit(bdev_ch, bdev_io);
+		return;
+	}
+
 	bdev_io->internal.blocked_qos_ch = bdev_ch->qos_ch;
 
 	bdev_qos_channel_queue_io(bdev_ch->qos_ch, bdev_io);
