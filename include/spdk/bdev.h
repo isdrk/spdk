@@ -1266,6 +1266,19 @@ int spdk_bdev_io_channel_register_flow_control_callbacks(
 	void *cb_arg);
 
 /**
+ * Check whether the bdev I/O channel is in a throttled state.
+ *
+ * This function is provided for debugging or specialized use cases.
+ * For high-performance I/O submission, the reactive callback model
+ * (spdk_bdev_io_channel_flow_control_callbacks) is highly recommended.
+ *
+ * \param ch I/O channel to query.
+ *
+ * \return true if throttled, or false otherwise.
+ */
+bool spdk_bdev_io_channel_is_throttled(struct spdk_io_channel *ch);
+
+/**
  * Obtain a bdev module context for the block device opened by the specified
  * descriptor.
  *
