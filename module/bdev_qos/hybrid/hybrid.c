@@ -878,26 +878,6 @@ bdev_qos_limit_return_quota(struct bdev_qos_limit *limit, uint64_t delta)
 	__atomic_add_fetch(&limit->remaining_this_timeslice, delta, __ATOMIC_RELAXED);
 }
 
-static bool
-bdev_qos_io_to_limit(struct spdk_bdev_io *bdev_io)
-{
-	switch (bdev_io->type) {
-	case SPDK_BDEV_IO_TYPE_NVME_IO:
-	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
-	case SPDK_BDEV_IO_TYPE_READ:
-	case SPDK_BDEV_IO_TYPE_WRITE:
-		return true;
-	case SPDK_BDEV_IO_TYPE_ZCOPY:
-		if (bdev_io->u.bdev.zcopy.start) {
-			return true;
-		} else {
-			return false;
-		}
-	default:
-		return false;
-	}
-}
-
 static inline bool
 _bdev_hybrid_qos_channel_queue_io(struct spdk_bdev_hybrid_qos_channel *hqos_ch,
 				  struct spdk_bdev_io *bdev_io)
@@ -922,10 +902,6 @@ bdev_hybrid_qos_channel_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
 {
 	struct spdk_bdev_hybrid_qos_channel *hqos_ch = bdev_hybrid_qos_channel(qos_ch_impl);
 
-	if (!bdev_qos_io_to_limit(bdev_io)) {
-		goto submit;
-	}
-
 	if (_bdev_hybrid_qos_channel_queue_io(hqos_ch, bdev_io)) {
 		return;
 	}
@@ -934,7 +910,6 @@ bdev_hybrid_qos_channel_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
 	 * queued I/Os. Hence, call submit function directly to avoid
 	 * extra overhead.
 	 */
-submit:
 	spdk_bdev_qos_module_allow_io(bdev_io);
 }
 
