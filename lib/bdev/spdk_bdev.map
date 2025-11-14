@@ -141,6 +141,7 @@
 	spdk_bdev_accel_sequence_supported;
 	spdk_bdev_set_ro;
 	spdk_bdev_desc_accel_sequence_supported;
+	spdk_bdev_io_channel_register_flow_control_callbacks;
 
 	# Public functions in bdev_module.h
 	spdk_bdev_register;

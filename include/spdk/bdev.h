@@ -1241,6 +1241,31 @@ struct spdk_io_channel *spdk_bdev_get_io_channel(struct spdk_bdev_desc *desc);
 uint32_t spdk_bdev_io_channel_get_weight(struct spdk_io_channel *ch);
 
 /**
+ * Callbacks for the bdev I/O channel flow_control.
+ */
+struct spdk_bdev_io_channel_flow_control_callbacks {
+	/** Called when the I/O channel needs the upper layer to pause. */
+	void (*throttle_cb)(struct spdk_io_channel *ch, void *cb_arg);
+
+	/** Called when the I/O channel is ready for more I/Os. */
+	void (*resume_cb)(struct spdk_io_channel *ch, void *cb_arg);
+};
+
+/**
+ * Register calback functions for the bdev I/O channel flow control.
+ *
+ * \param ch I/O channel to register.
+ * \param cbs A pointer to a struct of flow control callback functions.
+ * \param cb_arg Opaque context pointer to passed to all callbacks.
+ *
+ * \return 0 on success, negated errno on error.
+ */
+int spdk_bdev_io_channel_register_flow_control_callbacks(
+	struct spdk_io_channel *ch,
+	const struct spdk_bdev_io_channel_flow_control_callbacks *cbs,
+	void *cb_arg);
+
+/**
  * Obtain a bdev module context for the block device opened by the specified
  * descriptor.
  *

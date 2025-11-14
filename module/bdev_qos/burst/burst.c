@@ -1065,6 +1065,21 @@ bdev_burst_qos_channel_unblock_all_queued_io(struct spdk_bdev_qos_channel_impl *
 	}
 }
 
+static bool
+bdev_burst_qos_channel_is_throttled(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
+{
+	struct bdev_burst_qos_channel *bqos_ch = SPDK_CONTAINEROF(qos_ch_impl,
+			struct bdev_burst_qos_channel, base);
+	int i;
+
+	for (i = 0; i < BDEV_QOS_NUM_METRICS; i++) {
+		if (!TAILQ_EMPTY(&bqos_ch->local_buckets[i].queued_io)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static void
 bdev_burst_qos_channel_retry_queued_io(struct bdev_burst_qos_channel *bqos_ch)
 {
@@ -1242,6 +1257,7 @@ static struct spdk_bdev_qos_module bdev_burst_qos_if = {
 	.abort_queued_io = bdev_burst_qos_channel_abort_queued_io,
 	.abort_all_queued_io = bdev_burst_qos_channel_abort_all_queued_io,
 	.unblock_all_queued_io = bdev_burst_qos_channel_unblock_all_queued_io,
+	.is_throttled = bdev_burst_qos_channel_is_throttled,
 	.async_fini = true,
 };
 
