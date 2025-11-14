@@ -215,56 +215,6 @@ bdev_hybrid_qos_set_opts(struct bdev_hybrid_qos_opts *opts)
 	return 0;
 }
 
-static bool
-bdev_qos_limit_is_read_io(struct spdk_bdev_io *bdev_io)
-{
-	switch (bdev_io->type) {
-	case SPDK_BDEV_IO_TYPE_NVME_IO:
-	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
-		/* Bit 1 (0x2) set for read operation */
-		if (bdev_io->u.nvme_passthru.cmd.opc & SPDK_NVME_OPC_READ) {
-			return true;
-		} else {
-			return false;
-		}
-	case SPDK_BDEV_IO_TYPE_READ:
-		return true;
-	case SPDK_BDEV_IO_TYPE_ZCOPY:
-		/* Populate to read from disk */
-		if (bdev_io->u.bdev.zcopy.populate) {
-			return true;
-		} else {
-			return false;
-		}
-	default:
-		return false;
-	}
-}
-
-static uint64_t
-bdev_get_io_size_in_bytes(struct spdk_bdev_io *bdev_io)
-{
-	uint32_t blocklen = spdk_bdev_io_get_block_size(bdev_io);
-
-	switch (bdev_io->type) {
-	case SPDK_BDEV_IO_TYPE_NVME_IO:
-	case SPDK_BDEV_IO_TYPE_NVME_IO_MD:
-		return bdev_io->u.nvme_passthru.nbytes;
-	case SPDK_BDEV_IO_TYPE_READ:
-	case SPDK_BDEV_IO_TYPE_WRITE:
-		return bdev_io->u.bdev.num_blocks * blocklen;
-	case SPDK_BDEV_IO_TYPE_ZCOPY:
-		/* Track the data in the start phase only */
-		if (bdev_io->u.bdev.zcopy.start) {
-			return bdev_io->u.bdev.num_blocks * blocklen;
-		} else {
-			return 0;
-		}
-	default:
-		return 0;
-	}
-}
-
 static inline bool
 bdev_qos_limit_is_iops_rate_limit(enum spdk_bdev_qos_rate_limit_type limit)
 {
@@ -358,7 +308,7 @@ bdev_qos_limit_cache_rw_bps_queue(struct bdev_qos_limit_cache *cache,
 				  struct bdev_qos_limit *limit,
 				  struct spdk_bdev_io *io)
 {
-	return bdev_qos_limit_cache_rw_queue_io(cache, limit, io, bdev_get_io_size_in_bytes(io));
+	return bdev_qos_limit_cache_rw_queue_io(cache, limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 }
 
 static void
@@ -366,7 +316,7 @@ bdev_qos_limit_cache_rw_bps_rewind_quota(struct bdev_qos_limit_cache *cache,
 		struct bdev_qos_limit *limit,
 		struct spdk_bdev_io *io)
 {
-	bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, bdev_get_io_size_in_bytes(io));
+	bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 }
 
 static bool
@@ -374,7 +324,7 @@ bdev_qos_limit_cache_r_bps_queue(struct bdev_qos_limit_cache *cache,
 				 struct bdev_qos_limit *limit,
 				 struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) == false) {
+	if (spdk_bdev_io_is_read_io(io) == false) {
 		return false;
 	}
 
@@ -386,8 +336,8 @@ bdev_qos_limit_cache_r_bps_rewind_quota(struct bdev_qos_limit_cache *cache,
 					struct bdev_qos_limit *limit,
 					struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) != false) {
-		bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, bdev_get_io_size_in_bytes(io));
+	if (spdk_bdev_io_is_read_io(io) != false) {
+		bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 	}
 }
 
@@ -396,7 +346,7 @@ bdev_qos_limit_cache_w_bps_queue(struct bdev_qos_limit_cache *cache,
 				 struct bdev_qos_limit *limit,
 				 struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) == true) {
+	if (spdk_bdev_io_is_read_io(io) == true) {
 		return false;
 	}
 
@@ -408,8 +358,8 @@ bdev_qos_limit_cache_w_bps_rewind_quota(struct bdev_qos_limit_cache *cache,
 					struct bdev_qos_limit *limit,
 					struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) != true) {
-		bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, bdev_get_io_size_in_bytes(io));
+	if (spdk_bdev_io_is_read_io(io) != true) {
+		bdev_qos_limit_cache_rw_rewind_io(cache, limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 	}
 }
 
@@ -527,19 +477,19 @@ bdev_qos_limit_rw_iops_rewind_quota(struct bdev_qos_limit *limit, struct spdk_bd
 static bool
 bdev_qos_limit_rw_bps_queue(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	return bdev_qos_limit_rw_queue_io(limit, io, bdev_get_io_size_in_bytes(io));
+	return bdev_qos_limit_rw_queue_io(limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 }
 
 static void
 bdev_qos_limit_rw_bps_rewind_quota(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	bdev_qos_limit_rw_rewind_io(limit, io, bdev_get_io_size_in_bytes(io));
+	bdev_qos_limit_rw_rewind_io(limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 }
 
 static bool
 bdev_qos_limit_r_bps_queue(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) == false) {
+	if (spdk_bdev_io_is_read_io(io) == false) {
 		return false;
 	}
 
@@ -549,23 +499,23 @@ bdev_qos_limit_r_bps_queue(struct bdev_qos_limit *limit, struct spdk_bdev_io *io
 static void
 bdev_qos_limit_r_bps_rewind_quota(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) != false) {
-		bdev_qos_limit_rw_rewind_io(limit, io, bdev_get_io_size_in_bytes(io));
+	if (spdk_bdev_io_is_read_io(io) != false) {
+		bdev_qos_limit_rw_rewind_io(limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 	}
 }
 
 static void
 bdev_qos_limit_w_bps_rewind_quota(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) != true) {
-		bdev_qos_limit_rw_rewind_io(limit, io, bdev_get_io_size_in_bytes(io));
+	if (spdk_bdev_io_is_read_io(io) != true) {
+		bdev_qos_limit_rw_rewind_io(limit, io, spdk_bdev_io_get_io_size_in_bytes(io));
 	}
 }
 
 static bool
 bdev_qos_limit_w_bps_queue(struct bdev_qos_limit *limit, struct spdk_bdev_io *io)
 {
-	if (bdev_qos_limit_is_read_io(io) == true) {
+	if (spdk_bdev_io_is_read_io(io) == true) {
 		return false;
 	}
 
