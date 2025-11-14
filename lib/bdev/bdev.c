@@ -5567,6 +5567,14 @@ spdk_bdev_io_channel_get_weight(struct spdk_io_channel *ch)
 	return 0;
 }
 
+bool
+spdk_bdev_io_channel_is_throttled(struct spdk_io_channel *ch)
+{
+	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+
+	return bdev_channel_is_throttled(bdev_ch);
+}
+
 void *
 spdk_bdev_get_module_ctx(struct spdk_bdev_desc *desc)
 {
