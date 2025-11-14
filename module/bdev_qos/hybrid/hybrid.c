@@ -904,6 +904,20 @@ bdev_hybrid_qos_channel_abort_all_queued_io(struct spdk_bdev_qos_channel_impl *q
 	spdk_spin_unlock(&hgroup->spinlock);
 }
 
+static bool
+bdev_hybrid_qos_channel_is_throttled(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
+{
+	struct spdk_bdev_hybrid_qos_channel *hqos_ch = bdev_hybrid_qos_channel(qos_ch_impl);
+	struct spdk_bdev_hybrid_qos *hqos = hqos_ch->hqos;
+	bool is_throttled;
+
+	spdk_spin_lock(&hqos->spinlock);
+	is_throttled = !TAILQ_EMPTY(&hqos->queued_io);
+	spdk_spin_unlock(&hqos->spinlock);
+
+	return is_throttled;
+}
+
 static void
 bdev_hybrid_qos_retry_queued_io(struct spdk_bdev_hybrid_qos *hqos)
 {
@@ -1286,6 +1300,7 @@ static struct spdk_bdev_qos_module hybrid_if = {
 	.abort_queued_io = bdev_hybrid_qos_channel_abort_queued_io,
 	.abort_all_queued_io = bdev_hybrid_qos_channel_abort_all_queued_io,
 	.unblock_all_queued_io = bdev_hybrid_qos_channel_unblock_all_queued_io,
+	.is_throttled = bdev_hybrid_qos_channel_is_throttled,
 	.async_fini = true,
 };
 

@@ -276,6 +276,12 @@ struct spdk_bdev_channel {
 
 	struct spdk_histogram_data *histogram;
 
+	bool			throttled;
+
+	struct spdk_bdev_io_channel_flow_control_callbacks flow_control_cbs;
+
+	void			*flow_control_cb_arg;
+
 #ifdef SPDK_CONFIG_VTUNE
 	uint64_t		start_tsc;
 	uint64_t		interval_tsc;
@@ -351,6 +357,7 @@ enum bdev_io_retry_state {
 #define __bdev_to_io_dev(bdev)		(((char *)bdev) + 1)
 #define __bdev_from_io_dev(io_dev)	((struct spdk_bdev *)(((char *)io_dev) - 1))
 #define __io_ch_to_bdev_ch(io_ch)	((struct spdk_bdev_channel *)spdk_io_channel_get_ctx(io_ch))
+#define __io_ch_from_bdev_ch(bdev_ch)	(spdk_io_channel_from_ctx(bdev_ch))
 #define __io_ch_to_bdev_mgmt_ch(io_ch)	((struct spdk_bdev_mgmt_channel *)spdk_io_channel_get_ctx(io_ch))
 
 static inline void bdev_io_complete(void *ctx);
@@ -2909,6 +2916,38 @@ spdk_bdev_qos_channel_impl_queue_io_done(struct spdk_bdev_io *bdev_io)
 	}
 }
 
+static inline bool
+bdev_qos_channel_impl_is_throttled(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
+{
+	return qos_ch_impl->qos_impl->module->is_throttled(qos_ch_impl);
+}
+
+static bool
+bdev_qos_channel_is_throttled(struct spdk_bdev_qos_channel *qos_ch)
+{
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+
+	TAILQ_FOREACH(qos_ch_impl, &qos_ch->impl_list, link) {
+		if (bdev_qos_channel_impl_is_throttled(qos_ch_impl)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool
+bdev_channel_is_throttled(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_bdev_qos_channel *qos_ch = bdev_ch->qos_ch;
+
+	while (qos_ch != NULL) {
+		if (bdev_qos_channel_is_throttled(qos_ch)) {
+			return true;
+		}
+		qos_ch = qos_ch->parent_ch;
+	}
+	return false;
+}
 
 static inline void
 bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev_io *bdev_io)
@@ -2921,9 +2960,47 @@ bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev
 	bdev_qos_channel_impl_queue_io(qos_ch_impl, bdev_io);
 }
 
+/* This function is called if an I/O is blocked at a QoS channel.
+ * If the bdev channel is not throttled, mark it as throttled and notify throttle.
+ */
+static inline void
+bdev_channel_throttle_if_needed(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_io_channel *ch = __io_ch_from_bdev_ch(bdev_ch);
+
+	if (!bdev_ch->throttled) {
+		bdev_ch->throttled = true;
+		if (bdev_ch->flow_control_cbs.throttle_cb != NULL) {
+			bdev_ch->flow_control_cbs.throttle_cb(ch,
+							      bdev_ch->flow_control_cb_arg);
+		}
+	}
+}
+
+/* This function is called if an I/O passed all checks along the leaf-to-root path.
+ * If the bdev channel is throttled and all QoS channels along the leaf-to-root path
+ * do not throttle, clear the flag and notify resume.
+ */
+static inline void
+bdev_channel_resume_if_needed(struct spdk_bdev_channel *bdev_ch)
+{
+	struct spdk_io_channel *ch = __io_ch_from_bdev_ch(bdev_ch);
+
+	if (bdev_ch->throttled &&
+	    !bdev_channel_is_throttled(bdev_ch)) {
+		bdev_ch->throttled = false;
+		if (bdev_ch->flow_control_cbs.resume_cb != NULL) {
+			bdev_ch->flow_control_cbs.resume_cb(ch,
+							    bdev_ch->flow_control_cb_arg);
+		}
+	}
+}
+
 static inline void
 bdev_qos_queue_io_done(struct spdk_bdev_io *bdev_io)
 {
+	bdev_channel_resume_if_needed(bdev_io->internal.ch);
+
 	bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
 }
 
@@ -2939,6 +3016,10 @@ bdev_qos_queue_io(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 
 	qos_ch = bdev_ch->qos_ch;
 	bdev_qos_channel_queue_io(qos_ch, bdev_io);
+
+	if (bdev_io->internal.blocked_qos_ch != NULL) {
+		bdev_channel_throttle_if_needed(bdev_ch);
+	}
 }
 
 static void
@@ -5452,6 +5533,24 @@ struct spdk_io_channel *
 spdk_bdev_get_io_channel(struct spdk_bdev_desc *desc)
 {
 	return spdk_get_io_channel(__bdev_to_io_dev(spdk_bdev_desc_get_bdev(desc)));
+}
+
+int
+spdk_bdev_io_channel_register_flow_control_callbacks(
+	struct spdk_io_channel *ch,
+	const struct spdk_bdev_io_channel_flow_control_callbacks *cbs,
+	void *cb_arg)
+{
+	struct spdk_bdev_channel *bdev_ch = __io_ch_to_bdev_ch(ch);
+
+	if (cbs == NULL) {
+		return -EINVAL;
+	}
+
+	bdev_ch->flow_control_cbs = *cbs;
+	bdev_ch->flow_control_cb_arg = cb_arg;
+
+	return 0;
 }
 
 uint32_t

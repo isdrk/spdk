@@ -88,6 +88,11 @@ struct spdk_bdev_qos_module {
 			 struct spdk_bdev_io *bdev_io);
 
 	/**
+	 * Check whether the module-dependent object per QoS channel is throttled.
+	 */
+	bool (*is_throttled)(struct spdk_bdev_qos_channel_impl *qos_ch_impl);
+
+	/**
 	 * Try aborting the I/O if it is queued in the module-dependent object per QoS channel.
 	 * The bdev layer will use this function in spdk_bdev_abort().
 	 * The module must use spdk_bdev_abort_queued_io() to actually abort the I/O.
