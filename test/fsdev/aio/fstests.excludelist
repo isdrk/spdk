@@ -2,6 +2,9 @@
 generic/069
 # Currently fail
 generic/003
+# generic/011 has a race between rmdir() and chdir(), which sometimes causes chdir() to fail with
+# ESTALE
+generic/011
 generic/075
 generic/079
 # Fails on kernels older than v6.9
