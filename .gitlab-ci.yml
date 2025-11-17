@@ -34,6 +34,16 @@ unittests-build-job:
     - make -j4
     - ./test/unit/unittest.sh
 
+.autotest-template:
+  tags: [vm_host, x86_64]
+  stage: test
+  before_script:
+    - .ci/prepare_vm.sh
+  after_script:
+    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar -C $CI_PROJECT_DIR/.. output
+  artifacts:
+    name: ${TEST_TYPE}_artifacts
+
 autotest-nvmf-tcp:
   tags: [vm_host, x86_64]
   stage: test
