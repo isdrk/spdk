@@ -45,51 +45,29 @@ unittests-build-job:
     name: ${TEST_TYPE}_artifacts
 
 autotest-nvmf-tcp:
-  tags: [vm_host, x86_64]
-  stage: test
-  before_script:
-    - .ci/prepare_vm.sh
+  extends: .autotest-template
+  variables:
+    TEST_TYPE: nvmf-tcp
   script:
-    - ./configure --enable-debug --without-idxd --with-rdma --with-fio=/usr/src/fio --with-iscsi-initiator --disable-unit-tests --enable-coverage  --enable-ubsan --enable-asan --with-ublk --with-xlio && make -j${nproc}
-    - ./autorun.sh .ci/autotest-nvmf-tcp.conf
-  after_script:
-    - tar czf $CI_PROJECT_DIR/autotest-nvmf-tcp_artifacts.tar -C $CI_PROJECT_DIR/.. output
-  artifacts:
-    name: autotest-nvmf-tcp_artifacts
-    paths:
-      - $CI_PROJECT_DIR/autotest-nvmf-tcp_artifacts.tar
-    expire_in: 3 days
-    when: always
+    - ./configure --enable-debug --without-idxd --with-rdma --with-fio=/usr/src/fio --with-iscsi-initiator --disable-unit-tests --enable-coverage --with-ublk --with-xlio && make -j${nproc}
+    - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
 
 autotest-vm_host-matrix:
-  tags: [vm_host, x86_64]
-  stage: test
+  extends: .autotest-template
   parallel:
     matrix:
       - TEST_TYPE: [nvme, accel, fsdev, bdev, nvmf-rdma]
-  before_script:
-    - .ci/prepare_vm.sh
   script:
     - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
-  after_script:
-    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar -C $CI_PROJECT_DIR/.. output
-  artifacts:
-    name: ${TEST_TYPE}_artifacts
-    paths:
-      - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar
-    expire_in: 3 days
-    when: always
 
 test-crypto-job:
-  tags: [vm_host, x86_64]
-  stage: test
+  extends: .autotest-template
   variables:
     # VMs 17-20 have BlueField3 vfs with crypto
     VM_START_NUM: "017"
     VM_END_NUM: "020"
     CI_DUT_RDMA: "mlx5_0"
-  before_script:
-    - .ci/prepare_vm.sh
+    TEST_TYPE: crypto
   script:
     - ./configure --enable-debug --with-rdma=mlx5_dv --with-crypto
     - make -j${nproc}
@@ -97,14 +75,6 @@ test-crypto-job:
     - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh --allowed-devs=${CI_DUT_RDMA}
     - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA}
     - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA} --transport=rdma
-  after_script:
-    - tar czf $CI_PROJECT_DIR/crypto_artifacts.tar -C $CI_PROJECT_DIR/.. output
-  artifacts:
-    name: crypto_artifacts
-    paths:
-      - $CI_PROJECT_DIR/crypto_artifacts.tar
-    expire_in: 3 days
-    when: always
 
 coverity-job:
   tags: [k8s, linux, x86_64]
