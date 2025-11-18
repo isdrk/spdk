@@ -90,7 +90,7 @@ spdk_bdev_unblock_all_queued_io(bdev_io_tailq_t *queue, struct spdk_bdev_channel
 }
 
 void
-spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
+spdk_bdev_qos_channel_impl_queue_io_done(struct spdk_bdev_io *bdev_io)
 {
 	bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 }

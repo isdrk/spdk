@@ -224,7 +224,7 @@ struct spdk_bdev_qos_channel {
  *
  * \param bdev_io The bdev_io
  */
-void spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io);
+void spdk_bdev_qos_channel_impl_queue_io_done(struct spdk_bdev_io *bdev_io);
 
 static inline bool
 spdk_bdev_io_is_read_io(struct spdk_bdev_io *bdev_io)

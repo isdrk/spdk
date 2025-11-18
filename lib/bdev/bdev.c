@@ -2870,18 +2870,19 @@ bdev_io_is_qos_controlled(struct spdk_bdev_io *bdev_io)
 
 static inline void bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch,
 		struct spdk_bdev_io *bdev_io);
+static inline void bdev_qos_queue_io_done(struct spdk_bdev_io *bdev_io);
 
 static void
-bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
+bdev_qos_channel_queue_io_done(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev_qos_channel *qos_ch = bdev_io->internal.blocked_qos_ch;
 
 	qos_ch = qos_ch->parent_ch;
 	if (qos_ch != NULL) {
-		bdev_io->internal.blocked_qos_ch = qos_ch;
 		bdev_qos_channel_queue_io(qos_ch, bdev_io);
 	} else {
-		bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+		bdev_io->internal.blocked_qos_ch = NULL;
+		bdev_qos_queue_io_done(bdev_io);
 	}
 }
 
@@ -2895,7 +2896,7 @@ bdev_qos_channel_impl_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
 }
 
 void
-spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
+spdk_bdev_qos_channel_impl_queue_io_done(struct spdk_bdev_io *bdev_io)
 {
 	struct spdk_bdev_qos_channel_impl *qos_ch_impl = bdev_io->internal.blocked_qos_ch_impl;
 
@@ -2904,7 +2905,7 @@ spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
 		bdev_qos_channel_impl_queue_io(qos_ch_impl, bdev_io);
 	} else {
 		bdev_io->internal.blocked_qos_ch_impl = NULL;
-		bdev_qos_module_allow_io(bdev_io);
+		bdev_qos_channel_queue_io_done(bdev_io);
 	}
 }
 
@@ -2912,22 +2913,32 @@ spdk_bdev_qos_module_allow_io(struct spdk_bdev_io *bdev_io)
 static inline void
 bdev_qos_channel_queue_io(struct spdk_bdev_qos_channel *qos_ch, struct spdk_bdev_io *bdev_io)
 {
-	struct spdk_bdev_qos_channel_impl *qos_ch_impl = TAILQ_FIRST(&qos_ch->impl_list);
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
 
+	bdev_io->internal.blocked_qos_ch = qos_ch;
+
+	qos_ch_impl = TAILQ_FIRST(&qos_ch->impl_list);
 	bdev_qos_channel_impl_queue_io(qos_ch_impl, bdev_io);
 }
 
-static void
-bdev_qos_io_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
+static inline void
+bdev_qos_queue_io_done(struct spdk_bdev_io *bdev_io)
 {
+	bdev_io_do_submit(bdev_io->internal.ch, bdev_io);
+}
+
+static void
+bdev_qos_queue_io(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_io)
+{
+	struct spdk_bdev_qos_channel *qos_ch;
+
 	if (spdk_unlikely(!bdev_io_is_qos_controlled(bdev_io))) {
-		bdev_io_do_submit(bdev_ch, bdev_io);
+		bdev_qos_queue_io_done(bdev_io);
 		return;
 	}
 
-	bdev_io->internal.blocked_qos_ch = bdev_ch->qos_ch;
-
-	bdev_qos_channel_queue_io(bdev_ch->qos_ch, bdev_io);
+	qos_ch = bdev_ch->qos_ch;
+	bdev_qos_channel_queue_io(qos_ch, bdev_io);
 }
 
 static void
@@ -3674,7 +3685,7 @@ _bdev_io_submit(struct spdk_bdev_io *bdev_io)
 		    bdev_qos_abort_queued_io(bdev_ch, bdev_io->u.abort.bio_to_abort)) {
 			_bdev_io_complete_in_submit(bdev_ch, bdev_io, SPDK_BDEV_IO_STATUS_SUCCESS);
 		} else {
-			bdev_qos_io_submit(bdev_ch, bdev_io);
+			bdev_qos_queue_io(bdev_ch, bdev_io);
 		}
 	} else {
 		SPDK_ERRLOG("unknown bdev_ch flag %x found\n", bdev_ch->flags);
