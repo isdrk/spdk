@@ -58,10 +58,10 @@ static void usage(void);
 
 static char *g_exe_name;
 
-static float
+static double
 get_us_from_tsc(uint64_t tsc, uint64_t tsc_rate)
 {
-	return ((float)tsc) * 1000 * 1000 / tsc_rate;
+	return ((double)tsc) * 1000 * 1000 / tsc_rate;
 }
 
 static const char *
@@ -125,7 +125,7 @@ print_object_id(const struct spdk_trace_tpoint *d, struct spdk_trace_parser_entr
 }
 
 static void
-print_float(const char *arg_string, float arg)
+print_double(const char *arg_string, double arg)
 {
 	printf("%-7s%-16.3f ", format_argname(arg_string), arg);
 }
@@ -136,7 +136,7 @@ print_event(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t t
 	struct spdk_trace_entry		*e = entry->entry;
 	struct spdk_trace_owner		*owner;
 	const struct spdk_trace_tpoint	*d;
-	float				us;
+	double				us;
 	size_t				i;
 
 	d = &g_file->tpoint[e->tpoint_id];
@@ -164,7 +164,7 @@ print_event(struct spdk_trace_parser_entry *entry, uint64_t tsc_rate, uint64_t t
 		if (entry->object_index != UINT64_MAX) {
 			us = get_us_from_tsc(e->tsc - entry->object_start, tsc_rate);
 			print_object_id(d, entry);
-			print_float("time", us);
+			print_double("time", us);
 		} else {
 			printf("id:    %-17s", "N/A");
 		}
