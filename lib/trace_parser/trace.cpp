@@ -285,6 +285,7 @@ spdk_trace_parser::init(const spdk_trace_parser_opts *opts)
 	spdk_trace_history *history;
 	struct stat st;
 	int rc, i, entry_num;
+	uint64_t min_first_tsc = UINT64_MAX;
 	bool overflowed;
 
 	switch (opts->mode) {
@@ -348,19 +349,16 @@ spdk_trace_parser::init(const spdk_trace_parser_opts *opts)
 			if (history == NULL || history->num_entries == 0 || history->entries[0].tsc == 0) {
 				continue;
 			}
+			min_first_tsc = spdk_min(min_first_tsc, history->entries[0].tsc);
 			entry_num = history->num_entries - 1;
-			overflowed = true;
-			while (entry_num >= 0) {
-				if (history->entries[entry_num].tsc == 0) {
-					overflowed = false;
-					break;
-				}
-				entry_num--;
-			}
-			if (overflowed) {
+			overflowed = false;
+			if (history->entries[entry_num].tsc != 0) {
+				overflowed = true;
 				break;
 			}
-
+		}
+		if (!overflowed) {
+			_tsc_offset = min_first_tsc;
 		}
 		for (i = 0; i < SPDK_TRACE_MAX_LCORE; i++) {
 			history = spdk_get_per_lcore_history(_trace_file, i);
@@ -377,6 +375,7 @@ spdk_trace_parser::init(const spdk_trace_parser_opts *opts)
 			return false;
 		}
 		if (history->num_entries > 0 && history->entries[0].tsc != 0) {
+			_tsc_offset = history->entries[0].tsc;
 			populate_events(history, history->num_entries, false);
 		}
 	}
