@@ -101,6 +101,22 @@ struct ut_bdev_channel {
 	TAILQ_ENTRY(ut_bdev_channel)	link;
 };
 
+struct ut_qos {
+	struct spdk_bdev_qos_impl base;
+	TAILQ_ENTRY(ut_qos) link;
+};
+
+struct ut_qos_channel {
+	struct spdk_bdev_qos_channel_impl base;
+	bdev_io_tailq_t queued_io;
+	bool throttled;
+	TAILQ_ENTRY(ut_qos_channel) link;
+};
+
+struct ut_qos_mgr {
+	TAILQ_HEAD(, ut_qos) ut_qos_list;
+};
+
 int g_io_device;
 struct ut_bdev g_bdev;
 struct spdk_bdev_desc *g_desc;
@@ -115,6 +131,10 @@ int g_status = 0;
 int g_count = 0;
 struct spdk_histogram_data *g_histogram = NULL;
 TAILQ_HEAD(, ut_bdev_channel) g_ut_channels;
+
+struct ut_qos_mgr g_ut_qos_mgr = {
+	.ut_qos_list = TAILQ_HEAD_INITIALIZER(g_ut_qos_mgr.ut_qos_list),
+};
 
 static int
 ut_accel_ch_create_cb(void *io_device, void *ctx)
@@ -395,6 +415,209 @@ teardown_bdev2(void)
 	free(g_bdev2);
 	g_bdev2 = NULL;
 }
+
+static struct spdk_bdev_qos_module ut_qos_if;
+static struct spdk_bdev_qos_module ut_qos2_if;
+
+static int
+ut_qos_library_init(void)
+{
+	return 0;
+}
+
+static void
+ut_qos_library_fini(void)
+{
+	spdk_bdev_qos_module_fini_done();
+}
+
+static void
+ut_qos_library_config_json(struct spdk_json_write_ctx *w)
+{
+}
+
+static struct spdk_bdev_qos_impl *
+ut_qos_get(void)
+{
+	struct ut_qos *ut_qos;
+
+	ut_qos = calloc(1, sizeof(*ut_qos));
+	SPDK_CU_ASSERT_FATAL(ut_qos != NULL);
+
+	ut_qos->base.module = &ut_qos_if;
+
+	TAILQ_INSERT_TAIL(&g_ut_qos_mgr.ut_qos_list, ut_qos, link);
+
+	return &ut_qos->base;
+}
+
+static struct spdk_bdev_qos_impl *
+ut_qos2_get(void)
+{
+	struct ut_qos *ut_qos;
+
+	ut_qos = calloc(1, sizeof(*ut_qos));
+	SPDK_CU_ASSERT_FATAL(ut_qos != NULL);
+
+	ut_qos->base.module = &ut_qos2_if;
+
+	TAILQ_INSERT_TAIL(&g_ut_qos_mgr.ut_qos_list, ut_qos, link);
+
+	return &ut_qos->base;
+}
+
+static void
+ut_qos_put(struct spdk_bdev_qos_impl *qos_impl)
+{
+	struct ut_qos *ut_qos = SPDK_CONTAINEROF(qos_impl, struct ut_qos, base);
+
+	TAILQ_REMOVE(&g_ut_qos_mgr.ut_qos_list, ut_qos, link);
+
+	free(ut_qos);
+}
+
+static void
+ut_qos_config_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_json_write_ctx *w)
+{
+}
+
+static void
+ut_qos_info_json(struct spdk_bdev_qos_impl *qos_impl, struct spdk_json_write_ctx *w)
+{
+}
+
+static struct spdk_bdev_qos_channel_impl *
+ut_qos_channel_get(struct spdk_bdev_qos_impl *qos_impl)
+{
+	struct ut_qos_channel *ut_qos_ch;
+
+	CU_ASSERT(qos_impl->module == &ut_qos_if);
+
+	ut_qos_ch = calloc(1, sizeof(*ut_qos_ch));
+	SPDK_CU_ASSERT_FATAL(ut_qos_ch != NULL);
+
+	ut_qos_ch->base.qos_impl = qos_impl;
+
+	TAILQ_INIT(&ut_qos_ch->queued_io);
+	ut_qos_ch->throttled = false;
+
+	return &ut_qos_ch->base;
+}
+
+static struct spdk_bdev_qos_channel_impl *
+ut_qos2_channel_get(struct spdk_bdev_qos_impl *qos_impl)
+{
+	struct ut_qos_channel *ut_qos_ch;
+
+	CU_ASSERT(qos_impl->module == &ut_qos2_if);
+
+	ut_qos_ch = calloc(1, sizeof(*ut_qos_ch));
+	SPDK_CU_ASSERT_FATAL(ut_qos_ch != NULL);
+
+	ut_qos_ch->base.qos_impl = qos_impl;
+
+	TAILQ_INIT(&ut_qos_ch->queued_io);
+	ut_qos_ch->throttled = false;
+
+	return &ut_qos_ch->base;
+}
+
+static void
+ut_qos_channel_put(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	free(ut_qos_ch);
+}
+
+static void
+ut_qos_channel_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
+			struct spdk_bdev_io *bdev_io)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	if (!ut_qos_ch->throttled) {
+		spdk_bdev_qos_channel_impl_queue_io_done(bdev_io);
+	} else {
+		TAILQ_INSERT_TAIL(&ut_qos_ch->queued_io, bdev_io, internal.link);
+	}
+}
+
+static bool
+ut_qos_channel_abort_queued_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
+			       struct spdk_bdev_io *bio_to_abort)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	return spdk_bdev_abort_queued_io(&ut_qos_ch->queued_io, bio_to_abort);
+}
+
+static void
+ut_qos_channel_abort_all_queued_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
+				   struct spdk_bdev_channel *bdev_ch)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	spdk_bdev_abort_all_queued_io(&ut_qos_ch->queued_io, bdev_ch);
+}
+
+static void
+ut_qos_channel_unblock_all_queued_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
+				     struct spdk_bdev_channel *bdev_ch)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	return spdk_bdev_unblock_all_queued_io(&ut_qos_ch->queued_io, bdev_ch);
+}
+
+static bool
+ut_qos_channel_is_throttled(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
+{
+	struct ut_qos_channel *ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	return ut_qos_ch->throttled;
+}
+
+static struct spdk_bdev_qos_module ut_qos_if = {
+	.name = "ut_qos",
+	.module_init = ut_qos_library_init,
+	.module_fini = ut_qos_library_fini,
+	.module_config_json = ut_qos_library_config_json,
+	.get_impl = ut_qos_get,
+	.put_impl = ut_qos_put,
+	.impl_config_json = ut_qos_config_json,
+	.impl_info_json = ut_qos_info_json,
+	.get_channel_impl = ut_qos_channel_get,
+	.put_channel_impl = ut_qos_channel_put,
+	.queue_io = ut_qos_channel_queue_io,
+	.abort_queued_io = ut_qos_channel_abort_queued_io,
+	.abort_all_queued_io = ut_qos_channel_abort_all_queued_io,
+	.unblock_all_queued_io = ut_qos_channel_unblock_all_queued_io,
+	.is_throttled = ut_qos_channel_is_throttled,
+	.async_fini = true,
+};
+
+static struct spdk_bdev_qos_module ut_qos2_if = {
+	.name = "ut_qos2",
+	.module_init = ut_qos_library_init,
+	.module_fini = ut_qos_library_fini,
+	.module_config_json = ut_qos_library_config_json,
+	.get_impl = ut_qos2_get,
+	.put_impl = ut_qos_put,
+	.impl_config_json = ut_qos_config_json,
+	.impl_info_json = ut_qos_info_json,
+	.get_channel_impl = ut_qos2_channel_get,
+	.put_channel_impl = ut_qos_channel_put,
+	.queue_io = ut_qos_channel_queue_io,
+	.abort_queued_io = ut_qos_channel_abort_queued_io,
+	.abort_all_queued_io = ut_qos_channel_abort_all_queued_io,
+	.unblock_all_queued_io = ut_qos_channel_unblock_all_queued_io,
+	.is_throttled = ut_qos_channel_is_throttled,
+	.async_fini = true,
+};
+
+SPDK_BDEV_QOS_MODULE_REGISTER(ut_qos, &ut_qos_if)
+SPDK_BDEV_QOS_MODULE_REGISTER(ut_qos2, &ut_qos2_if)
 
 static void
 setup_test(void)
@@ -2262,6 +2485,280 @@ reset_start_complete_race(void)
 	teardown_test();
 }
 
+static void
+add_remove_bdev_done(void *cb_arg, int rc)
+{
+	int *status = cb_arg;
+
+	*status = rc;
+}
+
+static void
+basic_qos(void)
+{
+	struct spdk_bdev_qos *qos = NULL;
+	struct spdk_bdev_qos_desc *desc = NULL, *desc2 = NULL, *desc3 = NULL;
+	struct spdk_bdev *bdev1, *bdev2;
+	struct spdk_io_channel *bdev1_io_ch, *bdev2_io_ch;
+	struct spdk_bdev_channel *bdev1_ch, *bdev2_ch;
+	struct spdk_bdev_qos_impl *qos_impl;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl;
+	struct ut_qos_channel *ut_qos_ch;
+	const char *enabled_module[1] = {"ut_qos"};
+	enum spdk_bdev_io_status io_status, io_status2;
+	int rc, status, status2;
+
+	setup_test();
+
+	setup_bdev2(g_bdev.io_target);
+
+	/* Create qos device and open it separately. */
+	rc = spdk_bdev_qos_create("ut_qos_service", NULL, enabled_module, 1, &qos, NULL);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(qos != NULL);
+
+	qos_impl = TAILQ_FIRST(&qos->impl_list);
+	SPDK_CU_ASSERT_FATAL(qos_impl != NULL);
+	CU_ASSERT(TAILQ_NEXT(qos_impl, link) == NULL);
+	CU_ASSERT(qos_impl->module == &ut_qos_if);
+
+	rc = spdk_bdev_qos_open("ut_qos_service", &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+
+	bdev1_io_ch = spdk_bdev_get_io_channel(g_desc);
+	SPDK_CU_ASSERT_FATAL(bdev1_io_ch != NULL);
+	bdev1_ch = spdk_io_channel_get_ctx(bdev1_io_ch);
+
+	CU_ASSERT(bdev1_ch->qos_ch == NULL);
+	CU_ASSERT(!(bdev1_ch->flags &= BDEV_CH_QOS_ENABLED));
+
+	bdev1 = spdk_bdev_desc_get_bdev(g_desc);
+	bdev2 = spdk_bdev_desc_get_bdev(g_desc2);
+
+	/* 2nd qos_add_bdev call to the same bdev should fail. */
+	status = -1;
+	spdk_bdev_qos_add_bdev(qos, bdev1, add_remove_bdev_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(bdev1_ch->qos_ch != NULL);
+	CU_ASSERT(bdev1_ch->flags & BDEV_CH_QOS_ENABLED);
+
+	qos_ch_impl = TAILQ_FIRST(&bdev1_ch->qos_ch->impl_list);
+	SPDK_CU_ASSERT_FATAL(qos_ch_impl != NULL);
+	CU_ASSERT(TAILQ_NEXT(qos_ch_impl, link) == NULL);
+	ut_qos_ch = SPDK_CONTAINEROF(qos_ch_impl, struct ut_qos_channel, base);
+
+	status = -1;
+	spdk_bdev_qos_add_bdev(qos, bdev2, add_remove_bdev_done, &status);
+
+	status2 = 0;
+	spdk_bdev_qos_add_bdev(qos, bdev2, add_remove_bdev_done, &status2);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(status2 == -EEXIST);
+
+	bdev2_io_ch = spdk_bdev_get_io_channel(g_desc2);
+	SPDK_CU_ASSERT_FATAL(bdev2_io_ch != NULL);
+	bdev2_ch = spdk_io_channel_get_ctx(bdev2_io_ch);
+
+	CU_ASSERT(bdev2_ch->qos_ch != NULL);
+	CU_ASSERT(bdev2_ch->flags & BDEV_CH_QOS_ENABLED);
+
+	/* Check if I/O completes when QoS channel is not throttled. */
+	io_status = SPDK_BDEV_IO_STATUS_PENDING;
+
+	rc = spdk_bdev_read_blocks(g_desc, bdev1_io_ch, NULL, 0, 1, io_during_io_done, &io_status);
+	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(TAILQ_EMPTY(&ut_qos_ch->queued_io));
+
+	stub_complete_io(g_bdev.io_target, 0);
+	CU_ASSERT(io_status == SPDK_BDEV_IO_STATUS_SUCCESS);
+
+	poll_threads();
+
+	/* Check if I/O is queued when QoS channel is throttled. */
+	ut_qos_ch->throttled = true;
+
+	io_status = SPDK_BDEV_IO_STATUS_PENDING;
+
+	rc = spdk_bdev_read_blocks(g_desc, bdev1_io_ch, NULL, 0, 1, io_during_io_done, &io_status);
+	CU_ASSERT(rc == 0);
+
+	CU_ASSERT(!TAILQ_EMPTY(&ut_qos_ch->queued_io));
+
+	io_status2 = SPDK_BDEV_IO_STATUS_PENDING;
+
+	/* Abort the queued I/O. */
+	rc = spdk_bdev_abort(g_desc, bdev1_io_ch, &io_status, io_during_io_done, &io_status2);
+	CU_ASSERT(rc == 0);
+
+	poll_threads();
+
+	CU_ASSERT(io_status == SPDK_BDEV_IO_STATUS_ABORTED);
+	CU_ASSERT(io_status2 == SPDK_BDEV_IO_STATUS_SUCCESS);
+
+	status = -1;
+	spdk_bdev_qos_remove_bdev(qos, bdev1, add_remove_bdev_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+	CU_ASSERT(bdev1_ch->qos_ch == NULL);
+	CU_ASSERT(!(bdev1_ch->flags & BDEV_CH_QOS_ENABLED));
+
+	spdk_put_io_channel(bdev1_io_ch);
+
+	spdk_put_io_channel(bdev2_io_ch);
+
+	status = -1;
+	spdk_bdev_qos_remove_bdev(qos, bdev2, add_remove_bdev_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	spdk_bdev_qos_close(desc);
+
+	rc = spdk_bdev_qos_destroy(qos);
+	CU_ASSERT(rc == 0);
+
+	qos = NULL;
+	desc = NULL;
+
+	/* Create and open qos device in a single operation. */
+	rc = spdk_bdev_qos_create("ut_qos_service", NULL, enabled_module, 1, &qos, &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(qos != NULL);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	CU_ASSERT(spdk_bdev_qos_desc_get_qos(desc) == qos);
+
+	/* Another open should succeed. */
+	rc = spdk_bdev_qos_open("ut_qos_service", &desc2);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(desc2 != NULL);
+	CU_ASSERT(spdk_bdev_qos_desc_get_qos(desc2) == qos);
+
+	/* But after deletion call, open should fail even if there are descriptors. */
+	spdk_bdev_qos_destroy(qos);
+
+	rc = spdk_bdev_qos_open("ut_qos_service", &desc3);
+	CU_ASSERT(rc == -ENODEV);
+
+	spdk_bdev_qos_close(desc2);
+	spdk_bdev_qos_close(desc);
+
+	teardown_bdev2();
+	poll_threads();
+
+	teardown_test();
+}
+
+static void
+ut_qos_channel_queue_io_done(struct ut_qos_channel *ut_qos_ch, struct spdk_bdev_io *bdev_io)
+{
+	TAILQ_REMOVE(&ut_qos_ch->queued_io, bdev_io, internal.link);
+	spdk_bdev_qos_channel_impl_queue_io_done(bdev_io);
+}
+
+static void
+multi_qos_modules(void)
+{
+	struct spdk_bdev_qos *qos = NULL;
+	struct spdk_bdev_qos_desc *desc = NULL;
+	struct spdk_bdev *bdev;
+	struct spdk_io_channel *bdev_io_ch;
+	struct spdk_bdev_channel *bdev_ch;
+	struct spdk_bdev_qos_impl *qos_impl1, *qos_impl2;
+	struct spdk_bdev_qos_channel_impl *qos_ch_impl1, *qos_ch_impl2;
+	struct ut_qos_channel *ut_qos_ch1, *ut_qos_ch2;
+	struct spdk_bdev_io *bdev_io;
+	enum spdk_bdev_io_status io_status;
+	int rc, status;
+
+	setup_test();
+
+	/* Create a QoS device with two QoS modules. */
+	rc = spdk_bdev_qos_create("ut_qos_service", NULL, NULL, 0, &qos, &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(qos != NULL);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	CU_ASSERT(spdk_bdev_qos_desc_get_qos(desc) == qos);
+
+	qos_impl1 = TAILQ_FIRST(&qos->impl_list);
+	SPDK_CU_ASSERT_FATAL(qos_impl1 != NULL);
+	qos_impl2 = TAILQ_NEXT(qos_impl1, link);
+	SPDK_CU_ASSERT_FATAL(qos_impl2 != NULL);
+	CU_ASSERT(TAILQ_NEXT(qos_impl2, link) == NULL);
+
+	CU_ASSERT(qos_impl1->module == &ut_qos_if);
+	CU_ASSERT(qos_impl2->module == &ut_qos2_if);
+
+	bdev = spdk_bdev_desc_get_bdev(g_desc);
+
+	status = -1;
+	spdk_bdev_qos_add_bdev(qos, bdev, add_remove_bdev_done, &status);
+
+	poll_threads();
+	CU_ASSERT(status == 0);
+
+	bdev_io_ch = spdk_bdev_get_io_channel(g_desc);
+	SPDK_CU_ASSERT_FATAL(bdev_io_ch != NULL);
+	bdev_ch = spdk_io_channel_get_ctx(bdev_io_ch);
+
+	CU_ASSERT(bdev_ch->flags & BDEV_CH_QOS_ENABLED);
+
+	qos_ch_impl1 = TAILQ_FIRST(&bdev_ch->qos_ch->impl_list);
+	SPDK_CU_ASSERT_FATAL(qos_ch_impl1 != NULL);
+	qos_ch_impl2 = TAILQ_NEXT(qos_ch_impl1, link);
+	SPDK_CU_ASSERT_FATAL(qos_ch_impl2 != NULL);
+	CU_ASSERT(TAILQ_NEXT(qos_ch_impl2, link) == NULL);
+
+	ut_qos_ch1 = SPDK_CONTAINEROF(qos_ch_impl1, struct ut_qos_channel, base);
+	ut_qos_ch2 = SPDK_CONTAINEROF(qos_ch_impl2, struct ut_qos_channel, base);
+
+	/* Throttle both of ut_qos_ch1 and ut_qos_ch2. */
+	ut_qos_ch1->throttled = true;
+	ut_qos_ch2->throttled = true;
+
+	io_status = SPDK_BDEV_IO_STATUS_PENDING;
+
+	/* Submit a read I/O. */
+	rc = spdk_bdev_read_blocks(g_desc, bdev_io_ch, NULL, 0, 1, io_during_io_done, &io_status);
+	CU_ASSERT(rc == 0);
+
+	/* bdev_io should be blocked at 1st module. */
+	bdev_io = TAILQ_FIRST(&ut_qos_ch1->queued_io);
+	CU_ASSERT(bdev_io != NULL);
+
+	/* Pass 1st module for this bdev_io. */
+	ut_qos_channel_queue_io_done(ut_qos_ch1, bdev_io);
+
+	/* bdev_io should be blocked at 2nd module. */
+	CU_ASSERT(bdev_io == TAILQ_FIRST(&ut_qos_ch2->queued_io));
+
+	/* Pass 2nd module for this bdev_io. */
+	ut_qos_channel_queue_io_done(ut_qos_ch2, bdev_io);
+
+	CU_ASSERT(io_status == SPDK_BDEV_IO_STATUS_PENDING);
+
+	/* Then, the bdev_io should complete successfully. */
+	stub_complete_io(g_bdev.io_target, 1);
+
+	CU_ASSERT(io_status == SPDK_BDEV_IO_STATUS_SUCCESS);
+
+	spdk_bdev_qos_close(desc);
+
+	spdk_bdev_qos_destroy(qos);
+
+	spdk_put_io_channel(bdev_io_ch);
+
+	poll_threads();
+
+	teardown_test();
+}
+
 int
 main(int argc, char **argv)
 {
@@ -2295,6 +2792,8 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite_wt, spdk_bdev_examine_wt);
 	CU_ADD_TEST(suite, event_notify_and_close);
 	CU_ADD_TEST(suite, reset_start_complete_race);
+	CU_ADD_TEST(suite, basic_qos);
+	CU_ADD_TEST(suite, multi_qos_modules);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();
