@@ -860,7 +860,7 @@ bdev_hybrid_qos_channel_queue_io(struct spdk_bdev_qos_channel_impl *qos_ch_impl,
 	 * queued I/Os. Hence, call submit function directly to avoid
 	 * extra overhead.
 	 */
-	spdk_bdev_qos_module_allow_io(bdev_io);
+	spdk_bdev_qos_channel_impl_queue_io_done(bdev_io);
 }
 
 static bool
@@ -952,7 +952,7 @@ bdev_allow_all_queued_hybrid_qos_io(struct spdk_bdev_hybrid_qos_poll_group *hgro
 	TAILQ_FOREACH_SAFE(bdev_io, &tmp_head, internal.link, tmp_bdev_io) {
 		TAILQ_REMOVE(&tmp_head, bdev_io, internal.link);
 
-		spdk_bdev_qos_module_allow_io(bdev_io);
+		spdk_bdev_qos_channel_impl_queue_io_done(bdev_io);
 	}
 }
 

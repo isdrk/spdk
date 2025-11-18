@@ -245,7 +245,7 @@
 	spdk_bdev_qos_module_fini_done;
 	spdk_bdev_qos_find_impl;
 	spdk_bdev_qos_channel_find_impl;
-	spdk_bdev_qos_module_allow_io;
+	spdk_bdev_qos_channel_impl_queue_io_done;
 
 	# Everything else
 	local: *;
