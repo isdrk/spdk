@@ -106,23 +106,15 @@ code-style-job:
   script:
     - ./scripts/check_format.sh
 
-check-so-deps-job:
-  tags: [vm_host, x86_64]
-  stage: test
-  variables:
-    GIT_FETCH_EXTRA_FLAGS: "--tags"
-  script:
-    - ./configure --with-rdma=mlx5_dv --enable-debug --enable-werror --with-shared
-    - make -j4
-    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
-    - sudo ./test/make/check_so_deps.sh
-
-autotest-autobuild-job:
+autobuild-check-so-deps-job:
   extends: .autotest-template
   variables:
     TEST_TYPE: autobuild
   script:
     - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
+    - ./configure --with-rdma=mlx5_dv --enable-debug --enable-werror --with-shared && make -j8
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
+    - sudo ./test/make/check_so_deps.sh
 
 test-virtio-fs-app:
   stage: test
