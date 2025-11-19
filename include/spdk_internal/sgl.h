@@ -74,13 +74,13 @@ spdk_iov_sgl_advance(struct spdk_iov_sgl *s, uint32_t step)
  */
 
 static inline bool
-spdk_iov_sgl_append(struct spdk_iov_sgl *s, uint8_t *data, uint32_t data_len)
+spdk_iov_sgl_append(struct spdk_iov_sgl *s, void *data, uint32_t data_len)
 {
 	if (s->iov_offset >= data_len) {
 		s->iov_offset -= data_len;
 	} else {
 		assert(s->iovcnt > 0);
-		s->iov->iov_base = data + s->iov_offset;
+		s->iov->iov_base = (char *)data + s->iov_offset;
 		s->iov->iov_len = data_len - s->iov_offset;
 		s->total_size += data_len - s->iov_offset;
 		s->iov_offset = 0;
