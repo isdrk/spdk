@@ -363,9 +363,11 @@ if [ $SPDK_RUN_FUNCTIONAL_TEST -eq 1 ]; then
 		run_test "accel_mlx5_crc32c" $rootdir/test/accel/mlx5/accel_mlx5_crc32c.sh --transport=$SPDK_TEST_NVMF_TRANSPORT
 		run_test "accel_mlx5_driver_mkey" $rootdir/test/accel/mlx5/accel_mlx5_driver_mkey.sh --transport=$SPDK_TEST_NVMF_TRANSPORT
 	fi
+
 	if [[ $SPDK_TEST_FSDEV -eq 1 ]]; then
 		run_test "fstests_aio" "$rootdir/test/fsdev/aio/fstests.sh" --with-nvme
 		run_test "pjd_aio" "$rootdir/test/fsdev/aio/pjd.sh" --with-nvme
+		run_test "build_spdk_aio" "$rootdir/test/fsdev/aio/build_spdk.sh" --with-nvme
 	fi
 fi
 
