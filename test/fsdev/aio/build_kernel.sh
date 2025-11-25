@@ -8,7 +8,7 @@ rootdir=$(readlink -f "$testdir/../../..")
 source "$rootdir/test/common/autotest_common.sh"
 source "$rootdir/test/fsdev/common.sh"
 
-checkout_tag="${SPDK_CHECKOUT_TAG:-"v25.09"}"
+checkout_tag="${KERNEL_CHECKOUT_TAG:-"v6.8"}"
 mountdir="$testdir/mnt"
 srcdir="$testdir/aio0"
 fusepid=
@@ -31,10 +31,10 @@ rpc_cmd << CMD
 	fuse_mount aio0 "$mountdir"
 CMD
 (
-	git clone --depth=1 --branch "$checkout_tag" https://github.com/spdk/spdk.git "${mountdir}/aio0/spdk"
-	cd "${mountdir}/aio0/spdk"
-	git submodule update --init --recursive
-	./configure --enable-debug && make -j8
+	git clone --depth=1 --branch "$checkout_tag" https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git "${mountdir}/aio0/linux"
+	cd "${mountdir}/aio0/linux" || exit 1
+	make O=build tinyconfig
+	make O=build -j"$(nproc)"
 )
 cleanup
 trap - EXIT
