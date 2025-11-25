@@ -21,11 +21,23 @@
 #include "spdk/zipf.h"
 #include "spdk/histogram_data.h"
 
+#ifdef SPDK_CONFIG_RDMA
+#include "spdk_internal/rdma_utils.h"
+#endif
+
 #define BDEVPERF_CONFIG_MAX_FILENAME 1024
 #define BDEVPERF_CONFIG_UNDEFINED -1
 #define BDEVPERF_CONFIG_ERROR -2
 #define PATTERN_TYPES_STR "(read, write, randread, randwrite, rw, randrw, verify, reset, unmap, flush, write_zeroes)"
 #define BDEVPERF_MAX_COREMASK_STRING 64
+
+struct bdevperf_domain {
+	struct spdk_memory_domain	*domain;
+#ifdef SPDK_CONFIG_RDMA
+	struct spdk_rdma_utils_mem_map	*map;
+#endif
+	STAILQ_ENTRY(bdevperf_domain)	stailq;
+};
 
 struct bdevperf_task {
 	struct iovec			iov;
@@ -40,6 +52,7 @@ struct bdevperf_task {
 	enum spdk_bdev_io_type		io_type;
 	TAILQ_ENTRY(bdevperf_task)	link;
 	struct spdk_bdev_io_wait_entry	bdev_io_wait;
+	STAILQ_HEAD(, bdevperf_domain)	domains;
 };
 
 static char *g_workload_type = NULL;
@@ -112,6 +125,9 @@ static const double g_latency_cutoffs[] = {
 
 static const char *g_rpc_log_file_name = NULL;
 static FILE *g_rpc_log_file = NULL;
+
+static bool g_use_memory_domain = false;
+static struct spdk_memory_domain *g_memory_domain = NULL;
 
 struct latency_info {
 	uint64_t	min;
@@ -244,6 +260,130 @@ struct lcore_thread {
 TAILQ_HEAD(, lcore_thread) g_lcore_thread_list
 	= TAILQ_HEAD_INITIALIZER(g_lcore_thread_list);
 
+static int
+bdevperf_pull_data(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
+		   struct iovec *src_iovs, uint32_t src_iovcnt, struct iovec *dst_iovs,
+		   uint32_t dst_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
+{
+	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	cpl_cb(cpl_ctx, 0);
+	return 0;
+}
+
+static int
+bdevperf_push_data(struct spdk_memory_domain *dst_domain, void *dst_domain_ctx,
+		   struct iovec *dst_iovs, uint32_t dst_iovcnt, struct iovec *src_iovs,
+		   uint32_t src_iovcnt, spdk_memory_domain_data_cpl_cb cpl_cb, void *cpl_ctx)
+{
+	spdk_iovcpy(src_iovs, src_iovcnt, dst_iovs, dst_iovcnt);
+	cpl_cb(cpl_ctx, 0);
+	return 0;
+}
+
+#ifdef SPDK_CONFIG_RDMA
+static struct bdevperf_domain *
+bdevperf_get_domain(struct bdevperf_task *task, struct spdk_memory_domain *domain,
+		    struct spdk_memory_domain_translation_ctx *ctx)
+{
+	struct bdevperf_job *job = task->job;
+	struct bdevperf_domain *bd;
+	struct ibv_qp *qp;
+	uint64_t flags;
+
+	STAILQ_FOREACH(bd, &task->domains, stailq) {
+		if (bd->domain == domain) {
+			return bd;
+		}
+	}
+
+	bd = calloc(1, sizeof(*bd));
+	if (bd == NULL) {
+		return NULL;
+	}
+
+	qp = SPDK_GET_FIELD(ctx, rdma.ibv_qp, NULL);
+	flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+
+	bd->domain = domain;
+	bd->map = spdk_rdma_utils_create_mem_map(qp->pd, NULL, flags);
+	if (bd->map == NULL) {
+		fprintf(stderr, "%s: failed to create memory map\n", job->name);
+		free(bd);
+		return NULL;
+	}
+
+	STAILQ_INSERT_TAIL(&task->domains, bd, stailq);
+	return bd;
+}
+
+static int
+bdevperf_translate_addr(struct spdk_memory_domain *src_domain,
+			void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			void *addr, size_t len,
+			struct spdk_memory_domain_translation_result *result)
+{
+	struct bdevperf_task *task = src_domain_ctx;
+	struct bdevperf_job *job = task->job;
+	struct spdk_rdma_utils_memory_translation tr;
+	struct bdevperf_domain *bd;
+	int rc;
+
+	assert(spdk_memory_domain_get_dma_device_type(dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA);
+	bd = bdevperf_get_domain(task, dst_domain, dst_domain_ctx);
+	if (spdk_unlikely(bd == NULL)) {
+		return -ENOMEM;
+	}
+
+	rc = spdk_rdma_utils_get_translation(bd->map, addr, len, &tr);
+	if (spdk_unlikely(rc != 0)) {
+		fprintf(stderr, "%s: failed to translate addr=%p: %s\n", job->name, addr,
+			spdk_strerror(-rc));
+		return rc;
+	}
+
+	assert(result->size >= SPDK_SIZEOF(result, rdma));
+	result->iov_count = 1;
+	result->iov.iov_base = addr;
+	result->iov.iov_len = len;
+	result->dst_domain = dst_domain;
+	result->rdma.lkey = spdk_rdma_utils_memory_translation_get_lkey(&tr);
+	result->rdma.rkey = spdk_rdma_utils_memory_translation_get_rkey(&tr);
+
+	return 0;
+}
+#else
+static int
+bdevperf_translate_addr(struct spdk_memory_domain *src_domain,
+			void *src_domain_ctx, struct spdk_memory_domain *dst_domain,
+			struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
+			void *addr, size_t len,
+			struct spdk_memory_domain_translation_result *result)
+{
+	return -ENOTSUP;
+}
+#endif
+
+static int
+bdevperf_init_memory_domain(void)
+{
+	int rc;
+
+	if (g_memory_domain != NULL) {
+		return 0;
+	}
+
+	rc = spdk_memory_domain_create(&g_memory_domain, SPDK_DMA_DEVICE_TYPE_DMA, NULL, "bdevperf");
+	if (rc != 0) {
+		fprintf(stderr, "failed to create memory domain: %s\n", spdk_strerror(-rc));
+		return rc;
+	}
+
+	spdk_memory_domain_set_translation(g_memory_domain, bdevperf_translate_addr);
+	spdk_memory_domain_set_pull(g_memory_domain, bdevperf_pull_data);
+	spdk_memory_domain_set_push(g_memory_domain, bdevperf_push_data);
+	return 0;
+}
 
 static char *
 parse_workload_type(enum job_config_rw ret)
@@ -802,6 +942,14 @@ clean:
 			spdk_free(task->verify_buf);
 			spdk_free(task->md_buf);
 			spdk_free(task->verify_md_buf);
+			while (!STAILQ_EMPTY(&task->domains)) {
+				struct bdevperf_domain *domain = STAILQ_FIRST(&task->domains);
+				STAILQ_REMOVE_HEAD(&task->domains, stailq);
+#ifdef SPDK_CONFIG_RDMA
+				spdk_rdma_utils_free_mem_map(&domain->map);
+#endif
+				free(domain);
+			}
 			free(task);
 		}
 
@@ -1170,9 +1318,19 @@ bdevperf_submit_task(void *arg)
 	spdk_bdev_io_completion_cb cb_fn;
 	uint64_t		offset_in_ios;
 	int			rc = 0;
+	struct spdk_bdev_ext_io_opts io_opts = {};
 
 	desc = job->bdev_desc;
 	ch = job->ch;
+
+	if (!g_zcopy) {
+		io_opts.size = sizeof(io_opts);
+		io_opts.metadata = task->md_buf;
+		if (g_use_memory_domain && g_memory_domain != NULL) {
+			io_opts.memory_domain = g_memory_domain;
+			io_opts.memory_domain_ctx = task;
+		}
+	}
 
 	switch (task->io_type) {
 	case SPDK_BDEV_IO_TYPE_WRITE:
@@ -1186,11 +1344,10 @@ bdevperf_submit_task(void *arg)
 				spdk_bdev_zcopy_end(task->bdev_io, true, cb_fn, task);
 				return;
 			} else {
-				rc = spdk_bdev_writev_blocks_with_md(desc, ch, &task->iov, 1,
-								     task->md_buf,
-								     task->offset_blocks,
-								     job->io_size_blocks,
-								     cb_fn, task);
+				rc = spdk_bdev_writev_blocks_ext(desc, ch, &task->iov, 1,
+								 task->offset_blocks,
+								 job->io_size_blocks,
+								 cb_fn, task, &io_opts);
 			}
 		}
 		break;
@@ -1211,11 +1368,10 @@ bdevperf_submit_task(void *arg)
 			rc = spdk_bdev_zcopy_start(desc, ch, NULL, 0, task->offset_blocks, job->io_size_blocks,
 						   true, bdevperf_zcopy_populate_complete, task);
 		} else {
-			rc = spdk_bdev_readv_blocks_with_md(desc, ch, &task->iov, 1,
-							    task->md_buf,
-							    task->offset_blocks,
-							    job->io_size_blocks,
-							    bdevperf_complete, task);
+			rc = spdk_bdev_readv_blocks_ext(desc, ch, &task->iov, 1,
+							task->offset_blocks,
+							job->io_size_blocks,
+							bdevperf_complete, task, &io_opts);
 		}
 		break;
 	case SPDK_BDEV_IO_TYPE_ABORT:
@@ -2062,6 +2218,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 
 		task->job = job;
 		TAILQ_INSERT_TAIL(&job->task_list, task, link);
+		STAILQ_INIT(&task->domains);
 	}
 
 	g_construct_job_count++;
@@ -2601,6 +2758,14 @@ bdevperf_run(void *arg1)
 
 	g_main_thread = spdk_get_thread();
 
+	if (g_use_memory_domain) {
+		int rc = bdevperf_init_memory_domain();
+		if (rc != 0) {
+			spdk_app_stop(rc);
+			return;
+		}
+	}
+
 	spdk_cpuset_zero(&g_all_cpuset);
 	SPDK_ENV_FOREACH_CORE(i) {
 		spdk_cpuset_set_cpu(&g_all_cpuset, i, true);
@@ -2814,6 +2979,8 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_unique_writes = true;
 	} else if (ch == 'N') {
 		g_hide_metadata = true;
+	} else if (ch == 'O') {
+		g_use_memory_domain = true;
 	} else {
 		tmp = spdk_strtoll(arg, 10);
 		if (tmp < 0) {
@@ -2881,6 +3048,7 @@ bdevperf_usage(void)
 	printf(" -J                        File name to open with append mode and log JSON RPC calls.\n");
 	printf(" -U                        generate unique data for each write I/O, has no effect on non-write I/O\n");
 	printf(" -N                        Enable hide_metadata option to each bdev\n");
+	printf(" -O                        pass memory domain in all I/O requests\n");
 }
 
 static void
@@ -2893,6 +3061,9 @@ bdevperf_fini(void)
 		fclose(g_rpc_log_file);
 		g_rpc_log_file = NULL;
 	}
+
+	spdk_memory_domain_destroy(g_memory_domain);
+	g_memory_domain = NULL;
 }
 
 static int
@@ -3004,7 +3175,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DUN", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DUNO", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
