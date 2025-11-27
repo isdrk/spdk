@@ -4413,12 +4413,10 @@ fsdev_aio_op_abort_aio(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io
 	struct io_event result;
 
 	res = io_cancel(ch->u.io_ctx, &vfsdev_io->io, &result);
-	if (res) {
+	if (res == 0) {
 		TAILQ_REMOVE(&ch->ios_in_progress, vfsdev_io, link);
 		SPDK_DEBUGLOG(fsdev_aio, "aio=%p cancelled\n", vfsdev_io);
 		fsdev_aio_cb(vfsdev_io, -EINTR, 0);
-	} else {
-		SPDK_WARNLOG("aio=%p cancellation failed with err=%d\n", vfsdev_io, res);
 	}
 }
 
