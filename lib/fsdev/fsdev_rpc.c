@@ -676,11 +676,13 @@ rpc_fsdev_set_delays(struct spdk_jsonrpc_request *request, const struct spdk_jso
 	rc = spdk_fsdev_set_delays(spdk_fsdev_desc_get_fsdev(desc), rpc.submit_us,
 				   rpc.complete_us, rpc.complete_99_us);
 	if (rc) {
+		spdk_fsdev_close(desc);
 		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 						     "spdk_fsdev_set_delays failed with %d", rc);
 		goto ret;
 	}
 
+	spdk_fsdev_close(desc);
 	spdk_jsonrpc_send_bool_response(request, true);
 ret:
 	free(rpc.name);
