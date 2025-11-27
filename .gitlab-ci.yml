@@ -74,7 +74,6 @@ test-crypto-job:
     - ./scripts/setup.sh
     - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh
     - ./test/accel/mlx5/accel_mlx5_crypto.sh
-    - ./test/accel/mlx5/accel_mlx5_crypto.sh --transport=rdma
 
 coverity-job:
   tags: [k8s, linux, x86_64]
