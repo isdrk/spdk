@@ -4486,7 +4486,7 @@ fsdev_aio_op_interrupt(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_
 
 		if (spdk_fsdev_io_get_unique(_fsdev_io) == unique_to_abort) {
 			TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
-			fsdev_aio_io_complete(fsdev_io, -ECANCELED);
+			fsdev_aio_io_complete(_fsdev_io, -ECANCELED);
 			return 0; /* we found the IO to abort, no need to continue */
 		}
 	}
