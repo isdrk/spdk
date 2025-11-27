@@ -282,6 +282,7 @@ struct aio_fsdev_io {
 	struct iocb io;
 	uint32_t data_size;
 	int status;
+	bool interrupted;
 	TAILQ_ENTRY(aio_fsdev_io) link;
 };
 
@@ -411,7 +412,11 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 		}
 		aio->status = 0;
 	} else {
-		SPDK_ERRLOG("aio operation failed: %ld\n", res);
+		if (!aio->interrupted) {
+			SPDK_ERRLOG("aio operation failed: %ld\n", res);
+		} else {
+			res = -EINTR;
+		}
 		aio->status = res;
 	}
 
@@ -4459,13 +4464,13 @@ fsdev_aio_op_abort_io_uring(struct aio_io_channel *ch, struct aio_fsdev_io *vfsd
 static void
 fsdev_aio_op_abort_io(struct aio_io_channel *ch, struct aio_fsdev_io *vfsdev_io)
 {
+	vfsdev_io->interrupted = true;
 	if (aio_fsdev_use_io_uring_rdwr()) {
 		fsdev_aio_op_abort_io_uring(ch, vfsdev_io);
 	} else {
 		fsdev_aio_op_abort_aio(ch, vfsdev_io);
 	}
 }
-
 
 static int
 fsdev_aio_op_interrupt(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
@@ -4811,6 +4816,7 @@ aio_io_poll_io_uring(void *arg)
 static int
 fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
+	struct aio_fsdev_io *vfsdev_io = fsdev_to_aio_io(fsdev_io);
 	struct fuse_in_header *in_hdr = fsdev_io->u_in.fuse.hdr;
 	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 	int status;
@@ -4821,6 +4827,7 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		out_hdr->len = sizeof(*out_hdr);
 	}
 
+	vfsdev_io->interrupted = false;
 	switch (in_hdr->opcode) {
 	case FUSE_READ:
 		status = fsdev_aio_op_read(ch, fsdev_io);
