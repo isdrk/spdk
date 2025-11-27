@@ -111,6 +111,7 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 	struct spdk_json_write_ctx *w = ctx;
 	const char *fsdev_name = spdk_fsdev_get_name(fsdev);
 	enum spdk_dma_device_type types[16];
+	uint64_t submit_us, complete_us, complete_99_us;
 	int i, rc;
 
 	spdk_json_write_object_begin(w);
@@ -135,6 +136,15 @@ rpc_dump_fsdev_info(void *ctx, struct spdk_fsdev *fsdev)
 		}
 		spdk_json_write_array_end(w);
 	}
+
+	spdk_json_write_named_object_begin(w, "delays");
+	submit_us = fsdev->internal.delayed_submit_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+	complete_us = fsdev->internal.delayed_complete_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+	complete_99_us = fsdev->internal.delayed_99_complete_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+	spdk_json_write_named_uint64(w, "submit", submit_us);
+	spdk_json_write_named_uint64(w, "complete", complete_us);
+	spdk_json_write_named_uint64(w, "complete_99", complete_99_us);
+	spdk_json_write_object_end(w);
 
 	spdk_json_write_named_object_begin(w, "module_specific");
 	spdk_fsdev_dump_info_json(fsdev, w);
