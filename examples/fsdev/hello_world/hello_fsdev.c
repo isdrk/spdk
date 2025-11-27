@@ -171,7 +171,7 @@ hello_umount(struct hello_context_t *hello_context)
 
 	SPDK_NOTICELOG("Unmount\n");
 
-	assert(fsdev_supports_opcode(hello_context, SPDK_FSDEV_IO_UMOUNT));
+	assert(fsdev_supports_opcode(hello_context, FUSE_DESTROY));
 
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
 			   FUSE_DESTROY, 0, 0, FUSE_ROOT_ID, 0,
