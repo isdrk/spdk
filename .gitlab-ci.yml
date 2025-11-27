@@ -66,15 +66,15 @@ test-crypto-job:
     # VMs 17-20 have BlueField3 vfs with crypto
     VM_START_NUM: "017"
     VM_END_NUM: "020"
-    CI_DUT_RDMA: "mlx5_0"
     TEST_TYPE: crypto
+    SPDK_TEST_NVMF_NICS: mlx5
   script:
     - ./configure --enable-debug --with-rdma=mlx5_dv --with-crypto
     - make -j${nproc}
     - ./scripts/setup.sh
-    - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh --allowed-devs=${CI_DUT_RDMA}
-    - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA}
-    - ./test/accel/mlx5/accel_mlx5_crypto.sh --allowed-devs=${CI_DUT_RDMA} --transport=rdma
+    - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh
+    - ./test/accel/mlx5/accel_mlx5_crypto.sh
+    - ./test/accel/mlx5/accel_mlx5_crypto.sh --transport=rdma
 
 coverity-job:
   tags: [k8s, linux, x86_64]

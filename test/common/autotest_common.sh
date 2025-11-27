@@ -332,9 +332,6 @@ for i in "$@"; do
 		--interrupt-mode)
 			TEST_INTERRUPT_MODE=1
 			;;
-		--allowed-devs=*)
-			ALLOWED_DEVICES="${i#*=}"
-			;;
 	esac
 done
 

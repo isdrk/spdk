@@ -9,7 +9,8 @@ rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 
-allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
+gather_supported_nvmf_pci_devs
+rdma_dev=${ALLOWED_DEVICES:-$(get_rdma_device_name "${net_devs[0]}")}
 
 MALLOC_BDEV_SIZE=256
 MALLOC_BLOCK_SIZE=512
@@ -97,7 +98,7 @@ function aes_xts_test() {
 
 	nvmfappstart -m 0xf0 --wait-for-rpc
 
-	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs "$rdma_dev"
 	$rpc_py bdev_set_options --disable-auto-examine
 	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init
@@ -147,7 +148,7 @@ function aes_xts_test() {
 
 	nvmfappstart -m 0x20 --wait-for-rpc
 	# Test small qp size and number of MRs
-	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices --qp-size 16 --cq-size 8 --num-requests 16
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs "$rdma_dev" --qp-size 16 --cq-size 8 --num-requests 16
 	$rpc_py bdev_set_options --disable-auto-examine
 	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init
@@ -170,7 +171,7 @@ function aes_xts_test() {
 
 	nvmfappstart -m 0x20 --wait-for-rpc
 	# Test small number of accel tasks
-	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs "$rdma_dev"
 	$rpc_py accel_set_options --task-count 64
 	$rpc_py bdev_set_options --disable-auto-examine
 	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
@@ -194,7 +195,7 @@ function aes_xts_test() {
 
 	nvmfappstart -m 0xf0 --wait-for-rpc
 	# Test with malloc bdev with disabled accel sequence. In that case generic bdev layer handles the sequence
-	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+	$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs "$rdma_dev"
 	$rpc_py bdev_set_options --disable-auto-examine
 	$rpc_py rdma_provider_set_opts $support_offload_on_qp_str
 	$rpc_py framework_start_init

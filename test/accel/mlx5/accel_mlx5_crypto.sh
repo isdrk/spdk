@@ -9,7 +9,8 @@ rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 
-allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
+gather_supported_nvmf_pci_devs
+rdma_dev=${ALLOWED_DEVICES:-$(get_rdma_device_name "${net_devs[0]}")}
 
 function gen_accel_mlx5_crypto_json() {
 	crypto_split_blocks=${1:-0}
@@ -26,7 +27,7 @@ function gen_accel_mlx5_crypto_json() {
 		        {
 		          "method": "mlx5_scan_accel_module",
 		          "params": {
-		            "allowed_devs": "${allowed_devices}",
+		            "allowed_devs": "${rdma_dev}",
 		            "qp_size": ${accel_qp_size},
 		            "num_requests": ${accel_num_requests},
 		            "crypto_split_blocks": ${crypto_split_blocks},

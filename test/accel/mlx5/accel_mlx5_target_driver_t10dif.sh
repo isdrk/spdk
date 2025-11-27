@@ -8,7 +8,8 @@ rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
 
-allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
+gather_supported_nvmf_pci_devs
+rdma_dev=${ALLOWED_DEVICES:-$(get_rdma_device_name "${net_devs[0]}")}
 
 MALLOC_BDEV_SIZE=1
 MALLOC_BLOCK_SIZE=512
@@ -58,7 +59,7 @@ fi
 nvmftestinit
 nvmfappstart -m 0xf0 --wait-for-rpc
 
-$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs $allowed_devices
+$rpc_py mlx5_scan_accel_module --enable-driver --allowed-devs "$rdma_dev"
 $rpc_py bdev_set_options --disable-auto-examine
 $rpc_py framework_start_init
 $rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS --in-capsule-data-size 0

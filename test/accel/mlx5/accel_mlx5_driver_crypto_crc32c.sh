@@ -10,7 +10,8 @@ rootdir=$(readlink -f "${testdir}/../../..")
 source "${rootdir}/test/common/autotest_common.sh"
 source "${rootdir}/test/nvmf/common.sh"
 
-allowed_devices=${ALLOWED_DEVICES:-$(get_ib_device)}
+gather_supported_nvmf_pci_devs
+rdma_dev=${ALLOWED_DEVICES:-$(get_rdma_device_name "${net_devs[0]}")}
 
 XLIO_PATH=$1
 IP_ADDR=$2
@@ -97,7 +98,7 @@ function gen_accel_mlx5_crypto_crc_json() {
 		          "method": "mlx5_scan_accel_module",
 		          "params": {
 		            "enable_driver": true,
-		            "allowed_devs" : "${allowed_devices}"
+		            "allowed_devs" : "${rdma_dev}"
 		          }
 		        },
 		        {
