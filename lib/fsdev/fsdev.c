@@ -256,9 +256,29 @@ spdk_fsdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_spin_lock(&g_fsdev_mgr.spinlock);
 
 	TAILQ_FOREACH(fsdev, &g_fsdev_mgr.fsdevs, internal.link) {
+		uint64_t submit_us, complete_us, complete_99_us;
+
 		if (fsdev->fn_table->write_config_json) {
 			fsdev->fn_table->write_config_json(fsdev, w);
 		}
+
+		submit_us = fsdev->internal.delayed_submit_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+		complete_us = fsdev->internal.delayed_complete_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+		complete_99_us = fsdev->internal.delayed_99_complete_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
+
+		if (submit_us == 0 && complete_us == 0 && complete_99_us == 0) {
+			continue;
+		}
+
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string(w, "method", "fsdev_set_delays");
+		spdk_json_write_named_object_begin(w, "params");
+		spdk_json_write_named_string(w, "name", fsdev->name);
+		spdk_json_write_named_uint64(w, "submit", submit_us);
+		spdk_json_write_named_uint64(w, "complete", complete_us);
+		spdk_json_write_named_uint64(w, "complete_99", complete_99_us);
+		spdk_json_write_object_end(w); /* params */
+		spdk_json_write_object_end(w);
 	}
 
 	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
