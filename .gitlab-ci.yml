@@ -16,6 +16,7 @@ workflow:
 stages:
   - pre-test
   - test
+  - post-test
 
 unittests-build-job:
   tags: [vm_host, x86_64]
@@ -131,3 +132,26 @@ test-virtio-fs-app:
     paths:
       - trigger.json
       - pipeline.json
+
+autotest-summary-job:
+  stage: post-test
+  tags: [vm_host, x86_64]
+  variables:
+      GIT_SUBMODULE_STRATEGY: none
+  needs:
+    - job: autotest-nvmf-tcp
+      artifacts: true
+    - job: autotest-vm_host-matrix
+      artifacts: true
+    - job: test-crypto-job
+      artifacts: true
+    - job: autobuild-check-so-deps-job
+      artifacts: true
+  script:
+    - .ci/autotest_summary.sh
+  artifacts:
+    name: autotest_summary_artifacts
+    paths:
+      - $CI_PROJECT_DIR/autotest_summary
+    expire_in: 1 week
+    when: always
