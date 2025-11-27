@@ -4590,12 +4590,6 @@ aio_io_poll_aio(void *arg)
 				break;
 			}
 			break;
-		case SPDK_FSDEV_IO_POLL:
-		case SPDK_FSDEV_IO_SETLK:
-		case SPDK_FSDEV_IO_READ:
-		case SPDK_FSDEV_IO_WRITE:
-			SPDK_ERRLOG("Operation type %d has been converted to SPDK_FSDEV_IO_FUSE\n", (int)type);
-		/* FALLTHROUGH */
 		default:
 			TAILQ_REMOVE(&ios, vfsdev_io, link);
 			break;
