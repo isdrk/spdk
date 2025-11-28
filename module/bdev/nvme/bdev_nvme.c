@@ -75,6 +75,7 @@
 #define SPDK_BDEV_NVME_DEFAULT_KEEP_ALIVE_TIMEOUT_IN_MS	(10000)
 #define BDEV_NVME_IOBUF_SMALL_CACHE_SIZE		128
 #define BDEV_NVME_IOBUF_LARGE_CACHE_SIZE		64
+#define BDEV_NVME_DEFAULT_DETACH_CTRLR_TIMEOUT_SEC	10
 
 #define NSID_STR_LEN 10
 
@@ -199,6 +200,7 @@ static struct spdk_bdev_nvme_opts g_opts = {
 	.large_cache_size = BDEV_NVME_IOBUF_LARGE_CACHE_SIZE,
 	.rdma_umr_per_io = false,
 	.enable_flush = false,
+	.detach_ctrlr_timeout_sec = BDEV_NVME_DEFAULT_DETACH_CTRLR_TIMEOUT_SEC,
 };
 
 #define NVME_HOTPLUG_POLL_PERIOD_MAX			10000000ULL
@@ -6829,6 +6831,7 @@ spdk_bdev_nvme_get_opts(struct spdk_bdev_nvme_opts *opts, size_t opts_size)
 	SET_FIELD(tcp_connect_timeout_ms, 0);
 	SET_FIELD(enable_flush, false);
 	SET_FIELD(rdma_initial_cq_size, 0);
+	SET_FIELD(detach_ctrlr_timeout_sec, BDEV_NVME_DEFAULT_DETACH_CTRLR_TIMEOUT_SEC);
 
 #undef SET_FIELD
 
@@ -6959,6 +6962,7 @@ spdk_bdev_nvme_set_opts(const struct spdk_bdev_nvme_opts *opts)
 	SET_FIELD(tcp_connect_timeout_ms, 0);
 	SET_FIELD(enable_flush, false);
 	SET_FIELD(rdma_initial_cq_size, 0);
+	SET_FIELD(detach_ctrlr_timeout_sec, BDEV_NVME_DEFAULT_DETACH_CTRLR_TIMEOUT_SEC);
 
 	g_opts.opts_size = opts->opts_size;
 
@@ -7710,7 +7714,7 @@ spdk_bdev_nvme_delete(const char *name, const struct spdk_nvme_path_id *path_id,
 	ctx->delete_cb = delete_cb;
 	ctx->delete_cb_ctx = cb_ctx;
 	ctx->path_id = *path_id;
-	ctx->timeout_ticks = spdk_get_ticks() + 10 * spdk_get_ticks_hz();
+	ctx->timeout_ticks = spdk_get_ticks() + g_opts.detach_ctrlr_timeout_sec * spdk_get_ticks_hz();
 	ctx->poller = SPDK_POLLER_REGISTER(bdev_nvme_delete_complete_poll, ctx, 1000);
 	if (ctx->poller == NULL) {
 		SPDK_ERRLOG("Failed to register bdev_nvme_delete poller\n");
@@ -9708,6 +9712,7 @@ bdev_nvme_opts_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_uint32(w, "tcp_connect_timeout_ms", g_opts.tcp_connect_timeout_ms);
 	spdk_json_write_named_bool(w, "enable_flush", g_opts.enable_flush);
 	spdk_json_write_named_uint32(w, "rdma_initial_cq_size", g_opts.rdma_initial_cq_size);
+	spdk_json_write_named_uint32(w, "detach_ctrlr_timeout_sec", g_opts.detach_ctrlr_timeout_sec);
 
 	spdk_json_write_object_end(w);
 

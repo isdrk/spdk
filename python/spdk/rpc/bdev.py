@@ -641,6 +641,7 @@ def bdev_nvme_set_options(client, **params):
         tcp_connect_timeout_ms: Time to wait until TCP connection is done. Default: 0 (no timeout).
         enable_flush: Pass flush to nvme devices when volatile write cache is present. Default: false
         rdma_initial_cq_size: The initial size of a rdma completion queue, must be greater than 0 (optional).
+        detach_ctrlr_timeout_sec: Time to wait until NVMe controller is detached. Default: 10 seconds (optional).
     """
 
     strip_globals(params)

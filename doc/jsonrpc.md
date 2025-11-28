@@ -4863,6 +4863,7 @@ They can be overridden if they are given by the RPC bdev_nvme_attach_controller.
  tcp_connect_timeout_ms     | Optional   | number  | Time to wait until TCP connection is done. Default: 0 (no timeout).
  enable_flush               | Optional   | boolean | If true, pass flush to nvme devices when volatile write cache is present. Default : `false`.
  rdma_initial_cq_size       | Optional   | number  | Set the initial size of a rdma completion queue.
+ detach_ctrlr_timeout_sec   | Optional   | number  | Time to wait until NVMe controller is detached. Default: 10 seconds.
 
 #### Example
 
