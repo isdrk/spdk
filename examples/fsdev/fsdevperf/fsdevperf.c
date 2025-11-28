@@ -498,7 +498,7 @@ fsdevperf_filesystem_free(struct fsdevperf_filesystem *fs)
 	if (fs->fsdev_desc != NULL) {
 		spdk_fsdev_close(fs->fsdev_desc);
 	}
-	free(fs);
+	spdk_free(fs);
 }
 
 static struct fsdevperf_filesystem *
@@ -509,7 +509,8 @@ fsdevperf_filesystem_alloc(const char *name)
 
 	io_ctx_size = spdk_fsdev_get_io_ctx_size();
 
-	fs = calloc(1, FSDEVPERF_FS_SIZE(io_ctx_size));
+	fs = spdk_zmalloc(FSDEVPERF_FS_SIZE(io_ctx_size), 0, NULL, SPDK_ENV_NUMA_ID_ANY,
+			  SPDK_MALLOC_DMA);
 	if (fs == NULL) {
 		fsdevperf_errmsg("%s\n", spdk_strerror(ENOMEM));
 		return NULL;
@@ -630,7 +631,7 @@ fsdevperf_task_free(struct fsdevperf_task *task)
 		for (i = 0; i < task->io_depth; i++) {
 			free(fsdevperf_task_request(task, i)->iovs);
 		}
-		free(task->requests_buf);
+		spdk_free(task->requests_buf);
 	}
 	while (!STAILQ_EMPTY(&task->domains)) {
 		domain = STAILQ_FIRST(&task->domains);
@@ -640,7 +641,7 @@ fsdevperf_task_free(struct fsdevperf_task *task)
 #endif
 		free(domain);
 	}
-	free(task);
+	spdk_free(task);
 }
 
 static struct fsdevperf_task *
@@ -652,7 +653,8 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 	size_t i, j, len, curlen, iovcnt, io_segment_size;
 	char *buf;
 
-	task = calloc(1, FSDEVPERF_TASK_SIZE(file->fs));
+	task = spdk_zmalloc(FSDEVPERF_TASK_SIZE(file->fs), 0, NULL, SPDK_ENV_NUMA_ID_ANY,
+			    SPDK_MALLOC_DMA);
 	if (task == NULL) {
 		return NULL;
 	}
@@ -667,7 +669,8 @@ fsdevperf_task_alloc(struct fsdevperf_job *job, struct fsdevperf_file *file,
 	task->io_depth = job->io_depth;
 	task->io_pattern = job->io_pattern;
 	task->unique_data = (job->flags & FSDEVPERF_JOB_UNIQUE_DATA) != 0;
-	task->requests_buf = calloc(task->io_depth, FSDEVPERF_REQUEST_SIZE(task));
+	task->requests_buf = spdk_zmalloc(task->io_depth * FSDEVPERF_REQUEST_SIZE(task), 0, NULL,
+					  SPDK_ENV_NUMA_ID_ANY, SPDK_MALLOC_DMA);
 	if (task->requests_buf == NULL) {
 		goto error;
 	}
