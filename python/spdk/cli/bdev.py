@@ -529,6 +529,8 @@ def add_parser(subparsers):
                    action='store_true')
     p.add_argument('--rdma-initial-cq-size',
                    help='The initial size of a rdma completion queue, must be greater than 0.', type=int)
+    p.add_argument('--detach-ctrlr-timeout-sec',
+                   help='Time to wait until NVMe controller is detached. Default: 10 seconds.', type=int)
 
     p.set_defaults(func=bdev_nvme_set_options)
 

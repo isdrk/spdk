@@ -145,6 +145,7 @@ static const struct spdk_json_object_decoder rpc_bdev_nvme_options_decoders[] = 
 	{"tcp_connect_timeout_ms", offsetof(struct spdk_bdev_nvme_opts, tcp_connect_timeout_ms), spdk_json_decode_uint32, true},
 	{"enable_flush", offsetof(struct spdk_bdev_nvme_opts, enable_flush), spdk_json_decode_bool, true},
 	{"rdma_initial_cq_size", offsetof(struct spdk_bdev_nvme_opts, rdma_initial_cq_size), spdk_json_decode_uint32, true},
+	{"detach_ctrlr_timeout_sec", offsetof(struct spdk_bdev_nvme_opts, detach_ctrlr_timeout_sec), spdk_json_decode_uint32, true},
 };
 
 static void

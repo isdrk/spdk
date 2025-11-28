@@ -115,6 +115,7 @@ struct spdk_bdev_nvme_opts {
 	/* Hole at bytes 141-143. */
 	uint8_t reserved141[3];
 	uint32_t rdma_initial_cq_size;
+	uint32_t detach_ctrlr_timeout_sec;
 };
 SPDK_STATIC_ASSERT(sizeof(struct spdk_bdev_nvme_opts) == 152, "Incorrect size");
 
