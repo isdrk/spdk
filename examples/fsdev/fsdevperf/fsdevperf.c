@@ -716,7 +716,7 @@ error:
 static void
 fsdevperf_file_free(struct fsdevperf_file *file)
 {
-	free(file->name);
+	spdk_free(file->name);
 	free(file);
 }
 
@@ -725,6 +725,7 @@ fsdevperf_file_alloc(const char *fsname, const char *filename, size_t size)
 {
 	struct fsdevperf_file *file;
 	struct fsdevperf_filesystem *fs;
+	size_t len;
 
 	file = calloc(1, sizeof(*file));
 	if (file == NULL) {
@@ -743,13 +744,16 @@ fsdevperf_file_alloc(const char *fsname, const char *filename, size_t size)
 		return NULL;
 	}
 
+	len = strlen(filename) + 1;
 	file->fs = fs;
 	file->size = size;
-	file->name = strdup(filename);
+	file->name = spdk_malloc(len, 0, NULL, SPDK_ENV_NUMA_ID_ANY, SPDK_MALLOC_DMA);
 	if (file->name == NULL) {
 		fsdevperf_file_free(file);
 		return NULL;
 	}
+
+	snprintf(file->name, len, "%s", filename);
 
 	return file;
 }
