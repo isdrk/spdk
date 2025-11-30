@@ -132,51 +132,6 @@ static const char *fuse_opc_names[SPDK_FSDEV_MAX_FUSE_OPC] = {
 };
 SPDK_STATIC_ASSERT(SPDK_COUNTOF(fuse_opc_names) == SPDK_FSDEV_MAX_FUSE_OPC, "Incorrect size");
 
-static uint32_t fsdev_io_fuse_opc_values[__SPDK_FSDEV_IO_LAST] = {
-	[SPDK_FSDEV_IO_MOUNT]		= FUSE_INIT,
-	[SPDK_FSDEV_IO_UMOUNT]		= FUSE_DESTROY,
-	[SPDK_FSDEV_IO_LOOKUP]		= FUSE_LOOKUP,
-	[SPDK_FSDEV_IO_FORGET]		= FUSE_FORGET,
-	[SPDK_FSDEV_IO_GETATTR]		= FUSE_GETATTR,
-	[SPDK_FSDEV_IO_SETATTR]		= FUSE_SETATTR,
-	[SPDK_FSDEV_IO_READLINK]	= FUSE_READLINK,
-	[SPDK_FSDEV_IO_SYMLINK]		= FUSE_SYMLINK,
-	[SPDK_FSDEV_IO_MKNOD]		= FUSE_MKNOD,
-	[SPDK_FSDEV_IO_MKDIR]		= FUSE_MKDIR,
-	[SPDK_FSDEV_IO_UNLINK]		= FUSE_UNLINK,
-	[SPDK_FSDEV_IO_RMDIR]		= FUSE_RMDIR,
-	[SPDK_FSDEV_IO_RENAME]		= FUSE_RENAME,
-	[SPDK_FSDEV_IO_LINK]		= FUSE_LINK,
-	[SPDK_FSDEV_IO_OPEN]		= FUSE_OPEN,
-	[SPDK_FSDEV_IO_READ]		= FUSE_READ,
-	[SPDK_FSDEV_IO_WRITE]		= FUSE_WRITE,
-	[SPDK_FSDEV_IO_STATFS]		= FUSE_STATFS,
-	[SPDK_FSDEV_IO_RELEASE]		= FUSE_RELEASE,
-	[SPDK_FSDEV_IO_FSYNC]		= FUSE_FSYNC,
-	[SPDK_FSDEV_IO_SETXATTR]	= FUSE_SETXATTR,
-	[SPDK_FSDEV_IO_GETXATTR]	= FUSE_GETXATTR,
-	[SPDK_FSDEV_IO_LISTXATTR]	= FUSE_LISTXATTR,
-	[SPDK_FSDEV_IO_REMOVEXATTR]	= FUSE_REMOVEXATTR,
-	[SPDK_FSDEV_IO_FLUSH]		= FUSE_FLUSH,
-	[SPDK_FSDEV_IO_OPENDIR]		= FUSE_OPENDIR,
-	[SPDK_FSDEV_IO_READDIR]		= FUSE_READDIRPLUS,
-	[SPDK_FSDEV_IO_RELEASEDIR]	= FUSE_RELEASEDIR,
-	[SPDK_FSDEV_IO_FSYNCDIR]	= FUSE_FSYNCDIR,
-	[SPDK_FSDEV_IO_FLOCK]		= FUSE_SETLK,
-	[SPDK_FSDEV_IO_CREATE]		= FUSE_CREATE,
-	[SPDK_FSDEV_IO_ABORT]		= FUSE_INTERRUPT,
-	[SPDK_FSDEV_IO_FALLOCATE]	= FUSE_FALLOCATE,
-	[SPDK_FSDEV_IO_COPY_FILE_RANGE]	= FUSE_COPY_FILE_RANGE,
-	[SPDK_FSDEV_IO_SYNCFS]		= FUSE_SYNCFS,
-	[SPDK_FSDEV_IO_ACCESS]		= FUSE_ACCESS,
-	[SPDK_FSDEV_IO_LSEEK]		= FUSE_LSEEK,
-	[SPDK_FSDEV_IO_POLL]		= FUSE_POLL,
-	[SPDK_FSDEV_IO_IOCTL]		= FUSE_IOCTL,
-	[SPDK_FSDEV_IO_GETLK]		= FUSE_GETLK,
-	[SPDK_FSDEV_IO_SETLK]		= FUSE_SETLK,
-	[SPDK_FSDEV_IO_READDIR_SIMPLE]	= FUSE_READDIR,
-};
-
 static const char *fsdev_notify_type_names[] = {
 	[FUSE_NOTIFY_POLL] = "poll",
 	[FUSE_NOTIFY_INVAL_INODE] = "inval_inode",
@@ -623,11 +578,10 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	uint32_t io_type = fsdev_io->internal.type;
 	uint32_t opc;
 
-	if (spdk_likely(io_type == SPDK_FSDEV_IO_FUSE)) {
-		opc = fsdev_io->u_in.fuse.hdr->opcode;
-	} else {
-		opc = fsdev_io_fuse_opc_values[io_type];
-	}
+	assert(io_type == SPDK_FSDEV_IO_FUSE);
+	SPDK_UNUSED(io_type);
+
+	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
 	fsdev_io->internal.submit_tsc = current_tsc;
 
@@ -1585,11 +1539,9 @@ fsdev_io_complete(void *ctx)
 		return;
 	}
 
-	if (spdk_likely(io_type == SPDK_FSDEV_IO_FUSE)) {
-		opc = fsdev_io->u_in.fuse.hdr->opcode;
-	} else {
-		opc = fsdev_io_fuse_opc_values[io_type];
-	}
+	assert(io_type == SPDK_FSDEV_IO_FUSE);
+	SPDK_UNUSED(io_type);
+	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
 	assert(ch->io_outstanding > 0);
 	assert(shared_resource->io_outstanding > 0);
@@ -1601,19 +1553,12 @@ fsdev_io_complete(void *ctx)
 			  ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
 
-	if (spdk_likely(io_type == SPDK_FSDEV_IO_FUSE)) {
-		if (opc == FUSE_READ) {
-			ch->stat->bytes_read +=
-				fsdev_io->u_out.fuse.hdr->len - sizeof(struct fuse_out_header);
-		} else if (opc == FUSE_WRITE) {
-			ch->stat->bytes_written += fsdev_io->u_out.fuse.op.write->size;
-		}
-	} else {
-		if (opc == FUSE_READ) {
-			ch->stat->bytes_read += fsdev_io->u_out.read.data_size;
-		} else if (opc == FUSE_WRITE) {
-			ch->stat->bytes_written += fsdev_io->u_out.write.data_size;
-		}
+	assert(io_type == SPDK_FSDEV_IO_FUSE);
+	if (opc == FUSE_READ) {
+		ch->stat->bytes_read +=
+			fsdev_io->u_out.fuse.hdr->len - sizeof(struct fuse_out_header);
+	} else if (opc == FUSE_WRITE) {
+		ch->stat->bytes_written += fsdev_io->u_out.fuse.op.write->size;
 	}
 
 	/* We must not access the fsdev_io after the user callback, so we
@@ -2161,19 +2106,6 @@ spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn)
 	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 
 	return rc;
-}
-
-const char *
-spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type)
-{
-	uint32_t fuse_opc;
-
-	if (type >= __SPDK_FSDEV_IO_LAST) {
-		return NULL;
-	}
-
-	fuse_opc = fsdev_io_fuse_opc_values[type];
-	return fuse_opc_names[fuse_opc];
 }
 
 const char *

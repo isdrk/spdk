@@ -16,8 +16,8 @@
 #include "spdk/fsdev_module.h"
 
 #define UT_UNIQUE 0xBEADBEAD
-#define UT_FOBJECT ((struct spdk_fsdev_file_object *)0xDEADDEAD)
-#define UT_FHANDLE ((struct spdk_fsdev_file_handle *)0xBEABBEAB)
+#define UT_FOBJECT ((uint64_t)0xDEADDEAD)
+#define UT_FHANDLE ((uint64_t)0xBEABBEAB)
 #define UT_FNAME "ut_test.file"
 #define UT_LNAME "ut_test.file.link"
 #define UT_ANAME "xattr1.name"
@@ -137,24 +137,32 @@ static struct spdk_fsdev_io *ut_oustanding_io = NULL;
 static void
 ut_fsdev_submit_request(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev_io)
 {
-	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 	struct ut_fsdev *utfsdev = fsdev_to_ut_fsdev(fsdev_io->fsdev);
 
-	CU_ASSERT(type >= 0 && type < __SPDK_FSDEV_IO_LAST);
+	struct fuse_in_header *in_hdr = fsdev_io->u_in.fuse.hdr;
+	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
+
+	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 
 	ut_call_record_begin(ut_fsdev_submit_request);
 	ut_call_record_param_ptr(_ch);
 	ut_call_record_param_ptr(fsdev_io);
-	ut_call_record_param_hash(&fsdev_io->u_in, sizeof(fsdev_io->u_in));
+	ut_call_record_param_hash(&fsdev_io->u_in.fuse.hdr, sizeof(fsdev_io->u_in.fuse));
 
-	switch (type) {
-	case SPDK_FSDEV_IO_MOUNT:
-		fsdev_io->u_out.mount.root_fobject = UT_FOBJECT;
-		fsdev_io->u_out.mount.opts.opts_size = fsdev_io->u_in.mount.opts.opts_size;
-		fsdev_io->u_out.mount.opts.max_xfer_size = fsdev_io->u_in.mount.opts.max_xfer_size / 2;
-		fsdev_io->u_out.mount.opts.flags = fsdev_io->u_in.mount.opts.flags;
-		fsdev_io->u_out.mount.opts.flags &= ~SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
-		break;
+	switch (in_hdr->opcode) {
+	case FUSE_INIT: {
+		struct fuse_init_out *init = fsdev_io->u_out.fuse.op.init;
+		init->major = 7;
+		init->minor = 31;
+		init->flags = FUSE_WRITEBACK_CACHE;
+		init->max_readahead = UINT32_MAX / 2;
+		init->max_write = UINT32_MAX;
+
+		out_hdr->len = sizeof(*init);
+		out_hdr->error = utfsdev->desired_io_status;
+		out_hdr->unique = in_hdr->unique;
+	}
+	break;
 	default:
 		break;
 	}
@@ -620,6 +628,9 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 	struct spdk_io_channel *ch;
 	struct spdk_fsdev_desc *fsdev_desc;
 	struct spdk_fsdev_io *fsdev_io;
+	struct fuse_in_header in_hdr = {};
+	struct fuse_out_header out_hdr = {};
+	struct fuse_flush_in flush_in = {};
 	int rc;
 
 	utfsdev = ut_fsdev_create("utfsdev0");
@@ -633,17 +644,28 @@ ut_fsdev_do_test_reset(bool fail_module_reset, bool leak_io)
 	ch = spdk_fsdev_get_io_channel(fsdev_desc);
 	CU_ASSERT(ch != NULL);
 
-	fsdev_io = calloc(1, spdk_fsdev_get_io_ctx_size());
+	fsdev_io = calloc(1, sizeof(*fsdev_io) + spdk_fsdev_get_io_ctx_size());
 	CU_ASSERT(fsdev_io != NULL);
+
+	in_hdr.opcode = FUSE_FLUSH;
+	in_hdr.unique = UT_UNIQUE;
+	in_hdr.len = sizeof(in_hdr) + sizeof(flush_in);
+	in_hdr.nodeid = UT_FOBJECT;
+	in_hdr.uid = geteuid();
+	in_hdr.gid = getegid();
+	fsdev_io->u_in.fuse.hdr = &in_hdr;
+
+	flush_in.fh = UT_FHANDLE;
+	fsdev_io->u_in.fuse.op.flush = &flush_in;
+
+	fsdev_io->u_out.fuse.hdr = &out_hdr;
+	fsdev_io->u_out.fuse.op.raw = NULL;
 
 	ut_calls_reset();
 	ut_complete_next_request = false; /* Make sure the flush IO won't be completed */
 
-	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, UT_UNIQUE, SPDK_FSDEV_IO_FLUSH,
+	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, UT_UNIQUE, SPDK_FSDEV_IO_FUSE,
 			   0, 0, ut_fsdev_reset_flush_cpl_cb, utfsdev);
-
-	fsdev_io->u_in.flush.fobject = UT_FOBJECT;
-	fsdev_io->u_in.flush.fhandle = UT_FHANDLE;
 
 	spdk_fsdev_io_submit(fsdev_io);
 
@@ -758,8 +780,8 @@ ut_fsdev_test_notifications(void)
 	struct spdk_fsdev *fsdev;
 	int notify_ctx;
 	int reply_ctx;
-	int file_object;
-	int parent_file_object;
+	uint64_t nodeid;
+	uint64_t parent_nodeid;
 	const char *filename = "test_file.txt";
 	struct spdk_fsdev_notify_data notify_data;
 	struct spdk_fsdev_io_stat stat;
@@ -779,8 +801,7 @@ ut_fsdev_test_notifications(void)
 
 	/* No subscriber */
 	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
-					  4096, 8192, NULL, NULL);
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, nodeid, 4096, 8192, NULL, NULL);
 	CU_ASSERT(rc == -ENODEV);
 
 	/* Enable notifications */
@@ -797,12 +818,12 @@ ut_fsdev_test_notifications(void)
 
 	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_DATA */
 	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, (struct spdk_fsdev_file_object *)&file_object,
-					  4096, 8192, ut_fsdev_notify_reply_cb, &reply_ctx);
+	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, nodeid, 4096, 8192, ut_fsdev_notify_reply_cb,
+					  &reply_ctx);
 	CU_ASSERT(rc == 0);
 
 	memset(&notify_data, 0, sizeof(notify_data));
-	notify_data.inval_data.fobject = (struct spdk_fsdev_file_object *)&file_object;
+	notify_data.inval_data.nodeid = nodeid;
 	notify_data.inval_data.offset = 4096;
 	notify_data.inval_data.size = 8192;
 	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
@@ -816,13 +837,12 @@ ut_fsdev_test_notifications(void)
 
 	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_ENTRY */
 	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_entry(&utfsdev->fsdev,
-					   (struct spdk_fsdev_file_object *)&parent_file_object,
-					   filename, ut_fsdev_notify_reply_cb, &reply_ctx);
+	rc = spdk_fsdev_notify_inval_entry(&utfsdev->fsdev, parent_nodeid, filename,
+					   ut_fsdev_notify_reply_cb, &reply_ctx);
 	CU_ASSERT(rc == 0);
 
 	memset(&notify_data, 0, sizeof(notify_data));
-	notify_data.inval_entry.parent_fobject = (struct spdk_fsdev_file_object *)&parent_file_object;
+	notify_data.inval_entry.parent_nodeid = parent_nodeid;
 	notify_data.inval_entry.name = filename;
 	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
@@ -863,7 +883,6 @@ ut_fsdev_test_notifications(void)
 	ut_fsdev_destroy(utfsdev);
 }
 
-typedef void (*fill_clb)(struct spdk_fsdev_io *fsdev_io);
 typedef void (*check_clb)(struct spdk_fsdev_io *fsdev_io);
 
 static void
@@ -878,13 +897,15 @@ ut_fsdev_test_io_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io
 }
 
 static void
-ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, uint64_t unique,
-		 fill_clb fill_cb, check_clb check_cb)
+ut_fsdev_test_io(uint32_t opcode, void *extra_buf_in, uint32_t extra_len_in, void *extra_buf_out,
+		 uint32_t extra_len_out, int desired_io_status, uint64_t unique)
 {
 	struct ut_fsdev *utfsdev;
 	struct spdk_io_channel *ch;
 	struct spdk_fsdev_desc *fsdev_desc;
 	struct spdk_fsdev_io *fsdev_io;
+	struct fuse_in_header in_hdr = {};
+	struct fuse_out_header out_hdr = {};
 	int rc;
 	size_t io_hash;
 
@@ -898,17 +919,29 @@ ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, uint64_t u
 	ch = spdk_fsdev_get_io_channel(fsdev_desc);
 	CU_ASSERT(ch != NULL);
 
-	fsdev_io = calloc(1, spdk_fsdev_get_io_ctx_size());
+	fsdev_io = calloc(1,  sizeof(*fsdev_io) + spdk_fsdev_get_io_ctx_size());
 	CU_ASSERT(fsdev_io != NULL);
 
-	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, unique, type, 0, 0, ut_fsdev_test_io_cpl_cb,
+	in_hdr.opcode = opcode;
+	in_hdr.unique = unique;
+	in_hdr.len = sizeof(in_hdr) + extra_len_in;
+	in_hdr.nodeid = UT_FOBJECT;
+	in_hdr.uid = geteuid();
+	in_hdr.gid = getegid();
+	fsdev_io->u_in.fuse.hdr = &in_hdr;
+
+	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ch, unique, SPDK_FSDEV_IO_FUSE, 0, 0,
+			   ut_fsdev_test_io_cpl_cb,
 			   (void *)UT_UNIQUE);
+	fsdev_io->u_in.fuse.op.raw = extra_buf_in;
+
+	fsdev_io->u_out.fuse.hdr = &out_hdr;
+	fsdev_io->u_out.fuse.op.raw = extra_buf_out;
 
 	ut_calls_reset();
 	utfsdev->desired_io_status = desired_io_status;
-	fill_cb(fsdev_io);
 
-	io_hash = ut_hash(&fsdev_io->u_in, sizeof(fsdev_io->u_in));
+	io_hash = ut_hash(&fsdev_io->u_in.fuse, sizeof(fsdev_io->u_in.fuse));
 
 	spdk_fsdev_io_submit(fsdev_io);
 
@@ -926,9 +959,6 @@ ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, uint64_t u
 	CU_ASSERT(ut_calls_param_get_int(1, 0) == (uint64_t)desired_io_status);
 	CU_ASSERT(ut_calls_param_get_ptr(1, 1) == fsdev_io);
 
-	/* Op-specific params */
-	check_cb(fsdev_io);
-
 	free(fsdev_io);
 
 	ut_calls_reset();
@@ -940,55 +970,47 @@ ut_fsdev_test_io(enum spdk_fsdev_io_type type, int desired_io_status, uint64_t u
 	ut_fsdev_destroy(utfsdev);
 }
 
-static void
-ut_fsdev_mount_fill_clb(struct spdk_fsdev_io *fsdev_io)
-{
-	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
-	fsdev_io->u_in.mount.opts.opts_size = sizeof(fsdev_io->u_in.mount.opts);
-	fsdev_io->u_in.mount.opts.max_xfer_size = UINT32_MAX;
-	fsdev_io->u_in.mount.opts.flags = SPDK_FSDEV_MOUNT_WRITEBACK_CACHE;
-}
 
 static void
-ut_fsdev_mount_check_clb(struct spdk_fsdev_io *fsdev_io)
+ut_fsdev_do_test_mount_test(int desired_io_status)
 {
-	CU_ASSERT(fsdev_io->u_out.mount.root_fobject == UT_FOBJECT);
-	CU_ASSERT(fsdev_io->u_out.mount.opts.opts_size == sizeof(fsdev_io->u_in.mount.opts));
-	CU_ASSERT(fsdev_io->u_out.mount.opts.max_xfer_size == UINT32_MAX / 2);
-	CU_ASSERT((fsdev_io->u_out.mount.opts.flags & SPDK_FSDEV_MOUNT_WRITEBACK_CACHE) == 0);
+	struct fuse_init_in init_in = {};
+	struct fuse_init_out init_out = {};
+
+	init_in.major = 7;
+	init_in.minor = 34;
+
+	init_in.flags = FUSE_WRITEBACK_CACHE | FUSE_DO_READDIRPLUS;
+	init_in.max_readahead = UINT32_MAX;
+
+	ut_fsdev_test_io(FUSE_INIT, &init_in, sizeof(init_in), &init_out, sizeof(init_out),
+			 desired_io_status, UT_UNIQUE);
+
+
+	CU_ASSERT(init_out.major == 7);
+	CU_ASSERT(init_out.minor == 31);
+	CU_ASSERT(init_out.flags == FUSE_WRITEBACK_CACHE);
+	CU_ASSERT(init_out.max_readahead == UINT32_MAX / 2);
+	CU_ASSERT(init_out.max_write == UINT32_MAX);
 }
 
 static void
 ut_fsdev_test_mount_ok(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MOUNT, 0, 1, ut_fsdev_mount_fill_clb,
-			 ut_fsdev_mount_check_clb);
+	ut_fsdev_do_test_mount_test(0);
 }
 
 static void
 ut_fsdev_test_mount_err(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_MOUNT, -EINVAL, 1, ut_fsdev_mount_fill_clb,
-			 ut_fsdev_mount_check_clb);
-}
-
-static void
-ut_fsdev_umount_fill_clb(struct spdk_fsdev_io *fsdev_io)
-{
-	/* Nothing to check here */
-}
-
-static void
-ut_fsdev_umount_check_clb(struct spdk_fsdev_io *fsdev_io)
-{
-	/* Nothing to check here */
+	ut_fsdev_do_test_mount_test(-EINVAL);
 }
 
 static void
 ut_fsdev_test_umount(void)
 {
-	ut_fsdev_test_io(SPDK_FSDEV_IO_UMOUNT, 0, 0, ut_fsdev_umount_fill_clb,
-			 ut_fsdev_umount_check_clb);
+	ut_fsdev_test_io(FUSE_DESTROY, NULL, 0, NULL, 0, 0, UT_UNIQUE);
+	/* Nothing to check here */
 }
 
 static int
