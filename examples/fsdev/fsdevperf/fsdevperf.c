@@ -84,7 +84,6 @@ struct fsdevperf_filesystem {
 	struct spdk_fsdev_file_object		*root;
 	struct spdk_io_channel			*ioch;
 	TAILQ_ENTRY(fsdevperf_filesystem)	tailq;
-	struct fsdevperf_fuse_io		fuse_io;
 	int					io_ctx_size;
 	struct fsdevperf_io			io;
 };
@@ -1155,7 +1154,7 @@ fsdevperf_filesystem_submit_mount(struct fsdevperf_filesystem *fs,
 				  spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fsdevperf_fs_get_fsdev_io(fs);
-	struct fuse_init_in *init = &fs->fuse_io.in.op.init;
+	struct fuse_init_in *init = &fs->io.fuse_io.in.op.init;
 	uint64_t id;
 
 	id = fsdevperf_thread_next_id(fsdevperf_get_thread());
