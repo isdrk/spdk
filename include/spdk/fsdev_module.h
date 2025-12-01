@@ -98,9 +98,10 @@ struct spdk_fsdev_fn_table {
 
 	/** Process the I/O request.
 	 *
-	 * Note regarding the fobject reference counting.
+	 * Note regarding the filesystem object reference counting.
 	 *
-	 * The following IO types increase the fobject reference counter for the result fobject in case of success:
+	 * The following IO types increase the reference counter for the result filesystem object in case of
+	 * success:
 	 * - FUSE_LOOKUP
 	 * - FUSE_CREATE
 	 * - FUSE_LINK
@@ -109,11 +110,11 @@ struct spdk_fsdev_fn_table {
 	 * - FUSE_SYMLINK
 	 * - FUSE_READDIRPLUS
 	 *
-	 * The FUSE_FORGET decreases the fobject reference counter by \p nlookup.
+	 * The FUSE_FORGET decreases the nodeid reference counter by \p nlookup.
 	 *
-	 * The FUSE_DESTROY causes all the fobject reference counters to be implicitly dropped to zero.
+	 * The FUSE_DESTROY causes all the nodeid reference counters to be implicitly dropped to zero.
 	 * It is not guaranteed that the fsdev will receive corresponding FUSE_FORGET I/Os for the affected
-	 * fobjects.
+	 * nodeids.
 	 */
 	void (*submit_request)(struct spdk_io_channel *ch, struct spdk_fsdev_io *);
 
@@ -168,10 +169,6 @@ struct spdk_fsdev_name {
 	struct spdk_fsdev *fsdev;
 	RB_ENTRY(spdk_fsdev_name) node;
 };
-
-struct spdk_fsdev_file_handle;
-struct spdk_fsdev_file_object;
-
 
 /** The node ID of the root inode */
 #define SPDK_FUSE_ROOT_ID 1 /* Must be the same as FUSE_ROOT_ID in the fuse_kernel.h to avoid translation */
@@ -444,7 +441,7 @@ int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
  *
  * \param fsdev Filesystem device.
  * \param parent_nodeid Parent nodeid to invalidate.
- * \param name Name of entry in the parent_fobject to invalidate.
+ * \param name Name of entry in the parent_nodeid to invalidate.
  * \param reply_cb Callback to deliver notification handling status
  * Fsdev should be ready to get the reply callback in the context of this call.
  * \param reply_ctx Reply context

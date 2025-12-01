@@ -732,9 +732,6 @@ void spdk_fsdev_reset_device_stat(struct spdk_fsdev *fsdev,  spdk_fsdev_reset_de
 #define SPDK_FSDEV_ATTR_MTIME_NOW	(1 << 7)
 #define SPDK_FSDEV_ATTR_CTIME		(1 << 8)
 
-struct spdk_fsdev_file_object;
-struct spdk_fsdev_file_handle;
-
 struct spdk_fsdev_file_attr {
 	uint64_t ino;
 	uint64_t size;
