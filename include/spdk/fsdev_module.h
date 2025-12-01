@@ -191,7 +191,7 @@ struct spdk_fsdev {
 	/** Maximum size of variable sized notification data in bytes. */
 	uint32_t notify_max_data_size;
 
-	/** Specifies which FUSE opcodes are supported via SPDK_FSDEV_IO_FUSE. */
+	/** For backward compatibility. Do not use. */
 	uint64_t supported_fuse_opcodes;
 
 	/** Fields that are used internally by the fsdev subsystem. Fsdev modules
