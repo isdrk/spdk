@@ -82,6 +82,7 @@ struct fsdevperf_filesystem {
 	struct spdk_fsdev_desc			*fsdev_desc;
 	struct spdk_io_channel			*ioch;
 	TAILQ_ENTRY(fsdevperf_filesystem)	tailq;
+	size_t					max_xfer_size;
 	int					io_ctx_size;
 	bool					mounted;
 	struct fsdevperf_io			io;
@@ -1898,7 +1899,14 @@ fsdevperf_task_start(void *ctx)
 static void
 fsdevperf_job_start(struct fsdevperf_job *job)
 {
-	struct fsdevperf_task *task;
+	struct fsdevperf_task *task = TAILQ_FIRST(&job->tasks);
+	struct fsdevperf_filesystem *fs = task->fs;
+
+	if (job->io_size > fs->max_xfer_size) {
+		fsdevperf_errmsg("WARNING: iosize exceeds fsdev %s max transfer size (%zu < %zu)\n",
+				 spdk_fsdev_desc_get_name(fs->fsdev_desc), job->io_size,
+				 fs->max_xfer_size);
+	}
 
 	TAILQ_FOREACH(task, &job->tasks, tailq.job) {
 		spdk_thread_send_msg(task->thread->thread, fsdevperf_task_start, task);
@@ -1952,6 +1960,7 @@ fsdevperf_setup_files(void)
 		.job_done = fsdevperf_setup_job_done,
 	};
 	struct fsdevperf_file *file;
+	struct fsdevperf_filesystem *fs;
 	int rc;
 
 	job = fsdevperf_job_alloc("setup", &ops,
@@ -1966,6 +1975,11 @@ fsdevperf_setup_files(void)
 	job->io_depth = 1;
 	job->io_size = 1024 * 1024;
 	TAILQ_INSERT_TAIL(&g_app.jobs, job, tailq.app);
+
+	/* Limit iosize to the minimum supported by all filesystems */
+	TAILQ_FOREACH(fs, &g_app.filesystems, tailq) {
+		job->io_size = spdk_min(job->io_size, fs->max_xfer_size);
+	}
 
 	job->buf = spdk_zmalloc(job->io_depth * job->io_size, 4096, NULL,
 				SPDK_ENV_SOCKET_ID_ANY, SPDK_MALLOC_DMA);
@@ -2016,6 +2030,15 @@ fsdevperf_filesystem_mount_cb(void *cb_arg, int status, struct spdk_fsdev_io *fs
 	}
 
 	fs->mounted = true;
+	fs->max_xfer_size = spdk_min(fsdev_io->u_out.fuse.op.init->max_pages * 4096,
+				     fsdev_io->u_out.fuse.op.init->max_write);
+	if (fs->max_xfer_size == 0) {
+		fsdevperf_errmsg("FATAL: fsdev %s has invalid max transfer size: 0\n",
+				 spdk_fsdev_desc_get_name(fs->fsdev_desc));
+		fsdevperf_set_status(-EINVAL);
+		fsdevperf_done();
+		return;
+	}
 
 	next = TAILQ_NEXT(fs, tailq);
 	if (next != NULL) {
