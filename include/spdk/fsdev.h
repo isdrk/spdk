@@ -375,6 +375,19 @@ const char *spdk_fsdev_get_name(const struct spdk_fsdev *fsdev);
 struct spdk_fsdev *spdk_fsdev_desc_get_fsdev(struct spdk_fsdev_desc *desc);
 
 /**
+ * Get the name of the filesystem associated with an fsdev descriptor.
+ *
+ * \param desc Open filesystem device descriptor
+ *
+ * \return Name of the filesystem.
+ */
+static inline const char *
+spdk_fsdev_desc_get_name(struct spdk_fsdev_desc *desc)
+{
+	return spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(desc));
+}
+
+/**
  * Obtain an I/O channel for the filesystem device opened by the specified
  * descriptor. I/O channels are bound to threads, so the resulting I/O
  * channel may only be used from the thread it was originally obtained
