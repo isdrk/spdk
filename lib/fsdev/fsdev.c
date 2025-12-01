@@ -1240,14 +1240,14 @@ fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *noti
 
 int
 spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
-			     struct spdk_fsdev_file_object *fobject,
+			     uint64_t nodeid,
 			     uint64_t offset, size_t size,
 			     spdk_fsdev_notify_reply_cb_t reply_cb,
 			     void *reply_ctx)
 {
 	struct spdk_fsdev_notify_data notify_data = {
 		.type = SPDK_FSDEV_NOTIFY_INVAL_DATA,
-		.inval_data.fobject = fobject,
+		.inval_data.nodeid = nodeid,
 		.inval_data.offset = offset,
 		.inval_data.size = size
 	};
@@ -1257,14 +1257,14 @@ spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
 
 int
 spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
-			      struct spdk_fsdev_file_object *parent_fobject,
+			      uint64_t parent_nodeid,
 			      const char *name,
 			      spdk_fsdev_notify_reply_cb_t reply_cb,
 			      void *reply_ctx)
 {
 	struct spdk_fsdev_notify_data notify_data = {
 		.type = SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
-		.inval_entry.parent_fobject = parent_fobject,
+		.inval_entry.parent_nodeid = parent_nodeid,
 		.inval_entry.name = name
 	};
 

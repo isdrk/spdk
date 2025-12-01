@@ -561,14 +561,14 @@ struct spdk_fsdev_notify_data {
 	union {
 		/** Data for SPDK_FSDEV_NOTIFY_INVAL_DATA notification type */
 		struct {
-			struct spdk_fsdev_file_object *fobject;
+			uint64_t nodeid;
 			uint64_t offset;
 			size_t size;
 		} inval_data;
 
 		/** Data for SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification type */
 		struct {
-			struct spdk_fsdev_file_object *parent_fobject;
+			uint64_t parent_nodeid;
 			const char *name;
 		} inval_entry;
 

@@ -423,7 +423,7 @@ spdk_fsdev_io_from_ctx(void *ctx)
  * Send a SPDK_FSDEV_NOTIFY_INVAL_DATA notification to the user.
  *
  * \param fsdev Filesystem device.
- * \param fobject File object to invalidate.
+ * \param nodeid nodeid to invalidate.
  * \param offset Offset of data region to invalidate.
  * \param size Size of data region to invalidate.
  * \param reply_cb Callback to deliver notification handling status
@@ -434,7 +434,7 @@ spdk_fsdev_io_from_ctx(void *ctx)
  * \return -ENODEV if notifications are not enabled.
  */
 int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
-				 struct spdk_fsdev_file_object *fobject,
+				 uint64_t nodeid,
 				 uint64_t offset, size_t size,
 				 spdk_fsdev_notify_reply_cb_t reply_cb,
 				 void *reply_ctx);
@@ -443,7 +443,7 @@ int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
  * Send a SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification to the user.
  *
  * \param fsdev Filesystem device.
- * \param parent_fobject Parent file object to invalidate.
+ * \param parent_nodeid Parent nodeid to invalidate.
  * \param name Name of entry in the parent_fobject to invalidate.
  * \param reply_cb Callback to deliver notification handling status
  * Fsdev should be ready to get the reply callback in the context of this call.
@@ -453,7 +453,7 @@ int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
  * \return -ENODEV if notifications are not enabled.
  */
 int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
-				  struct spdk_fsdev_file_object *parent_fobject,
+				  uint64_t parent_nodeid,
 				  const char *name,
 				  spdk_fsdev_notify_reply_cb_t reply_cb,
 				  void *reply_ctx);
