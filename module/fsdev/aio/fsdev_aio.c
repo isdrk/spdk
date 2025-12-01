@@ -469,12 +469,6 @@ fsdev_aio_fobject_to_nodeid(struct aio_fsdev *vfsdev, struct aio_fsdev_file_obje
 	return fobject->hdr.lut_key + FILE_PTR_LUT_BASE;
 }
 
-static inline struct spdk_fsdev_file_object *
-fsdev_aio_get_spdk_fobject(struct aio_fsdev *vfsdev, struct aio_fsdev_file_object *fobject)
-{
-	return (struct spdk_fsdev_file_object *)(uintptr_t)fsdev_aio_fobject_to_nodeid(vfsdev, fobject);
-}
-
 /* The returned fhandle pointer is only valid while the stack frame this pointer is returned to
  * remains valid. You cannot store tihs pointer to be used later. Instead, look it back up again. */
 static inline struct aio_fsdev_file_handle *

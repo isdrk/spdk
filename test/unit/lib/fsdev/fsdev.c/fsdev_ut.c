@@ -48,14 +48,6 @@ struct ut_io_channel {
 	int reserved;
 };
 
-struct spdk_fsdev_file_object {
-	int reserved;
-};
-
-struct spdk_fsdev_file_handle {
-	int reserved;
-};
-
 static inline struct ut_fsdev *
 fsdev_to_ut_fsdev(struct spdk_fsdev *fsdev)
 {
