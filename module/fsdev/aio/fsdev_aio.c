@@ -342,7 +342,6 @@ fsdev_to_aio_io(const struct spdk_fsdev_io *fsdev_io)
 static const char *
 fsdev_aio_io_fuse_get_name(struct spdk_fsdev_io *fsdev_io)
 {
-	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	assert(fsdev_io->u_in.fuse.iov[0].iov_base);
 
 	/* The name will always be at the start of the first in iov.
@@ -389,8 +388,6 @@ fsdev_aio_cb(struct aio_fsdev_io *aio, long res, long res2)
 	if (res >= 0) {
 		struct fuse_in_header *in_hdr = fsdev_io->u_in.fuse.hdr;
 		struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
-
-		assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 
 		switch (in_hdr->opcode) {
 		case FUSE_READ:
@@ -518,8 +515,6 @@ static inline void
 fsdev_aio_io_complete(struct spdk_fsdev_io *fsdev_io, int status)
 {
 	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
-
-	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 
 	if (out_hdr != NULL) {
 		out_hdr->error = status;
@@ -4543,36 +4538,28 @@ aio_io_poll_aio(void *arg)
 	TAILQ_SWAP(&ch->ios_for_submit, &ios, aio_fsdev_io, link);
 	TAILQ_FOREACH_SAFE(vfsdev_io, &ios, link, tmp) {
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-		enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 
 		rc = -EOPNOTSUPP;
 		res = SPDK_POLLER_BUSY;
 
-		switch (type) {
-		case SPDK_FSDEV_IO_FUSE:
-			switch (fsdev_io->u_in.fuse.hdr->opcode) {
-			case FUSE_READ:
-			case FUSE_WRITE:
-				iocbs[to_submit++] = &vfsdev_io->io;
-				rc = IO_STATUS_ASYNC;
-				break;
-			case FUSE_SETLKW:
-				TAILQ_REMOVE(&ios, vfsdev_io, link);
-				rc = fsdev_aio_do_setlk(ch, fsdev_io);
-				break;
-			case FUSE_POLL:
-				TAILQ_REMOVE(&ios, vfsdev_io, link);
-				rc = fsdev_aio_do_poll(ch, fsdev_io);
-				break;
-			default:
-				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
-				assert(0);
-				rc = -EINVAL;
-				break;
-			}
+		switch (fsdev_io->u_in.fuse.hdr->opcode) {
+		case FUSE_READ:
+		case FUSE_WRITE:
+			iocbs[to_submit++] = &vfsdev_io->io;
+			rc = IO_STATUS_ASYNC;
+			break;
+		case FUSE_SETLKW:
+			TAILQ_REMOVE(&ios, vfsdev_io, link);
+			rc = fsdev_aio_do_setlk(ch, fsdev_io);
+			break;
+		case FUSE_POLL:
+			TAILQ_REMOVE(&ios, vfsdev_io, link);
+			rc = fsdev_aio_do_poll(ch, fsdev_io);
 			break;
 		default:
-			TAILQ_REMOVE(&ios, vfsdev_io, link);
+			SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", fsdev_io->u_in.fuse.hdr->opcode);
+			assert(0);
+			rc = -EINVAL;
 			break;
 		}
 
@@ -4731,43 +4718,33 @@ aio_io_poll_io_uring(void *arg)
 	while (!TAILQ_EMPTY(&ch->ios_for_submit)) {
 		struct aio_fsdev_io *vfsdev_io = TAILQ_FIRST(&ch->ios_for_submit);
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
-		enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 		int rc = IO_STATUS_ASYNC;
 
 		TAILQ_REMOVE(&ch->ios_for_submit, vfsdev_io, link);
 
 		res = SPDK_POLLER_BUSY;
 
-		switch (type) {
-		case SPDK_FSDEV_IO_FUSE:
-			switch (fsdev_io->u_in.fuse.hdr->opcode) {
-			case FUSE_READ:
-				/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
-				if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_read(ch, vfsdev_io) == -EAGAIN) {
-					TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
-				}
-				break;
-			case FUSE_WRITE:
-				/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
-				if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_write(ch, vfsdev_io) == -EAGAIN) {
-					TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
-				}
-				break;
-			case FUSE_SETLKW:
-				rc = fsdev_aio_do_setlk(ch, fsdev_io);
-				break;
-			case FUSE_POLL:
-				rc = fsdev_aio_do_poll(ch, fsdev_io);
-				break;
-			default:
-				SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", type);
-				assert(0);
-				rc = -EINVAL;
-				break;
+		switch (fsdev_io->u_in.fuse.hdr->opcode) {
+		case FUSE_READ:
+			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_read(ch, vfsdev_io) == -EAGAIN) {
+				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
 			}
 			break;
+		case FUSE_WRITE:
+			/* If this or one of the previous IOs failed due to no SQE available, we need to retry it */
+			if (!TAILQ_EMPTY(&ios) || aio_retry_io_uring_write(ch, vfsdev_io) == -EAGAIN) {
+				TAILQ_INSERT_TAIL(&ios, vfsdev_io, link);
+			}
+			break;
+		case FUSE_SETLKW:
+			rc = fsdev_aio_do_setlk(ch, fsdev_io);
+			break;
+		case FUSE_POLL:
+			rc = fsdev_aio_do_poll(ch, fsdev_io);
+			break;
 		default:
-			SPDK_ERRLOG("Unsupported IO type: %d\n", type);
+			SPDK_ERRLOG("Unsupported FUSE IO type: %d\n", fsdev_io->u_in.fuse.hdr->opcode);
 			assert(0);
 			rc = -EINVAL;
 			break;
@@ -4805,7 +4782,6 @@ fsdev_aio_op_fuse(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 	int status;
 
-	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	if (out_hdr != NULL) {
 		out_hdr->unique = fsdev_io->u_in.fuse.hdr->unique;
 		out_hdr->len = sizeof(*out_hdr);
@@ -5125,17 +5101,9 @@ fsdev_aio_destruct(void *ctx)
 static void
 fsdev_aio_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 {
-	int status;
-	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
-
-	if (spdk_likely(type == SPDK_FSDEV_IO_FUSE)) {
-		status = fsdev_aio_op_fuse(ch, fsdev_io);
-		if (status != IO_STATUS_ASYNC) {
-			fsdev_aio_io_complete(fsdev_io, status);
-		}
-	} else {
-		SPDK_DEBUGLOG(fsdev_aio, "Operation type %d is not implemented!\n", (int)type);
-		spdk_fsdev_io_complete(fsdev_io, -ENOSYS);
+	int status = fsdev_aio_op_fuse(ch, fsdev_io);
+	if (status != IO_STATUS_ASYNC) {
+		fsdev_aio_io_complete(fsdev_io, status);
 	}
 }
 

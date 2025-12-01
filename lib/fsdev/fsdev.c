@@ -498,12 +498,9 @@ spdk_fsdev_get_io_ctx_size(void)
 void
 spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 		   struct spdk_io_channel *ch,
-		   uint64_t unique, enum spdk_fsdev_io_type type,
-		   uint16_t source_id, uint64_t source_unique,
+		   uint64_t unique, uint16_t source_id, uint64_t source_unique,
 		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
-	assert(type == SPDK_FSDEV_IO_FUSE);
-
 	fsdev_io->internal.ch = __io_ch_to_fsdev_ch(ch);
 	fsdev_io->internal.desc = desc;
 	fsdev_io->internal.usr_cb_fn = cb_fn;
@@ -2396,8 +2393,7 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	}
 
 	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
-			   SPDK_FSDEV_IO_FUSE, source_id,
-			   source_unique, clb, cb_arg);
+			   source_id, source_unique, clb, cb_arg);
 	fsdev_io->internal.in_iov = in_iov;
 	fsdev_io->internal.in_iovcnt = in_iovcnt;
 	fsdev_io->internal.out_iov = out_iov;

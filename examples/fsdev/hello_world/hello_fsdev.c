@@ -125,8 +125,7 @@ fsdev_io_init_fuse(struct hello_fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io
 	fuse_io->in.hdr.uid = 0;
 	fuse_io->in.hdr.gid = 0;
 
-	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ioch, unique, SPDK_FSDEV_IO_FUSE,
-			   source_id, unique, cb_fn, cb_ctx);
+	spdk_fsdev_io_init(fsdev_io, fsdev_desc, ioch, unique, source_id, unique, cb_fn, cb_ctx);
 
 	fsdev_io->u_in.fuse.hdr = &fuse_io->in.hdr;
 	fsdev_io->u_in.fuse.op.raw = &fuse_io->in.op;

@@ -1129,7 +1129,7 @@ fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
 	io->fuse_io.in.hdr.uid = g_app.uid;
 	io->fuse_io.in.hdr.gid = g_app.gid;
 	/* Skip pid */
-	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, id, SPDK_FSDEV_IO_FUSE,
+	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, id,
 			   source_id, id, cb_fn, cb_ctx);
 	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
 	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;
@@ -1579,8 +1579,6 @@ fsdevperf_request_complete_cb(void *cb_arg, int status, struct spdk_fsdev_io *fs
 	assert(task->num_outstanding > 0);
 	task->num_outstanding--;
 	task->stats.num_ios++;
-
-	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 
 	fsdev = spdk_fsdev_desc_get_fsdev(fs->fsdev_desc);
 

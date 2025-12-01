@@ -178,14 +178,6 @@ struct spdk_fsdev_io_opts {
 } __attribute__((packed));
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_io_opts) == 24, "Incorrect size");
 
-/**
- * fsdev IO type
- */
-enum spdk_fsdev_io_type {
-	SPDK_FSDEV_IO_FUSE,
-	__SPDK_FSDEV_IO_LAST
-};
-
 /* There are fewer than 64 FUSE opcodes (52 as of writing this comment in
  * September 2025), but leave some space to account for more being added
  * in the future. Only 3 opcodes were added between 2019 and 2025.
@@ -365,15 +357,6 @@ typedef int (*spdk_for_each_fsdev_fn)(void *ctx, struct spdk_fsdev *fsdev);
  * callback returned otherwise.
  */
 int spdk_for_each_fsdev(void *ctx, spdk_for_each_fsdev_fn fn);
-
-/**
- * Get spdk_fsdev_io_type name
- *
- * \param type IO type
- *
- * \return non-NULL IO type name if operation is successful, or NULL otherwise.
- */
-const char *spdk_fsdev_io_type_get_name(enum spdk_fsdev_io_type type);
 
 /**
  * Get fuse opc name
@@ -1022,25 +1005,12 @@ struct spdk_fsdev_io {
 };
 
 /**
- * Get I/O type
- *
- * \param fsdev_io I/O to complete.
- *
- * \return operation code associated with the I/O
- */
-static inline enum spdk_fsdev_io_type
-spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
-	return SPDK_FSDEV_IO_FUSE;
-}
-
-/**
  * Init I/O request structure.
  *
  * \param fsdev_io I/O request.
  * \param desc Filesystem device descriptor.
  * \param ch I/O channel.
  * \param unique Unique I/O id.
- * \param type I/O type.
  * \param source_id Source id.
  * \param source_unique Source unique.
  * \param cb_fn Completion callback.
@@ -1048,8 +1018,7 @@ spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
  */
 void spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 			struct spdk_io_channel *ch,
-			uint64_t unique, enum spdk_fsdev_io_type type,
-			uint16_t source_id, uint64_t source_unique,
+			uint64_t unique, uint16_t source_id, uint64_t source_unique,
 			spdk_fsdev_cpl_cb *cb_fn, void *cb_arg);
 
 /**

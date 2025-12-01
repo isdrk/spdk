@@ -155,7 +155,6 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 					  pt_fsdev);
 	struct pt_io_channel *pt_ch = spdk_io_channel_get_ctx(ch);
 	struct passthru_fsdev_io *io_ctx = (struct passthru_fsdev_io *)fsdev_io->driver_ctx;
-	enum spdk_fsdev_io_type type = spdk_fsdev_io_get_type(fsdev_io);
 	struct spdk_fsdev_io *child_io;
 
 	child_io = malloc(spdk_fsdev_get_io_ctx_size());
@@ -173,7 +172,7 @@ vfsdev_passthru_submit_request(struct spdk_io_channel *ch, struct spdk_fsdev_io 
 	io_ctx->child_fsdev_io = child_io;
 
 	spdk_fsdev_io_init(child_io, pt_node->base_desc, pt_ch->base_ch, spdk_fsdev_io_get_unique(fsdev_io),
-			   type, spdk_fsdev_io_get_source_id(fsdev_io), spdk_fsdev_io_get_source_unique(fsdev_io),
+			   spdk_fsdev_io_get_source_id(fsdev_io), spdk_fsdev_io_get_source_unique(fsdev_io),
 			   vfsdev_passthru_cpl_cb, fsdev_io);
 
 	memcpy(&child_io->u_in, &fsdev_io->u_in, sizeof(fsdev_io->u_in));
