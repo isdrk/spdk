@@ -1906,6 +1906,11 @@ fsdevperf_task_lookup_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 	uint32_t flags;
 	uint64_t id;
 
+	/* If a file doesn't exist, LOOKUP succeeds but the returned nodeid is zero */
+	if (status == 0 && fsdev_io->u_out.fuse.op.entry->nodeid == 0) {
+		status = -ENOENT;
+	}
+
 	if (status != 0) {
 		if (status == -ENOENT) {
 			/* We're only going to create the file if the user specified its size */
