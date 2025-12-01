@@ -49,7 +49,6 @@ struct hello_fuse_io {
  * our events and callbacks.
  */
 struct hello_context_t {
-	uint64_t supported_fuse_opcodes;
 	struct spdk_thread *app_thread;
 	struct spdk_fsdev_desc *fsdev_desc;
 	struct spdk_io_channel *fsdev_io_channel;
@@ -113,12 +112,6 @@ hello_fsdev_parse_arg(int ch, char *arg)
 	return 0;
 }
 
-static inline bool
-fsdev_supports_opcode(struct hello_context_t *hello_context, uint64_t opcode)
-{
-	return hello_context->supported_fuse_opcodes & SPDK_BIT(opcode);
-}
-
 static void
 fsdev_io_init_fuse(struct hello_fuse_io *fuse_io, struct spdk_fsdev_io *fsdev_io,
 		   struct spdk_fsdev_desc *fsdev_desc, struct spdk_io_channel *ioch, uint32_t opcode, uint64_t unique,
@@ -170,8 +163,6 @@ hello_umount(struct hello_context_t *hello_context)
 	struct hello_fuse_io *fuse_io = &hello_context->fuse_io;
 
 	SPDK_NOTICELOG("Unmount\n");
-
-	assert(fsdev_supports_opcode(hello_context, FUSE_DESTROY));
 
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_context->fsdev_io_channel,
 			   FUSE_DESTROY, 0, 0, FUSE_ROOT_ID, 0,
@@ -249,8 +240,6 @@ hello_unlink(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Unlink file %s\n", hello_thread->file_name);
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_UNLINK));
-
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_UNLINK, 0, 0, FUSE_ROOT_ID, len,
 			   fuse_io->in.iovs, 1, NULL, 0, unlink_complete, hello_thread);
@@ -285,8 +274,6 @@ hello_setattr(struct hello_thread_t *hello_thread)
 	struct fuse_setattr_in *setattr = &fuse_io->in.op.setattr;
 
 	SPDK_NOTICELOG("Setattr file %s\n", hello_thread->file_name);
-
-	assert(fsdev_supports_opcode(hello_context, FUSE_SETATTR));
 
 	hello_thread->attr.mode &= ~S_IRWXO;
 
@@ -326,8 +313,6 @@ hello_getattr(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Getattr file %s\n", hello_thread->file_name);
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_GETATTR));
-
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_GETATTR, 0, 0, hello_thread->nodeid, sizeof(*getattr),
 			   NULL, 0, NULL, 0, getattr_complete, hello_thread);
@@ -361,8 +346,6 @@ hello_release(struct hello_thread_t *hello_thread)
 
 
 	SPDK_NOTICELOG("Release file handle 0x%" PRIx64 "\n", hello_thread->fh);
-
-	assert(fsdev_supports_opcode(hello_context, FUSE_RELEASE));
 
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_RELEASE, 0, 0, hello_thread->nodeid, sizeof(*release),
@@ -418,8 +401,6 @@ hello_read(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_READ));
-
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_READ, 0, 0, hello_thread->nodeid, sizeof(*read) + DATA_SIZE,
 			   NULL, 0, hello_thread->iov, 2, read_complete, hello_thread);
@@ -466,8 +447,6 @@ hello_write(struct hello_thread_t *hello_thread)
 	hello_thread->iov[1].iov_base = hello_thread->buf + hello_thread->iov[0].iov_len;
 	hello_thread->iov[1].iov_len = DATA_SIZE - hello_thread->iov[0].iov_len;
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_WRITE));
-
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_WRITE, 0, 0, hello_thread->nodeid, sizeof(*write) + DATA_SIZE,
 			   hello_thread->iov, 2, NULL, 0, write_complete, hello_thread);
@@ -504,8 +483,6 @@ hello_open(struct hello_thread_t *hello_thread)
 	struct fuse_open_in *open = &fuse_io->in.op.open;
 
 	SPDK_NOTICELOG("Open file 0x%" PRIx64 "\n", hello_thread->nodeid);
-
-	assert(fsdev_supports_opcode(hello_context, FUSE_OPEN));
 
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_OPEN, 0, 0, hello_thread->nodeid, sizeof(*open),
@@ -544,8 +521,6 @@ hello_lookup(struct hello_thread_t *hello_thread)
 
 	SPDK_NOTICELOG("Lookup file %s\n", hello_thread->file_name);
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_LOOKUP));
-
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_LOOKUP, 0, 0, FUSE_ROOT_ID, len,
 			   fuse_io->in.iovs, 1, NULL, 0, lookup_complete, hello_thread);
@@ -582,8 +557,6 @@ hello_mknod(void *ctx)
 	uint32_t len  = strlen(hello_thread->file_name) + 1;
 
 	SPDK_NOTICELOG("Mknod file %s\n", hello_thread->file_name);
-
-	assert(fsdev_supports_opcode(hello_context, FUSE_MKNOD));
 
 	fsdev_io_init_fuse(fuse_io, fsdev_io, hello_context->fsdev_desc, hello_thread->fsdev_io_channel,
 			   FUSE_MKNOD, 0, 0, FUSE_ROOT_ID, sizeof(*mknod) + len,
@@ -695,8 +668,6 @@ hello_submit_mount(struct hello_context_t *hello_context)
 
 	fsdev_io = hello_context_get_fsdev_io(hello_context);
 
-	assert(fsdev_supports_opcode(hello_context, FUSE_INIT));
-
 	memset(init, 0, sizeof(*init));
 	init->major = 7;
 	init->minor = 31;
@@ -721,7 +692,6 @@ hello_start(void *arg1)
 {
 	struct hello_context_t *hello_context = arg1;
 	int rc = 0;
-	struct spdk_fsdev *fsdev;
 	hello_context->fsdev_desc = NULL;
 
 	SPDK_NOTICELOG("Successfully started the application\n");
@@ -754,9 +724,6 @@ hello_start(void *arg1)
 		spdk_app_stop(-1);
 		return;
 	}
-
-	fsdev = spdk_fsdev_desc_get_fsdev(hello_context->fsdev_desc);
-	hello_context->supported_fuse_opcodes = spdk_fsdev_get_supported_fuse_opcodes(fsdev);
 
 	SPDK_NOTICELOG("Mount\n");
 

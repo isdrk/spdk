@@ -5583,8 +5583,6 @@ spdk_fsdev_aio_create(struct spdk_fsdev **fsdev, const char *name, const char *r
 	}
 #endif
 
-	vfsdev->fsdev.supported_fuse_opcodes = UINT64_MAX;
-
 	rc = spdk_fsdev_register(&vfsdev->fsdev);
 	if (rc) {
 		fsdev_aio_free(vfsdev);
