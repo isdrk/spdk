@@ -1290,7 +1290,9 @@ def add_parser(subparsers):
                                           name=args.name,
                                           qos_metric=args.qos_metric,
                                           avg_rate=args.avg_rate,
-                                          qos_mode=args.qos_mode)
+                                          qos_mode=args.qos_mode,
+                                          max_burst_rate=args.max_burst_rate,
+                                          max_burst_time_in_sec=args.max_burst_time_in_sec)
 
     p = subparsers.add_parser('bdev_burst_qos_set_limit',
                               help='Set rate limit for a QoS metric on a QoS device')
@@ -1298,6 +1300,8 @@ def add_parser(subparsers):
     p.add_argument('qos_metric', help='Metric controlled by QoS rate limit')
     p.add_argument('avg_rate', help='Average rate for this metric', type=int)
     p.add_argument('-m', '--qos-mode', help='Operating mode (strict or burst_ready)')
+    p.add_argument('-r', '--max-burst-rate', help='Peak rate allowed during a burst', type=int)
+    p.add_argument('-t', '--max-burst-time-in-sec', help='The maximum duration max_burst_rate can be sustained', type=int)
     p.set_defaults(func=bdev_burst_qos_set_limit)
 
     def bdev_error_inject_error(args):

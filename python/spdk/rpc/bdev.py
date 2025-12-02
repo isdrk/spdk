@@ -1785,13 +1785,17 @@ def bdev_burst_qos_set_limit(
         name,
         qos_metric,
         avg_rate,
-        qos_mode):
+        qos_mode,
+        max_burst_rate,
+        max_burst_time_in_sec):
     """Set rate limit for a QoS metric on a QoS device.
     Args:
         name: name of a QoS device.
         qos_metric: Metric controlled by QoS rate limit (rw_iops, rw_mbps, r_mbps, or w_mps).
         avg_rate: Average rate for this metric.
-        qos_mode: Operating mode (strict or burst_ready). (optional)
+        qos_mode: Operating mode (strict, burst_ready, or earned_burst). (optional)
+        max_burt_rate: Peak rate allowed during a burst. (optional)
+        max_burst_time_in_sec: The maximum duration max_burst_rate can be sustained. (optional)
     """
     params = dict()
     params['name'] = name
@@ -1799,6 +1803,10 @@ def bdev_burst_qos_set_limit(
     params['avg_rate'] = avg_rate
     if qos_mode is not None:
         params['qos_mode'] = qos_mode
+    if max_burst_rate is not None:
+        params['max_burst_rate'] = max_burst_rate
+    if max_burst_time_in_sec is not None:
+        params['max_burst_time_in_sec'] = max_burst_time_in_sec
     return client.call('bdev_burst_qos_set_limit', params)
 
 
