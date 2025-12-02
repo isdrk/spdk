@@ -725,6 +725,9 @@ ut_fsdev_test_reset_module_reset_fails(void)
 	ut_fsdev_do_test_reset(true, false);
 }
 
+static spdk_fsdev_notify_reply_cb_t ut_notify_reply_cb = NULL;
+static void *ut_notify_reply_ctx = NULL;
+
 static void
 ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
 		   void *ctx,
@@ -735,27 +738,22 @@ ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
 	ut_call_record_begin(ut_fsdev_notify_cb);
 	ut_call_record_param_ptr(fsdev);
 	ut_call_record_param_ptr(ctx);
-	ut_call_record_param_int(notify_data->type);
-	switch (notify_data->type) {
-	case SPDK_FSDEV_NOTIFY_INVAL_DATA:
-		ut_call_record_param_hash(&notify_data->inval_data, sizeof(notify_data->inval_data));
-		break;
-	case SPDK_FSDEV_NOTIFY_INVAL_ENTRY:
-		ut_call_record_param_hash(&notify_data->inval_entry, sizeof(notify_data->inval_entry));
-		break;
-	default:
-		CU_ASSERT(false);
-		break;
-	}
-	ut_call_record_param_ptr(reply_cb);
-	ut_call_record_param_ptr(reply_ctx);
+	ut_call_record_param_hash(notify_data->fuse, offsetof(struct spdk_fuse_notify_request, internal));
+	ut_call_record_param_hash(notify_data->fuse->iovs[0].iov_base,
+				  (uint32_t)notify_data->fuse->iovs[0].iov_len);
 	ut_call_record_end();
+
+	ut_notify_reply_cb = reply_cb;
+	ut_notify_reply_ctx = reply_ctx;
 }
 
 static void
-ut_fsdev_notify_reply_cb(const struct spdk_fsdev_notify_reply_data *notify_reply_data,
-			 void *reply_ctx)
+ut_fsdev_notify_reply_cb(struct spdk_fuse_notify_request *req, int status)
 {
+	ut_call_record_begin(ut_fsdev_notify_reply_cb);
+	ut_call_record_param_ptr(req);
+	ut_call_record_param_int(status);
+	ut_call_record_end();
 }
 
 static void
@@ -771,12 +769,16 @@ ut_fsdev_test_notifications(void)
 	struct spdk_fsdev_desc *fsdev_desc;
 	struct spdk_fsdev *fsdev;
 	int notify_ctx;
-	int reply_ctx;
-	uint64_t nodeid;
-	uint64_t parent_nodeid;
 	const char *filename = "test_file.txt";
-	struct spdk_fsdev_notify_data notify_data;
 	struct spdk_fsdev_io_stat stat;
+	struct spdk_fuse_notify_request req;
+	struct {
+		struct fuse_out_header hdr;
+		struct fuse_notify_inval_entry_out entry;
+		uint8_t data[256];
+	} out = {};
+	struct iovec iov = {};
+	struct spdk_fsdev_notify_reply_data notify_reply_data = {};
 	int rc;
 
 	utfsdev = ut_fsdev_create("utfsdev0");
@@ -791,9 +793,25 @@ ut_fsdev_test_notifications(void)
 	CU_ASSERT(spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(fsdev_desc)) ==
 		  UT_NOTIFY_MAX_DATA_SIZE);
 
+	out.hdr.error = FUSE_NOTIFY_INVAL_ENTRY;
+	out.hdr.unique = 0;
+	out.entry.parent = FUSE_ROOT_ID;
+	out.entry.namelen = strlen(filename);
+	out.hdr.len = sizeof(out) + out.entry.namelen + 1;
+
+	memcpy(out.data, filename, out.entry.namelen + 1);
+
+	iov.iov_base = &out;
+	iov.iov_len = sizeof(out) + out.entry.namelen + 1;
+
+	req.iovcnt = 1;
+	req.iovs = &iov;
+	req.fsdev = &utfsdev->fsdev;
+	req.cb_fn = ut_fsdev_notify_reply_cb;
+
 	/* No subscriber */
 	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, nodeid, 4096, 8192, NULL, NULL);
+	rc = spdk_fsdev_notify_fuse(&req);
 	CU_ASSERT(rc == -ENODEV);
 
 	/* Enable notifications */
@@ -810,54 +828,41 @@ ut_fsdev_test_notifications(void)
 
 	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_DATA */
 	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_data(&utfsdev->fsdev, nodeid, 4096, 8192, ut_fsdev_notify_reply_cb,
-					  &reply_ctx);
+	rc = spdk_fsdev_notify_fuse(&req);
 	CU_ASSERT(rc == 0);
 
-	memset(&notify_data, 0, sizeof(notify_data));
-	notify_data.inval_data.nodeid = nodeid;
-	notify_data.inval_data.offset = 4096;
-	notify_data.inval_data.size = 8192;
 	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
 	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
-	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_DATA);
-	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_data,
-			sizeof(notify_data.inval_data)));
-	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
+	CU_ASSERT(ut_calls_param_get_hash(0, 2) ==
+		  ut_hash(&req, offsetof(struct spdk_fuse_notify_request, internal)));
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&out, sizeof(out) + out.entry.namelen + 1));
 
-	/* SPDK_FSDEV_EVENT_NOTIFY_INVAL_ENTRY */
-	ut_calls_reset();
-	rc = spdk_fsdev_notify_inval_entry(&utfsdev->fsdev, parent_nodeid, filename,
-					   ut_fsdev_notify_reply_cb, &reply_ctx);
-	CU_ASSERT(rc == 0);
+	CU_ASSERT(ut_notify_reply_cb != NULL);
+	CU_ASSERT(ut_notify_reply_ctx != NULL);
 
-	memset(&notify_data, 0, sizeof(notify_data));
-	notify_data.inval_entry.parent_nodeid = parent_nodeid;
-	notify_data.inval_entry.name = filename;
-	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == fsdev);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
-	CU_ASSERT(ut_calls_param_get_int(0, 2) == SPDK_FSDEV_NOTIFY_INVAL_ENTRY);
-	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&notify_data.inval_entry,
-			sizeof(notify_data.inval_entry)));
-	CU_ASSERT(ut_calls_param_get_ptr(0, 4) == ut_fsdev_notify_reply_cb);
-	CU_ASSERT(ut_calls_param_get_ptr(0, 5) == &reply_ctx);
-
+	/* Check device stat */
 	memset(&stat, 0, sizeof(stat));
 	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
 	poll_threads();
-	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].count == 1);
 	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].count == 1);
-	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].replies == 0);
 	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].replies == 0);
 
-	spdk_fsdev_notify_reply_add_stat(&utfsdev->fsdev, SPDK_FSDEV_NOTIFY_INVAL_DATA);
+	/* Check reply path */
+	ut_calls_reset();
+	notify_reply_data.status = 100;
+	ut_notify_reply_cb(&notify_reply_data, ut_notify_reply_ctx);
+
+	CU_ASSERT(ut_calls_get_func(0) == ut_fsdev_notify_reply_cb);
+	CU_ASSERT(ut_calls_param_get_ptr(0, 0) == &req);
+	CU_ASSERT(ut_calls_param_get_int(0, 1) == 100);
+
+	/* Check device stat - now with reply */
+	memset(&stat, 0, sizeof(stat));
 	spdk_fsdev_get_device_stat(&utfsdev->fsdev, &stat, ut_fsdev_device_stat_cb, NULL);
 	poll_threads();
-	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_INODE].replies == 1);
-	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].replies == 0);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].count == 1);
+	CU_ASSERT(stat.notify[FUSE_NOTIFY_INVAL_ENTRY].replies == 1);
 
 	/* Disable notifications */
 	ut_calls_reset();
