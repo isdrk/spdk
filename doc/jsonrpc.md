@@ -3351,14 +3351,20 @@ Example response:
 
 Set rate limit for a QoS metric on a QoS device.
 
+max_burst_rate and max_burst_time_in_sec are used only if qos_mode is burst_ready or earned_burst.
+If qos_mode is burst_ready, rate limiter starts ready to burst immediately.
+If qos_mode is earned_burst, rate limiter starts like strict leaky bucket, but can burst later if credits are earned.
+
 #### Parameters
 
- Name              | Optional   | Type   | Description
------------------- | ---------- | ------ | ------------------------------------------------------------------
- name              | Required   | string | QoS device name
- qos_metric        | Required   | string | Metric controlled by QoS rate limit.
- avg_rate          | Required   | number | Average rate for this metric. 0 means unlimited.
- qos_mode          | Optinal    | string | Operating mode (strict or burst_ready). (Default is strict.)
+ Name                  | Optional   | Type   | Description
+---------------------- | ---------- | ------ | ------------------------------------------------------------------
+ name                  | Required   | string | QoS device name
+ qos_metric            | Required   | string | Metric controlled by QoS rate limit.
+ avg_rate              | Required   | number | Average rate for this metric. 0 means unlimited.
+ qos_mode              | Optinal    | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
+ max_burst_rate        | Optional   | number | Peak rate allowed during a burst.
+ max_burst_time_in_sec | Optional   | number | The maximum duration max_burst_rate can be sustained.
 
 #### Example
 
