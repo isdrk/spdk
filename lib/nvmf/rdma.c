@@ -5401,6 +5401,8 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 				count++;
 				assert(wc[i].opcode == IBV_WC_SEND);
 				assert(nvmf_rdma_req_is_completing(rdma_req));
+			} else {
+				nvmf_rdma_log_wc_status(rqpair, &wc[i]);
 			}
 
 			rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
@@ -5444,6 +5446,8 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 					spdk_nvmf_qpair_disconnect(&rqpair->qpair);
 					break;
 				}
+			} else {
+				nvmf_rdma_log_wc_status(rqpair, &wc[i]);
 			}
 
 			rdma_recv->wr.next = NULL;
@@ -5501,7 +5505,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 					}
 				}
 			} else {
-				rqpair->ibv_in_error_state = true;
+				nvmf_rdma_log_wc_status(rqpair, &wc[i]);
 				/* If the data transfer fails still force the queue into the error state,
 				 * if we were performing an RDMA_READ, we need to force the request into a
 				 * completed state since it wasn't linked to a send. However, in the RDMA_WRITE
@@ -5539,8 +5543,6 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 		/* Handle error conditions */
 		if (spdk_unlikely(wc[i].status)) {
 			rqpair->ibv_in_error_state = true;
-			nvmf_rdma_log_wc_status(rqpair, &wc[i]);
-
 			error = true;
 
 			if (spdk_nvmf_qpair_is_active(&rqpair->qpair)) {
