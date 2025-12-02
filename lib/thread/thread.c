@@ -276,6 +276,10 @@ struct io_device {
 
 	bool				pending_unregister;
 	bool				unregistered;
+
+	/* Last thread used for round-robin broadcast starting point */
+	struct spdk_thread		*broadcast_rr_last;
+	uint64_t			broadcast_rr_generation;
 };
 
 static RB_HEAD(io_device_tree, io_device) g_io_devices = RB_INITIALIZER(g_io_devices);
@@ -2882,6 +2886,70 @@ spdk_for_each_channel_broadcast(void *io_device, spdk_channel_msg_fn fn, void *c
 
 		pthread_mutex_lock(&g_devlist_mutex);
 		thread = TAILQ_NEXT(thread, tailq);
+	}
+
+	pthread_mutex_unlock(&g_devlist_mutex);
+}
+
+void
+spdk_for_each_channel_broadcast_rr(void *io_device, spdk_channel_msg_fn fn, void *ctx)
+{
+	struct io_device *dev;
+	struct spdk_thread *thread, *start_thread;
+	bool is_exited;
+	bool wrapped = false;
+
+	pthread_mutex_lock(&g_devlist_mutex);
+
+	dev = io_device_get(io_device);
+	if (!dev) {
+		pthread_mutex_unlock(&g_devlist_mutex);
+		return;
+	}
+
+	/* Start from next thread after last start, or from beginning */
+	if (dev->broadcast_rr_last != NULL &&
+	    dev->broadcast_rr_generation == g_thread_generation) {
+		/* Safe to use cached position. */
+		thread = TAILQ_NEXT(dev->broadcast_rr_last, tailq);
+		if (thread == NULL) {
+			thread = TAILQ_FIRST(&g_threads);
+		}
+	} else {
+		/* Generation changed or first time, start fresh */
+		thread = TAILQ_FIRST(&g_threads);
+	}
+
+	dev->broadcast_rr_generation = g_thread_generation;
+
+	/* Remember where we started for next time */
+	start_thread = thread;
+	if (thread != NULL) {
+		dev->broadcast_rr_last = thread;
+	}
+
+	/* Make a full pass through all threads */
+	while (thread != NULL) {
+		is_exited = spdk_thread_is_exited(thread);
+		pthread_mutex_unlock(&g_devlist_mutex);
+
+		if (!is_exited) {
+			spdk_io_channel_send_msg(thread, io_device, fn, ctx);
+		}
+
+		pthread_mutex_lock(&g_devlist_mutex);
+		thread = TAILQ_NEXT(thread, tailq);
+
+		/* Wrap around to beginning if we reach the end */
+		if (thread == NULL && !wrapped) {
+			thread = TAILQ_FIRST(&g_threads);
+			wrapped = true;
+		}
+
+		/* Stop if we've completed a full loop */
+		if (thread == start_thread) {
+			break;
+		}
 	}
 
 	pthread_mutex_unlock(&g_devlist_mutex);

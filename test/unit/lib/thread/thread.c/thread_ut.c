@@ -2320,6 +2320,208 @@ failing_create_cb(void *io_device, void *ctx_buf)
 	return -1;
 }
 
+struct broadcast_msg_ctx {
+	int thread_id;
+	int call_order;
+};
+
+static struct broadcast_msg_ctx g_broadcast_msgs[10];
+static int g_broadcast_msg_count;
+
+static void
+broadcast_msg_fn(struct spdk_io_channel *ch, void *ctx)
+{
+	struct spdk_thread *thread = spdk_get_thread();
+	uint32_t i;
+
+	/* Find which thread this is by comparing with g_ut_threads */
+	for (i = 0; i < g_ut_num_threads; i++) {
+		if (g_ut_threads[i].thread == thread) {
+			g_broadcast_msgs[g_broadcast_msg_count].thread_id = i;
+			g_broadcast_msgs[g_broadcast_msg_count].call_order = g_broadcast_msg_count;
+			g_broadcast_msg_count++;
+			break;
+		}
+	}
+}
+
+static void
+for_each_channel_broadcast_test(void)
+{
+	struct spdk_io_channel *ch0, *ch1, *ch2;
+	int ch_count = 0;
+	int i;
+
+	allocate_threads(3);
+	set_thread(0);
+	spdk_io_device_register(&ch_count, channel_create, channel_destroy, sizeof(int), NULL);
+	ch0 = spdk_get_io_channel(&ch_count);
+	set_thread(1);
+	ch1 = spdk_get_io_channel(&ch_count);
+	set_thread(2);
+	ch2 = spdk_get_io_channel(&ch_count);
+	CU_ASSERT(ch_count == 3);
+
+	/* Test basic broadcast - all channels should receive the message */
+	g_broadcast_msg_count = 0;
+	memset(g_broadcast_msgs, 0, sizeof(g_broadcast_msgs));
+
+	set_thread(0);
+	spdk_for_each_channel_broadcast(&ch_count, broadcast_msg_fn, NULL);
+	poll_threads();
+
+	/* All three threads should have received the message */
+	CU_ASSERT(g_broadcast_msg_count == 3);
+	/* Messages are received in thread poll order: 0, 1, 2 */
+	for (i = 0; i < 3; i++) {
+		CU_ASSERT(g_broadcast_msgs[i].thread_id == i);
+	}
+
+	/* Test broadcast after removing a channel */
+	set_thread(1);
+	spdk_put_io_channel(ch1);
+	poll_threads();
+	CU_ASSERT(ch_count == 2);
+
+	g_broadcast_msg_count = 0;
+	memset(g_broadcast_msgs, 0, sizeof(g_broadcast_msgs));
+
+	set_thread(0);
+	spdk_for_each_channel_broadcast(&ch_count, broadcast_msg_fn, NULL);
+	poll_threads();
+
+	/* Only threads 0 and 2 should receive messages (thread 1 has no channel) */
+	CU_ASSERT(g_broadcast_msg_count == 2);
+	CU_ASSERT(g_broadcast_msgs[0].thread_id == 0);
+	CU_ASSERT(g_broadcast_msgs[1].thread_id == 2);
+
+	set_thread(0);
+	spdk_put_io_channel(ch0);
+	set_thread(2);
+	spdk_put_io_channel(ch2);
+	poll_threads();
+
+	spdk_io_device_unregister(&ch_count, NULL);
+	poll_threads();
+
+	free_threads();
+}
+
+static void
+for_each_channel_broadcast_rr_test(void)
+{
+	struct spdk_io_channel *ch0, *ch1, *ch2, *ch3;
+	int ch_count = 0;
+	int i, call;
+	/* When polling threads individually in send order, we should see rotation */
+	int expected_order[5][4] = {
+		{0, 1, 2, 3},  /* First call: start from thread 0 */
+		{1, 2, 3, 0},  /* Second call: start from thread 1 */
+		{2, 3, 0, 1},  /* Third call: start from thread 2 */
+		{3, 0, 1, 2},  /* Fourth call: start from thread 3 */
+		{0, 1, 2, 3}   /* Fifth call: wrap around to thread 0 */
+	};
+
+	allocate_threads(4);
+	set_thread(0);
+	spdk_io_device_register(&ch_count, channel_create, channel_destroy, sizeof(int), NULL);
+	ch0 = spdk_get_io_channel(&ch_count);
+	set_thread(1);
+	ch1 = spdk_get_io_channel(&ch_count);
+	set_thread(2);
+	ch2 = spdk_get_io_channel(&ch_count);
+	set_thread(3);
+	ch3 = spdk_get_io_channel(&ch_count);
+	CU_ASSERT(ch_count == 4);
+
+	/* Test round-robin rotation - poll threads in send order to verify rotation */
+	for (call = 0; call < 5; call++) {
+		g_broadcast_msg_count = 0;
+		memset(g_broadcast_msgs, 0, sizeof(g_broadcast_msgs));
+
+		set_thread(0);
+		spdk_for_each_channel_broadcast_rr(&ch_count, broadcast_msg_fn, NULL);
+
+		/* Poll threads in the order they were sent to verify send order */
+		for (i = 0; i < 4; i++) {
+			poll_thread(expected_order[call][i]);
+		}
+
+		/* All four threads should receive messages */
+		CU_ASSERT(g_broadcast_msg_count == 4);
+
+		/* Verify the order matches expected round-robin pattern */
+		for (i = 0; i < 4; i++) {
+			CU_ASSERT(g_broadcast_msgs[i].thread_id == expected_order[call][i]);
+		}
+	}
+
+	/* Test that multiple io_devices maintain separate rotation state */
+	{
+		struct spdk_io_channel *ch_dev2[4];
+		int ch_count_dev2 = 0;
+		int j;
+
+		/* Register a second io_device */
+		set_thread(0);
+		spdk_io_device_register(&ch_count_dev2, channel_create, channel_destroy, sizeof(int), NULL);
+		for (j = 0; j < 4; j++) {
+			set_thread(j);
+			ch_dev2[j] = spdk_get_io_channel(&ch_count_dev2);
+		}
+		CU_ASSERT(ch_count_dev2 == 4);
+
+		/* Verify independent rotation for two devices */
+		g_broadcast_msg_count = 0;
+		memset(g_broadcast_msgs, 0, sizeof(g_broadcast_msgs));
+		set_thread(0);
+		spdk_for_each_channel_broadcast_rr(&ch_count, broadcast_msg_fn, NULL);
+		/* Poll in expected order for device 1 (should start from thread 1) */
+		poll_thread(1);
+		poll_thread(2);
+		poll_thread(3);
+		poll_thread(0);
+		CU_ASSERT(g_broadcast_msg_count == 4);
+		CU_ASSERT(g_broadcast_msgs[0].thread_id == 1);
+
+		g_broadcast_msg_count = 0;
+		memset(g_broadcast_msgs, 0, sizeof(g_broadcast_msgs));
+		set_thread(0);
+		spdk_for_each_channel_broadcast_rr(&ch_count_dev2, broadcast_msg_fn, NULL);
+		/* Poll in expected order for device 2 (should start from thread 0, first call) */
+		poll_thread(0);
+		poll_thread(1);
+		poll_thread(2);
+		poll_thread(3);
+		CU_ASSERT(g_broadcast_msg_count == 4);
+		CU_ASSERT(g_broadcast_msgs[0].thread_id == 0);
+
+		/* Clean up device 2 */
+		for (j = 0; j < 4; j++) {
+			set_thread(j);
+			spdk_put_io_channel(ch_dev2[j]);
+		}
+		poll_threads();
+		spdk_io_device_unregister(&ch_count_dev2, NULL);
+		poll_threads();
+	}
+
+	set_thread(0);
+	spdk_put_io_channel(ch0);
+	set_thread(1);
+	spdk_put_io_channel(ch1);
+	set_thread(2);
+	spdk_put_io_channel(ch2);
+	set_thread(3);
+	spdk_put_io_channel(ch3);
+	poll_threads();
+
+	spdk_io_device_unregister(&ch_count, NULL);
+	poll_threads();
+
+	free_threads();
+}
+
 static void
 channel_create_cb_failed(void)
 {
@@ -2376,6 +2578,8 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, poller_get_state_str);
 	CU_ADD_TEST(suite, poller_get_period_ticks);
 	CU_ADD_TEST(suite, poller_get_stats);
+	CU_ADD_TEST(suite, for_each_channel_broadcast_test);
+	CU_ADD_TEST(suite, for_each_channel_broadcast_rr_test);
 	CU_ADD_TEST(suite, channel_create_cb_failed);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);

@@ -856,6 +856,19 @@ void spdk_io_channel_send_msg(struct spdk_thread *thread, void *io_device,
 void spdk_for_each_channel_broadcast(void *io_device, spdk_channel_msg_fn fn, void *ctx);
 
 /**
+ * Call 'fn' on all channels associated with io_device by broadcast manner with round-robin starting point.
+ *
+ * Similar to spdk_for_each_channel_broadcast(), but rotates the starting thread on each call
+ * to distribute load more fairly across threads. All threads are still visited in each call.
+ * The rotation state is automatically maintained per io_device.
+ *
+ * \param io_device 'fn' will be called on all channels associated with this io_device.
+ * \param fn Called on the appropriate thread for all channels associated with io_device.
+ * \param ctx Context buffer passed to 'fn'.
+ */
+void spdk_for_each_channel_broadcast_rr(void *io_device, spdk_channel_msg_fn fn, void *ctx);
+
+/**
  * Get the io_device for the specified I/O channel.
  *
  * \param ch I/O channel.
