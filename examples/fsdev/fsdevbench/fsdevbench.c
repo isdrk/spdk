@@ -9,6 +9,40 @@
 #include "spdk/string.h"
 #include "spdk/thread.h"
 
+struct fsdevbench_fuse_io {
+	struct {
+		struct fuse_in_header		hdr;
+		union {
+			struct fuse_init_in	init;
+			struct fuse_open_in	open;
+			struct fuse_create_in	create;
+			struct fuse_release_in	release;
+			struct fuse_forget_in	forget;
+			struct fuse_read_in	read;
+			struct fuse_write_in	write;
+		} op;
+		struct iovec			iovs[1];
+	} in;
+	struct {
+		struct fuse_out_header			hdr;
+		union {
+			struct fuse_init_out		init;
+			struct fuse_entry_out		entry;
+			struct fuse_open_out		open;
+			struct fuse_statfs_out		statfs;
+			struct spdk_fuse_create_out	create;
+			struct fuse_write_out		write;
+		} op;
+		struct iovec			iovs[1];
+	} out;
+
+	uint64_t unique;
+};
+struct fsdevbench_io {
+	struct fsdevbench_fuse_io fuse_io;
+	struct spdk_fsdev_io fsdev_io;
+};
+SPDK_STATIC_ASSERT(offsetof(struct fsdevbench_io, fsdev_io) % 8 == 0, "misalignment");
 
 struct fsdevbench_app {
 	/* User options */
@@ -18,14 +52,14 @@ struct fsdevbench_app {
 
 	struct spdk_fsdev_desc			*fsdev_desc;
 	struct spdk_io_channel			*ioch;
-	struct spdk_fsdev_io			*fsdev_io;
-	struct spdk_fsdev_file_object		*root;
+	struct fsdevbench_io			*io;
 	size_t					cur_file_count;
 
 	int					status;
 	uint64_t				tsc_start;
 	uint64_t				tsc_end;
 
+	char					readdir_buf[4096];
 } g_app = {};
 
 #define fsdevbench_errmsg(fmt, ...) \
@@ -60,9 +94,36 @@ fsdevbench_thread_exit(void *ctx)
 static void
 fsdevbench_fini(void)
 {
-	free(g_app.fsdev_io);
+	free(g_app.io);
 
 	spdk_for_each_thread(fsdevbench_thread_exit, NULL, fsdevbench_done);
+}
+
+static void
+fsdevbench_io_init(struct fsdevbench_io *io, struct spdk_fsdev_desc *fsdev_desc,
+		   struct spdk_io_channel *ioch, uint32_t opcode,
+		   uint64_t nodeid, uint32_t len, struct iovec *in_iovs, int in_iovcnt,
+		   struct iovec *out_iovs, int out_iovcnt, spdk_fsdev_cpl_cb cb_fn, void *cb_ctx)
+{
+	io->fuse_io.in.hdr.opcode = opcode;
+	io->fuse_io.in.hdr.unique = io->fuse_io.unique;
+	io->fuse_io.in.hdr.len = sizeof(io->fuse_io.in.hdr) + len;
+	io->fuse_io.in.hdr.nodeid = nodeid;
+	io->fuse_io.in.hdr.uid = geteuid();
+	io->fuse_io.in.hdr.gid = getegid();
+	/* Skip pid */
+	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, io->fuse_io.unique, SPDK_FSDEV_IO_FUSE,
+			   0, io->fuse_io.unique, cb_fn, cb_ctx);
+	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
+	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;
+	io->fsdev_io.u_in.fuse.iov = in_iovs;
+	io->fsdev_io.u_in.fuse.iovcnt = in_iovcnt;
+	io->fsdev_io.u_out.fuse.hdr = &io->fuse_io.out.hdr;
+	io->fsdev_io.u_out.fuse.op.raw = &io->fuse_io.out.op;
+	io->fsdev_io.u_out.fuse.iov = out_iovs;
+	io->fsdev_io.u_out.fuse.iovcnt = out_iovcnt;
+
+	io->fuse_io.unique++;
 }
 
 static void
@@ -87,10 +148,11 @@ fsdevbench_fini_umount_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_
 static void
 fsdevbench_fini_umount(void)
 {
-	struct spdk_fsdev_io *fsdev_io = g_app.fsdev_io;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_UMOUNT,
-			   0, 0, fsdevbench_fini_umount_cb, NULL);
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_DESTROY,
+			   0, 0, NULL, 0, NULL, 0, fsdevbench_fini_umount_cb, NULL);
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -101,7 +163,9 @@ static void fsdevbench_fini_unlink(void);
 static void
 fsdevbench_fini_unlink_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
-	free((void *)fsdev_io->u_in.unlink.name);
+	struct fsdevbench_io *io = g_app.io;
+
+	free((void *)io->fuse_io.in.iovs[0].iov_base);
 
 	if (g_app.cur_file_count > 0) {
 		fsdevbench_fini_unlink();
@@ -113,7 +177,9 @@ fsdevbench_fini_unlink_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_
 static void
 fsdevbench_fini_unlink(void)
 {
-	struct spdk_fsdev_io *fsdev_io = g_app.fsdev_io;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	struct fsdevbench_fuse_io *fuse_io = &io->fuse_io;
 	char *file_name;
 
 	g_app.cur_file_count--;
@@ -126,11 +192,11 @@ fsdevbench_fini_unlink(void)
 		return;
 	}
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_UNLINK,
-			   0, 0, fsdevbench_fini_unlink_cb, NULL);
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_UNLINK,
+			   FUSE_ROOT_ID, strlen(file_name) + 1, fuse_io->in.iovs, 1, NULL, 0, fsdevbench_fini_unlink_cb, NULL);
 
-	fsdev_io->u_in.unlink.parent_fobject = g_app.root;
-	fsdev_io->u_in.create.name = file_name;
+	fuse_io->in.iovs[0].iov_base = (char *)file_name;
+	fuse_io->in.iovs[0].iov_len = strlen(file_name) + 1;
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -155,20 +221,12 @@ fsdevbench_readdir_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 
 }
 
-static int
-fsdevbench_readdir_entry_cb(void *cb_arg, struct spdk_fsdev_io *fsdev_io,
-			    const char *name,
-			    struct spdk_fsdev_file_object *fobject, const struct spdk_fsdev_file_attr *attr,
-			    off_t offset, bool *forget)
-{
-	return 0;
-}
-
-
 static void
 fsdevbench_opendir_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
-	struct spdk_fsdev_file_handle *fhandle;
+	struct fsdevbench_io *io = g_app.io;
+	struct fuse_open_out *open = &io->fuse_io.out.op.open;
+	struct fuse_read_in *read_in = io->fsdev_io.u_in.fuse.op.read;
 
 	if (status != 0) {
 		fsdevbench_errmsg("failed to open dir: %s\n", spdk_strerror(-status));
@@ -177,14 +235,13 @@ fsdevbench_opendir_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 		return;
 	}
 
-	fhandle = fsdev_io->u_out.opendir.fhandle;
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_READDIR,
+			   FUSE_ROOT_ID, sizeof(*read_in), NULL, 0, io->fuse_io.out.iovs, 1, fsdevbench_readdir_cb, NULL);
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_READDIR,
-			   0, 0, fsdevbench_readdir_cb, NULL);
-
-	fsdev_io->u_in.readdir.fhandle = fhandle;
-	fsdev_io->u_in.readdir.fobject = g_app.root;
-	fsdev_io->u_in.readdir.entry_cb_fn = fsdevbench_readdir_entry_cb;
+	memset(read_in, 0, sizeof(*read_in));
+	read_in->fh = open->fh;
+	io->fuse_io.out.iovs[0].iov_base = g_app.readdir_buf;
+	io->fuse_io.out.iovs[0].iov_len = sizeof(g_app.readdir_buf);
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -192,13 +249,15 @@ fsdevbench_opendir_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 static void
 fsdevbench_opendir(void)
 {
-	struct spdk_fsdev_io *fsdev_io = g_app.fsdev_io;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	struct fuse_open_in *open = &io->fuse_io.in.op.open;
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_OPENDIR,
-			   0, 0, fsdevbench_opendir_cb, NULL);
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_OPENDIR,
+			   FUSE_ROOT_ID, 0, NULL, 0, NULL, 0, fsdevbench_opendir_cb, NULL);
 
-	fsdev_io->u_in.opendir.fobject = g_app.root;
-	fsdev_io->u_in.opendir.flags = 0;
+
+	open->flags = 0;
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -231,13 +290,14 @@ fsdevbench_init_close_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 static void
 fsdevbench_init_create_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
-	struct spdk_fsdev_file_object *fobject;
-	struct spdk_fsdev_file_handle *fhandle;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fuse_create_out *create = &io->fuse_io.out.op.create;
+	struct fuse_release_in *release = &io->fuse_io.in.op.release;
 
-	free((void *)fsdev_io->u_in.create.name);
+	free((void *)io->fuse_io.in.iovs[0].iov_base);
 
 	if (status != 0) {
-		fsdevbench_errmsg("failed to mount %s: %s\n",
+		fsdevbench_errmsg("failed to create file %s: %s\n",
 				  spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(g_app.fsdev_desc)),
 				  spdk_strerror(-status));
 		fsdevbench_set_status(status);
@@ -245,15 +305,11 @@ fsdevbench_init_create_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_
 		return;
 	}
 
-	fobject = fsdev_io->u_out.create.fobject;
-	fhandle = fsdev_io->u_out.create.fhandle;
-
 	/* Immediately close the file */
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_RELEASE,
-			   0, 0, fsdevbench_init_close_cb, NULL);
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_RELEASE, create->entry.nodeid,
+			   sizeof(*release), NULL, 0, NULL, 0, fsdevbench_init_close_cb, NULL);
 
-	fsdev_io->u_in.release.fobject = fobject;
-	fsdev_io->u_in.release.fhandle = fhandle;
+	release->fh = create->open.fh;
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -261,8 +317,12 @@ fsdevbench_init_create_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_
 static void
 fsdevbench_init_create_file(void)
 {
-	struct spdk_fsdev_io *fsdev_io = g_app.fsdev_io;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	struct fsdevbench_fuse_io *fuse_io = &io->fuse_io;
+	struct fuse_create_in *create = &io->fuse_io.in.op.create;
 	char *file_name;
+	size_t len;
 
 	file_name = spdk_sprintf_alloc("file_%lu", g_app.cur_file_count);
 	if (file_name == NULL) {
@@ -272,15 +332,14 @@ fsdevbench_init_create_file(void)
 		return;
 	}
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_CREATE,
-			   0, 0, fsdevbench_init_create_cb, NULL);
+	len = strlen(file_name) + 1;
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_CREATE,
+			   FUSE_ROOT_ID, sizeof(*create) + len, fuse_io->in.iovs, 1, NULL, 0, fsdevbench_init_create_cb, NULL);
 
-	fsdev_io->u_in.create.parent_fobject = g_app.root;
-	fsdev_io->u_in.create.name = file_name;
-	fsdev_io->u_in.create.mode = 0644;
-	fsdev_io->u_in.create.euid = geteuid();
-	fsdev_io->u_in.create.egid = getegid();
-	fsdev_io->u_in.create.flags = O_RDWR;
+	create->mode = 0644;
+	create->flags = O_RDWR;
+	fuse_io->in.iovs[0].iov_base = (char *)file_name;
+	fuse_io->in.iovs[0].iov_len = len;
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -297,22 +356,22 @@ fsdevbench_init_mount_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_i
 		return;
 	}
 
-	g_app.root = fsdev_io->u_out.mount.root_fobject;
-
 	fsdevbench_init_create_file();
-
 }
 
 static void
 fsdevbench_init_mount(void)
 {
-	struct spdk_fsdev_io *fsdev_io = g_app.fsdev_io;
+	struct fsdevbench_io *io = g_app.io;
+	struct spdk_fsdev_io *fsdev_io = &io->fsdev_io;
+	struct fuse_init_in *init = &io->fuse_io.in.op.init;
 
-	spdk_fsdev_io_init(fsdev_io, g_app.fsdev_desc, g_app.ioch, 0, SPDK_FSDEV_IO_MOUNT,
-			   0, 0, fsdevbench_init_mount_cb, NULL);
+	fsdevbench_io_init(io, g_app.fsdev_desc, g_app.ioch, FUSE_INIT,
+			   0, 0, NULL, 0, NULL, 0, fsdevbench_init_mount_cb, NULL);
 
-	memset(&fsdev_io->u_in.mount.opts, 0, sizeof(fsdev_io->u_in.mount.opts));
-	fsdev_io->u_in.mount.opts.opts_size = SPDK_SIZEOF(&fsdev_io->u_in.mount.opts, opts_size);
+	memset(init, 0, sizeof(*init));
+	init->major = 7;
+	init->minor = 31;
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
@@ -337,9 +396,10 @@ fsdevbench_start_app(void *ctx)
 	}
 
 	sz = spdk_fsdev_get_io_ctx_size();
-	g_app.fsdev_io = calloc(1, sz);
-	if (g_app.fsdev_io == NULL) {
-		fsdevbench_errmsg("failed to allocate %d bytes for fsdev_io\n", sz);
+	g_app.io = calloc(1, sizeof(struct fsdevbench_io) + sz);
+	if (g_app.io == NULL) {
+		fsdevbench_errmsg("failed to allocate %zu bytes for fsdev_io\n",
+				  sizeof(struct fsdevbench_io) + (size_t)sz);
 		goto error;
 	}
 
