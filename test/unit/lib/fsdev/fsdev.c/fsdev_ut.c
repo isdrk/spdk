@@ -732,16 +732,15 @@ static void *ut_notify_reply_ctx = NULL;
 static void
 ut_fsdev_notify_cb(struct spdk_fsdev *fsdev,
 		   void *ctx,
-		   const struct spdk_fsdev_notify_data *notify_data,
+		   const struct spdk_fuse_notify_request *request,
 		   spdk_fsdev_notify_reply_cb_t reply_cb,
 		   void *reply_ctx)
 {
 	ut_call_record_begin(ut_fsdev_notify_cb);
 	ut_call_record_param_ptr(fsdev);
 	ut_call_record_param_ptr(ctx);
-	ut_call_record_param_hash(notify_data->fuse, offsetof(struct spdk_fuse_notify_request, internal));
-	ut_call_record_param_hash(notify_data->fuse->iovs[0].iov_base,
-				  (uint32_t)notify_data->fuse->iovs[0].iov_len);
+	ut_call_record_param_hash(request, offsetof(struct spdk_fuse_notify_request, internal));
+	ut_call_record_param_hash(request->iovs[0].iov_base, (uint32_t)request->iovs[0].iov_len);
 	ut_call_record_end();
 
 	ut_notify_reply_cb = reply_cb;

@@ -1271,27 +1271,27 @@ spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev)
 }
 
 static int
-fsdev_notify_get_type(const struct spdk_fsdev_notify_data *notify_data)
+fsdev_notify_get_type(const struct spdk_fuse_notify_request *request)
 {
 	struct fuse_out_header *out;
 
-	out = notify_data->fuse->iovs[0].iov_base;
+	out = request->iovs[0].iov_base;
 	return out->error;
 }
 
 static int
-fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *notify_data,
+fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fuse_notify_request *request,
 	     bool is_retry, spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
 {
 	int type, res = -ENODEV;
 
 	if (fsdev->internal.notify_cb) {
 		assert(spdk_get_thread() == fsdev->internal.notify_thread);
-		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, notify_data,
+		fsdev->internal.notify_cb(fsdev, fsdev->internal.notify_ctx, request,
 					  reply_cb, reply_ctx);
 		res = 0;
 		if (!is_retry) {
-			type = fsdev_notify_get_type(notify_data);
+			type = fsdev_notify_get_type(request);
 			__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].count, 1,
 					   __ATOMIC_RELAXED);
 		}
@@ -1366,17 +1366,13 @@ fsdev_fuse_notify_done(const struct spdk_fsdev_notify_reply_data *reply, void *c
 static int
 fsdev_notify_fuse(struct spdk_fuse_notify_request *req, bool is_retry)
 {
-	struct spdk_fsdev_notify_data notify_data = {
-		.type = SPDK_FSDEV_NOTIFY_FUSE,
-		.fuse = req,
-	};
 	int rc;
 
 	req->internal.status = 0;
 	req->internal.flags.raw = 0;
 
 	req->internal.flags.in_submit_notify = 1;
-	rc =  fsdev_notify(req->fsdev, &notify_data, is_retry, fsdev_fuse_notify_done, req);
+	rc =  fsdev_notify(req->fsdev, req, is_retry, fsdev_fuse_notify_done, req);
 	req->internal.flags.in_submit_notify = 0;
 
 	return rc;
@@ -2279,12 +2275,13 @@ spdk_fsdev_set_delays(struct spdk_fsdev *fsdev, uint64_t submit_us,
 
 int
 spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
-			 const struct spdk_fsdev_notify_data *notify_data,
+			 const struct spdk_fuse_notify_request *req,
 			 uint64_t unique_id)
 {
 	struct fuse_out_header *out_hdr;
 	size_t buf_size;
 	int rc = 0;
+	struct fuse_out_header *req_out;
 
 	buf_size = spdk_iov_length(iov, iovcnt);
 	assert(buf_size >= sizeof(struct fuse_out_header));
@@ -2294,29 +2291,16 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 		return -ENOMEM;
 	}
 
-	if (notify_data) {
-		if (notify_data->type == SPDK_FSDEV_NOTIFY_FUSE) {
-			struct spdk_fuse_notify_request *req = notify_data->fuse;
-			struct fuse_out_header *req_out = req->iovs[0].iov_base;
+	req_out = req->iovs[0].iov_base;
 
-			if (req_out->len > buf_size) {
-				SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
-					    buf_size, req_out->len);
-				rc = -ENOMEM;
-			} else {
-				spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
-				out_hdr->unique = unique_id;
-				rc = 0;
-			}
-		} else {
-			SPDK_ERRLOG("Unsupported notify type %d\n", notify_data->type);
-			rc = -EINVAL;
-		}
+	if (req_out->len > buf_size) {
+		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+			    buf_size, req_out->len);
+		rc = -ENOMEM;
 	} else {
-		/* error and unique set to zero indicate device reset to driver */
-		out_hdr->len = sizeof(*out_hdr);
-		out_hdr->error = 0;
-		out_hdr->unique = 0;
+		spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
+		out_hdr->unique = unique_id;
+		rc = 0;
 	}
 
 	if (rc == 0) {

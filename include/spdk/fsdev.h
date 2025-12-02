@@ -558,15 +558,6 @@ struct spdk_fuse_notify_request {
 	STAILQ_ENTRY(spdk_fuse_notify_request)	stailq;
 };
 
-struct spdk_fsdev_notify_data {
-	/** Notification type */
-	enum spdk_fsdev_notify_type type;
-	union {
-		/** Data for SPDK_FSDEV_NOTIFY_FUSE notification type */
-		struct spdk_fuse_notify_request *fuse;
-	};
-};
-
 struct spdk_fsdev_notify_reply_data {
 	/** Notification handling status */
 	int status;
@@ -588,7 +579,7 @@ typedef void (*spdk_fsdev_notify_reply_cb_t)(
  *
  * \param fsdev Filesystem device that triggered event.
  * \param ctx Context that was passed in spdk_fsdev_enable_notifications().
- * \param notify_data Data for the filesystem device notification.
+ * \param request Data for the filesystem device notification.
  * Data is only valid in the context of this callback.
  * \param reply_cb Optional notification reply callback. If NULL, fsdev doesn't need a reply for this notification.
  * Fsdev should be ready to get the reply callback in the context of notify callback.
@@ -596,7 +587,7 @@ typedef void (*spdk_fsdev_notify_reply_cb_t)(
  */
 typedef void (*spdk_fsdev_notify_cb_t)(struct spdk_fsdev *fsdev,
 				       void *ctx,
-				       const struct spdk_fsdev_notify_data *notify_data,
+				       const struct spdk_fuse_notify_request *request,
 				       spdk_fsdev_notify_reply_cb_t reply_cb,
 				       void *reply_ctx);
 
@@ -632,7 +623,7 @@ int spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc);
 /**
  * Get filesystem device maximum notification data size.
  * It indicates the maximum size of varibale sized data in the notification
- * and does not include fixed size fields in spdk_fsdev_notify_data structure.
+ * and does not include fixed size fields in spdk_fuse_notify_request structure.
  * Example of variable sized data is 'name' in FUSE_NOTIFY_INVAL_ENTRY notification.
  *
  * \param fsdev Filesystem device to query.
@@ -1092,14 +1083,13 @@ int spdk_fsdev_set_delays(struct spdk_fsdev *fsdev, uint64_t submit_us,
  *
  * \param iov Output IO vectors array.
  * \param iovcnt Size of the output IO vectors array.
- * \param notify_data Notification data received from fsdev.
- * Pass NULL to encode "empty" notification that is used to indicate device reset.
+ * \param req Notification request received from fsdev.
  * \param unique_id Unique ID of the notification.
  *
  * \return 0 on success, negated errno on failure.
  */
 int spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
-			     const struct spdk_fsdev_notify_data *notify_data,
+			     const struct spdk_fuse_notify_request *req,
 			     uint64_t unique_id);
 
 
