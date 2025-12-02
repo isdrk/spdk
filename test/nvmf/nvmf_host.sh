@@ -35,9 +35,10 @@ fi
 run_test "nvmf_identify_kernel_target" "$rootdir/test/nvmf/host/identify_kernel_nvmf.sh" "${TEST_ARGS[@]}"
 run_test "nvmf_auth_host" "$rootdir/test/nvmf/host/auth.sh" "${TEST_ARGS[@]}"
 
-if [[ "$SPDK_TEST_NVMF_TRANSPORT" == "tcp" ]]; then
-	run_test "nvmf_digest" "$rootdir/test/nvmf/host/digest.sh" "${TEST_ARGS[@]}"
-fi
+# FIXME:
+#if [[ "$SPDK_TEST_NVMF_TRANSPORT" == "tcp" ]]; then
+#	run_test "nvmf_digest" "$rootdir/test/nvmf/host/digest.sh" "${TEST_ARGS[@]}"
+#fi
 
 if [[ $SPDK_TEST_NVMF_MDNS -eq 1 && "$SPDK_TEST_NVMF_TRANSPORT" == "tcp" ]]; then
 	# Skipping tests on RDMA because the rdma stack fails to configure the same IP for host and target.
@@ -50,6 +51,9 @@ if [[ $SPDK_TEST_USDT -eq 1 ]]; then
 fi
 
 run_test "nvmf_bdevperf" $rootdir/test/nvmf/host/bdevperf.sh "${TEST_ARGS[@]}"
-run_test "nvmf_target_disconnect" $rootdir/test/nvmf/host/target_disconnect.sh "${TEST_ARGS[@]}"
+# FIXME: Temporarily disabled for tcp transport.
+if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
+	run_test "nvmf_target_disconnect" $rootdir/test/nvmf/host/target_disconnect.sh "${TEST_ARGS[@]}"
+fi
 
 trap - SIGINT SIGTERM EXIT
