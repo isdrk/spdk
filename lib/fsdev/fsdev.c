@@ -142,11 +142,6 @@ static const char *fsdev_notify_type_names[] = {
 	[FUSE_NOTIFY_RESEND] = "resend",
 };
 
-static uint32_t fsdev_notify_fuse_values[SPDK_FSDEV_NOTIFY_NUM_TYPES] = {
-	[SPDK_FSDEV_NOTIFY_INVAL_DATA] = FUSE_NOTIFY_INVAL_INODE,
-	[SPDK_FSDEV_NOTIFY_INVAL_ENTRY] = FUSE_NOTIFY_INVAL_ENTRY,
-};
-
 static struct spdk_fsdev_module *g_resume_fsdev_module = NULL;
 
 struct spdk_fsdev_mgmt_channel {
@@ -1208,13 +1203,8 @@ fsdev_notify_get_type(const struct spdk_fsdev_notify_data *notify_data)
 {
 	struct fuse_out_header *out;
 
-	if (notify_data->type == SPDK_FSDEV_NOTIFY_FUSE) {
-		out = notify_data->fuse->iovs[0].iov_base;
-		return out->error;
-	}
-
-	assert(notify_data->type < SPDK_COUNTOF(fsdev_notify_fuse_values));
-	return fsdev_notify_fuse_values[notify_data->type];
+	out = notify_data->fuse->iovs[0].iov_base;
+	return out->error;
 }
 
 static int
@@ -1236,39 +1226,6 @@ fsdev_notify(struct spdk_fsdev *fsdev, const struct spdk_fsdev_notify_data *noti
 	}
 
 	return res;
-}
-
-int
-spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
-			     uint64_t nodeid,
-			     uint64_t offset, size_t size,
-			     spdk_fsdev_notify_reply_cb_t reply_cb,
-			     void *reply_ctx)
-{
-	struct spdk_fsdev_notify_data notify_data = {
-		.type = SPDK_FSDEV_NOTIFY_INVAL_DATA,
-		.inval_data.nodeid = nodeid,
-		.inval_data.offset = offset,
-		.inval_data.size = size
-	};
-
-	return fsdev_notify(fsdev, &notify_data, false, reply_cb, reply_ctx);
-}
-
-int
-spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
-			      uint64_t parent_nodeid,
-			      const char *name,
-			      spdk_fsdev_notify_reply_cb_t reply_cb,
-			      void *reply_ctx)
-{
-	struct spdk_fsdev_notify_data notify_data = {
-		.type = SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
-		.inval_entry.parent_nodeid = parent_nodeid,
-		.inval_entry.name = name
-	};
-
-	return fsdev_notify(fsdev, &notify_data, false, reply_cb, reply_ctx);
 }
 
 static void
@@ -1357,14 +1314,6 @@ int
 spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req)
 {
 	return fsdev_notify_fuse(req, false);
-}
-
-void
-spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type fsdev_type)
-{
-	int type = fsdev_notify_fuse_values[fsdev_type];
-
-	__atomic_add_fetch(&fsdev->internal.hist_stat->notify[type].replies, 1, __ATOMIC_RELAXED);
 }
 
 bool

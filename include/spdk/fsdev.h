@@ -192,8 +192,6 @@ enum spdk_fsdev_io_type {
 
 /** Notification type */
 enum spdk_fsdev_notify_type {
-	SPDK_FSDEV_NOTIFY_INVAL_DATA,
-	SPDK_FSDEV_NOTIFY_INVAL_ENTRY,
 	SPDK_FSDEV_NOTIFY_FUSE,
 	SPDK_FSDEV_NOTIFY_NUM_TYPES
 };
@@ -542,19 +540,6 @@ struct spdk_fsdev_notify_data {
 	/** Notification type */
 	enum spdk_fsdev_notify_type type;
 	union {
-		/** Data for SPDK_FSDEV_NOTIFY_INVAL_DATA notification type */
-		struct {
-			uint64_t nodeid;
-			uint64_t offset;
-			size_t size;
-		} inval_data;
-
-		/** Data for SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification type */
-		struct {
-			uint64_t parent_nodeid;
-			const char *name;
-		} inval_entry;
-
 		/** Data for SPDK_FSDEV_NOTIFY_FUSE notification type */
 		struct spdk_fuse_notify_request *fuse;
 	};
@@ -626,7 +611,7 @@ int spdk_fsdev_disable_notifications(struct spdk_fsdev_desc *desc);
  * Get filesystem device maximum notification data size.
  * It indicates the maximum size of varibale sized data in the notification
  * and does not include fixed size fields in spdk_fsdev_notify_data structure.
- * Example of variable sized data is 'name' in SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification.
+ * Example of variable sized data is 'name' in FUSE_NOTIFY_INVAL_ENTRY notification.
  *
  * \param fsdev Filesystem device to query.
  *

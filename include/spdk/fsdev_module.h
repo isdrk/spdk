@@ -417,45 +417,6 @@ spdk_fsdev_io_from_ctx(void *ctx)
 }
 
 /**
- * Send a SPDK_FSDEV_NOTIFY_INVAL_DATA notification to the user.
- *
- * \param fsdev Filesystem device.
- * \param nodeid nodeid to invalidate.
- * \param offset Offset of data region to invalidate.
- * \param size Size of data region to invalidate.
- * \param reply_cb Callback to deliver notification handling status
- * Fsdev should be ready to get the reply callback in the context of this call.
- * \param reply_ctx Reply context
- *
- * \return 0 on success.
- * \return -ENODEV if notifications are not enabled.
- */
-int spdk_fsdev_notify_inval_data(struct spdk_fsdev *fsdev,
-				 uint64_t nodeid,
-				 uint64_t offset, size_t size,
-				 spdk_fsdev_notify_reply_cb_t reply_cb,
-				 void *reply_ctx);
-
-/**
- * Send a SPDK_FSDEV_NOTIFY_INVAL_ENTRY notification to the user.
- *
- * \param fsdev Filesystem device.
- * \param parent_nodeid Parent nodeid to invalidate.
- * \param name Name of entry in the parent_nodeid to invalidate.
- * \param reply_cb Callback to deliver notification handling status
- * Fsdev should be ready to get the reply callback in the context of this call.
- * \param reply_ctx Reply context
- *
- * \return 0 on success.
- * \return -ENODEV if notifications are not enabled.
- */
-int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
-				  uint64_t parent_nodeid,
-				  const char *name,
-				  spdk_fsdev_notify_reply_cb_t reply_cb,
-				  void *reply_ctx);
-
-/**
  * Send a SPDK_FSDEV_NOTIFY_FUSE notification.
  *
  * \param req Notification request.
@@ -463,15 +424,6 @@ int spdk_fsdev_notify_inval_entry(struct spdk_fsdev *fsdev,
  * \return 0 on success, negative errno otherwise.
  */
 int spdk_fsdev_notify_fuse(struct spdk_fuse_notify_request *req);
-
-/**
- * Increment filesystem device notification reply statistics.
- *
- * \param fsdev Filesystem device.
- * \param type Notification type.
- */
-void spdk_fsdev_notify_reply_add_stat(struct spdk_fsdev *fsdev, enum spdk_fsdev_notify_type type);
-
 /*
  *  Macro used to register module for later initialization.
  */
