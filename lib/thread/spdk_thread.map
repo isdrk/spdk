@@ -59,6 +59,7 @@
 	spdk_for_each_channel_continue;
 	spdk_io_channel_send_msg;
 	spdk_for_each_channel_broadcast;
+	spdk_for_each_channel_broadcast_rr;
 	spdk_interrupt_register;
 	spdk_interrupt_register_for_events;
 	spdk_interrupt_register_ext;
