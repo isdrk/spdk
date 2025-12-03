@@ -41,3 +41,6 @@ static struct spdk_subsystem g_spdk_subsystem_accel = {
 
 SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_accel);
 SPDK_SUBSYSTEM_DEPEND(accel, iobuf)
+#ifdef CONFIG_RDMA
+SPDK_SUBSYSTEM_DEPEND(accel, rdma_provider)
+#endif

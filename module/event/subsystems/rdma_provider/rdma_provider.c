@@ -2,9 +2,11 @@
  *   Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 
+#include "spdk/log.h"
 #include "spdk/stdinc.h"
 
 #include "spdk_internal/rdma_provider.h"
+#include "spdk_internal/rdma_utils.h"
 #include "spdk/init.h"
 
 static void
@@ -16,6 +18,7 @@ rdma_provider_subsystem_initialize(void)
 static void
 rdma_provider_subsystem_finish(void)
 {
+	spdk_rdma_utils_finish();
 	spdk_subsystem_fini_next();
 }
 
