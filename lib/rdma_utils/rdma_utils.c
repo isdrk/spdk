@@ -422,10 +422,12 @@ spdk_rdma_utils_put_pd(struct ibv_pd *pd)
 	pthread_mutex_unlock(&g_dev_mutex);
 }
 
-__attribute__((destructor)) static void
-_rdma_utils_fini(void)
+void
+spdk_rdma_utils_finish(void)
 {
 	struct rdma_utils_device *dev, *tmp;
+
+	pthread_mutex_lock(&g_dev_mutex);
 
 	TAILQ_FOREACH_SAFE(dev, &g_dev_list, tailq, tmp) {
 		dev->removed = true;
@@ -437,6 +439,8 @@ _rdma_utils_fini(void)
 		rdma_free_devices(g_ctx_list);
 		g_ctx_list = NULL;
 	}
+
+	pthread_mutex_unlock(&g_dev_mutex);
 }
 
 struct spdk_memory_domain *

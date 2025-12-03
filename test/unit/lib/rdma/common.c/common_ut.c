@@ -221,7 +221,7 @@ test_spdk_rdma_pd(void)
 	CU_ASSERT(_rdma_get_dev(ut_dev1->context) == NULL);
 	CU_ASSERT(_rdma_get_dev(ut_dev2->context) != NULL);
 
-	_rdma_utils_fini();
+	spdk_rdma_utils_finish();
 
 	ut_rdma_remove_dev(ut_dev0);
 	ut_rdma_remove_dev(ut_dev1);

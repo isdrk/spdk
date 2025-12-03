@@ -223,7 +223,10 @@ DEPDIRS-event_keyring := init json keyring
 DEPDIRS-event_fsdev := event_rmem init fsdev
 DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
-DEPDIRS-event_rdma_provider := init rdma_provider
+DEPDIRS-event_rdma_provider := init rdma_provider rdma_utils
+DEPDIRS-event_nvmf += event_rdma_provider
+DEPDIRS-event_bdev += event_rdma_provider
+DEPDIRS-event_accel += event_rdma_provider
 endif
 DEPDIRS-event_fuse := event_fsdev fsdev fuse init json jsonrpc log rpc util
 

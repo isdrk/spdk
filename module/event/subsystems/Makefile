@@ -40,6 +40,12 @@ DEPDIRS-fuse := fsdev
 ifeq ($(CONFIG_XLIO),y)
 DEPDIRS-sock := xlio
 endif
+ifeq ($(CONFIG_RDMA),y)
+DEPDIRS-bdev += rdma_provider
+DEPDIRS-accel += rdma_provider
+DEPDIRS-nvmf += rdma_provider
+endif
+
 
 .PHONY: all clean $(DIRS-y)
 

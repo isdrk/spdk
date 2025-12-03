@@ -619,3 +619,6 @@ SPDK_SUBSYSTEM_REGISTER(g_spdk_subsystem_nvmf)
 SPDK_SUBSYSTEM_DEPEND(nvmf, bdev)
 SPDK_SUBSYSTEM_DEPEND(nvmf, keyring)
 SPDK_SUBSYSTEM_DEPEND(nvmf, sock)
+#ifdef CONFIG_RDMA
+SPDK_SUBSYSTEM_DEPEND(nvmf, rdma_provider)
+#endif
