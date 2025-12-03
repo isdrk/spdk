@@ -9332,10 +9332,30 @@ rpc_tgt_ofld_eu_find_by_name(struct doca_sta_eu_handle **handles, uint32_t num_h
 	return DOCA_ERROR_NOT_FOUND;
 }
 
+static const char *
+rpt_tgt_ofld_eu_state_to_str(enum dpa_sta_eu_state state)
+{
+	switch (state) {
+	case DOCA_STA_EU_STATE_IDLE:
+		return "IDLE";
+	case DOCA_STA_EU_STATE_STOPPING:
+		return "STOPPING";
+	case DOCA_STA_EU_STATE_STARTED:
+		return "STARTED";
+	case DOCA_STA_EU_STATE_SUSPENDED:
+		return "SUSPENDED";
+	case DOCA_STA_EU_STATE_STOPPED:
+		return "STOPPED";
+	default:
+		return "UNKNOWN";
+	}
+}
+
 struct rpc_tgt_ofld_eu_data {
 	const char *name;
 	uint16_t eu_id;
 	uint16_t port;
+	enum dpa_sta_eu_state state;
 };
 
 static doca_error_t
@@ -9358,7 +9378,21 @@ rpc_tgt_ofld_eu_get_data(struct doca_sta_eu_handle *eu_handle, struct rpc_tgt_of
 		return drc;
 	}
 
+	drc = doca_sta_get_eu_state(eu_handle, &data->state);
+	if (DOCA_IS_ERROR(drc)) {
+		return drc;
+	}
+
 	return DOCA_SUCCESS;
+}
+
+static void
+rpc_tgt_ofld_eu_data_dump(struct rpc_tgt_ofld_eu_data *eu_data, struct spdk_json_write_ctx *w)
+{
+	spdk_json_write_named_string(w, "hdlr_name", eu_data->name);
+	spdk_json_write_named_uint16(w, "eu_id", eu_data->eu_id);
+	spdk_json_write_named_uint16(w, "port", eu_data->port);
+	spdk_json_write_named_string(w, "state", rpt_tgt_ofld_eu_state_to_str(eu_data->state));
 }
 
 static void
@@ -9374,11 +9408,7 @@ rpc_tgt_ofld_hdlr_data_dump(struct doca_sta_eu_handle *eu_handle, struct spdk_js
 	}
 
 	spdk_json_write_object_begin(w);
-
-	spdk_json_write_named_string(w, "hdlr_name", data.name);
-	spdk_json_write_named_uint16(w, "eu_id", data.eu_id);
-	spdk_json_write_named_uint16(w, "port", data.port);
-
+	rpc_tgt_ofld_eu_data_dump(&data, w);
 	spdk_json_write_object_end(w);
 }
 
@@ -9488,11 +9518,7 @@ rpc_tgt_ofld_eu_dump_counters(struct doca_sta_eu_handle *eu_handle, struct spdk_
 	}
 
 	spdk_json_write_object_begin(w);
-
-	spdk_json_write_named_string(w, "hdlr_name", eu_data.name);
-	spdk_json_write_named_uint16(w, "eu_id", eu_data.eu_id);
-	spdk_json_write_named_uint16(w, "port", eu_data.port);
-	spdk_json_write_named_string(w, "state", "RUNNING");
+	rpc_tgt_ofld_eu_data_dump(&eu_data, w);
 
 	drc = doca_sta_get_eu_stats(eu_handle, &ctr_entries, &num_entries);
 	if (DOCA_IS_ERROR(drc)) {
