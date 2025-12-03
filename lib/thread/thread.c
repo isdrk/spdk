@@ -190,6 +190,9 @@ static size_t g_ctx_sz = 0;
 static uint64_t g_thread_id = 1;
 static uint64_t g_poll_warning_threshold;
 
+/* Global thread generation counter */
+static uint64_t g_thread_generation = 0;
+
 enum spin_error {
 	SPIN_ERR_NONE,
 	/* Trying to use an SPDK lock while not on an SPDK thread */
@@ -428,6 +431,7 @@ _free_thread(struct spdk_thread *thread)
 	assert(g_thread_count > 0);
 	g_thread_count--;
 	TAILQ_REMOVE(&g_threads, thread, tailq);
+	g_thread_generation++;
 	pthread_mutex_unlock(&g_devlist_mutex);
 
 	msg = SLIST_FIRST(&thread->msg_cache);
