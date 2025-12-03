@@ -816,6 +816,24 @@ print_bucket(void *ctx, uint64_t start, uint64_t end, uint64_t count,
 }
 
 static void
+bdevperf_task_free(struct bdevperf_task *task)
+{
+	spdk_free(task->buf);
+	spdk_free(task->verify_buf);
+	spdk_free(task->md_buf);
+	spdk_free(task->verify_md_buf);
+	while (!STAILQ_EMPTY(&task->domains)) {
+		struct bdevperf_domain *domain = STAILQ_FIRST(&task->domains);
+		STAILQ_REMOVE_HEAD(&task->domains, stailq);
+#ifdef SPDK_CONFIG_RDMA
+		spdk_rdma_utils_free_mem_map(&domain->map);
+#endif
+		free(domain);
+	}
+	free(task);
+}
+
+static void
 bdevperf_test_done(void *ctx)
 {
 	struct bdevperf_job *job, *jtmp;
@@ -938,19 +956,7 @@ clean:
 
 		TAILQ_FOREACH_SAFE(task, &job->task_list, link, ttmp) {
 			TAILQ_REMOVE(&job->task_list, task, link);
-			spdk_free(task->buf);
-			spdk_free(task->verify_buf);
-			spdk_free(task->md_buf);
-			spdk_free(task->verify_md_buf);
-			while (!STAILQ_EMPTY(&task->domains)) {
-				struct bdevperf_domain *domain = STAILQ_FIRST(&task->domains);
-				STAILQ_REMOVE_HEAD(&task->domains, stailq);
-#ifdef SPDK_CONFIG_RDMA
-				spdk_rdma_utils_free_mem_map(&domain->map);
-#endif
-				free(domain);
-			}
-			free(task);
+			bdevperf_task_free(task);
 		}
 
 		bdevperf_job_free(job);
@@ -2167,12 +2173,14 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 			return -ENOMEM;
 		}
 
+		STAILQ_INIT(&task->domains);
+
 		task->buf = spdk_zmalloc(job->buf_size, spdk_bdev_get_buf_align(job->bdev), NULL,
 					 numa_id, SPDK_MALLOC_DMA);
 		if (!task->buf) {
 			fprintf(stderr, "Cannot allocate buf for task=%p\n", task);
 			spdk_zipf_free(&job->zipf);
-			free(task);
+			bdevperf_task_free(task);
 			return -ENOMEM;
 		}
 
@@ -2181,9 +2189,8 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 							numa_id, SPDK_MALLOC_DMA);
 			if (!task->verify_buf) {
 				fprintf(stderr, "Cannot allocate buf_verify for task=%p\n", task);
-				spdk_free(task->buf);
+				bdevperf_task_free(task);
 				spdk_zipf_free(&job->zipf);
-				free(task);
 				return -ENOMEM;
 			}
 
@@ -2192,10 +2199,8 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 								   spdk_bdev_get_buf_align(job->bdev), NULL, numa_id, SPDK_MALLOC_DMA);
 				if (!task->verify_md_buf) {
 					fprintf(stderr, "Cannot allocate verify_md_buf for task=%p\n", task);
-					spdk_free(task->buf);
-					spdk_free(task->verify_buf);
+					bdevperf_task_free(task);
 					spdk_zipf_free(&job->zipf);
-					free(task);
 					return -ENOMEM;
 				}
 			}
@@ -2207,18 +2212,13 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 						    numa_id, SPDK_MALLOC_DMA);
 			if (!task->md_buf) {
 				fprintf(stderr, "Cannot allocate md buf for task=%p\n", task);
-				spdk_zipf_free(&job->zipf);
-				spdk_free(task->verify_buf);
-				spdk_free(task->verify_md_buf);
-				spdk_free(task->buf);
-				free(task);
+				bdevperf_task_free(task);
 				return -ENOMEM;
 			}
 		}
 
 		task->job = job;
 		TAILQ_INSERT_TAIL(&job->task_list, task, link);
-		STAILQ_INIT(&task->domains);
 	}
 
 	g_construct_job_count++;
