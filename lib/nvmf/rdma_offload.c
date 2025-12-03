@@ -1581,6 +1581,7 @@ nvmf_offload_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	struct spdk_nvmf_offload_poller *opoller;
 	struct spdk_nvmf_rdma_accept_private_data accept_data;
 	doca_error_t drc;
+	union doca_data user_data;
 
 	oqpair = nvmf_offload_qpair_get(qpair);
 	opoller = oqpair->opoller;
@@ -1591,6 +1592,13 @@ nvmf_offload_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	drc = doca_sta_io_qp_alloc(opoller->sta_io, oqpair->device->doca_dev, &oqpair->handle);
 	if (DOCA_IS_ERROR(drc)) {
 		SPDK_ERRLOG("Failed to alloc offload qpair: %s\n", doca_error_get_descr(drc));
+		return -1;
+	}
+
+	user_data.ptr = oqpair;
+	drc = doca_sta_io_qp_set_user_data(opoller->sta_io, oqpair->handle, user_data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to set user data for offload qpair: %s\n", doca_error_get_descr(drc));
 		return -1;
 	}
 
@@ -6411,16 +6419,6 @@ nvmf_sta_io_state_changed_cb(const union doca_data user_data,
 	opoller->state = next_state;
 }
 
-static struct spdk_nvmf_offload_qpair *
-get_offload_qpair_from_qp_handle(struct spdk_nvmf_offload_poller *opoller,
-				 struct doca_sta_qp_handle *qp_handle)
-{
-	struct spdk_nvmf_offload_qpair find;
-
-	find.handle = qp_handle;
-	return RB_FIND(offload_qpairs_tree, &opoller->qpairs, &find);
-}
-
 static void
 nvmf_rdma_offload_qpair_disconnect(struct spdk_nvmf_offload_qpair *oqpair)
 {
@@ -6450,15 +6448,18 @@ nvmf_sta_io_non_offload_cb(struct doca_sta_qp_handle *qp_handle,
 	struct spdk_nvmf_offload_poller *opoller = user_data.ptr;
 	struct spdk_nvmf_offload_qpair *oqpair;
 	struct nvmf_non_offload_request *req;
+	union doca_data qp_user_data;
+	doca_error_t drc;
 	uint64_t receive_tsc = spdk_get_ticks();
 
 	assert(opoller);
 
-	oqpair = get_offload_qpair_from_qp_handle(opoller, qp_handle);
-	if (!oqpair) {
-		SPDK_ERRLOG("qpair is not found for qp_handle %p\n", qp_handle);
+	drc = doca_sta_io_qp_get_user_data(qp_handle, &qp_user_data);
+	if (DOCA_IS_ERROR(drc)) {
+		SPDK_ERRLOG("Failed to get user data for offload qpair: %s\n", doca_error_get_descr(drc));
 		return;
 	}
+	oqpair = qp_user_data.ptr;
 
 	if (STAILQ_EMPTY(&opoller->resources->free_queue)) {
 		SPDK_ERRLOG("No free entries for non-offload IO\n");
