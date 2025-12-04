@@ -664,12 +664,14 @@ spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
 	assert(w != NULL);
 
+	spdk_json_write_array_begin(w);
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "method", "rdma_provider_set_opts");
 	spdk_json_write_named_object_begin(w, "params");
 	spdk_json_write_named_bool(w, "support_offload_on_qp", g_mlx5_dv_opts.support_offload_on_qp);
 	spdk_json_write_object_end(w); /* params */
 	spdk_json_write_object_end(w);
+	spdk_json_write_array_end(w);
 }
 
 void
