@@ -422,6 +422,12 @@ spdk_rdma_utils_put_pd(struct ibv_pd *pd)
 	pthread_mutex_unlock(&g_dev_mutex);
 }
 
+int
+spdk_rdma_utils_init(void)
+{
+	return rdma_sync_dev_list();
+}
+
 void
 spdk_rdma_utils_finish(void)
 {

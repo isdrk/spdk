@@ -12,6 +12,7 @@
 static void
 rdma_provider_subsystem_initialize(void)
 {
+	spdk_rdma_utils_init();
 	spdk_subsystem_init_next(0);
 }
 

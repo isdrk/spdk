@@ -144,10 +144,16 @@ struct rdma_cm_id;
 int32_t spdk_rdma_cm_id_get_numa_id(struct rdma_cm_id *cm_id);
 
 /**
+ * Perform initialization work to prepare for usage.
+ *
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_rdma_utils_init(void);
+
+/**
  * Perform cleanup work to release all allocated resources.
  */
 void spdk_rdma_utils_finish(void);
-
 
 #ifdef __cplusplus
 }
