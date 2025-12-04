@@ -100,6 +100,7 @@ static int g_run_rc;
 
 static void destroy_tasks(void);
 static int dma_test_submit_io(struct dma_test_req *req);
+static int verify_tasks(void);
 
 static void
 print_total_stats(void)
@@ -183,6 +184,10 @@ dma_test_task_complete(void *ctx)
 	if (--g_num_complete_tasks == 0) {
 		spdk_poller_unregister(&g_runtime_poller);
 		print_total_stats();
+		if (g_run_rc == 0) {
+			g_run_rc = verify_tasks();
+		}
+		destroy_tasks();
 		spdk_app_stop(g_run_rc);
 	}
 }
@@ -1167,10 +1172,6 @@ main(int argc, char **argv)
 	}
 
 	rc = spdk_app_start(&opts, dma_test_start, NULL);
-	if (rc == 0) {
-		rc = verify_tasks();
-	}
-	destroy_tasks();
 	spdk_app_fini();
 
 	return rc;
