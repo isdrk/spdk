@@ -405,7 +405,8 @@ struct spdk_json_write_ctx;
 void
 spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w)
 {
-
+	spdk_json_write_array_begin(w);
+	spdk_json_write_array_end(w);
 }
 
 void
