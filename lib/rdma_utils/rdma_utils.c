@@ -260,6 +260,8 @@ rdma_add_dev(struct ibv_context *context)
 static void
 rdma_remove_dev(struct rdma_utils_device *dev)
 {
+	int rc;
+
 	if (!dev->removed || dev->ref > 0) {
 		return;
 	}
@@ -268,7 +270,10 @@ rdma_remove_dev(struct rdma_utils_device *dev)
 	 * there is no reference.
 	 */
 	TAILQ_REMOVE(&g_dev_list, dev, tailq);
-	ibv_dealloc_pd(dev->pd);
+	rc = ibv_dealloc_pd(dev->pd);
+	if (rc) {
+		SPDK_ERRLOG("ibv_dealloc_pd() failed: %s (%d)\n", spdk_strerror(errno), errno);
+	}
 	free(dev);
 }
 
