@@ -3377,17 +3377,16 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 
 	poller->group = group;
 	poller->device = ctx;
+	poller->pd = spdk_rdma_utils_get_pd(ctx);
+	if (poller->pd == NULL) {
+		SPDK_ERRLOG("Unable to get PD\n");
+		goto fail;
+	}
 
 	if (g_spdk_nvme_transport_opts.rdma_srq_size != 0) {
 		rc = ibv_query_device(ctx, &dev_attr);
 		if (rc) {
 			SPDK_ERRLOG("Unable to query RDMA device.\n");
-			goto fail;
-		}
-
-		poller->pd = spdk_rdma_utils_get_pd(ctx);
-		if (poller->pd == NULL) {
-			SPDK_ERRLOG("Unable to get PD.\n");
 			goto fail;
 		}
 
@@ -3443,11 +3442,6 @@ nvme_rdma_poller_create(struct nvme_rdma_poll_group *group, struct ibv_context *
 		num_cqe = max_num_cqe;
 	}
 
-	poller->pd = spdk_rdma_utils_get_pd(ctx);
-	if (poller->pd == NULL) {
-		SPDK_ERRLOG("Unable to get PD.\n");
-		goto fail;
-	}
 	cq_attr.cqe		= num_cqe;
 	cq_attr.comp_vector	= 0;
 	cq_attr.cq_context	= group;
