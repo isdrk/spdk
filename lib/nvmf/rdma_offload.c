@@ -616,7 +616,7 @@ struct spdk_nvmf_offload_qpair {
 	uint8_t					in_error_state : 1;
 	struct doca_sta_producer_task_send	*destroy_task;
 
-	RB_ENTRY(spdk_nvmf_offload_qpair)	node;
+	STAILQ_ENTRY(spdk_nvmf_offload_qpair)	link;
 };
 
 static inline struct spdk_nvmf_offload_qpair *
@@ -641,7 +641,7 @@ struct spdk_nvmf_offload_poller {
 	struct spdk_interrupt			*interrupt;
 	bool					need_destroy;
 
-	RB_HEAD(offload_qpairs_tree, spdk_nvmf_offload_qpair)	qpairs;
+	STAILQ_HEAD(, spdk_nvmf_offload_qpair)	qpairs;
 };
 
 struct spdk_nvmf_rdma_poll_group_stat {
@@ -898,15 +898,6 @@ RB_GENERATE_STATIC(qpairs_tree, spdk_nvmf_rdma_qpair, node, nvmf_rdma_qpair_comp
 
 static bool nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				      struct spdk_nvmf_rdma_request *rdma_req);
-
-static int
-nvmf_offload_qpair_compare(struct spdk_nvmf_offload_qpair *oqpair1,
-			   struct spdk_nvmf_offload_qpair *oqpair2)
-{
-	return oqpair1->handle < oqpair2->handle ? -1 : oqpair1->handle > oqpair2->handle;
-}
-
-RB_GENERATE_STATIC(offload_qpairs_tree, spdk_nvmf_offload_qpair, node, nvmf_offload_qpair_compare);
 
 static void _poller_submit_sends(struct spdk_nvmf_rdma_transport *rtransport,
 				 struct spdk_nvmf_rdma_poller *rpoller);
@@ -6655,7 +6646,7 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		SPDK_ERRLOG("Cannot allocate memory for offload poller context\n");
 		return -ENOMEM;
 	}
-	RB_INIT(&opoller->qpairs);
+	STAILQ_INIT(&opoller->qpairs);
 	opoller->notification_handle = doca_event_invalid_handle;
 	opoller->state = DOCA_CTX_STATE_IDLE;
 
@@ -7100,7 +7091,7 @@ nvmf_rdma_poll_group_add_offload_qpair(struct spdk_nvmf_rdma_poll_group *rgroup,
 	}
 
 	oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_CONNECTED;
-	RB_INSERT(offload_qpairs_tree, &opoller->qpairs, oqpair);
+	STAILQ_INSERT_TAIL(&opoller->qpairs, oqpair, link);
 
 	return 0;
 }
@@ -7351,12 +7342,12 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 					    doca_error_get_descr(drc));
 			}
 		}
-		RB_REMOVE(offload_qpairs_tree, &oqpair->opoller->qpairs, oqpair);
+		STAILQ_REMOVE(&oqpair->opoller->qpairs, oqpair, spdk_nvmf_offload_qpair, link);
 	}
 	if (oqpair->destruct_channel) {
 		spdk_put_io_channel(oqpair->destruct_channel);
 	}
-	if (oqpair->opoller && oqpair->opoller->need_destroy && RB_EMPTY(&oqpair->opoller->qpairs)) {
+	if (oqpair->opoller && oqpair->opoller->need_destroy && STAILQ_EMPTY(&oqpair->opoller->qpairs)) {
 		nvmf_offload_poller_destroy(oqpair->opoller);
 	}
 	if (oqpair->cm_id) {
