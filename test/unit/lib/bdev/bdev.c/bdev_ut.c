@@ -3179,7 +3179,7 @@ bdev_io_split_with_io_wait(void)
 	io_ch = spdk_bdev_get_io_channel(desc);
 	CU_ASSERT(io_ch != NULL);
 	channel = spdk_io_channel_get_ctx(io_ch);
-	mgmt_ch = channel->shared_resource->mgmt_ch;
+	mgmt_ch = shared_resource_to_mgmt_channel(channel->shared_resource);
 
 	bdev->optimal_io_boundary = 16;
 	bdev->split_on_optimal_io_boundary = true;
@@ -5552,7 +5552,7 @@ bdev_io_abort(void)
 	io_ch = spdk_bdev_get_io_channel(desc);
 	CU_ASSERT(io_ch != NULL);
 	channel = spdk_io_channel_get_ctx(io_ch);
-	mgmt_ch = channel->shared_resource->mgmt_ch;
+	mgmt_ch = shared_resource_to_mgmt_channel(channel->shared_resource);
 
 	g_abort_done = false;
 

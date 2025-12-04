@@ -169,9 +169,6 @@ struct spdk_bdev_channel;
  * to retry sending IO to one bdev after IO from other bdev completes.
  */
 struct spdk_bdev_shared_resource {
-	/* The bdev management channel */
-	struct spdk_bdev_mgmt_channel *mgmt_ch;
-
 	/*
 	 * Count of I/O submitted to bdev module and waiting for completion.
 	 * Incremented before submit_request() is called on an spdk_bdev_io.
@@ -402,6 +399,12 @@ static bool bdev_io_should_split(struct spdk_bdev_io *bdev_io);
 
 #define bdev_get_ext_io_opt(opts, field, defval) \
 	((opts) != NULL ? SPDK_GET_FIELD(opts, field, defval) : (defval))
+
+static inline struct spdk_bdev_mgmt_channel *
+shared_resource_to_mgmt_channel(struct spdk_bdev_shared_resource *shared)
+{
+	return SPDK_CONTAINEROF(shared, struct spdk_bdev_mgmt_channel, shared_resource);
+}
 
 static inline void
 bdev_ch_add_to_io_submitted(struct spdk_bdev_io *bdev_io)
@@ -1540,7 +1543,7 @@ _bdev_io_put_buf(struct spdk_bdev_io *bdev_io, void *buf, uint64_t buf_len)
 {
 	struct spdk_bdev_mgmt_channel *ch;
 
-	ch = bdev_io->internal.ch->shared_resource->mgmt_ch;
+	ch = shared_resource_to_mgmt_channel(bdev_io->internal.ch->shared_resource);
 	spdk_iobuf_put(&ch->iobuf, buf, bdev_io_get_max_buf_len(bdev_io, buf_len));
 }
 
@@ -1933,7 +1936,7 @@ bdev_io_get_buf(struct spdk_bdev_io *bdev_io, uint64_t len)
 	void *buf;
 
 	assert(spdk_bdev_io_get_thread(bdev_io) == spdk_get_thread());
-	mgmt_ch = bdev_io->internal.ch->shared_resource->mgmt_ch;
+	mgmt_ch = shared_resource_to_mgmt_channel(bdev_io->internal.ch->shared_resource);
 	max_len = bdev_io_get_max_buf_len(bdev_io, len);
 
 	if (spdk_unlikely(max_len > mgmt_ch->iobuf.cache[0].large.bufsize)) {
@@ -2746,7 +2749,7 @@ spdk_bdev_finish(spdk_bdev_fini_cb cb_fn, void *cb_arg)
 struct spdk_bdev_io *
 bdev_channel_get_io(struct spdk_bdev_channel *channel)
 {
-	struct spdk_bdev_mgmt_channel *ch = channel->shared_resource->mgmt_ch;
+	struct spdk_bdev_mgmt_channel *ch = shared_resource_to_mgmt_channel(channel->shared_resource);
 	struct spdk_bdev_io *bdev_io;
 
 	if (ch->per_thread_cache_count > 0) {
@@ -2774,7 +2777,7 @@ spdk_bdev_free_io(struct spdk_bdev_io *bdev_io)
 	assert(bdev_io != NULL);
 	assert(bdev_io->internal.status != SPDK_BDEV_IO_STATUS_PENDING);
 
-	ch = bdev_io->internal.ch->shared_resource->mgmt_ch;
+	ch = shared_resource_to_mgmt_channel(bdev_io->internal.ch->shared_resource);
 
 	if (bdev_io->internal.f.has_buf) {
 		bdev_io_put_buf(bdev_io);
@@ -2816,7 +2819,7 @@ bdev_io_do_submit(struct spdk_bdev_channel *bdev_ch, struct spdk_bdev_io *bdev_i
 	struct spdk_bdev_shared_resource *shared_resource = bdev_ch->shared_resource;
 
 	if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_ABORT)) {
-		struct spdk_bdev_mgmt_channel *mgmt_channel = shared_resource->mgmt_ch;
+		struct spdk_bdev_mgmt_channel *mgmt_channel = shared_resource_to_mgmt_channel(shared_resource);
 		struct spdk_bdev_io *bio_to_abort = bdev_io->u.abort.bio_to_abort;
 
 		if (spdk_bdev_abort_queued_io(&shared_resource->nomem_io, bio_to_abort) ||
@@ -4412,7 +4415,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	shared_resource->ref--;
 	if (shared_resource->ref == 0) {
 		assert(shared_resource->io_outstanding == 0);
-		spdk_put_io_channel(spdk_io_channel_from_ctx(shared_resource->mgmt_ch));
+		spdk_put_io_channel(spdk_io_channel_from_ctx(shared_resource_to_mgmt_channel(shared_resource)));
 		spdk_poller_unregister(&shared_resource->nomem_poller);
 	}
 }
@@ -4609,7 +4612,6 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
 	shared_resource = &mgmt_ch->shared_resource;
 	if (shared_resource->ref == 0) {
-		shared_resource->mgmt_ch = mgmt_ch;
 		shared_resource->io_outstanding = 0;
 		TAILQ_INIT(&shared_resource->nomem_io);
 		shared_resource->nomem_threshold = 0;
@@ -5362,7 +5364,7 @@ static void
 bdev_channel_abort_queued_ios(struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_shared_resource *shared_resource = ch->shared_resource;
-	struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource->mgmt_ch;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource_to_mgmt_channel(shared_resource);
 
 	bdev_abort_all_nomem_io(ch);
 	bdev_abort_all_buf_io(mgmt_ch, ch);
@@ -7575,7 +7577,7 @@ bdev_reset_freeze_channel(struct spdk_bdev_channel_iter *i, struct spdk_bdev *bd
 
 	channel = __io_ch_to_bdev_ch(ch);
 	shared_resource = channel->shared_resource;
-	mgmt_channel = shared_resource->mgmt_ch;
+	mgmt_channel = shared_resource_to_mgmt_channel(shared_resource);
 	channel->flags |= BDEV_CH_RESET_IN_PROGRESS;
 
 	bdev_channel_print_io_info(channel);
@@ -8199,7 +8201,7 @@ spdk_bdev_queue_io_wait(struct spdk_bdev *bdev, struct spdk_io_channel *ch,
 			struct spdk_bdev_io_wait_entry *entry)
 {
 	struct spdk_bdev_channel *channel = __io_ch_to_bdev_ch(ch);
-	struct spdk_bdev_mgmt_channel *mgmt_ch = channel->shared_resource->mgmt_ch;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource_to_mgmt_channel(channel->shared_resource);
 
 	if (bdev != entry->bdev) {
 		SPDK_ERRLOG("bdevs do not match\n");
