@@ -7,9 +7,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-ifeq ($(OS),Linux)
-DIRS-y += aio
-endif
+DIRS-$(CONFIG_FSDEV_AIO) += aio
 
 .PHONY: all clean $(DIRS-y)
 
