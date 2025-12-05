@@ -73,6 +73,7 @@ struct spdk_sock_map {
 
 struct spdk_net_impl {
 	const char *name;
+	int (*init)(struct spdk_sock_initialize_opts *opts);
 
 	int (*getaddr)(struct spdk_sock *sock, char *saddr, int slen, uint16_t *sport, char *caddr,
 		       int clen, uint16_t *cport);
@@ -124,9 +125,6 @@ struct spdk_net_impl {
 	struct spdk_memory_domain *(*get_memory_domain)(struct spdk_sock *);
 
 	STAILQ_ENTRY(spdk_net_impl) link;
-
-	int (*init)(void);
-	void (*deinit)(void);
 };
 
 void spdk_net_impl_register(struct spdk_net_impl *impl);

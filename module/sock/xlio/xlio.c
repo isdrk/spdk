@@ -1489,7 +1489,7 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 }
 
 static int
-xlio_sock_initialize(void)
+xlio_sock_initialize(struct spdk_sock_initialize_opts *opts)
 {
 
 	if (!spdk_xlio_is_initialized()) {
