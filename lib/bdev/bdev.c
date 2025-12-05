@@ -191,9 +191,6 @@ struct spdk_bdev_shared_resource {
 	 * If true, we should not touch the nomem_io list on I/O completions.
 	 */
 	bool			nomem_abort_in_progress;
-
-	/* Refcount of bdev channels using this resource */
-	uint32_t		ref;
 };
 
 struct spdk_bdev_mgmt_channel {
@@ -2202,6 +2199,8 @@ bdev_mgmt_channel_destroy(void *io_device, void *ctx_buf)
 	}
 
 	assert(ch->per_thread_cache_count == 0);
+
+	spdk_poller_unregister(&ch->nomem_poller);
 }
 
 static int
@@ -2238,6 +2237,10 @@ bdev_mgmt_channel_create(void *io_device, void *ctx_buf)
 	}
 
 	TAILQ_INIT(&ch->io_wait_queue);
+
+	TAILQ_INIT(&ch->shared_resource.nomem_io);
+	ch->shared_resource.io_outstanding = 0;
+	ch->shared_resource.nomem_threshold = 0;
 
 	return 0;
 }
@@ -4383,8 +4386,8 @@ err:
 static void
 bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 {
-	struct spdk_bdev_shared_resource *shared_resource;
 	struct lba_range *range;
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
 
 	bdev_free_io_stat(ch->stat);
 #ifdef SPDK_CONFIG_VTUNE
@@ -4405,22 +4408,14 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 		bdev_put_qos_channels(ch);
 	}
 
-	shared_resource = ch->shared_resource;
-
 	assert(TAILQ_EMPTY(&ch->io_locked));
 	assert(TAILQ_EMPTY(&ch->io_submitted));
 	assert(TAILQ_EMPTY(&ch->io_accel_exec));
 	assert(TAILQ_EMPTY(&ch->io_memory_domain));
 	assert(ch->io_outstanding == 0);
-	assert(shared_resource->ref > 0);
-	shared_resource->ref--;
-	if (shared_resource->ref == 0) {
-		struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource_to_mgmt_channel(shared_resource);
 
-		assert(shared_resource->io_outstanding == 0);
-		spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
-		spdk_poller_unregister(&mgmt_ch->nomem_poller);
-	}
+	mgmt_ch = shared_resource_to_mgmt_channel(ch->shared_resource);
+	spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
 }
 
 struct poll_timeout_ctx {
@@ -4578,7 +4573,6 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	struct spdk_bdev_channel	*ch = ctx_buf;
 	struct spdk_io_channel		*mgmt_io_ch;
 	struct spdk_bdev_mgmt_channel	*mgmt_ch;
-	struct spdk_bdev_shared_resource *shared_resource;
 	struct lba_range		*range;
 	int				rc;
 
@@ -4613,22 +4607,11 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 	}
 
 	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
-	shared_resource = &mgmt_ch->shared_resource;
-	if (shared_resource->ref == 0) {
-		shared_resource->io_outstanding = 0;
-		TAILQ_INIT(&shared_resource->nomem_io);
-		shared_resource->nomem_threshold = 0;
-	} else {
-		spdk_put_io_channel(mgmt_io_ch);
-	}
-
-	shared_resource->ref++;
-
 	ch->io_outstanding = 0;
 	TAILQ_INIT(&ch->locked_ranges);
 	ch->flags = 0;
 	ch->trace_id = bdev->internal.trace_id;
-	ch->shared_resource = shared_resource;
+	ch->shared_resource = &mgmt_ch->shared_resource;
 
 	TAILQ_INIT(&ch->io_submitted);
 	TAILQ_INIT(&ch->io_locked);
