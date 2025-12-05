@@ -192,13 +192,12 @@ struct spdk_bdev_shared_resource {
 	 */
 	bool			nomem_abort_in_progress;
 
-	struct spdk_poller	*nomem_poller;
-
 	/* Refcount of bdev channels using this resource */
 	uint32_t		ref;
 };
 
 struct spdk_bdev_mgmt_channel {
+	struct spdk_poller	*nomem_poller;
 	/*
 	 * Each thread keeps a cache of bdev_io - this allows
 	 *  bdev threads which are *not* DPDK threads to still
@@ -1684,7 +1683,8 @@ bdev_ch_retry_io(struct spdk_bdev_channel *bdev_ch)
 static int
 bdev_no_mem_poller(void *ctx)
 {
-	struct spdk_bdev_shared_resource *shared_resource = ctx;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = ctx;
+	struct spdk_bdev_shared_resource *shared_resource = &mgmt_ch->shared_resource;
 
 	if (!TAILQ_EMPTY(&shared_resource->nomem_io)) {
 		bdev_shared_ch_retry_io(shared_resource);
@@ -1695,7 +1695,7 @@ bdev_no_mem_poller(void *ctx)
 		return SPDK_POLLER_BUSY;
 	}
 
-	spdk_poller_unregister(&shared_resource->nomem_poller);
+	spdk_poller_unregister(&mgmt_ch->nomem_poller);
 	return SPDK_POLLER_IDLE;
 }
 
@@ -1704,18 +1704,19 @@ _bdev_io_handle_no_mem(struct spdk_bdev_io *bdev_io, enum bdev_io_retry_state st
 {
 	struct spdk_bdev_channel *bdev_ch = bdev_io->internal.ch;
 	struct spdk_bdev_shared_resource *shared_resource = bdev_ch->shared_resource;
+	struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource_to_mgmt_channel(shared_resource);
 
 	if (spdk_unlikely(bdev_io->internal.status == SPDK_BDEV_IO_STATUS_NOMEM)) {
 		bdev_io->internal.status = SPDK_BDEV_IO_STATUS_PENDING;
 		bdev_queue_nomem_io_head(shared_resource, bdev_io, state);
 
-		if (shared_resource->io_outstanding == 0 && !shared_resource->nomem_poller) {
+		if (shared_resource->io_outstanding == 0 && !mgmt_ch->nomem_poller) {
 			/* Special case when we have nomem IOs and no outstanding IOs which completions
 			 * could trigger retry of queued IOs
 			 * Any IOs submitted may trigger retry of queued IOs. This poller handles a case when no
 			 * new IOs submitted, e.g. qd==1 */
-			shared_resource->nomem_poller = SPDK_POLLER_REGISTER(bdev_no_mem_poller, shared_resource,
-							10 * SPDK_MSEC_TO_USEC);
+			mgmt_ch->nomem_poller = SPDK_POLLER_REGISTER(bdev_no_mem_poller, mgmt_ch,
+						10 * SPDK_MSEC_TO_USEC);
 		}
 		/* If bdev module completed an I/O that has an accel sequence with NOMEM status, the
 		 * ownership of that sequence is transferred back to the bdev layer, so we need to
@@ -4414,9 +4415,11 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	assert(shared_resource->ref > 0);
 	shared_resource->ref--;
 	if (shared_resource->ref == 0) {
+		struct spdk_bdev_mgmt_channel *mgmt_ch = shared_resource_to_mgmt_channel(shared_resource);
+
 		assert(shared_resource->io_outstanding == 0);
-		spdk_put_io_channel(spdk_io_channel_from_ctx(shared_resource_to_mgmt_channel(shared_resource)));
-		spdk_poller_unregister(&shared_resource->nomem_poller);
+		spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
+		spdk_poller_unregister(&mgmt_ch->nomem_poller);
 	}
 }
 
