@@ -616,7 +616,7 @@ struct spdk_nvmf_offload_qpair {
 	uint8_t					in_error_state : 1;
 	struct doca_sta_producer_task_send	*destroy_task;
 
-	STAILQ_ENTRY(spdk_nvmf_offload_qpair)	link;
+	TAILQ_ENTRY(spdk_nvmf_offload_qpair)	link;
 };
 
 static inline struct spdk_nvmf_offload_qpair *
@@ -641,7 +641,7 @@ struct spdk_nvmf_offload_poller {
 	struct spdk_interrupt			*interrupt;
 	bool					need_destroy;
 
-	STAILQ_HEAD(, spdk_nvmf_offload_qpair)	qpairs;
+	TAILQ_HEAD(, spdk_nvmf_offload_qpair)	qpairs;
 };
 
 struct spdk_nvmf_rdma_poll_group_stat {
@@ -6646,7 +6646,7 @@ nvmf_offload_poller_create(struct spdk_nvmf_rdma_transport *rtransport,
 		SPDK_ERRLOG("Cannot allocate memory for offload poller context\n");
 		return -ENOMEM;
 	}
-	STAILQ_INIT(&opoller->qpairs);
+	TAILQ_INIT(&opoller->qpairs);
 	opoller->notification_handle = doca_event_invalid_handle;
 	opoller->state = DOCA_CTX_STATE_IDLE;
 
@@ -7091,7 +7091,7 @@ nvmf_rdma_poll_group_add_offload_qpair(struct spdk_nvmf_rdma_poll_group *rgroup,
 	}
 
 	oqpair->state = SPDK_NVMF_OFFLOAD_QPAIR_STATE_CONNECTED;
-	STAILQ_INSERT_TAIL(&opoller->qpairs, oqpair, link);
+	TAILQ_INSERT_TAIL(&opoller->qpairs, oqpair, link);
 
 	return 0;
 }
@@ -7342,12 +7342,12 @@ nvmf_rdma_offload_qpair_destroy(struct spdk_nvmf_offload_qpair *oqpair)
 					    doca_error_get_descr(drc));
 			}
 		}
-		STAILQ_REMOVE(&oqpair->opoller->qpairs, oqpair, spdk_nvmf_offload_qpair, link);
+		TAILQ_REMOVE(&oqpair->opoller->qpairs, oqpair, link);
 	}
 	if (oqpair->destruct_channel) {
 		spdk_put_io_channel(oqpair->destruct_channel);
 	}
-	if (oqpair->opoller && oqpair->opoller->need_destroy && STAILQ_EMPTY(&oqpair->opoller->qpairs)) {
+	if (oqpair->opoller && oqpair->opoller->need_destroy && TAILQ_EMPTY(&oqpair->opoller->qpairs)) {
 		nvmf_offload_poller_destroy(oqpair->opoller);
 	}
 	if (oqpair->cm_id) {
