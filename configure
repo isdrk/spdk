@@ -1500,6 +1500,16 @@ if [[ "${CONFIG[FSDEV]}" = "y" ]]; then
 	fi
 fi
 
+if [[ $sys_name != "Linux" ]]; then
+	CONFIG[FSDEV_AIO]=n
+else
+	if ! echo -e '#include <linux/stat.h>\nint main(void) { return STATX_MNT_ID; }' \
+		| "${BUILD_CMD[@]}" - 2> /dev/null; then
+		echo "The kernel doesn't support STATX_MNT_ID. Disabling fsdev_aio."
+		CONFIG[FSDEV_AIO]=n
+	fi
+fi
+
 if echo -e '#include <fcntl.h>\n#include <sys/fanotify.h>\nint main(void) { return FAN_EVENT_INFO_TYPE_DFID_NAME; }\n' \
 	| "${BUILD_CMD[@]}" - 2> /dev/null; then
 	CONFIG[HAVE_FANOTIFY]="y"
