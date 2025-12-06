@@ -822,8 +822,7 @@ spdk_sock_close(struct spdk_sock **_sock)
 	struct spdk_sock_group_impl *group_impl;
 
 	if (sock == NULL) {
-		errno = EBADF;
-		return -1;
+		return -EBADF;
 	}
 
 	group_impl = sock->group_impl;

@@ -523,7 +523,7 @@ int32_t spdk_sock_get_numa_id(struct spdk_sock *sock);
  *
  * \param sock Socket to close.
  *
- * \return 0 on success, -1 on failure.
+ * \return 0 on success, negative errno value on failure.
  */
 int spdk_sock_close(struct spdk_sock **sock);
 
