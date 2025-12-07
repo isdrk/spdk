@@ -83,12 +83,6 @@ struct fuse_notify_reply_in {
 	uint32_t padding;
 };
 
-static inline const char *
-fuse_dispatcher_name(struct spdk_fuse_dispatcher *disp)
-{
-	return spdk_fsdev_get_name(spdk_fsdev_desc_get_fsdev(disp->desc));
-}
-
 static inline void *
 _iov_arr_get_buf_info(struct iovec *iovs, size_t cnt, struct iov_offs *offs, size_t *size)
 {
@@ -261,11 +255,6 @@ fuse_dispatcher_io_complete_hdr(struct fuse_io *fuse_io, struct fuse_out_header 
 {
 	assert(_fuse_op_requires_reply(fuse_io->hdr.opcode));
 	fuse_dispatcher_fill_outhdr(fuse_io, hdr, out_len, error);
-
-	SPDK_DEBUGLOG(fuse_dispatcher,
-		      "Completing IO#%" PRIu64 " (err=%d, out_len=%" PRIu32 ")\n",
-		      fuse_io->hdr.unique, error, out_len);
-
 	fuse_dispatcher_io_complete_final(fuse_io, error);
 }
 
@@ -286,8 +275,6 @@ fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error
 static void
 fuse_dispatcher_io_complete_none(struct fuse_io *fuse_io, int err)
 {
-	SPDK_DEBUGLOG(fuse_dispatcher, "Completing IO#%" PRIu64 " (err=%d)\n",
-		      fuse_io->hdr.unique, err);
 	fuse_dispatcher_io_complete_final(fuse_io, err);
 }
 
@@ -464,19 +451,10 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	return 0;
 }
 
-
 static void
 fuse_dispatcher_submit_fsdev_io(struct fuse_io *fuse_io)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-
-	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
-		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
-		      " core_id=%" PRIu32 " source_id=%" PRIu16 " source_unique=%" PRIu64 "\n",
-		      fuse_io->hdr.opcode, spdk_fsdev_get_opcode_name(fuse_io->hdr.opcode),
-		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
-		      fuse_io->hdr.gid, fuse_io->hdr.pid, spdk_env_get_current_core(),
-		      fuse_io->source_id, fuse_io->source_unique);
 
 	spdk_fsdev_io_submit(fsdev_io);
 }
