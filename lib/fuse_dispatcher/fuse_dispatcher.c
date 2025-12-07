@@ -172,13 +172,6 @@ _fsdev_io_in_arg_get_str(struct fuse_io *fuse_io)
 	return arg_buf;
 }
 
-static inline void *
-_fsdev_io_out_arg_get_buf(struct fuse_io *fuse_io, size_t size)
-{
-	return _iov_arr_get_buf(fuse_io->out_iov, fuse_io->out_iovcnt, &fuse_io->out_offs, size,
-				"OUT");
-}
-
 static inline struct spdk_fsdev_io *
 fuse_to_fsdev_io(struct fuse_io *fuse_io)
 {
@@ -484,16 +477,6 @@ fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_i
 		/* The fsdev is not currently active. Complete this request. */
 		SPDK_ERRLOG("IO (%" PRIu32 ") arrived while there's no channel\n", fuse_io->hdr.opcode);
 		goto exit;
-	}
-
-	if (spdk_likely(_fuse_op_requires_reply(hdr->opcode))) {
-		struct fuse_out_header *out_hdr = _fsdev_io_out_arg_get_buf(fuse_io, sizeof(*out_hdr));
-		if (!out_hdr) {
-			SPDK_ERRLOG("Bad IO: cannot get out_hdr\n");
-			goto exit;
-		}
-
-		UNUSED(out_hdr); /* We don't need it here, we just made a check and a reservation */
 	}
 
 	return fuse_dispatcher_submit_io(fuse_io);
