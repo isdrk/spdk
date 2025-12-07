@@ -170,18 +170,6 @@ fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error
 }
 
 static void
-fuse_dispatcher_io_complete_none(struct fuse_io *fuse_io, int err)
-{
-	fuse_dispatcher_io_complete_final(fuse_io, err);
-}
-
-static void
-fuse_dispatcher_io_complete_err(struct fuse_io *fuse_io, int err)
-{
-	fuse_dispatcher_io_complete(fuse_io, 0, err);
-}
-
-static void
 fuse_io_save_iovs(struct fuse_io *fuse_io)
 {
 	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
@@ -357,9 +345,9 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 
 	if (rc) {
 		if (_fuse_op_requires_reply(fuse_io->hdr.opcode)) {
-			fuse_dispatcher_io_complete_err(fuse_io, rc);
+			fuse_dispatcher_io_complete(fuse_io, 0, rc);
 		} else {
-			fuse_dispatcher_io_complete_none(fuse_io, rc);
+			fuse_dispatcher_io_complete_final(fuse_io, rc);
 		}
 		return;
 	}
