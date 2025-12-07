@@ -349,14 +349,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 }
 
 static void
-fuse_dispatcher_submit_fsdev_io(struct fuse_io *fuse_io)
-{
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-
-	spdk_fsdev_io_submit(fsdev_io);
-}
-
-static int
 fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 {
 	int rc;
@@ -369,11 +361,10 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 		} else {
 			fuse_dispatcher_io_complete_none(fuse_io, rc);
 		}
-		return 0;
+		return;
 	}
 
-	fuse_dispatcher_submit_fsdev_io(fuse_io);
-	return 0;
+	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
 }
 
 struct spdk_fuse_dispatcher *
@@ -444,7 +435,8 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 
 	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
 				source_id, source_unique, clb, cb_arg);
-	return fuse_dispatcher_submit_io(fuse_io);
+	fuse_dispatcher_submit_io(fuse_io);
+	return 0;
 }
 
 static void
@@ -505,7 +497,7 @@ spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp, struct spdk
 	fuse_dispatcher_fill_zcopy_fuse_io(fuse_io, in_hdr, in_iovs, in_iovcnt,
 					   out_hdr, out_iovs, out_iovcnt, domain,
 					   domain_ctx);
-	fuse_dispatcher_submit_fsdev_io(fuse_io);
+	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
 	return 0;
 }
 
