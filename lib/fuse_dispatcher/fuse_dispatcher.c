@@ -173,13 +173,6 @@ _fsdev_io_in_arg_get_str(struct fuse_io *fuse_io)
 }
 
 static inline void *
-_fsdev_io_in_arg_get_buf(struct fuse_io *fuse_io, size_t size)
-{
-	return _iov_arr_get_buf(fuse_io->in_iov, fuse_io->in_iovcnt, &fuse_io->in_offs, size, "IN");
-}
-
-
-static inline void *
 _fsdev_io_out_arg_get_buf(struct fuse_io *fuse_io, size_t size)
 {
 	return _iov_arr_get_buf(fuse_io->out_iov, fuse_io->out_iovcnt, &fuse_io->out_offs, size,
@@ -482,16 +475,8 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 static int
 fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
 {
-	struct fuse_in_header *hdr;
-
 	if (!fuse_io->in_iovcnt || !fuse_io->in_iov) {
 		SPDK_ERRLOG("Bad IO: no IN iov (%d, %p)\n", fuse_io->in_iovcnt, fuse_io->in_iov);
-		goto exit;
-	}
-
-	hdr = _fsdev_io_in_arg_get_buf(fuse_io, sizeof(*hdr));
-	if (!hdr) {
-		SPDK_ERRLOG("Bad IO: cannot get fuse_in_header\n");
 		goto exit;
 	}
 
