@@ -376,26 +376,6 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 	return 0;
 }
 
-static int
-fuse_dispatcher_handle_fuse_req(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io)
-{
-	if (!fuse_io->in_iovcnt || !fuse_io->in_iov) {
-		SPDK_ERRLOG("Bad IO: no IN iov (%d, %p)\n", fuse_io->in_iovcnt, fuse_io->in_iov);
-		goto exit;
-	}
-
-	if (spdk_unlikely(!fuse_io->ch)) {
-		/* The fsdev is not currently active. Complete this request. */
-		SPDK_ERRLOG("IO (%" PRIu32 ") arrived while there's no channel\n", fuse_io->hdr.opcode);
-		goto exit;
-	}
-
-	return fuse_dispatcher_submit_io(fuse_io);
-
-exit:
-	return -EINVAL;
-}
-
 struct spdk_fuse_dispatcher *
 spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 			    spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
@@ -464,7 +444,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 
 	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
 				source_id, source_unique, clb, cb_arg);
-	return fuse_dispatcher_handle_fuse_req(disp, fuse_io);
+	return fuse_dispatcher_submit_io(fuse_io);
 }
 
 static void
