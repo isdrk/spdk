@@ -976,6 +976,12 @@ if [[ "${CONFIG[FC]}" = "y" ]]; then
 	fi
 fi
 
+if [[ "${CONFIG[XLIO]}" = "y" && "${CONFIG[RDMA]}" = "n" ]]; then
+	echo "ERROR: XLIO requires RDMA to be enabled."
+	echo "Please enable RDMA and re-run this script."
+	exit 1
+fi
+
 function dpdk_version() {
 	# Check DPDK version to determine if mlx5_pci driver is supported
 	local dpdk_ver="none"
