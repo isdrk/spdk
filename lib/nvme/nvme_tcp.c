@@ -2218,7 +2218,7 @@ nvme_tcp_qpair_process_completions(struct spdk_nvme_qpair *qpair, uint32_t max_c
 
 		if (tqpair->sock) {
 			rc = spdk_sock_flush(tqpair->sock);
-			if (rc < 0 && errno != EAGAIN) {
+			if (rc < 0 && rc != -EAGAIN) {
 				NVME_TQPAIR_ERRLOG(tqpair, "Failed to flush (%d): %s\n", errno, spdk_strerror(errno));
 				if (nvme_qpair_get_state(qpair) == NVME_QPAIR_DISCONNECTING) {
 					if (TAILQ_EMPTY(&tqpair->outstanding_reqs)) {
