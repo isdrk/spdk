@@ -296,11 +296,10 @@ uring_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 
 	rc = setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc < 0) {
-		return rc;
+		return -errno;
 	}
 
 	_sock->impl_opts.recv_buf_size = sz;
-
 	return 0;
 }
 
@@ -323,11 +322,10 @@ uring_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 
 	rc = setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 	if (rc < 0) {
-		return rc;
+		return -errno;
 	}
 
 	_sock->impl_opts.send_buf_size = sz;
-
 	return 0;
 }
 
@@ -1287,9 +1285,10 @@ uring_sock_set_recvlowat(struct spdk_sock *_sock, int nbytes)
 
 	val = nbytes;
 	rc = setsockopt(sock->fd, SOL_SOCKET, SO_RCVLOWAT, &val, sizeof val);
-	if (rc != 0) {
-		return -1;
+	if (rc < 0) {
+		return -errno;
 	}
+
 	return 0;
 }
 
