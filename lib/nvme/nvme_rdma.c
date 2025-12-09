@@ -2494,8 +2494,14 @@ nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		 * Destroy rdma resources forcefully. */
 		rc = nvme_rdma_qpair_disconnected(rqpair, 0);
 		if (rc != 0) {
+			if (rqpair->num_active_accel_reqs != 0) {
+				/* We only care if there are active accel reqs when the qpair is disconnected since they can complete later and touch already freed memory
+				This case shouldn't happen in most cases but we should assert if it does */
+				SPDK_ERRLOG("qpair %p id %u has %u active accel reqs!\n", rqpair, rqpair->qpair.id,
+					    rqpair->num_active_accel_reqs);
+				assert(0);
+			}
 			nvme_rdma_qpair_complete_disconnect(rqpair);
-			assert(0);
 		}
 	}
 
