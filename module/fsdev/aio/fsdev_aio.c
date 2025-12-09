@@ -789,7 +789,7 @@ fsdev_aio_do_statmount(uint64_t mnt_id, uint64_t mask, struct statmount *buf, si
 }
 
 static int
-fsdev_aio_get_mount_fd_unique(int fd, uint64_t mount_id)
+fsdev_aio_get_mount_fd_unique(uint64_t mount_id)
 {
 	struct {
 		struct statmount st;
@@ -823,11 +823,11 @@ fsdev_aio_get_mount_fd_unique(int fd, uint64_t mount_id)
 #endif
 
 static int
-fsdev_aio_get_mount_fd(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
+fsdev_aio_get_mount_fd(struct aio_fsdev *vfsdev, uint64_t mount_id)
 {
 #ifdef SPDK_CONFIG_HAVE_MNT_ID_UNIQUE
 	if (vfsdev->has_unique_mount_id) {
-		return fsdev_aio_get_mount_fd_unique(fd, mount_id);
+		return fsdev_aio_get_mount_fd_unique(mount_id);
 	}
 #endif
 	return fsdev_aio_get_mount_fd_compat(mount_id);
@@ -877,7 +877,7 @@ fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
 	/* Unique mount ids start from INT_MAX to distinguish between regular mount ids */
 	assert(!vfsdev->has_unique_mount_id || mount_id > INT_MAX);
 	fs->id = mount_id;
-	fs->fd = fsdev_aio_get_mount_fd(vfsdev, fd, mount_id);
+	fs->fd = fsdev_aio_get_mount_fd(vfsdev, mount_id);
 	if (fs->fd < 0) {
 		free(fs);
 		return NULL;
