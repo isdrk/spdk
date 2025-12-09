@@ -907,9 +907,6 @@ struct spdk_fsdev_io {
 		 */
 		bool in_submit_request;
 
-		/** IO operation */
-		enum spdk_fsdev_io_type type;
-
 		/** IO unique ID */
 		uint64_t unique;
 
@@ -967,7 +964,7 @@ struct spdk_fsdev_io {
  */
 static inline enum spdk_fsdev_io_type
 spdk_fsdev_io_get_type(struct spdk_fsdev_io *fsdev_io) {
-	return fsdev_io->internal.type;
+	return SPDK_FSDEV_IO_FUSE;
 }
 
 /**
