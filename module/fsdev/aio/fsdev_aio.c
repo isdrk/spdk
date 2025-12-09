@@ -1529,22 +1529,17 @@ fsdev_aio_get_mount_id_by_fsid(struct aio_fsdev *vfsdev, fsid_t fsid, uint64_t *
 }
 
 static void
-fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd, fsid_t fsid,
+fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, fsid_t fsid,
 				       struct file_handle *file_handle, const char *file_name)
 {
 	struct aio_fsdev_file_object *fobject;
 	uint64_t mount_id = 0;
 	int rc;
 
-	if (fd >= 0) {
-		rc = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
-	} else {
-		rc = fsdev_aio_get_mount_id_by_fsid(vfsdev, fsid, &mount_id);
-	}
-
+	rc = fsdev_aio_get_mount_id_by_fsid(vfsdev, fsid, &mount_id);
 	if (rc != 0) {
-		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s (fd=%d): %s\n",
-			     file_name, fd, spdk_strerror(-rc));
+		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s: %s\n",
+			     file_name, spdk_strerror(-rc));
 		return;
 	}
 
@@ -1626,8 +1621,7 @@ fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
 	}
 
 	if ((metadata->mask & FAN_ATTRIB) && file_name && file_handle) {
-		fsdev_aio_fanotify_attrib_event_handle(vfsdev, metadata->fd, fsid,
-						       file_handle, file_name);
+		fsdev_aio_fanotify_attrib_event_handle(vfsdev, fsid, file_handle, file_name);
 	}
 
 	if (metadata->fd != FAN_NOFD) {
