@@ -621,7 +621,10 @@ fsdev_aio_fanotify_remove(struct aio_fsdev_file_object *fobject)
 	} else {
 		SPDK_DEBUGLOG(fsdev_aio, "Removed fobject from fanotify: name %s\n", name);
 	}
-	close(fd);
+
+	if (fd >= 0) {
+		close(fd);
+	}
 }
 #endif
 
@@ -4077,7 +4080,7 @@ fsdev_aio_op_setxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		      FOBJECT_ARGS(fobject), name, value, size, flags);
 
 fop_failed:
-	if (fd != -1) {
+	if (fd >= 0) {
 		close(fd);
 	}
 	file_object_unref(fobject, 1);
@@ -4142,7 +4145,7 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 		      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
 
 fop_failed:
-	if (fd != -1) {
+	if (fd >= 0) {
 		close(fd);
 	}
 	file_object_unref(fobject, 1);
@@ -4196,7 +4199,7 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 		      FOBJECT_ARGS(fobject), data_size);
 
 fop_failed:
-	if (fd != -1) {
+	if (fd >= 0) {
 		close(fd);
 	}
 	file_object_unref(fobject, 1);
@@ -4246,7 +4249,7 @@ fsdev_aio_op_removexattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev
 		      FOBJECT_ARGS(fobject), name);
 
 fop_failed:
-	if (fd != -1) {
+	if (fd >= 0) {
 		close(fd);
 	}
 	file_object_unref(fobject, 1);
