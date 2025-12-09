@@ -2894,7 +2894,8 @@ fop_failed:
 static int
 fsdev_fchmodat(int fd, struct aio_fsdev_file_object *fobject, uint32_t mode)
 {
-	int res;
+	char fdstr[32];
+	int res, pfd;
 
 	res = fchmodat(fd, "", mode, AT_EMPTY_PATH);
 	if (res == 0) {
@@ -2907,21 +2908,19 @@ fsdev_fchmodat(int fd, struct aio_fsdev_file_object *fobject, uint32_t mode)
 
 	/* Linux only gained support for AT_EMPTY_PATH in fchmodat recently. We'll use a fallback
 	 * option.
-	 *
-	 * Also, we must open the file on non-blocking mode, because it might be a named pipe, which
-	 * would block on open() if it wasn't opened with O_NONBLOCK.
 	 */
-	fd = fsdev_aio_fobject_open(fobject, O_RDONLY | O_NONBLOCK);
-	if (fd < 0) {
-		return fd;
+	pfd = open("/proc/self/fd", O_PATH);
+	if (pfd < 0) {
+		return -errno;
 	}
 
-	res = fchmod(fd, mode);
+	snprintf(fdstr, sizeof(fdstr), "%d", fd);
+	res = fchmodat(pfd, fdstr, mode, 0);
 	if (res != 0) {
 		res = -errno;
 	}
 
-	close(fd);
+	close(pfd);
 	return res;
 }
 
