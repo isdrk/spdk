@@ -198,6 +198,7 @@ struct aio_fsdev_file_handle {
 struct aio_fsdev_fs {
 	uint64_t id;
 	int fd;
+	fsid_t fsid;
 	STAILQ_ENTRY(aio_fsdev_fs) link;
 };
 
@@ -844,6 +845,23 @@ fsdev_aio_get_mount_id(struct aio_fsdev *vfsdev, int fd, uint64_t *mount_id)
 	return fsdev_aio_get_mount_id_compat(fd, mount_id);
 }
 
+static int
+fsdev_aio_get_fsid(int fd, fsid_t *fsid)
+{
+	struct statvfs st;
+	int rc, errsv;
+
+	rc = fstatvfs(fd, &st);
+	if (rc != 0) {
+		errsv = -errno;
+		SPDK_ERRLOG("statfs() failed: %s\n", spdk_strerror(errsv));
+		return -errsv;
+	}
+
+	memcpy(fsid, &st.f_fsid, sizeof(*fsid));
+	return 0;
+}
+
 static struct aio_fsdev_fs *
 fsdev_aio_find_fs_unsafe(struct aio_fsdev *vfsdev, uint64_t mount_id)
 {
@@ -862,6 +880,7 @@ static struct aio_fsdev_fs *
 fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
 {
 	struct aio_fsdev_fs *fs;
+	int rc;
 
 	fs = fsdev_aio_find_fs_unsafe(vfsdev, mount_id);
 	if (fs != NULL) {
@@ -871,6 +890,13 @@ fsdev_aio_get_fs_unsafe(struct aio_fsdev *vfsdev, int fd, uint64_t mount_id)
 	fs = calloc(1, sizeof(*fs));
 	if (fs == NULL) {
 		SPDK_ERRLOG("Failed to allocate filesystem\n");
+		return NULL;
+	}
+
+	/* We need fsid for notifications */
+	rc = fsdev_aio_get_fsid(fd, &fs->fsid);
+	if (rc != 0) {
+		free(fs);
 		return NULL;
 	}
 
@@ -1482,18 +1508,43 @@ fsdev_aio_notify_reply_cb(struct spdk_fuse_notify_request *req, int status)
 	free(aio_req);
 }
 
+static int
+fsdev_aio_get_mount_id_by_fsid(struct aio_fsdev *vfsdev, fsid_t fsid, uint64_t *mount_id)
+{
+	struct aio_fsdev_fs *fs;
+
+	spdk_spin_lock(&vfsdev->lock);
+	STAILQ_FOREACH(fs, &vfsdev->fss, link) {
+		if (memcmp(&fs->fsid, &fsid, sizeof(fsid)) == 0) {
+			break;
+		}
+	}
+	spdk_spin_unlock(&vfsdev->lock);
+	if (fs == NULL) {
+		return -ENODEV;
+	}
+
+	*mount_id = fs->id;
+	return 0;
+}
+
 static void
-fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd,
+fsdev_aio_fanotify_attrib_event_handle(struct aio_fsdev *vfsdev, int fd, fsid_t fsid,
 				       struct file_handle *file_handle, const char *file_name)
 {
 	struct aio_fsdev_file_object *fobject;
 	uint64_t mount_id = 0;
 	int rc;
 
-	rc = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
+	if (fd >= 0) {
+		rc = fsdev_aio_get_mount_id(vfsdev, fd, &mount_id);
+	} else {
+		rc = fsdev_aio_get_mount_id_by_fsid(vfsdev, fsid, &mount_id);
+	}
+
 	if (rc != 0) {
-		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s (fd=%d): %s\n", file_name, fd,
-			     spdk_strerror(-rc));
+		SPDK_INFOLOG(fsdev_aio, "Couldn't get mount_id for %s (fd=%d): %s\n",
+			     file_name, fd, spdk_strerror(-rc));
 		return;
 	}
 
@@ -1547,6 +1598,7 @@ fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
 	struct fanotify_event_info_header *hdr;
 	struct file_handle *file_handle = NULL;
 	const char *file_name = NULL;
+	fsid_t fsid;
 	uint32_t md_len;
 
 	SPDK_DEBUGLOG(fsdev_aio, "Got fanotify event: fd %d, pid %d, mask %016llX\n",
@@ -1566,15 +1618,15 @@ fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
 			struct fanotify_event_info_fid *dfid_name = (struct fanotify_event_info_fid *)hdr;
 			file_handle = (struct file_handle *)dfid_name->handle;
 			file_name = file_handle->f_handle + file_handle->handle_bytes;
+			memcpy(&fsid, &dfid_name->fsid, sizeof(fsid));
 		}
 
 		md_len -= hdr->len;
 		hdr = (struct fanotify_event_info_header *)((char *)hdr + hdr->len);
 	}
 
-	if ((metadata->mask & FAN_ATTRIB) && (metadata->fd != FAN_NOFD) &&
-	    file_name && file_handle) {
-		fsdev_aio_fanotify_attrib_event_handle(vfsdev, metadata->fd,
+	if ((metadata->mask & FAN_ATTRIB) && file_name && file_handle) {
+		fsdev_aio_fanotify_attrib_event_handle(vfsdev, metadata->fd, fsid,
 						       file_handle, file_name);
 	}
 
