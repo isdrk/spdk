@@ -1,6 +1,7 @@
 /*   SPDX-License-Identifier: BSD-3-Clause
  *   Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
+#include "spdk/queue.h"
 #include "spdk/stdinc.h"
 #include "spdk/event.h"
 #include "spdk/log.h"
@@ -4523,7 +4524,7 @@ aio_io_poll_common(struct aio_io_channel *ch)
 	TAILQ_FOREACH_SAFE(vfsdev_io, &ios, link, tmp) {
 		struct spdk_fsdev_io *fsdev_io = aio_to_fsdev_io(vfsdev_io);
 
-		TAILQ_REMOVE(&ios, vfsdev_io, link);
+		TAILQ_REMOVE_CLEAR(&ios, vfsdev_io, link);
 		fsdev_aio_io_complete(fsdev_io, vfsdev_io->status);
 		res = SPDK_POLLER_BUSY;
 	}
