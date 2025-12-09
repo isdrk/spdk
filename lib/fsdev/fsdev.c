@@ -476,9 +476,10 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 		   uint16_t source_id, uint64_t source_unique,
 		   spdk_fsdev_cpl_cb *cb_fn, void *cb_arg)
 {
+	assert(type == SPDK_FSDEV_IO_FUSE);
+
 	fsdev_io->internal.ch = __io_ch_to_fsdev_ch(ch);
 	fsdev_io->internal.desc = desc;
-	fsdev_io->internal.type = type;
 	fsdev_io->internal.unique = unique;
 	fsdev_io->internal.usr_cb_fn = cb_fn;
 	fsdev_io->internal.usr_cb_arg = cb_arg;
@@ -571,8 +572,6 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
 	uint64_t current_tsc = spdk_get_ticks();
 	uint32_t opc;
-
-	assert(fsdev_io->internal.type == SPDK_FSDEV_IO_FUSE);
 
 	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
@@ -1484,8 +1483,6 @@ fsdev_io_complete(void *ctx)
 				     fsdev_io_complete, fsdev_io);
 		return;
 	}
-
-	assert(fsdev_io->internal.type == SPDK_FSDEV_IO_FUSE);
 
 	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
