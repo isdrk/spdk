@@ -947,19 +947,16 @@ xlio_sock_recv_next(struct spdk_sock *_sock, void **buf, struct spdk_sock_buf_to
 	struct spdk_xlio_stream_segment *segment;
 
 	if (sock->rc != 0) {
-		errno = sock->rc;
-		return -1;
+		return sock->rc;
 	}
 
 	if (!sock->events.rx) {
-		errno = EAGAIN;
-		return -1;
+		return EAGAIN;
 	}
 
 	segment = STAILQ_FIRST(&sock->pending_stream);
 	if (segment == NULL) {
-		errno = EAGAIN;
-		return -1;
+		return EAGAIN;
 	}
 
 	group = sock->group;

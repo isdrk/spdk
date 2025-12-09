@@ -3084,14 +3084,14 @@ nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 		}
 
 		if (ret < 0) {
-			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			if (ret == -EAGAIN || ret == -EWOULDBLOCK) {
 				return 0;
 			}
 
 			/* For connect reset issue, do not output error log */
-			if (errno != ECONNRESET) {
-				SPDK_ERRLOG("spdk_sock_recv() failed, errno %d: %s\n",
-					    errno, spdk_strerror(errno));
+			if (ret != -ECONNRESET) {
+				SPDK_ERRLOG("spdk_sock_recv() failed, rc %d: %s\n",
+					    ret, spdk_strerror(-ret));
 			}
 		}
 
@@ -3930,7 +3930,7 @@ nvmf_tcp_qpair_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			/* Now try to grab the next portion of the TCP stream */
 			rc = spdk_sock_recv_next(tqpair->sock, &segment->buf, &segment->token);
 			if (rc < 0) {
-				if (errno == ENOBUFS || errno == EAGAIN) {
+				if (rc == ENOBUFS || rc == EAGAIN) {
 					break;
 				}
 

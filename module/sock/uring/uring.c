@@ -587,6 +587,7 @@ uring_sock_close(struct spdk_sock_group_impl *group, struct spdk_sock *_sock)
 	return 0;
 }
 
+
 static inline ssize_t
 sock_readv(int fd, struct iovec *iov, int iovcnt)
 {
@@ -594,8 +595,10 @@ sock_readv(int fd, struct iovec *iov, int iovcnt)
 		.msg_iov = iov,
 		.msg_iovlen = iovcnt,
 	};
+	int rc;
 
-	return recvmsg(fd, &msg, MSG_DONTWAIT);
+	rc = recvmsg(fd, &msg, MSG_DONTWAIT);
+	return rc < 0 ? -errno : rc;
 }
 
 static ssize_t
@@ -608,8 +611,7 @@ uring_sock_readv(struct spdk_sock *_sock, struct iovec *iovs, int iovcnt)
 	int i;
 
 	if (sock->connection_status < 0) {
-		errno = -sock->connection_status;
-		return -1;
+		return sock->connection_status;
 	}
 
 	if (STAILQ_EMPTY(&sock->recv_stream)) {
@@ -626,8 +628,7 @@ uring_sock_readv(struct spdk_sock *_sock, struct iovec *iovs, int iovcnt)
 			return sock_readv(sock->fd, iovs, iovcnt);
 		}
 
-		errno = EAGAIN;
-		return -1;
+		return -EAGAIN;
 	}
 
 	total = 0;
@@ -734,8 +735,7 @@ uring_sock_recv_next(struct spdk_sock *_sock, void **buf, struct spdk_sock_buf_t
 	struct spdk_uring_buf_tracker *tr;
 
 	if (sock->connection_status < 0) {
-		errno = -sock->connection_status;
-		return -1;
+		return -sock->connection_status;
 	}
 
 	tr = STAILQ_FIRST(&sock->recv_stream);
