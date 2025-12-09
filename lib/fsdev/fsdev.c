@@ -570,11 +570,9 @@ spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io)
 	struct spdk_fsdev_channel *ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
 	uint64_t current_tsc = spdk_get_ticks();
-	uint32_t io_type = fsdev_io->internal.type;
 	uint32_t opc;
 
-	assert(io_type == SPDK_FSDEV_IO_FUSE);
-	SPDK_UNUSED(io_type);
+	assert(fsdev_io->internal.type == SPDK_FSDEV_IO_FUSE);
 
 	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
@@ -1471,7 +1469,6 @@ static inline void
 fsdev_io_complete(void *ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = ctx;
-	uint32_t io_type = fsdev_io->internal.type;
 	uint32_t opc;
 	struct spdk_fsdev_channel *ch = fsdev_io->internal.ch;
 	struct spdk_fsdev_shared_resource *shared_resource = ch->shared_resource;
@@ -1488,8 +1485,8 @@ fsdev_io_complete(void *ctx)
 		return;
 	}
 
-	assert(io_type == SPDK_FSDEV_IO_FUSE);
-	SPDK_UNUSED(io_type);
+	assert(fsdev_io->internal.type == SPDK_FSDEV_IO_FUSE);
+
 	opc = fsdev_io->u_in.fuse.hdr->opcode;
 
 	assert(ch->io_outstanding > 0);
@@ -1502,7 +1499,6 @@ fsdev_io_complete(void *ctx)
 			  ch->io_outstanding, fsdev_io->internal.usr_cb_arg);
 	assert(spdk_get_thread() == spdk_fsdev_io_get_thread(fsdev_io));
 
-	assert(io_type == SPDK_FSDEV_IO_FUSE);
 	if (opc == FUSE_READ) {
 		ch->stat->bytes_read +=
 			fsdev_io->u_out.fuse.hdr->len - sizeof(struct fuse_out_header);
