@@ -1129,7 +1129,7 @@ fsdevperf_io_init(struct fsdevperf_io *io, struct spdk_fsdev_desc *fsdev_desc,
 	io->fuse_io.in.hdr.uid = g_app.uid;
 	io->fuse_io.in.hdr.gid = g_app.gid;
 	/* Skip pid */
-	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, id,
+	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch,
 			   source_id, id, cb_fn, cb_ctx);
 	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
 	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;

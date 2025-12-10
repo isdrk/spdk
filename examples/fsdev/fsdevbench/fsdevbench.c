@@ -111,7 +111,7 @@ fsdevbench_io_init(struct fsdevbench_io *io, struct spdk_fsdev_desc *fsdev_desc,
 	io->fuse_io.in.hdr.nodeid = nodeid;
 	io->fuse_io.in.hdr.uid = geteuid();
 	io->fuse_io.in.hdr.gid = getegid();
-	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch, io->fuse_io.unique,
+	spdk_fsdev_io_init(&io->fsdev_io, fsdev_desc, ioch,
 			   0, io->fuse_io.unique, cb_fn, cb_ctx);
 	io->fsdev_io.u_in.fuse.hdr = &io->fuse_io.in.hdr;
 	io->fsdev_io.u_in.fuse.op.raw = &io->fuse_io.in.op;

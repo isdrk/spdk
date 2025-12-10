@@ -334,19 +334,6 @@ void spdk_fsdev_module_fini_done(void);
 void spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status);
 
 /**
- * Get I/O unique id
- *
- * \param fsdev_io I/O to complete.
- *
- * \return I/O unique id
- */
-static inline uint64_t
-spdk_fsdev_io_get_unique(struct spdk_fsdev_io *fsdev_io)
-{
-	return fsdev_io->u_in.fuse.hdr->unique;
-}
-
-/**
  * Get I/O source id
  *
  * \param fsdev_io I/O to complete.

@@ -1001,7 +1001,6 @@ struct spdk_fsdev_io {
  * \param fsdev_io I/O request.
  * \param desc Filesystem device descriptor.
  * \param ch I/O channel.
- * \param unique Unique I/O id.
  * \param source_id Source id.
  * \param source_unique Source unique.
  * \param cb_fn Completion callback.
@@ -1009,7 +1008,7 @@ struct spdk_fsdev_io {
  */
 void spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 			struct spdk_io_channel *ch,
-			uint64_t unique, uint16_t source_id, uint64_t source_unique,
+			uint16_t source_id, uint64_t source_unique,
 			spdk_fsdev_cpl_cb *cb_fn, void *cb_arg);
 
 /**
