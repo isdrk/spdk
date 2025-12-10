@@ -1597,7 +1597,7 @@ fsdev_aio_fanotify_event_handle(struct aio_fsdev *vfsdev,
 	struct fanotify_event_info_header *hdr;
 	struct file_handle *file_handle = NULL;
 	const char *file_name = NULL;
-	fsid_t fsid;
+	fsid_t fsid = {0};
 	uint32_t md_len;
 
 	SPDK_DEBUGLOG(fsdev_aio, "Got fanotify event: fd %d, pid %d, mask %016llX\n",
