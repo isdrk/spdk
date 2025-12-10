@@ -346,7 +346,7 @@ void spdk_fsdev_io_complete(struct spdk_fsdev_io *fsdev_io, int status);
 static inline uint64_t
 spdk_fsdev_io_get_unique(struct spdk_fsdev_io *fsdev_io)
 {
-	return fsdev_io->internal.unique;
+	return fsdev_io->u_in.fuse.hdr->unique;
 }
 
 /**

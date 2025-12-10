@@ -480,7 +480,6 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 
 	fsdev_io->internal.ch = __io_ch_to_fsdev_ch(ch);
 	fsdev_io->internal.desc = desc;
-	fsdev_io->internal.unique = unique;
 	fsdev_io->internal.usr_cb_fn = cb_fn;
 	fsdev_io->internal.usr_cb_arg = cb_arg;
 	fsdev_io->internal.status = -ENOSYS;

@@ -907,9 +907,6 @@ struct spdk_fsdev_io {
 		 */
 		bool in_submit_request;
 
-		/** IO unique ID */
-		uint64_t unique;
-
 		/** User callback */
 		spdk_fsdev_cpl_cb *usr_cb_fn;
 
