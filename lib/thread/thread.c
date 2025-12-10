@@ -38,6 +38,7 @@
 #define SPDK_MAX_THREAD_NAME_LEN	256
 
 static struct spdk_thread *g_app_thread;
+static bool g_under_debug;
 
 struct spdk_interrupt {
 	int			efd;
@@ -993,7 +994,10 @@ thread_update_stats(struct spdk_thread *thread, uint64_t end,
 	thread->tsc_last = end;
 	if (spdk_unlikely(runtime >= g_poll_warning_threshold)) {
 		runtime_ms = runtime * SPDK_SEC_TO_MSEC / spdk_get_ticks_hz();
-		SPDK_WARNLOG("Thread %s took over %"PRIu64"ms to poll\n", thread->name, runtime_ms);
+		if (!g_under_debug) {
+			SPDK_WARNLOG("Thread %s took over %"PRIu64"ms to poll\n", thread->name,
+				     runtime_ms);
+		}
 	}
 }
 
