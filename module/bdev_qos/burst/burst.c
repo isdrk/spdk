@@ -268,20 +268,22 @@ atomic_add_capped(uint64_t *value, uint64_t to_add, uint64_t cap)
 	}
 }
 
-static inline bool
+static inline uint64_t
 atomic_sub_floor(uint64_t *value, uint64_t to_sub)
 {
-	uint64_t current, new;
+	uint64_t current, new, actual_sub;
 
 	current = __atomic_load_n(value, __ATOMIC_RELAXED);
 	while (true) {
-		if (current < to_sub) {
-			return false;
+		if (current == 0) {
+			/* There is nothing to withdraw. */
+			return 0;
 		}
-		new = current - to_sub;
+		actual_sub = spdk_min(current, to_sub);
+		new = current - actual_sub;
 		if (__atomic_compare_exchange_n(value, &current, new, false,
 						__ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-			return true;
+			return actual_sub;
 		}
 		spdk_pause();
 	}
@@ -392,9 +394,9 @@ bdev_burst_qos_set_opts(struct bdev_burst_qos_opts *opts)
  * \param global_bucket Global token bucket
  * \param tokens_to_withdraw Amount of tokens to withdraw.
  *
- * \return true if succeed, or false otherwise.
+ * \return amount of tokens actually withdrawn.
  */
-static inline bool
+static inline uint64_t
 global_token_bucket_withdraw(struct global_token_bucket *global_bucket,
 			     uint64_t tokens_to_withdraw)
 {
@@ -402,7 +404,7 @@ global_token_bucket_withdraw(struct global_token_bucket *global_bucket,
 
 	if (global_bucket->avg_rate == UINT64_MAX) {
 		/* The bucket is disabled. */
-		return true;
+		return tokens_to_withdraw;
 	}
 
 	return atomic_sub_floor(&steady_bucket->tokens, tokens_to_withdraw);
@@ -437,7 +439,7 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket, uint32_t e
 	overflow = atomic_add_capped(&steady_bucket->tokens, tokens_to_refill,
 				     steady_bucket->capacity);
 
-	if (overflow > 0) {
+	if (overflow > 0 && burst_bucket->capacity != 0) {
 		/* Handle overflow into burst bucket. */
 		burst_bucket->tokens = spdk_min(burst_bucket->tokens + overflow,
 						burst_bucket->capacity);
@@ -648,6 +650,7 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 	struct global_token_bucket *global_bucket = local_bucket->global_bucket;
 	int64_t shortfall;
 	uint64_t additive_increase_step, max_withdraw_batch_size, min_withdraw_batch_size;
+	uint64_t actual_withdrawn;
 
 	if (global_bucket->avg_rate == UINT64_MAX) {
 		/* The bucket is disabled */
@@ -676,22 +679,26 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 
 	/* We will accumulate the needed tokens locally before spending. */
 	while (shortfall > 0) {
-		if (global_token_bucket_withdraw(global_bucket, local_bucket->withdraw_batch_size)) {
-			/* Successful withdraw */
-
+		actual_withdrawn = global_token_bucket_withdraw(global_bucket, local_bucket->withdraw_batch_size);
+		if (actual_withdrawn > 0) {
 			/* Transfer tokens. */
-			local_bucket->tokens += local_bucket->withdraw_batch_size;
+			local_bucket->tokens += actual_withdrawn;
 			/* Reduce shortfall. */
-			shortfall -= local_bucket->withdraw_batch_size;
-			/* Apply Additive Increase. */
-			local_bucket->withdraw_batch_size += additive_increase_step;
-			if (local_bucket->withdraw_batch_size > max_withdraw_batch_size) {
-				local_bucket->withdraw_batch_size = max_withdraw_batch_size;
+			shortfall -= actual_withdrawn;
+
+			if (actual_withdrawn == local_bucket->withdraw_batch_size) {
+				/* Full withdrawal: Apply Additive Increase. */
+				local_bucket->withdraw_batch_size += additive_increase_step;
+				if (local_bucket->withdraw_batch_size > max_withdraw_batch_size) {
+					local_bucket->withdraw_batch_size = max_withdraw_batch_size;
+				}
+			} else {
+				/* Partial withdrawal: Keep the current batch size.
+				 * Global bucket is under pressure but we could still make progress.
+				 */
 			}
 		} else {
-			/* Failed withdraw. */
-
-			/* Apply Multiplicative Decrease. */
+			/* Failed withdrawal: Apply Multiplicative Decrease. */
 			local_bucket->withdraw_batch_size >>= 1;
 			if (local_bucket->withdraw_batch_size < min_withdraw_batch_size) {
 				local_bucket->withdraw_batch_size = min_withdraw_batch_size;
