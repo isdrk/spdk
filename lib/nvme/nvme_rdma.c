@@ -2493,7 +2493,10 @@ nvme_rdma_ctrlr_delete_io_qpair(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_
 		/* qpair was removed from the poll group while the disconnect is not finished.
 		 * Destroy rdma resources forcefully. */
 		rc = nvme_rdma_qpair_disconnected(rqpair, 0);
-		assert(rc == 0);
+		if (rc != 0) {
+			nvme_rdma_qpair_complete_disconnect(rqpair);
+			assert(0);
+		}
 	}
 
 	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
