@@ -40,9 +40,13 @@ unittests-build-job:
   before_script:
     - .ci/prepare_vm.sh
   after_script:
-    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar -C $CI_PROJECT_DIR/.. output
+    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz -C $CI_PROJECT_DIR/../output .
   artifacts:
     name: ${TEST_TYPE}_artifacts
+    paths:
+      - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz
+    expire_in: 3 days
+    when: always
 
 autotest-nvmf-tcp:
   extends: .autotest-template
