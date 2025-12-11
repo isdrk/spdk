@@ -2222,6 +2222,28 @@ nvme_rdma_finish_outstanding_accel_transfers(struct nvme_rdma_qpair *rqpair)
 	}
 }
 
+static void
+nvme_rdma_qpair_complete_disconnect(struct nvme_rdma_qpair *rqpair)
+{
+	if (rqpair->qpair.poll_group) {
+		struct nvme_rdma_poll_group *group = nvme_rdma_poll_group(rqpair->qpair.poll_group);
+
+		if (rqpair->link_active.tqe_prev) {
+			TAILQ_REMOVE(&group->active_qpairs, rqpair, link_active);
+			rqpair->link_active.tqe_prev = NULL;
+		}
+	}
+	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
+
+	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
+		SPDK_NOTICELOG("qpair %p, id %u aborting outstanding requests\n", rqpair, rqpair->qpair.id);
+	}
+	nvme_rdma_qpair_abort_reqs(&rqpair->qpair, rqpair->qpair.abort_dnr);
+	assert(TAILQ_EMPTY(&rqpair->outstanding_reqs));
+	nvme_rdma_qpair_destroy(rqpair);
+	nvme_transport_ctrlr_disconnect_qpair_done(&rqpair->qpair);
+}
+
 static int
 nvme_rdma_qpair_disconnected(struct nvme_rdma_qpair *rqpair, int ret)
 {
@@ -2265,23 +2287,7 @@ lingering:
 	}
 
 quiet:
-	if (rqpair->qpair.poll_group) {
-		struct nvme_rdma_poll_group *group = nvme_rdma_poll_group(rqpair->qpair.poll_group);
-
-		if (rqpair->link_active.tqe_prev) {
-			TAILQ_REMOVE(&group->active_qpairs, rqpair, link_active);
-			rqpair->link_active.tqe_prev = NULL;
-		}
-	}
-	rqpair->state = NVME_RDMA_QPAIR_STATE_EXITED;
-
-	if (!TAILQ_EMPTY(&rqpair->outstanding_reqs)) {
-		SPDK_NOTICELOG("qpair %p, id %u aborting outstanding requests\n", rqpair, rqpair->qpair.id);
-	}
-	nvme_rdma_qpair_abort_reqs(&rqpair->qpair, rqpair->qpair.abort_dnr);
-	assert(TAILQ_EMPTY(&rqpair->outstanding_reqs));
-	nvme_rdma_qpair_destroy(rqpair);
-	nvme_transport_ctrlr_disconnect_qpair_done(&rqpair->qpair);
+	nvme_rdma_qpair_complete_disconnect(rqpair);
 
 	return 0;
 }
