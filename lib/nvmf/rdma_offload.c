@@ -79,7 +79,10 @@ struct nvmf_error_log_entry {
 	uint8_t cc_opcode;
 	enum doca_sta_cqe_notify_type cqe_type;
 	uint16_t param_err_loc;
-	struct spdk_nvme_status status_code;
+	union {
+		uint16_t status_code_raw;
+		struct spdk_nvme_status status_code;
+	};
 	const struct doca_sta_qp_handle *qp_handle;
 };
 
@@ -4213,7 +4216,7 @@ nvmf_sta_event_cqe_notify_cb(const struct doca_sta_event_cqe_notify *event,
 		return;
 	}
 
-	err_cqe.status_code = err_cqe.be_cqe.status;
+	err_cqe.status_code_raw = err_cqe.be_cqe.status_raw;
 
 	drc = doca_sta_event_cqe_notify_get_qp_handle(event, &err_cqe.qp_handle);
 	if (DOCA_IS_ERROR(drc)) {
