@@ -83,6 +83,9 @@ struct global_token_bucket {
 	 */
 	struct token_bucket burst_bucket;
 
+	/* Ticks at last refill was done. */
+	uint64_t last_refill_ticks;
+
 	/* The number of new tokens generated on each tick, based on avg_rate. */
 	uint64_t income_per_tick;
 
@@ -158,6 +161,7 @@ struct bdev_burst_qos_channel {
 struct bdev_burst_qos_mgr {
 	uint64_t last_tick_tsc;
 	uint64_t tick_period_tsc;
+	uint64_t ticks;
 
 	struct spdk_poller *poller;
 
@@ -173,6 +177,7 @@ static struct spdk_bdev_qos_module bdev_burst_qos_if;
 static struct bdev_burst_qos_mgr g_qos_mgr = {
 	.last_tick_tsc = 0,
 	.tick_period_tsc = 0,
+	.ticks = 0,
 	.poller = NULL,
 	.bqos_list = TAILQ_HEAD_INITIALIZER(g_qos_mgr.bqos_list),
 };
@@ -412,19 +417,18 @@ global_token_bucket_withdraw(struct global_token_bucket *global_bucket,
 
 /*
  * To ensure the average rate is maintained accurately even if the periodic timer is
- * delayed or missed, the refill function accepts an elapsed_ticks parameter.
+ * delayed or missed, the refill function calculates elapsed_ticks by itself.
  * This allows it to calculate and the correct amount of tokens to compensate for
  * the time that has passed since the last call.
  *
  * \param global_bucket Global token bucket.
- * \param elapsed_ticks Elapsed ticks since the last call of this function.
  */
 static inline void
-global_token_bucket_refill(struct global_token_bucket *global_bucket, uint32_t elapsed_ticks)
+global_token_bucket_refill(struct global_token_bucket *global_bucket)
 {
 	struct token_bucket *steady_bucket = &global_bucket->steady_bucket;
 	struct token_bucket *burst_bucket = &global_bucket->burst_bucket;
-	uint64_t tokens_to_refill, tokens_to_transfer, overflow, transfer;
+	uint64_t elapsed_ticks, tokens_to_refill, tokens_to_transfer, overflow, transfer;
 
 	assert(spdk_thread_is_app_thread(NULL));
 
@@ -432,6 +436,10 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket, uint32_t e
 		/* The bucket is disabled. */
 		return;
 	}
+
+	assert(g_qos_mgr.ticks >= global_bucket->last_refill_ticks);
+	elapsed_ticks = g_qos_mgr.ticks - global_bucket->last_refill_ticks;
+	global_bucket->last_refill_ticks = g_qos_mgr.ticks;
 
 	tokens_to_refill = global_bucket->income_per_tick * elapsed_ticks;
 
@@ -473,6 +481,7 @@ global_token_bucket_reset(struct global_token_bucket *global_bucket)
 	token_bucket_reset(&global_bucket->steady_bucket);
 	global_bucket->mode = BDEV_QOS_MODE_STRICT;
 	global_bucket->avg_rate = UINT64_MAX;
+	global_bucket->last_refill_ticks = 0;
 	global_bucket->income_per_tick = 0;
 	global_bucket->transfer_per_tick = 0;
 	global_bucket->max_burst_time_in_sec = 0;
@@ -541,6 +550,8 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 		avg_rate += min_rate - complement;
 		SPDK_WARNLOG("Round up it to %" PRIu64 "\n", avg_rate);
 	}
+
+	global_bucket->last_refill_ticks = g_qos_mgr.ticks;
 
 	global_bucket->avg_rate = avg_rate;
 	global_bucket->income_per_tick = TOKENS_PER_TICK(avg_rate);
@@ -935,6 +946,7 @@ bdev_burst_qos_get(void)
 
 	if (TAILQ_EMPTY(&g_qos_mgr.bqos_list)) {
 		g_qos_mgr.last_tick_tsc = spdk_get_ticks();
+		g_qos_mgr.ticks = 0;
 		spdk_poller_resume(g_qos_mgr.poller);
 	}
 
@@ -971,12 +983,12 @@ bdev_burst_qos_find_global_bucket(struct spdk_bdev_qos_impl *qos_impl,
 }
 
 static void
-bdev_burst_qos_refill(struct bdev_burst_qos *bqos, uint32_t elapsed_ticks)
+bdev_burst_qos_refill(struct bdev_burst_qos *bqos)
 {
 	int i;
 
 	for (i = 0; i < BDEV_QOS_NUM_METRICS; i++) {
-		global_token_bucket_refill(&bqos->global_buckets[i], elapsed_ticks);
+		global_token_bucket_refill(&bqos->global_buckets[i]);
 	}
 }
 
@@ -1208,21 +1220,19 @@ static int
 bdev_burst_qos_poll(void *arg)
 {
 	uint64_t now = spdk_get_ticks();
-	uint64_t tick_period_tsc = g_qos_mgr.tick_period_tsc;
-	uint32_t elapsed_ticks = 0;
 	struct bdev_burst_qos *bqos;
 
-	if (now < g_qos_mgr.last_tick_tsc + tick_period_tsc) {
+	if (now < g_qos_mgr.last_tick_tsc + g_qos_mgr.tick_period_tsc) {
 		return SPDK_POLLER_IDLE;
 	}
 
-	while (now >= g_qos_mgr.last_tick_tsc + tick_period_tsc) {
-		g_qos_mgr.last_tick_tsc += tick_period_tsc;
-		elapsed_ticks++;
+	while (now >= g_qos_mgr.last_tick_tsc + g_qos_mgr.tick_period_tsc) {
+		g_qos_mgr.last_tick_tsc += g_qos_mgr.tick_period_tsc;
+		g_qos_mgr.ticks++;
 	}
 
 	TAILQ_FOREACH(bqos, &g_qos_mgr.bqos_list, link) {
-		bdev_burst_qos_refill(bqos, elapsed_ticks);
+		bdev_burst_qos_refill(bqos);
 	}
 
 	spdk_for_each_channel_broadcast_rr(&g_qos_mgr,
@@ -1238,6 +1248,7 @@ bdev_burst_qos_library_init(void)
 	g_qos_mgr.tick_period_tsc = g_qos_opts.tick_period_us * spdk_get_ticks_hz() /
 				    SPDK_SEC_TO_USEC;
 	g_qos_mgr.last_tick_tsc = spdk_get_ticks();
+	g_qos_mgr.ticks = 0;
 
 	g_qos_mgr.poller = SPDK_POLLER_REGISTER(bdev_burst_qos_poll, NULL,
 						g_qos_opts.tick_period_us);
