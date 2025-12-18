@@ -541,6 +541,14 @@ function get_config_params() {
 
 	if [[ $SPDK_TEST_XLIO -eq 1 ]]; then
 		config_params+=' --with-xlio'
+		# nvme_nvda_tcp is built when xlio is enabled and it uses some rdma utils
+		if [[ ! $config_params =~ --with-rdma ]]; then
+			if [[ $SPDK_TEST_NVMF_NICS == "mlx5" ]]; then
+				config_params+=' --with-rdma=mlx5_dv'
+			elif [ -f /usr/include/infiniband/verbs.h ]; then
+				config_params+=' --with-rdma'
+			fi
+		fi
 	fi
 
 	echo "$config_params"
