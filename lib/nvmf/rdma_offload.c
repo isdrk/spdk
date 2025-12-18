@@ -96,6 +96,9 @@ enum spdk_nvmf_rdma_request_state {
 	/* The request is queued until a data buffer is available. */
 	RDMA_REQUEST_STATE_NEED_BUFFER,
 
+	/* The request has a data buffer available. */
+	RDMA_REQUEST_STATE_HAVE_BUFFER,
+
 	/* The request is waiting on RDMA queue depth availability
 	 * to transfer data from the host to the controller.
 	 */
@@ -160,6 +163,7 @@ enum spdk_nvmf_rdma_request_state {
 #define TRACE_RDMA_OFFLOAD_QP_DISCONNECT					SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x10)
 #define TRACE_RDMA_OFFLOAD_QP_DESTROY						SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x11)
 #define TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE_PENDING		SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x12)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x13)
 
 static void
 nvmf_rdma_offload_trace(void)
@@ -189,6 +193,9 @@ nvmf_rdma_offload_trace(void)
 	spdk_trace_register_description("RDMA_REQ_NEED_BUFFER",
 					TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER,
 					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
+					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
+	spdk_trace_register_description("RDMA_REQ_HAVE_BUFFER", TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
 					TRACE_RDMA_OFFLOAD_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING,
@@ -2997,6 +3004,11 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			}
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
+			rdma_req->state = RDMA_REQUEST_STATE_HAVE_BUFFER;
+			break;
+		case RDMA_REQUEST_STATE_HAVE_BUFFER:
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER, 0, 0,
+					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
 
 			/* If data is transferring from host to controller and the data didn't
 			 * arrive using in capsule data, we need to do a transfer from the host.
@@ -3628,6 +3640,11 @@ start_processing:
 			break;
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
 			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER, 0, 0,
+					  (uintptr_t)non_offload_req, (uintptr_t)oqpair);
+			non_offload_req->state = RDMA_REQUEST_STATE_HAVE_BUFFER;
+			break;
+		case RDMA_REQUEST_STATE_HAVE_BUFFER:
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER, 0, 0,
 					  (uintptr_t)non_offload_req, (uintptr_t)oqpair);
 
 			assert(req->xfer != SPDK_NVME_DATA_NONE);
