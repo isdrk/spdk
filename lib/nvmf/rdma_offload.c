@@ -93,6 +93,9 @@ enum spdk_nvmf_rdma_request_state {
 	/* Initial state when request first received */
 	RDMA_REQUEST_STATE_NEW,
 
+	/* The request is queued until data WRs are available. */
+	RDMA_REQUEST_STATE_NEED_DATA_WR,
+
 	/* The request is queued until a data buffer is available. */
 	RDMA_REQUEST_STATE_NEED_BUFFER,
 
@@ -164,6 +167,7 @@ enum spdk_nvmf_rdma_request_state {
 #define TRACE_RDMA_OFFLOAD_QP_DESTROY						SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x11)
 #define TRACE_RDMA_OFFLOAD_REQUEST_STATE_READY_TO_COMPLETE_PENDING		SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x12)
 #define TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x13)
+#define TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_DATA_WR				SPDK_TPOINT_ID(TRACE_GROUP_NVMF_RDMA_OFFLOAD, 0x14)
 
 static void
 nvmf_rdma_offload_trace(void)
@@ -195,6 +199,9 @@ nvmf_rdma_offload_trace(void)
 					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_OFFLOAD_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_HAVE_BUFFER", TRACE_RDMA_OFFLOAD_REQUEST_STATE_HAVE_BUFFER,
+					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
+					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
+	spdk_trace_register_description("RDMA_REQ_NEED_DATA_WR", TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_DATA_WR,
 					OWNER_TYPE_NONE, OBJECT_NVMF_RDMA_IO, 0,
 					SPDK_TRACE_ARG_TYPE_PTR, "qpair");
 	spdk_trace_register_description("RDMA_REQ_TX_PENDING_C2H",
@@ -2331,13 +2338,6 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 	rdma_req->iovpos = 0;
 
 	if (spdk_unlikely(req->dif_enabled)) {
-		if (rdma_req->num_wrs > 1) {
-			rc = nvmf_request_alloc_wrs(rtransport, rdma_req, rdma_req->num_wrs - 1);
-			if (spdk_unlikely(rc != 0)) {
-				goto err_exit;
-			}
-		}
-
 		rc = nvmf_rdma_fill_wr_sgl_with_dif(device, rdma_req, wr, length);
 		if (spdk_unlikely(rc != 0)) {
 			goto err_exit;
@@ -2363,35 +2363,6 @@ err_exit:
 	nvmf_rdma_request_free_data(rdma_req, rtransport);
 	req->iovcnt = 0;
 	return rc;
-}
-
-static int
-nvmf_rdma_request_alloc_buffers_multi_sgl(struct spdk_nvmf_rdma_transport *rtransport,
-		struct spdk_nvmf_rdma_device *device,
-		struct spdk_nvmf_rdma_request *rdma_req,
-		uint32_t num_sgl_descriptors,
-		uint32_t length)
-{
-	struct spdk_nvmf_rdma_qpair		*rqpair;
-	struct spdk_nvmf_rdma_poll_group	*rgroup;
-	struct spdk_nvmf_request		*req = &rdma_req->common.req;
-	int					rc;
-
-	rqpair = nvmf_rdma_qpair_get(rdma_req->common.req.qpair);
-	rgroup = rqpair->poller->group;
-
-	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1);
-	if (spdk_unlikely(rc != 0)) {
-		return -ENOMEM;
-	}
-
-	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, length);
-	if (spdk_unlikely(rc != 0)) {
-		nvmf_rdma_request_free_data(rdma_req, rtransport);
-		return rc;
-	}
-
-	return 0;
 }
 
 static int
@@ -2561,7 +2532,6 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 		/* fill request length and populate iovs */
 		req->length = length;
 		/* rdma wr specifics */
-		nvmf_rdma_setup_request(rdma_req);
 		if (spdk_unlikely(req->dif_enabled)) {
 			req->dif.orig_length = length;
 			length = spdk_dif_get_length_with_md(length, &req->dif.dif_ctx);
@@ -2619,8 +2589,8 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 			return -EINVAL;
 		}
 
-		rc = nvmf_rdma_request_alloc_buffers_multi_sgl(rtransport, device, rdma_req, num_sgl_descriptors,
-				length);
+		rc = spdk_nvmf_request_get_buffers(req, &rqpair->poller->group->group, &rtransport->transport,
+						   length);
 		if (spdk_unlikely(rc != 0)) {
 			return 0;
 		}
@@ -2884,6 +2854,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			  !spdk_nvmf_qpair_is_active(&rqpair->common.qpair))) {
 		switch (rdma_req->state) {
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
+		case RDMA_REQUEST_STATE_NEED_DATA_WR:
 			STAILQ_REMOVE(&rgroup->group.pending_buf_queue, &rdma_req->common.req, spdk_nvmf_request, buf_link);
 			break;
 		case RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING:
@@ -3003,6 +2974,8 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			    sgl->unkeyed.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) {
 				rdma_req->num_wrs = sgl->unkeyed.length / sizeof(struct spdk_nvme_sgl_descriptor);
 				assert(rdma_req->num_wrs > 1);
+				rdma_req->state = RDMA_REQUEST_STATE_NEED_DATA_WR;
+				STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->common.req, buf_link);
 				break;
 			} else if (spdk_unlikely(rdma_req->common.req.dif_enabled &&
 						 sgl->generic.type == SPDK_NVME_SGL_TYPE_KEYED_DATA_BLOCK &&
@@ -3012,9 +2985,31 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 						    &rdma_req->common.req.dif.dif_ctx),
 						    rtransport->transport.opts.io_unit_size,
 						    rdma_req->common.req.dif.dif_ctx.block_size);
+				if (rdma_req->num_wrs > 1) {
+					rdma_req->state = RDMA_REQUEST_STATE_NEED_DATA_WR;
+					STAILQ_INSERT_TAIL(&rgroup->group.pending_buf_queue, &rdma_req->common.req, buf_link);
+					break;
+				}
 			}
+			nvmf_rdma_setup_request(rdma_req);
 			rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
 			nvmf_rdma_poll_group_insert_need_buffer_req(rgroup, rdma_req);
+			break;
+		case RDMA_REQUEST_STATE_NEED_DATA_WR:
+			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_DATA_WR, 0, 0,
+					  (uintptr_t)rdma_req, (uintptr_t)rqpair);
+			assert(rdma_req->num_wrs > 1);
+			if (&rdma_req->common.req != STAILQ_FIRST(&rgroup->group.pending_buf_queue)) {
+				/* This request needs to wait in line to obtain a buffer */
+				break;
+			}
+			rc = nvmf_request_alloc_wrs(rtransport, rdma_req, rdma_req->num_wrs - 1);
+			if (spdk_unlikely(rc != 0)) {
+				rgroup->stat.pending_data_buffer++;
+				break;
+			}
+			/* Request remains in the pending_buf_queue */
+			rdma_req->state = RDMA_REQUEST_STATE_NEED_BUFFER;
 			break;
 		case RDMA_REQUEST_STATE_NEED_BUFFER:
 			spdk_trace_record(TRACE_RDMA_OFFLOAD_REQUEST_STATE_NEED_BUFFER, 0, 0,
@@ -8303,6 +8298,7 @@ _nvmf_rdma_qpair_abort_request(void *ctx)
 		break;
 
 	case RDMA_REQUEST_STATE_NEED_BUFFER:
+	case RDMA_REQUEST_STATE_NEED_DATA_WR:
 		STAILQ_REMOVE(&rqpair->poller->group->group.pending_buf_queue,
 			      &rdma_req_to_abort->common.req, spdk_nvmf_request, buf_link);
 
