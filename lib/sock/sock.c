@@ -1207,27 +1207,30 @@ spdk_sock_group_poll(struct spdk_sock_group *group)
 }
 
 int
-spdk_sock_group_close(struct spdk_sock_group **group)
+spdk_sock_group_close(struct spdk_sock_group **_group)
 {
 	struct spdk_sock_group_impl *group_impl = NULL, *tmp;
+	struct spdk_sock_group *group;
 	struct spdk_fd_group *fgrp;
 	int rc, fd;
 
-	if (*group == NULL) {
+	if (_group == NULL || (*_group) == NULL) {
 		errno = EBADF;
 		return -1;
 	}
 
-	fgrp = (*group)->fgrp;
-	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
+	group = *_group;
+
+	fgrp = group->fgrp;
+	STAILQ_FOREACH_SAFE(group_impl, &group->group_impls, link, tmp) {
 		if (!TAILQ_EMPTY(&group_impl->socks)) {
 			errno = EBUSY;
 			return -1;
 		}
 	}
 
-	STAILQ_FOREACH_SAFE(group_impl, &(*group)->group_impls, link, tmp) {
-		STAILQ_REMOVE_HEAD(&(*group)->group_impls, link);
+	STAILQ_FOREACH_SAFE(group_impl, &group->group_impls, link, tmp) {
+		STAILQ_REMOVE_HEAD(&group->group_impls, link);
 		if (fgrp != NULL) {
 			fd = group_impl->net_impl->group_impl_get_interruptfd(group_impl);
 			if (fd >= 0) {
@@ -1243,8 +1246,8 @@ spdk_sock_group_close(struct spdk_sock_group **group)
 	if (fgrp != NULL) {
 		spdk_fd_group_destroy(fgrp);
 	}
-	free(*group);
-	*group = NULL;
+	free(group);
+	*_group = NULL;
 
 	return 0;
 }
