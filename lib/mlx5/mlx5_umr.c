@@ -88,6 +88,13 @@ struct spdk_mlx5_psv_pool {
 	uint32_t num_psvs;
 };
 
+struct spdk_mlx5_umr_mb_pool {
+	struct ibv_pd *pd;
+	struct spdk_mempool *mpool;
+	uint32_t mb_count;
+	uint8_t *mb;
+};
+
 static bool g_umr_implementer_registered;
 
 static int
@@ -2011,4 +2018,151 @@ bool
 spdk_mlx5_umr_implementer_is_registered(void)
 {
 	return g_umr_implementer_registered;
+}
+
+void
+spdk_mlx5_umr_mb_pool_destroy(struct spdk_mlx5_umr_mb_pool *pool)
+{
+	uint32_t num_objects_in_pool;
+
+	if (pool->mpool) {
+		num_objects_in_pool = spdk_mempool_count(pool->mpool);
+		if (num_objects_in_pool != pool->mb_count) {
+			SPDK_ERRLOG("Expected %u objects in the pool, but got only %u\n",
+				    pool->mb_count, num_objects_in_pool);
+		}
+		spdk_mempool_free(pool->mpool);
+	}
+	spdk_dma_free(pool->mb);
+	free(pool);
+}
+
+struct mlx5_umr_mb_pool_ctor_args {
+	struct spdk_mlx5_umr_mb_pool *pool;
+	struct spdk_rdma_utils_mem_map *map;
+	uint32_t mb_size;
+	int rc;
+};
+
+static void
+mlx5_set_umr_mb_in_pool(struct spdk_mempool *mp, void *cb_arg, void *_mb, unsigned i)
+{
+	struct mlx5_umr_mb_pool_ctor_args *args = cb_arg;
+	struct spdk_mlx5_umr_mb_pool *pool = args->pool;
+	struct spdk_mlx5_umr_mb_pool_obj *mb = _mb;
+	struct spdk_rdma_utils_memory_translation translation;
+	int rc;
+
+	if (args->rc) {
+		return;
+	}
+
+	assert(i < pool->mb_count);
+	memset(mb, 0, sizeof(*mb));
+	mb->ptr = pool->mb + (size_t)i * args->mb_size;
+	mb->size = args->mb_size;
+
+	rc = spdk_rdma_utils_get_translation(args->map, mb->ptr, args->mb_size, &translation);
+	if (rc) {
+		SPDK_ERRLOG("Memory translation failed, addr %p, length %u\n", mb->ptr, args->mb_size);
+		args->rc = -EINVAL;
+	} else {
+		mb->mkey = spdk_rdma_utils_memory_translation_get_lkey(&translation);
+	}
+}
+
+struct spdk_mlx5_umr_mb_pool *
+spdk_mlx5_umr_mb_pool_create(struct spdk_mlx5_umr_mb_pool_param *params, struct ibv_pd *pd)
+{
+	struct mlx5_umr_mb_pool_ctor_args args = {};
+	struct spdk_mlx5_umr_mb_pool *pool;
+	char name[32];
+	int rc;
+
+	if (!pd) {
+		return NULL;
+	}
+	if (!params || !params->mb_count) {
+		return NULL;
+	}
+	rc = snprintf(name, sizeof(name), "umr_mb_%s", pd->context->device->dev_name);
+	if (rc < 0) {
+		return NULL;
+	}
+
+	pool = calloc(1, sizeof(*pool));
+	if (!pool) {
+		return NULL;
+	}
+
+	if (params->cache_per_thread > params->mb_count || !params->cache_per_thread) {
+		params->cache_per_thread = params->mb_count * 3 / 4 / spdk_env_get_core_count();
+	}
+
+	pool->pd = pd;
+	pool->mb_count = params->mb_count;
+	args.pool = pool;
+	args.mb_size = spdk_align32pow2(params->mb_size);
+	args.map = params->map;
+
+	pool->mb = spdk_dma_zmalloc((size_t)args.mb_size * params->mb_count, 4096, NULL);
+	if (!pool->mb) {
+		SPDK_ERRLOG("Failed to allocate UMR Memory Buffer\n");
+		goto err;
+	}
+
+	pool->mpool = spdk_mempool_create_ctor(name, params->mb_count,
+					       sizeof(struct spdk_mlx5_umr_mb_pool_obj),
+					       params->cache_per_thread, SPDK_ENV_SOCKET_ID_ANY,
+					       mlx5_set_umr_mb_in_pool, &args);
+	if (!pool->mpool) {
+		SPDK_ERRLOG("Failed to create UMR Memory Buffer memory pool\n");
+		goto err;
+	}
+
+	if (args.rc) {
+		SPDK_ERRLOG("Failed to init UMR Memory Buffer objects, rc %d\n", args.rc);
+		goto err;
+	}
+
+	return pool;
+err:
+	spdk_dma_free(pool->mb);
+	free(pool);
+	return NULL;
+}
+
+struct spdk_mlx5_umr_mb_pool_obj *
+spdk_mlx5_umr_mb_pool_get(struct spdk_mlx5_umr_mb_pool *pool)
+{
+	return spdk_mempool_get(pool->mpool);
+}
+
+void
+spdk_mlx5_umr_mb_pool_put(struct spdk_mlx5_umr_mb_pool *pool, struct spdk_mlx5_umr_mb_pool_obj *mb)
+{
+	assert(pool);
+	assert(mb);
+	spdk_mempool_put(pool->mpool, mb);
+}
+
+int
+spdk_mlx5_umr_mb_pool_get_bulk(struct spdk_mlx5_umr_mb_pool *pool,
+			       struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count)
+{
+	assert(pool->mpool);
+
+	return spdk_mempool_get_bulk(pool->mpool, (void **)mb, mb_count);
+}
+
+void
+spdk_mlx5_umr_mb_pool_put_bulk(struct spdk_mlx5_umr_mb_pool *pool,
+			       struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count)
+{
+	assert(pool);
+	assert(pool->mpool);
+	assert(mb);
+	assert(mb_count);
+
+	spdk_mempool_put_bulk(pool->mpool, (void **)mb, mb_count);
 }

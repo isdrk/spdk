@@ -121,6 +121,21 @@ union spdk_mlx5_cq_error {
 	} sigerr;
 };
 
+struct spdk_mlx5_umr_mb_pool;
+
+struct spdk_mlx5_umr_mb_pool_obj {
+	uint8_t *ptr;
+	uint32_t mkey;
+	uint32_t size;
+};
+
+struct spdk_mlx5_umr_mb_pool_param {
+	uint32_t mb_count;
+	uint32_t mb_size;
+	uint32_t cache_per_thread;
+	struct spdk_rdma_utils_mem_map *map;
+};
+
 struct spdk_mlx5_mkey_pool;
 
 enum spdk_mlx5_mkey_pool_flags {
@@ -924,4 +939,59 @@ void spdk_mlx5_umr_implementer_register(bool registered);
  */
 bool spdk_mlx5_umr_implementer_is_registered(void);
 
+/**
+ * Create a pool of UMR Memory Buffers for a given PD.
+ *
+ * Can be called several times for different PDs.
+ *
+ * \param params Parameter of the memory pool
+ * \param pd Protection Domain
+ * \return Pointer to the UMR Memory Buffer pool on success or NULL on error
+ */
+struct spdk_mlx5_umr_mb_pool *spdk_mlx5_umr_mb_pool_create(
+	struct spdk_mlx5_umr_mb_pool_param *params, struct ibv_pd *pd);
+
+/**
+ * Destroy a pool of UMR Memory Buffers which was created by \ref spdk_mlx5_umr_mb_pool_create.
+ *
+ * \param pool Pointer to the UMR Memory Buffer pool to destroy.
+ */
+void spdk_mlx5_umr_mb_pool_destroy(struct spdk_mlx5_umr_mb_pool *pool);
+
+/**
+ * Get several UMR Memory Buffers from the pool
+ *
+ * \param pool UMR Memory Buffer pool
+ * \param mb array of UMR Memory Buffer pointers to be filled by this function
+ * \param mb_count number of UMR Memory Buffers to get from the pool
+ * \return 0 on success, errno on failure
+ */
+int spdk_mlx5_umr_mb_pool_get_bulk(struct spdk_mlx5_umr_mb_pool *pool,
+				   struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count);
+
+/**
+ * Return UMR Memory Buffers to the pool
+ *
+ * \param pool UMR Memory Buffer pool
+ * \param mb array of UMR Memory Buffer pointers to be returned to the pool
+ * \param mb_count number of UMR Memory Buffers to be returned to the pool
+ */
+void spdk_mlx5_umr_mb_pool_put_bulk(struct spdk_mlx5_umr_mb_pool *pool,
+				    struct spdk_mlx5_umr_mb_pool_obj **mb, uint32_t mb_count);
+/**
+ * Get a UMR Memory Buffer from the pool.
+ *
+ * \param pool UMR Memory Buffer pool
+ * \return Pointer to a UMR Memory Buffer on success, NULL if the pool is empty
+ */
+struct spdk_mlx5_umr_mb_pool_obj *spdk_mlx5_umr_mb_pool_get(struct spdk_mlx5_umr_mb_pool *pool);
+
+/**
+ * Return the UMR Memory Buffer to the pool
+ *
+ * \param pool UMR Memory Buffer pool
+ * \param mb UMR Memory Buffer to return to the pool
+ */
+void spdk_mlx5_umr_mb_pool_put(struct spdk_mlx5_umr_mb_pool *pool,
+			       struct spdk_mlx5_umr_mb_pool_obj *mb);
 #endif /* SPDK_MLX5_H */
