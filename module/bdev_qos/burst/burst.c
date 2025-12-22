@@ -63,6 +63,8 @@ struct token_bucket {
 	uint64_t capacity;
 };
 
+struct local_token_bucket;
+
 struct global_token_bucket {
 	/*
 	 * Steady bucket is the primary "spending account" that I/O requests directly
@@ -105,6 +107,15 @@ struct global_token_bucket {
 	/* The operating mode this token bucket uses. */
 	enum bdev_qos_mode mode;
 
+	/* Number of local buckets for this global bucket. */
+	uint32_t num_local_buckets;
+
+	/* Local buckets for this global bucket. */
+	TAILQ_HEAD(, local_token_bucket) local_buckets;
+
+	/* Spinlock to protect local bucket list and count. */
+	struct spdk_spinlock spinlock;
+
 	/* The long-term average rate set by user. */
 	uint64_t avg_rate;
 
@@ -141,6 +152,7 @@ struct local_token_bucket {
 	struct global_token_bucket *global_bucket;
 
 	STAILQ_ENTRY(local_token_bucket) slink;
+	TAILQ_ENTRY(local_token_bucket) link;
 };
 
 struct bdev_burst_qos {
@@ -544,7 +556,37 @@ global_token_bucket_init(struct global_token_bucket *global_bucket,
 			 enum bdev_qos_metric metric)
 {
 	global_bucket->metric = metric;
+	TAILQ_INIT(&global_bucket->local_buckets);
+	global_bucket->num_local_buckets = 0;
+	spdk_spin_init(&global_bucket->spinlock);
 	global_token_bucket_reset(global_bucket);
+}
+
+static void
+global_token_bucket_fini(struct global_token_bucket *global_bucket)
+{
+	spdk_spin_destroy(&global_bucket->spinlock);
+}
+
+static void
+global_token_bucket_add_local_bucket(struct global_token_bucket *global_bucket,
+				     struct local_token_bucket *local_bucket)
+{
+	spdk_spin_lock(&global_bucket->spinlock);
+	TAILQ_INSERT_TAIL(&global_bucket->local_buckets, local_bucket, link);
+	global_bucket->num_local_buckets++;
+	spdk_spin_unlock(&global_bucket->spinlock);
+}
+
+static void
+global_token_bucket_remove_local_bucket(struct global_token_bucket *global_bucket,
+					struct local_token_bucket *local_bucket)
+{
+	spdk_spin_lock(&global_bucket->spinlock);
+	TAILQ_REMOVE(&global_bucket->local_buckets, local_bucket, link);
+	assert(global_bucket->num_local_buckets > 0);
+	global_bucket->num_local_buckets--;
+	spdk_spin_unlock(&global_bucket->spinlock);
 }
 
 /*
@@ -1003,6 +1045,7 @@ local_token_bucket_init(struct local_token_bucket *local_bucket,
 	TAILQ_INIT(&local_bucket->queued_io);
 
 	local_bucket->global_bucket = global_bucket;
+	global_token_bucket_add_local_bucket(global_bucket, local_bucket);
 
 	switch (global_bucket->metric) {
 	case BDEV_QOS_RW_IOPS:
@@ -1022,6 +1065,12 @@ local_token_bucket_init(struct local_token_bucket *local_bucket,
 	}
 
 	local_token_bucket_reset(local_bucket);
+}
+
+static void
+local_token_bucket_fini(struct local_token_bucket *local_bucket)
+{
+	global_token_bucket_remove_local_bucket(local_bucket->global_bucket, local_bucket);
 }
 
 static struct spdk_bdev_qos_impl *
@@ -1056,11 +1105,16 @@ static void
 bdev_burst_qos_put(struct spdk_bdev_qos_impl *qos_impl)
 {
 	struct bdev_burst_qos *bqos = bdev_burst_qos(qos_impl);
+	int i;
 
 	TAILQ_REMOVE(&g_qos_mgr.bqos_list, bqos, link);
 
 	if (TAILQ_EMPTY(&g_qos_mgr.bqos_list) && g_qos_mgr.poller != NULL) {
 		spdk_poller_pause(g_qos_mgr.poller);
+	}
+
+	for (i = 0; i < BDEV_QOS_NUM_METRICS; i++) {
+		global_token_bucket_fini(&bqos->global_buckets[i]);
 	}
 
 	free(bqos);
@@ -1135,10 +1189,15 @@ bdev_burst_qos_channel_put(struct spdk_bdev_qos_channel_impl *qos_ch_impl)
 {
 	struct bdev_burst_qos_channel *bqos_ch = bdev_burst_qos_channel(qos_ch_impl);
 	struct bdev_burst_qos_poll_group *bgroup = bqos_ch->bgroup;
+	int i;
 
 	TAILQ_REMOVE(&bgroup->bqos_ch_list, bqos_ch, link);
 
 	spdk_put_io_channel(spdk_io_channel_from_ctx(bgroup));
+
+	for (i = 0; i < BDEV_QOS_NUM_METRICS; i++) {
+		local_token_bucket_fini(&bqos_ch->local_buckets[i]);
+	}
 
 	free(qos_ch_impl);
 }
