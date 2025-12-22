@@ -3355,6 +3355,10 @@ max_burst_rate and max_burst_time_in_sec are used only if qos_mode is burst_read
 If qos_mode is burst_ready, rate limiter starts ready to burst immediately.
 If qos_mode is earned_burst, rate limiter starts like strict leaky bucket, but can burst later if credits are earned.
 
+For the refill period, start by assuming the user's refill_period_us is correct. It is calculated that
+how many tokens are refilled per the period (naive income). Compare the naive income against io_burst.
+If the naive income is smaller than io_burst, override the tick period because the user's refill_period_us was too fast.
+
 #### Parameters
 
  Name                  | Optional   | Type   | Description
@@ -3365,6 +3369,8 @@ If qos_mode is earned_burst, rate limiter starts like strict leaky bucket, but c
  qos_mode              | Optinal    | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
  max_burst_rate        | Optional   | number | Peak rate allowed during a burst.
  max_burst_time_in_sec | Optional   | number | The maximum duration max_burst_rate can be sustained.
+ refill_period_us      | Optional   | number | Refill period in microseconds (default is 0)
+ io_burst              | Optional   | number | Max I/O allowed in a single burst (default: 64 for IOPS limit, 64 x 64KiB for BW limit)
 
 #### Example
 

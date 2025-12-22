@@ -22,6 +22,8 @@
 #define BDEV_QOS_BYTE_ADDITIVE_INCREASE_STEP	16384
 #define BDEV_QOS_MIN_IO_PER_SEC			1000
 #define BDEV_QOS_MIN_BYTE_PER_SEC		(1024 * 1024)
+#define BDEV_QOS_DEFAULT_IO_BURST_SIZE		64
+#define BDEV_QOS_DEFAULT_IO_BURST_BYTES		(64 * 65536)
 
 /** Metric controlled by QoS rate limit */
 enum bdev_qos_metric {
@@ -108,6 +110,9 @@ struct global_token_bucket {
 
 	/* The duration in seconds for which the burst rate is maintained. */
 	uint64_t max_burst_time_in_sec;
+
+	/* Max I/O allowed in a single burst */
+	uint64_t io_burst;
 };
 
 /*
@@ -295,6 +300,39 @@ atomic_sub_floor(uint64_t *value, uint64_t to_sub)
 		}
 		spdk_pause();
 	}
+}
+
+/*
+ * Calculate the next closest divisor >= n for a given dividend.
+ * If n is already a divisor, it returns n.
+ */
+static inline uint64_t
+calculate_next_divisor(uint64_t dividend, uint64_t n)
+{
+	uint64_t i;
+
+	/* Handle the edge case where the dividend is 0. */
+	if (dividend == 0) {
+		return 0;
+	}
+
+	/* Start searching from n upwards. The loop continues as long as the potential
+	 * divisor 'i' is less than or equal to the dividend.
+	 */
+	for (i = n; i <= dividend; i++) {
+		if ((dividend % i) == 0) {
+			return i;
+		}
+	}
+
+	/* If no divisor is found in the range [n, dividend], the only remaining divisor is
+	 * the dividend itself. The loop condition i <= dividend ensures we check the
+	 * dividend itself.
+	 *
+	 * If we reach here, it implies n > dividend initially. The most logical return in
+	 * this scenario is probably the dividend itself.
+	 */
+	return dividend;
 }
 
 void
@@ -498,6 +536,7 @@ global_token_bucket_reset(struct global_token_bucket *global_bucket)
 	global_bucket->transfer_per_refill = 0;
 	global_bucket->refill_period_ticks = 0;
 	global_bucket->max_burst_time_in_sec = 0;
+	global_bucket->io_burst = 0;
 }
 
 static void
@@ -507,8 +546,6 @@ global_token_bucket_init(struct global_token_bucket *global_bucket,
 	global_bucket->metric = metric;
 	global_token_bucket_reset(global_bucket);
 }
-
-#define TOKENS_PER_TICK(tokens)	((tokens) * g_qos_opts.tick_period_us / SPDK_SEC_TO_USEC)
 
 /*
  * Configure the global token bucket based on the passed average rate.
@@ -522,15 +559,18 @@ global_token_bucket_init(struct global_token_bucket *global_bucket,
  * \param mode Operating mode.
  * \param max_burst_rate Peak rate allowed during a burst.
  * \param max_burst_time_in_sec The maximum duration max_burst_rate can be sustained.
+ * \param refill_period_us Refill period in microseconds.
+ * \param io_burst Max I/O allowed in a single burst.
  */
 static int
 global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_rate,
 			enum bdev_qos_mode qos_mode,
-			uint64_t max_burst_rate, uint64_t max_burst_time_in_sec)
+			uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
+			uint64_t refill_period_us, uint64_t io_burst)
 {
 	struct token_bucket *steady_bucket = &global_bucket->steady_bucket;
 	struct token_bucket *burst_bucket = &global_bucket->burst_bucket;
-	uint64_t min_rate, complement;
+	uint64_t min_rate, complement, ticks_per_sec, batch_demand, refills_per_sec;
 
 	switch (qos_mode) {
 	case BDEV_QOS_MODE_STRICT:
@@ -544,6 +584,10 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	if (avg_rate == 0 || avg_rate == UINT64_MAX) {
 		global_token_bucket_reset(global_bucket);
 		return 0;
+	}
+
+	if (io_burst == 0) {
+		return -EINVAL;
 	}
 
 	global_bucket->mode = qos_mode;
@@ -566,10 +610,42 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 
 	global_bucket->last_refill_ticks = g_qos_mgr.ticks;
 
-	global_bucket->avg_rate = avg_rate;
-	global_bucket->income_per_refill = TOKENS_PER_TICK(avg_rate);
+	ticks_per_sec = SPDK_SEC_TO_USEC / g_qos_opts.tick_period_us;
 
-	global_bucket->refill_period_ticks = 1;
+	global_bucket->avg_rate = avg_rate;
+
+	global_bucket->io_burst = io_burst;
+
+	/* Sanitize user input. */
+	if (refill_period_us == 0) {
+		refill_period_us = g_qos_opts.tick_period_us;
+	}
+
+	/* Align to the tick resolution. */
+	refill_period_us = spdk_round_up(refill_period_us, g_qos_opts.tick_period_us);
+
+	/* Calculate user's desired frequency. */
+	refills_per_sec = SPDK_SEC_TO_USEC / refill_period_us;
+
+	/* Calculate total batch demand. We want to refill enough to satisfy one
+	 * batched consumption for every local bucket per period.
+	 */
+	batch_demand = io_burst * spdk_env_get_core_count();
+
+	/* Align batch demand safely. Find a divisor of avg_rate which is >= batch demand.
+	 * This ensures limit / batch_demand results in an integer max frequency. */
+	batch_demand = calculate_next_divisor(avg_rate, batch_demand);
+
+	/* The prioritize but protect logic. Use user's frequency unless it exceeds the safe max. */
+	refills_per_sec = spdk_min(refills_per_sec, avg_rate / batch_demand);
+
+	/* Now we derive the final income and period. Since refills_per_sec is derived from a
+	 * divisor, this division is usually clean.
+	 */
+	global_bucket->income_per_refill = avg_rate / refills_per_sec;
+
+	/* Recalculate ticks from the finalized frequency. */
+	global_bucket->refill_period_ticks = ticks_per_sec / refills_per_sec;
 
 	if (qos_mode == BDEV_QOS_MODE_STRICT) {
 		steady_bucket->capacity = global_bucket->income_per_refill;
@@ -590,7 +666,7 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	}
 
 	global_bucket->max_burst_time_in_sec = max_burst_time_in_sec;
-	global_bucket->transfer_per_refill = TOKENS_PER_TICK(max_burst_rate - avg_rate);
+	global_bucket->transfer_per_refill = (max_burst_rate - avg_rate) / refills_per_sec;
 
 	if (qos_mode == BDEV_QOS_MODE_BURST_READY) {
 		/* Steady bucket must be large enough to handle the peak rate. */
@@ -656,6 +732,9 @@ global_token_bucket_config_json(struct global_token_bucket *global_bucket, const
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
 	spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
 	spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	spdk_json_write_named_uint64(w, "refill_period_us",
+				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
+	spdk_json_write_named_uint64(w, "io_burst", global_bucket->io_burst);
 
 	spdk_json_write_object_end(w);
 
@@ -677,6 +756,9 @@ global_token_bucket_info_json(struct global_token_bucket *global_bucket,
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
 	spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
 	spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	spdk_json_write_named_uint64(w, "refill_period_us",
+				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
+	spdk_json_write_named_uint64(w, "io_burst", global_bucket->io_burst);
 
 	spdk_json_write_object_end(w);
 }
@@ -1358,6 +1440,7 @@ bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 			 enum bdev_qos_metric qos_metric, uint64_t avg_rate,
 			 enum bdev_qos_mode qos_mode,
 			 uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
+			 uint64_t refill_period_us, uint64_t io_burst,
 			 spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
 	struct burst_qos_set_limit_ctx *ctx;
@@ -1382,7 +1465,8 @@ bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 	}
 
 	rc = global_token_bucket_set(global_bucket, avg_rate, qos_mode,
-				     max_burst_rate, max_burst_time_in_sec);
+				     max_burst_rate, max_burst_time_in_sec,
+				     refill_period_us, io_burst);
 	if (rc != 0) {
 		bdev_burst_qos_set_limit_done(ctx, rc);
 		return;
@@ -1398,6 +1482,8 @@ struct burst_qos_json {
 	enum bdev_qos_mode qos_mode;
 	uint64_t max_burst_rate;
 	uint64_t max_burst_time_in_sec;
+	uint64_t refill_period_us;
+	uint64_t io_burst;
 };
 
 static int
@@ -1446,12 +1532,19 @@ static const struct spdk_json_object_decoder burst_qos_json_decoders[] = {
 	{"max_burst_time_in_sec", offsetof(struct burst_qos_json, max_burst_time_in_sec), spdk_json_decode_uint64, true},
 };
 
+static const struct spdk_json_object_decoder burst_qos_json_decoders2[] = {
+	{"refill_period_us", offsetof(struct burst_qos_json, refill_period_us), spdk_json_decode_uint64, true},
+	{"io_burst", offsetof(struct burst_qos_json, io_burst), spdk_json_decode_uint64, true},
+};
+
 void
 bdev_burst_qos_set_limit_json(struct spdk_bdev_qos *qos,
 			      const struct spdk_json_val *params,
 			      spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
-	struct burst_qos_json req = { .qos_mode = BDEV_QOS_MODE_STRICT, };
+	struct burst_qos_json req = {
+		.qos_mode = BDEV_QOS_MODE_STRICT,
+	};
 	struct spdk_bdev_qos_impl *qos_impl;
 
 	if (!spdk_thread_is_app_thread(NULL)) {
@@ -1471,8 +1564,22 @@ bdev_burst_qos_set_limit_json(struct spdk_bdev_qos *qos,
 		return;
 	}
 
+	req.refill_period_us = 0;
+	if (bdev_qos_metric_is_iops(req.qos_metric)) {
+		req.io_burst = BDEV_QOS_DEFAULT_IO_BURST_SIZE;
+	} else {
+		req.io_burst = BDEV_QOS_DEFAULT_IO_BURST_BYTES;
+	}
+
+	if (spdk_json_decode_object_relaxed(params, burst_qos_json_decoders2,
+					    SPDK_COUNTOF(burst_qos_json_decoders2), &req)) {
+		cb_fn(cb_arg, -EINVAL);
+		return;
+	}
+
 	bdev_burst_qos_set_limit(qos_impl, req.qos_metric, req.avg_rate, req.qos_mode,
 				 req.max_burst_rate, req.max_burst_time_in_sec,
+				 req.refill_period_us, req.io_burst,
 				 cb_fn, cb_arg);
 }
 
