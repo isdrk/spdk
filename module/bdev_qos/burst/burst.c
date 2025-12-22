@@ -133,7 +133,9 @@ struct global_token_bucket {
  * Hence, there is no unnecessary I/O rejection or split due to rate limiter.
  */
 struct local_token_bucket {
-	/* Number of tokens currently cached locally. */
+	/* Number of tokens currently cached locally. Ready for immediate,
+	 * lock-free spending.
+	 */
 	uint64_t tokens;
 
 	/* The current size of the batch this local bucket will try to withdraw.
@@ -141,6 +143,17 @@ struct local_token_bucket {
 	 * (AIMD) algorithm.
 	 */
 	uint64_t withdraw_batch_size;
+
+	/* The threshold for sending guaranteed tokens back to the shared global bucket.
+	 * This limits how many tokens an idle or low-load local bucket can buffer.
+	 * This limit is strictly enforced when the I/O queue is empty, but effectively
+	 * ignored when I/Os are queued to allow accumulation for requests larger than
+	 * the bucket size.
+	 */
+	uint64_t capacity;
+
+	/* Tokens allocated by the refill operation, waiting to be claimed. */
+	uint64_t refill_grant;
 
 	/* List to queue the I/Os blocked to this bucket. */
 	bdev_io_tailq_t queued_io;
@@ -500,6 +513,9 @@ _global_token_bucket_refill(struct global_token_bucket *global_bucket,
 	}
 }
 
+static uint64_t local_token_bucket_refill(struct local_token_bucket *local_bucket,
+		uint64_t tokens_to_refill);
+
 /*
  * To ensure the average rate is maintained accurately even if the periodic timer is
  * delayed or missed, the refill function calculates elapsed_ticks by itself.
@@ -512,7 +528,8 @@ static inline void
 global_token_bucket_refill(struct global_token_bucket *global_bucket)
 {
 	uint64_t elapsed_ticks, num_refills;
-	uint64_t tokens_to_refill;
+	uint64_t tokens_to_refill, fair_share, to_global;
+	struct local_token_bucket *local_bucket;
 
 	assert(spdk_thread_is_app_thread(NULL));
 
@@ -535,7 +552,25 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 
 	tokens_to_refill = global_bucket->income_per_refill * num_refills;
 
-	_global_token_bucket_refill(global_bucket, tokens_to_refill);
+	spdk_spin_lock(&global_bucket->spinlock);
+	if (global_bucket->num_local_buckets == 0) {
+		to_global = tokens_to_refill;
+	} else {
+		fair_share = tokens_to_refill / global_bucket->num_local_buckets;
+		to_global = tokens_to_refill % global_bucket->num_local_buckets;
+
+		TAILQ_FOREACH(local_bucket, &global_bucket->local_buckets, link) {
+			to_global += local_token_bucket_refill(local_bucket, fair_share);
+		}
+	}
+	spdk_spin_unlock(&global_bucket->spinlock);
+
+	if (to_global > 0) {
+		/* Excess tokens are back to the global pool to maintain work-conserving
+		 * behavior.
+		 */
+		_global_token_bucket_refill(global_bucket, to_global);
+	}
 }
 
 static void
@@ -814,6 +849,25 @@ global_token_bucket_info_json(struct global_token_bucket *global_bucket,
 	spdk_json_write_object_end(w);
 }
 
+static uint64_t
+local_token_bucket_refill(struct local_token_bucket *local_bucket, uint64_t tokens_to_refill)
+{
+	uint64_t effective_cap;
+
+	/* Limit to prevent hoarding during idle periods. */
+	effective_cap = local_bucket->capacity;
+
+	if (!TAILQ_EMPTY(&local_bucket->queued_io)) {
+		/* Remove the capacity effectively to allow a starved local bucket to
+		 * accumulate its guaranteed share over multiple ticks to satisfy large
+		 * I/O size.
+		 */
+		effective_cap = UINT64_MAX;
+	}
+
+	return atomic_add_capped(&local_bucket->refill_grant, tokens_to_refill, effective_cap);
+}
+
 /*
  * The core function to consume tokens, implementing Additive Increase Multiplicative Decrease
  * (AIMD) algorithm to withdraw tokens from the global bucket.
@@ -829,7 +883,7 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 	struct global_token_bucket *global_bucket = local_bucket->global_bucket;
 	int64_t shortfall;
 	uint64_t additive_increase_step, max_withdraw_batch_size, min_withdraw_batch_size;
-	uint64_t actual_withdrawn;
+	uint64_t claimed, actual_withdrawn;
 
 	if (global_bucket->avg_rate == UINT64_MAX) {
 		/* The bucket is disabled */
@@ -845,6 +899,15 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 	/* Not enough tokens. Calculate the shortfall and start taking from
 	 * global bucket. */
 	shortfall = tokens_needed - local_bucket->tokens;
+
+	/* Move from 'guaranteed' mailbox to 'tokens' wallet. */
+	claimed = atomic_sub_floor(&local_bucket->refill_grant, shortfall);
+	if (claimed > 0) {
+		/* Transfer tokens. */
+		local_bucket->tokens += claimed;
+		/* Reduce shortfall. */
+		shortfall -= claimed;
+	}
 
 	if (bdev_qos_metric_is_iops(global_bucket->metric)) {
 		additive_increase_step = g_qos_opts.io_additive_increase_step;
@@ -1039,12 +1102,15 @@ local_token_bucket_unblock_all_queued_io(struct local_token_bucket *local_bucket
 static void
 local_token_bucket_reset(struct local_token_bucket *local_bucket)
 {
+	struct global_token_bucket *global_bucket = local_bucket->global_bucket;
+
 	local_bucket->tokens = 0;
 	if (bdev_qos_metric_is_iops(local_bucket->global_bucket->metric)) {
 		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
 	} else {
 		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
 	}
+	local_bucket->capacity = global_bucket->io_burst;
 }
 
 static void
