@@ -86,13 +86,16 @@ struct global_token_bucket {
 	/* Ticks at last refill was done. */
 	uint64_t last_refill_ticks;
 
-	/* The number of new tokens generated on each tick, based on avg_rate. */
-	uint64_t income_per_tick;
+	/* Refill period in ticks */
+	uint64_t refill_period_ticks;
+
+	/* The number of new tokens generated on each refill, based on avg_rate. */
+	uint64_t income_per_refill;
 
 	/* The maximum rate at which saved tokens can be moved from burst_bucket
 	 * to steady bucket.
 	 */
-	uint64_t transfer_per_tick;
+	uint64_t transfer_per_refill;
 
 	/* The metric this token bucket applies to. */
 	enum bdev_qos_metric metric;
@@ -428,7 +431,8 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 {
 	struct token_bucket *steady_bucket = &global_bucket->steady_bucket;
 	struct token_bucket *burst_bucket = &global_bucket->burst_bucket;
-	uint64_t elapsed_ticks, tokens_to_refill, tokens_to_transfer, overflow, transfer;
+	uint64_t elapsed_ticks, num_refills;
+	uint64_t tokens_to_refill, tokens_to_transfer, overflow, transfer;
 
 	assert(spdk_thread_is_app_thread(NULL));
 
@@ -439,9 +443,17 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 
 	assert(g_qos_mgr.ticks >= global_bucket->last_refill_ticks);
 	elapsed_ticks = g_qos_mgr.ticks - global_bucket->last_refill_ticks;
-	global_bucket->last_refill_ticks = g_qos_mgr.ticks;
 
-	tokens_to_refill = global_bucket->income_per_tick * elapsed_ticks;
+	/* Check if the mandatory refill period passed. */
+	if (elapsed_ticks < global_bucket->refill_period_ticks) {
+		return;
+	}
+
+	num_refills = elapsed_ticks / global_bucket->refill_period_ticks;
+
+	tokens_to_refill = global_bucket->income_per_refill * num_refills;
+
+	global_bucket->last_refill_ticks += num_refills * global_bucket->refill_period_ticks;
 
 	/* Add income to steady bucket first. */
 	overflow = atomic_add_capped(&steady_bucket->tokens, tokens_to_refill,
@@ -455,7 +467,7 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 	} else if (burst_bucket->tokens > 0) {
 		/* Eagerly transfer from burst bucket to steady bucket. */
 		tokens_to_transfer = spdk_min(burst_bucket->tokens,
-					      global_bucket->transfer_per_tick);
+					      global_bucket->transfer_per_refill);
 
 		overflow = atomic_add_capped(&steady_bucket->tokens, tokens_to_transfer,
 					     steady_bucket->capacity);
@@ -482,8 +494,9 @@ global_token_bucket_reset(struct global_token_bucket *global_bucket)
 	global_bucket->mode = BDEV_QOS_MODE_STRICT;
 	global_bucket->avg_rate = UINT64_MAX;
 	global_bucket->last_refill_ticks = 0;
-	global_bucket->income_per_tick = 0;
-	global_bucket->transfer_per_tick = 0;
+	global_bucket->income_per_refill = 0;
+	global_bucket->transfer_per_refill = 0;
+	global_bucket->refill_period_ticks = 0;
 	global_bucket->max_burst_time_in_sec = 0;
 }
 
@@ -554,13 +567,15 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	global_bucket->last_refill_ticks = g_qos_mgr.ticks;
 
 	global_bucket->avg_rate = avg_rate;
-	global_bucket->income_per_tick = TOKENS_PER_TICK(avg_rate);
+	global_bucket->income_per_refill = TOKENS_PER_TICK(avg_rate);
+
+	global_bucket->refill_period_ticks = 1;
 
 	if (qos_mode == BDEV_QOS_MODE_STRICT) {
-		steady_bucket->capacity = global_bucket->income_per_tick;
+		steady_bucket->capacity = global_bucket->income_per_refill;
 		burst_bucket->capacity = 0;
 		global_bucket->max_burst_time_in_sec = 0;
-		global_bucket->transfer_per_tick = 0;
+		global_bucket->transfer_per_refill = 0;
 		return 0;
 	}
 
@@ -575,7 +590,7 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	}
 
 	global_bucket->max_burst_time_in_sec = max_burst_time_in_sec;
-	global_bucket->transfer_per_tick = TOKENS_PER_TICK(max_burst_rate - avg_rate);
+	global_bucket->transfer_per_refill = TOKENS_PER_TICK(max_burst_rate - avg_rate);
 
 	if (qos_mode == BDEV_QOS_MODE_BURST_READY) {
 		/* Steady bucket must be large enough to handle the peak rate. */
@@ -587,8 +602,8 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 		burst_bucket->capacity = (max_burst_rate - avg_rate) * (max_burst_time_in_sec - 1);
 	} else {
 		assert(qos_mode == BDEV_QOS_MODE_EARNED_BURST);
-		steady_bucket->capacity = global_bucket->income_per_tick +
-					  global_bucket->transfer_per_tick;
+		steady_bucket->capacity = global_bucket->income_per_refill +
+					  global_bucket->transfer_per_refill;
 
 		burst_bucket->capacity = (max_burst_rate - avg_rate) * max_burst_time_in_sec;
 	}
