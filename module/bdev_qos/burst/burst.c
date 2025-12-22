@@ -460,14 +460,30 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket, uint32_t e
 }
 
 static void
+token_bucket_reset(struct token_bucket *bucket)
+{
+	bucket->tokens = 0;
+	bucket->capacity = 0;
+}
+
+static void
+global_token_bucket_reset(struct global_token_bucket *global_bucket)
+{
+	token_bucket_reset(&global_bucket->burst_bucket);
+	token_bucket_reset(&global_bucket->steady_bucket);
+	global_bucket->mode = BDEV_QOS_MODE_STRICT;
+	global_bucket->avg_rate = UINT64_MAX;
+	global_bucket->income_per_tick = 0;
+	global_bucket->transfer_per_tick = 0;
+	global_bucket->max_burst_time_in_sec = 0;
+}
+
+static void
 global_token_bucket_init(struct global_token_bucket *global_bucket,
 			 enum bdev_qos_metric metric)
 {
-	memset(global_bucket, 0, sizeof(*global_bucket));
-
 	global_bucket->metric = metric;
-	global_bucket->mode = BDEV_QOS_MODE_STRICT;
-	global_bucket->avg_rate = UINT64_MAX;
+	global_token_bucket_reset(global_bucket);
 }
 
 #define TOKENS_PER_TICK(tokens)	((tokens) * g_qos_opts.tick_period_us / SPDK_SEC_TO_USEC)
@@ -504,7 +520,7 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	}
 
 	if (avg_rate == 0 || avg_rate == UINT64_MAX) {
-		global_token_bucket_init(global_bucket, global_bucket->metric);
+		global_token_bucket_reset(global_bucket);
 		return 0;
 	}
 
