@@ -878,6 +878,17 @@ local_token_bucket_unblock_all_queued_io(struct local_token_bucket *local_bucket
 }
 
 static void
+local_token_bucket_reset(struct local_token_bucket *local_bucket)
+{
+	local_bucket->tokens = 0;
+	if (bdev_qos_metric_is_iops(local_bucket->global_bucket->metric)) {
+		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
+	} else {
+		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
+	}
+}
+
+static void
 local_token_bucket_init(struct local_token_bucket *local_bucket,
 			struct global_token_bucket *global_bucket)
 {
@@ -888,36 +899,21 @@ local_token_bucket_init(struct local_token_bucket *local_bucket,
 	switch (global_bucket->metric) {
 	case BDEV_QOS_RW_IOPS:
 		local_bucket->consume = local_token_bucket_rw_iops_consume;
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
 		break;
 	case BDEV_QOS_RW_BPS:
 		local_bucket->consume = local_token_bucket_rw_bps_consume;
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
 		break;
 	case BDEV_QOS_R_BPS:
 		local_bucket->consume = local_token_bucket_r_bps_consume;
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
 		break;
 	case BDEV_QOS_W_BPS:
 		local_bucket->consume = local_token_bucket_w_bps_consume;
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
 		break;
 	default:
 		break;
 	}
 
-	local_bucket->tokens = 0;
-}
-
-static void
-local_token_bucket_reset(struct local_token_bucket *local_bucket)
-{
-	local_bucket->tokens = 0;
-	if (bdev_qos_metric_is_iops(local_bucket->global_bucket->metric)) {
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
-	} else {
-		local_bucket->withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
-	}
+	local_token_bucket_reset(local_bucket);
 }
 
 static struct spdk_bdev_qos_impl *
