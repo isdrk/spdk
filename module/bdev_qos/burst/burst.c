@@ -468,42 +468,13 @@ global_token_bucket_withdraw(struct global_token_bucket *global_bucket,
 	return atomic_sub_floor(&steady_bucket->tokens, tokens_to_withdraw);
 }
 
-/*
- * To ensure the average rate is maintained accurately even if the periodic timer is
- * delayed or missed, the refill function calculates elapsed_ticks by itself.
- * This allows it to calculate and the correct amount of tokens to compensate for
- * the time that has passed since the last call.
- *
- * \param global_bucket Global token bucket.
- */
 static inline void
-global_token_bucket_refill(struct global_token_bucket *global_bucket)
+_global_token_bucket_refill(struct global_token_bucket *global_bucket,
+			    uint64_t tokens_to_refill)
 {
 	struct token_bucket *steady_bucket = &global_bucket->steady_bucket;
 	struct token_bucket *burst_bucket = &global_bucket->burst_bucket;
-	uint64_t elapsed_ticks, num_refills;
-	uint64_t tokens_to_refill, tokens_to_transfer, overflow, transfer;
-
-	assert(spdk_thread_is_app_thread(NULL));
-
-	if (global_bucket->avg_rate == UINT64_MAX) {
-		/* The bucket is disabled. */
-		return;
-	}
-
-	assert(g_qos_mgr.ticks >= global_bucket->last_refill_ticks);
-	elapsed_ticks = g_qos_mgr.ticks - global_bucket->last_refill_ticks;
-
-	/* Check if the mandatory refill period passed. */
-	if (elapsed_ticks < global_bucket->refill_period_ticks) {
-		return;
-	}
-
-	num_refills = elapsed_ticks / global_bucket->refill_period_ticks;
-
-	tokens_to_refill = global_bucket->income_per_refill * num_refills;
-
-	global_bucket->last_refill_ticks += num_refills * global_bucket->refill_period_ticks;
+	uint64_t overflow, tokens_to_transfer, transfer;
 
 	/* Add income to steady bucket first. */
 	overflow = atomic_add_capped(&steady_bucket->tokens, tokens_to_refill,
@@ -527,6 +498,44 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 			burst_bucket->tokens -= transfer;
 		}
 	}
+}
+
+/*
+ * To ensure the average rate is maintained accurately even if the periodic timer is
+ * delayed or missed, the refill function calculates elapsed_ticks by itself.
+ * This allows it to calculate and the correct amount of tokens to compensate for
+ * the time that has passed since the last call.
+ *
+ * \param global_bucket Global token bucket.
+ */
+static inline void
+global_token_bucket_refill(struct global_token_bucket *global_bucket)
+{
+	uint64_t elapsed_ticks, num_refills;
+	uint64_t tokens_to_refill;
+
+	assert(spdk_thread_is_app_thread(NULL));
+
+	if (global_bucket->avg_rate == UINT64_MAX) {
+		/* The bucket is disabled. */
+		return;
+	}
+
+	assert(g_qos_mgr.ticks >= global_bucket->last_refill_ticks);
+	elapsed_ticks = g_qos_mgr.ticks - global_bucket->last_refill_ticks;
+
+	/* Check if the mandatory refill period passed. */
+	if (elapsed_ticks < global_bucket->refill_period_ticks) {
+		return;
+	}
+
+	num_refills = elapsed_ticks / global_bucket->refill_period_ticks;
+
+	global_bucket->last_refill_ticks += num_refills * global_bucket->refill_period_ticks;
+
+	tokens_to_refill = global_bucket->income_per_refill * num_refills;
+
+	_global_token_bucket_refill(global_bucket, tokens_to_refill);
 }
 
 static void
