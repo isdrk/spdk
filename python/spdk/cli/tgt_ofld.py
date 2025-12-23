@@ -115,7 +115,6 @@ def add_parser(subparsers):
                                                  cc_nsid=args.cc_nsid,
                                                  cc_lba=args.cc_lba,
                                                  cc_opcode=args.cc_opcode,
-                                                 dc_q_id=args.dc_q_id,
                                                  param_err_loc=args.param_err_loc,
                                                  status_code=args.status_code))
 
@@ -132,7 +131,6 @@ def add_parser(subparsers):
     p.add_argument('--cc-nsid', type=int, help='Original capsule NSID', required=False)
     p.add_argument('--cc-lba', type=int, help='Original capsule LBA', required=False)
     p.add_argument('--cc-opcode', type=int, help='Controller Command Opcode', required=False)
-    p.add_argument('--dc-q-id', type=int, help='DC Queue ID', required=False)
     p.add_argument('--param-err-loc', type=int, help='Parameter Error Location', required=False)
     p.add_argument('--status-code', type=int, help='Status Code', required=False)
     p.set_defaults(func=tgt_ofld_add_log)

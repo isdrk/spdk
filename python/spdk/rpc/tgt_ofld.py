@@ -152,7 +152,7 @@ def tgt_ofld_get_log(client, subnqn=None, log_type=None, num_entries=None):
 
 
 def tgt_ofld_add_log(client, subnqn, log_type=None, qp_handle=None, be_cid=None, be_cqe=None,
-                     cc_cid=None, cc_nsid=None, cc_lba=None, cc_opcode=None, dc_q_id=None,
+                     cc_cid=None, cc_nsid=None, cc_lba=None, cc_opcode=None,
                      param_err_loc=None, status_code=None):
     """Manually add a log entry to the subsystem's err_cqes or success_cqes based on cqe_type.
 
@@ -166,7 +166,6 @@ def tgt_ofld_add_log(client, subnqn, log_type=None, qp_handle=None, be_cid=None,
         cc_nsid: Controller Command Namespace ID (optional)
         cc_lba: Controller Command LBA (optional)
         cc_opcode: Controller Command Opcode (optional)
-        dc_q_id: DC Queue ID (optional)
         param_err_loc: Parameter Error Location (optional)
         status_code: Status Code (optional)
 
@@ -192,8 +191,6 @@ def tgt_ofld_add_log(client, subnqn, log_type=None, qp_handle=None, be_cid=None,
         params['cc_lba'] = cc_lba
     if cc_opcode is not None:
         params['cc_opcode'] = cc_opcode
-    if dc_q_id is not None:
-        params['dc_q_id'] = dc_q_id
     if param_err_loc is not None:
         params['param_err_loc'] = param_err_loc
     if status_code is not None:
