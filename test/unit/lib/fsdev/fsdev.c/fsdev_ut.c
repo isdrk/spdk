@@ -797,12 +797,12 @@ ut_fsdev_test_notifications(void)
 	out.hdr.unique = 0;
 	out.entry.parent = FUSE_ROOT_ID;
 	out.entry.namelen = strlen(filename);
-	out.hdr.len = sizeof(out) + out.entry.namelen + 1;
+	out.hdr.len = offsetof(typeof(out), data) + out.entry.namelen + 1;
 
 	memcpy(out.data, filename, out.entry.namelen + 1);
 
 	iov.iov_base = &out;
-	iov.iov_len = sizeof(out) + out.entry.namelen + 1;
+	iov.iov_len = offsetof(typeof(out), data) + out.entry.namelen + 1;
 
 	req.iovcnt = 1;
 	req.iovs = &iov;
@@ -836,7 +836,8 @@ ut_fsdev_test_notifications(void)
 	CU_ASSERT(ut_calls_param_get_ptr(0, 1) == &notify_ctx);
 	CU_ASSERT(ut_calls_param_get_hash(0, 2) ==
 		  ut_hash(&req, offsetof(struct spdk_fuse_notify_request, internal)));
-	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&out, sizeof(out) + out.entry.namelen + 1));
+	CU_ASSERT(ut_calls_param_get_hash(0, 3) == ut_hash(&out, offsetof(typeof(out),
+			data) + out.entry.namelen + 1));
 
 	CU_ASSERT(ut_notify_reply_cb != NULL);
 	CU_ASSERT(ut_notify_reply_ctx != NULL);
