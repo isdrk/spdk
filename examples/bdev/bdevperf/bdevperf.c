@@ -89,6 +89,7 @@ static double g_zipf_theta;
 static bool g_random_map = false;
 static bool g_unique_writes = false;
 static bool g_hide_metadata = false;
+static bool g_back_pressure = false;
 
 static struct spdk_cpuset g_all_cpuset;
 static struct spdk_poller *g_perf_timer = NULL;
@@ -2023,7 +2024,9 @@ _bdevperf_construct_job(void *ctx)
 		goto end;
 	}
 
-	spdk_bdev_io_channel_register_flow_control_callbacks(job->ch, &flow_control_cbs, job);
+	if (g_back_pressure) {
+		spdk_bdev_io_channel_register_flow_control_callbacks(job->ch, &flow_control_cbs, job);
+	}
 
 end:
 	spdk_thread_send_msg(g_main_thread, _bdevperf_construct_job_done, NULL);
@@ -3042,6 +3045,8 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_hide_metadata = true;
 	} else if (ch == 'O') {
 		g_use_memory_domain = true;
+	} else if (ch == 'Q') {
+		g_back_pressure = true;
 	} else {
 		tmp = spdk_strtoll(arg, 10);
 		if (tmp < 0) {
@@ -3110,6 +3115,7 @@ bdevperf_usage(void)
 	printf(" -U                        generate unique data for each write I/O, has no effect on non-write I/O\n");
 	printf(" -N                        Enable hide_metadata option to each bdev\n");
 	printf(" -O                        pass memory domain in all I/O requests\n");
+	printf(" -Q                        Enable back-pressure to avoid blocking in bdev layer\n");
 }
 
 static void
@@ -3236,7 +3242,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DUNO", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DUNOQ", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
