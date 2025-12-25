@@ -58,6 +58,7 @@ struct bdevperf_task {
 enum bdevperf_stat_mode {
 	STAT_MODE_CMA = 0,	/* Cumulative Moving Average */
 	STAT_MODE_EMA,		/* Exponential Moving Average */
+	STAT_MODE_IA,		/* Interval Average */
 };
 
 static char *g_workload_type = NULL;
@@ -431,10 +432,11 @@ parse_workload_type(enum job_config_rw ret)
  * Cumulative Moving Average (CMA): average of all data up to current
  * Exponential Moving Average (EMA): weighted mean of the previous n data and more weight is given to recent
  * Simple Moving Average (SMA): unweighted mean of the previous n data
+ * Interval Average (IA): average over the last interval (since last periodic dump)
  *
  * Bdevperf supports CMA and EMA.
  * - Test completion: Always use CMA for the final result.
- * - Periodic dump: Use g_periodic_dump_stat_mode (CMA or EMA)
+ * - Periodic dump: Use g_periodic_dump_stat_mode (CMA, EMA, or IA)
  */
 static double
 get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec)
@@ -525,6 +527,9 @@ bdevperf_job_get_stats(struct bdevperf_job *job,
 		break;
 	case STAT_MODE_EMA:
 		io_per_second = get_ema_io_per_second(job);
+		break;
+	case STAT_MODE_IA:
+		io_per_second = get_ia_io_per_second(job);
 		break;
 	default:
 		io_per_second = 0;
@@ -3072,6 +3077,8 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_use_memory_domain = true;
 	} else if (ch == 'Q') {
 		g_back_pressure = true;
+	} else if (ch == 'I') {
+		g_periodic_dump_stat_mode = STAT_MODE_IA;
 	} else {
 		tmp = spdk_strtoll(arg, 10);
 		if (tmp < 0) {
@@ -3120,10 +3127,13 @@ bdevperf_usage(void)
 	printf(" -t <time>                 time in seconds\n");
 	printf(" -k <timeout>              timeout in seconds to detect starved I/O (default is 0 and disabled)\n");
 	printf(" -M <percent>              rwmixread (100 for reads, 0 for writes)\n");
+	printf(" -I                        show average over the last interval for periodic stat dump\n");
+	printf("\t\t(-I is mutually exclusive with -P)\n");
 	printf(" -P <num>                  number of moving average period\n");
 	printf("\t\t(If set to n, show weighted mean of the previous n IO/s in real time)\n");
 	printf("\t\t(Formula: M = 2 / (n + 1), EMA[i+1] = IO/s * M + (1 - M) * EMA[i])\n");
 	printf("\t\t(only valid with -S)\n");
+	printf("\t\t(-P is mutually exclusive with -I)\n");
 	printf(" -S <period>               show performance result in real time every <period> seconds\n");
 	printf(" -T <bdev>                 bdev to run against. Default: all available bdevs.\n");
 	printf(" -f                        continue processing I/O even after failures\n");
@@ -3268,7 +3278,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DUNOQ", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DIUNOQ", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
