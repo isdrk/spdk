@@ -55,6 +55,11 @@ struct bdevperf_task {
 	STAILQ_HEAD(, bdevperf_domain)	domains;
 };
 
+enum bdevperf_stat_mode {
+	STAT_MODE_CMA = 0,	/* Cumulative Moving Average */
+	STAT_MODE_EMA,		/* Exponential Moving Average */
+};
+
 static char *g_workload_type = NULL;
 static int g_io_size = 0;
 /* initialize to invalid value so we can detect if user overrides it. */
@@ -70,6 +75,7 @@ static bool g_summarize_performance = true;
 static uint64_t g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
 static uint64_t g_show_performance_period_num = 0;
 static uint64_t g_show_performance_ema_period = 0;
+static enum bdevperf_stat_mode g_periodic_dump_stat_mode = STAT_MODE_CMA;
 static int g_run_rc = 0;
 static bool g_shutdown = false;
 static uint64_t g_start_tsc;
@@ -427,6 +433,8 @@ parse_workload_type(enum job_config_rw ret)
  * Simple Moving Average (SMA): unweighted mean of the previous n data
  *
  * Bdevperf supports CMA and EMA.
+ * - Test completion: Always use CMA for the final result.
+ * - Periodic dump: Use g_periodic_dump_stat_mode (CMA or EMA)
  */
 static double
 get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec)
@@ -448,14 +456,14 @@ get_ia_io_per_second(struct bdevperf_job *job)
 }
 
 static double
-get_ema_io_per_second(struct bdevperf_job *job, uint64_t ema_period)
+get_ema_io_per_second(struct bdevperf_job *job)
 {
 	double io_per_second;
 
 	io_per_second = get_ia_io_per_second(job);
 
 	job->ema_io_per_second += (io_per_second - job->ema_io_per_second) * 2
-				  / (ema_period + 1);
+				  / (g_show_performance_ema_period + 1);
 	return job->ema_io_per_second;
 }
 
@@ -503,7 +511,7 @@ static void
 bdevperf_job_get_stats(struct bdevperf_job *job,
 		       struct bdevperf_stats *job_stats,
 		       uint64_t time_in_usec,
-		       uint64_t ema_period)
+		       enum bdevperf_stat_mode stat_mode)
 {
 	double io_per_second, mb_per_second, failed_per_second, timeout_per_second;
 	double average_latency = 0.0, min_latency, max_latency;
@@ -511,10 +519,16 @@ bdevperf_job_get_stats(struct bdevperf_job *job,
 	uint64_t total_io;
 	struct latency_info latency_info = {};
 
-	if (ema_period == 0) {
+	switch (stat_mode) {
+	case STAT_MODE_CMA:
 		io_per_second = get_cma_io_per_second(job, time_in_usec);
-	} else {
-		io_per_second = get_ema_io_per_second(job, ema_period);
+		break;
+	case STAT_MODE_EMA:
+		io_per_second = get_ema_io_per_second(job);
+		break;
+	default:
+		io_per_second = 0;
+		break;
 	}
 	tsc_rate = spdk_get_ticks_hz();
 	mb_per_second = io_per_second * job->io_size / (1024 * 1024);
@@ -895,7 +909,8 @@ bdevperf_test_done(void *ctx)
 	TAILQ_FOREACH_SAFE(job, &g_bdevperf.jobs, link, jtmp) {
 		spdk_cpuset_or(&cpu_mask, spdk_thread_get_cpumask(job->thread));
 		memset(&job_stats, 0, sizeof(job_stats));
-		bdevperf_job_get_stats(job, &job_stats, job->run_time_in_usec, 0);
+		/* Always use cumulative average (CMA) for the final result. */
+		bdevperf_job_get_stats(job, &job_stats, job->run_time_in_usec, STAT_MODE_CMA);
 		bdevperf_job_stats_accumulate(&g_stats.total, &job_stats);
 		performance_dump_job_stdout(job, &job_stats);
 		if (w) {
@@ -1778,7 +1793,7 @@ _performance_dump(void *ctx)
 		time_in_usec = stats->total.io_time_in_usec;
 	}
 
-	bdevperf_job_get_stats(job, &job_stats, time_in_usec, g_show_performance_ema_period);
+	bdevperf_job_get_stats(job, &job_stats, time_in_usec, g_periodic_dump_stat_mode);
 	bdevperf_job_stats_accumulate(&stats->total, &job_stats);
 	if (!g_summarize_performance) {
 		performance_dump_job_stdout(stats->current_job, &job_stats);
@@ -3083,6 +3098,7 @@ bdevperf_parse_arg(int ch, char *arg)
 			break;
 		case 'P':
 			g_show_performance_ema_period = tmp;
+			g_periodic_dump_stat_mode = STAT_MODE_EMA;
 			break;
 		case 'S':
 			g_summarize_performance = false;
