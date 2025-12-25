@@ -77,6 +77,8 @@ static uint64_t g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
 static uint64_t g_show_performance_period_num = 0;
 static uint64_t g_show_performance_ema_period = 0;
 static enum bdevperf_stat_mode g_periodic_dump_stat_mode = STAT_MODE_CMA;
+static int g_warmup_time_in_sec = 0;
+static bool g_warmup_finished = false;
 static int g_run_rc = 0;
 static bool g_shutdown = false;
 static uint64_t g_start_tsc;
@@ -184,6 +186,7 @@ struct bdevperf_job {
 	uint64_t			io_completed;
 	uint64_t			io_failed;
 	uint64_t			io_timeout;
+	uint64_t			io_completed_at_warmup_end;
 	uint64_t			prev_io_completed;
 	double				ema_io_per_second;
 	int				current_queue_depth;
@@ -257,6 +260,7 @@ struct bdevperf_stats {
 struct bdevperf_aggregate_stats {
 	struct bdevperf_job		*current_job;
 	struct bdevperf_stats		total;
+	bool in_warmup;
 };
 
 static struct bdevperf_aggregate_stats g_stats = {.total.min_latency = (double)UINT64_MAX};
@@ -437,11 +441,29 @@ parse_workload_type(enum job_config_rw ret)
  * Bdevperf supports CMA and EMA.
  * - Test completion: Always use CMA for the final result.
  * - Periodic dump: Use g_periodic_dump_stat_mode (CMA, EMA, or IA)
+ *
+ * Note: If configuring warmup time, please use EMA or IA for periodic dump to avoid confusing results.
  */
 static double
 get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec)
 {
-	return (double)job->io_completed * SPDK_SEC_TO_USEC / io_time_in_usec;
+	uint64_t valid_io_completed, valid_io_time_in_usec;
+
+	if (!g_warmup_finished) {
+		/* In warmup, use everything from start. */
+		valid_io_completed = job->io_completed;
+		valid_io_time_in_usec = io_time_in_usec;
+	} else {
+		/* In steady state, subtract the warmup garbage from the total. */
+		valid_io_completed = job->io_completed - job->io_completed_at_warmup_end;
+		valid_io_time_in_usec = io_time_in_usec - g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+	}
+
+	if (valid_io_time_in_usec == 0) {
+		return 0;
+	}
+
+	return (double)valid_io_completed * SPDK_SEC_TO_USEC / valid_io_time_in_usec;
 }
 
 static double
@@ -1011,6 +1033,8 @@ clean:
 	if (g_bdevperf_conf == NULL) {
 		free_job_config();
 	}
+
+	g_warmup_finished = false;
 
 	rc = g_run_rc;
 	if (g_request && !g_shutdown) {
@@ -1761,7 +1785,9 @@ _performance_dump_done(void *ctx)
 	double average_latency;
 
 	if (g_summarize_performance) {
-		printf("%12.2f IOPS, %8.2f MiB/s", stats->total_io_per_second, stats->total_mb_per_second);
+		printf("%s%12.2f IOPS, %8.2f MiB/s",
+		       g_warmup_finished ? "" : "[Warmup] ",
+		       stats->total_io_per_second, stats->total_mb_per_second);
 		printf("\r");
 	} else {
 		printf("\r =================================================================================="
@@ -1814,6 +1840,25 @@ _performance_dump(void *ctx)
 	}
 }
 
+static void
+check_and_process_warmup(uint64_t io_time_in_usec)
+{
+	struct bdevperf_job *job;
+
+	if (g_warmup_finished ||
+	    io_time_in_usec < g_warmup_time_in_sec * SPDK_SEC_TO_USEC) {
+		return;
+	}
+
+	g_warmup_finished = true;
+
+	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
+		job->io_completed_at_warmup_end = job->io_completed;
+	}
+
+	printf("--- Warmup Completed. Stats Reset. ---\n");
+}
+
 static int
 performance_statistics_thread(void *arg)
 {
@@ -1837,6 +1882,8 @@ performance_statistics_thread(void *arg)
 	g_show_performance_period_num++;
 
 	stats->io_time_in_usec = g_show_performance_period_num * g_show_performance_period_in_usec;
+
+	check_and_process_warmup(stats->io_time_in_usec);
 
 	/* Iterate all of the jobs to gather stats
 	 * These jobs will not get removed here until a final performance dump is run,
@@ -3111,6 +3158,9 @@ bdevperf_parse_arg(int ch, char *arg)
 			g_summarize_performance = false;
 			g_show_performance_period_in_usec = tmp * SPDK_SEC_TO_USEC;
 			break;
+		case 'K':
+			g_warmup_time_in_sec = tmp;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -3152,6 +3202,7 @@ bdevperf_usage(void)
 	printf(" -N                        Enable hide_metadata option to each bdev\n");
 	printf(" -O                        pass memory domain in all I/O requests\n");
 	printf(" -Q                        Enable back-pressure to avoid blocking in bdev layer\n");
+	printf(" -K <warmup time>          Exclude the warmup interval from cumulative average\n");
 }
 
 static void
@@ -3192,6 +3243,11 @@ verify_test_params(void)
 
 	if (g_timeout_in_sec < 0) {
 		goto out;
+	}
+
+	if (g_warmup_time_in_sec == 0) {
+		/* No warmup needed. Mark finished immediately. */
+		g_warmup_finished = true;
 	}
 
 	if (g_abort && !g_timeout_in_sec) {
@@ -3278,7 +3334,7 @@ main(int argc, char **argv)
 	opts.rpc_addr = NULL;
 	opts.shutdown_cb = spdk_bdevperf_shutdown_cb;
 
-	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:M:P:S:T:Xlj:DIUNOQ", NULL,
+	if ((rc = spdk_app_parse_args(argc, argv, &opts, "Zzfq:o:t:w:k:CEF:J:K:M:P:S:T:Xlj:DIUNOQ", NULL,
 				      bdevperf_parse_arg, bdevperf_usage)) !=
 	    SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
