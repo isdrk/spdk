@@ -435,7 +435,7 @@ get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec)
 }
 
 static double
-get_ema_io_per_second(struct bdevperf_job *job, uint64_t ema_period)
+get_ia_io_per_second(struct bdevperf_job *job)
 {
 	double io_completed, io_per_second;
 
@@ -443,6 +443,16 @@ get_ema_io_per_second(struct bdevperf_job *job, uint64_t ema_period)
 	io_per_second = (double)(io_completed - job->prev_io_completed) * SPDK_SEC_TO_USEC
 			/ g_show_performance_period_in_usec;
 	job->prev_io_completed = io_completed;
+
+	return io_per_second;
+}
+
+static double
+get_ema_io_per_second(struct bdevperf_job *job, uint64_t ema_period)
+{
+	double io_per_second;
+
+	io_per_second = get_ia_io_per_second(job);
 
 	job->ema_io_per_second += (io_per_second - job->ema_io_per_second) * 2
 				  / (ema_period + 1);
