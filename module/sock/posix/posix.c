@@ -824,7 +824,7 @@ posix_sock_configure_ssl(struct spdk_posix_sock *sock, bool client)
 }
 
 static ssize_t
-SSL_readv(SSL *ssl, const struct iovec *iov, int iovcnt)
+posix_ssl_readv(SSL *ssl, const struct iovec *iov, int iovcnt)
 {
 	int i, rc = 0;
 	ssize_t total = 0;
@@ -840,7 +840,6 @@ SSL_readv(SSL *ssl, const struct iovec *iov, int iovcnt)
 		}
 	}
 	if (total > 0) {
-		errno = 0;
 		return total;
 	}
 	switch (SSL_get_error(ssl, rc)) {
@@ -868,7 +867,7 @@ SSL_readv(SSL *ssl, const struct iovec *iov, int iovcnt)
 }
 
 static ssize_t
-SSL_writev(SSL *ssl, struct iovec *iov, int iovcnt)
+posix_ssl_writev(SSL *ssl, struct iovec *iov, int iovcnt)
 {
 	int i, rc = 0;
 	ssize_t total = 0;
@@ -884,7 +883,6 @@ SSL_writev(SSL *ssl, struct iovec *iov, int iovcnt)
 		}
 	}
 	if (total > 0) {
-		errno = 0;
 		return total;
 	}
 	switch (SSL_get_error(ssl, rc)) {
@@ -1469,7 +1467,7 @@ _sock_flush(struct spdk_sock *sock)
 	msg.msg_iovlen = iovcnt;
 
 	if (psock->ssl) {
-		rc = SSL_writev(psock->ssl, iovs, iovcnt);
+		rc = posix_ssl_writev(psock->ssl, iovs, iovcnt);
 	} else {
 		rc = sendmsg(psock->fd, &msg, flags);
 	}
@@ -1627,7 +1625,7 @@ posix_sock_read(struct spdk_posix_sock *sock)
 	}
 
 	if (sock->ssl) {
-		bytes_recvd = SSL_readv(sock->ssl, iov, 2);
+		bytes_recvd = posix_ssl_readv(sock->ssl, iov, 2);
 	} else {
 		bytes_recvd = readv(sock->fd, iov, 2);
 	}
@@ -1684,7 +1682,7 @@ posix_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 			TAILQ_REMOVE(&group->socks_with_data, sock, link);
 		}
 		if (sock->ssl) {
-			return SSL_readv(sock->ssl, iov, iovcnt);
+			return posix_ssl_readv(sock->ssl, iov, iovcnt);
 		} else {
 			return readv(sock->fd, iov, iovcnt);
 		}
@@ -1703,7 +1701,7 @@ posix_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 		if (len >= MIN_SOCK_PIPE_SIZE) {
 			/* TODO: Should this detect if kernel socket is drained? */
 			if (sock->ssl) {
-				return SSL_readv(sock->ssl, iov, iovcnt);
+				return posix_ssl_readv(sock->ssl, iov, iovcnt);
 			} else {
 				return readv(sock->fd, iov, iovcnt);
 			}
@@ -1750,7 +1748,7 @@ posix_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 	}
 
 	if (sock->ssl) {
-		return SSL_writev(sock->ssl, iov, iovcnt);
+		return posix_ssl_writev(sock->ssl, iov, iovcnt);
 	} else {
 		return writev(sock->fd, iov, iovcnt);
 	}
