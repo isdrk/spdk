@@ -1417,10 +1417,31 @@ _sock_check_zcopy(struct spdk_sock *sock)
 #endif
 
 static int
+posix_writev(struct spdk_posix_sock *sock, struct iovec *iov, int iovcnt, int flags)
+{
+	struct msghdr msg = {.msg_iov = iov, .msg_iovlen = iovcnt};
+	int rc;
+
+	if (sock->ssl) {
+		return posix_ssl_writev(sock->ssl, iov, iovcnt);
+	}
+
+	rc = sendmsg(sock->fd, &msg, flags);
+	if (rc <= 0) {
+		if (rc == 0 || errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && sock->zcopy)) {
+			errno = EAGAIN;
+		}
+
+		return -1;
+	}
+
+	return rc;
+}
+
+static int
 _sock_flush(struct spdk_sock *sock)
 {
 	struct spdk_posix_sock *psock = __posix_sock(sock);
-	struct msghdr msg = {};
 	int flags;
 	struct iovec iovs[IOV_BATCH_SIZE];
 	int iovcnt;
@@ -1462,20 +1483,9 @@ _sock_flush(struct spdk_sock *sock)
 	is_zcopy = flags & MSG_ZEROCOPY;
 #endif
 
-	/* Perform the vectored write */
-	msg.msg_iov = iovs;
-	msg.msg_iovlen = iovcnt;
-
-	if (psock->ssl) {
-		rc = posix_ssl_writev(psock->ssl, iovs, iovcnt);
-	} else {
-		rc = sendmsg(psock->fd, &msg, flags);
-	}
-	if (rc <= 0) {
-		if (rc == 0 || errno == EAGAIN || errno == EWOULDBLOCK || (errno == ENOBUFS && psock->zcopy)) {
-			errno = EAGAIN;
-		}
-		return -1;
+	rc = posix_writev(psock, iovs, iovcnt, flags);
+	if (rc < 0) {
+		return rc;
 	}
 
 	if (is_zcopy) {
@@ -1732,7 +1742,6 @@ static ssize_t
 posix_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 {
 	struct spdk_posix_sock *sock = __posix_sock(_sock);
-	struct msghdr msg = {.msg_iov = iov, .msg_iovlen = iovcnt};
 	int rc;
 
 	/* In order to process a writev, we need to flush any asynchronous writes
@@ -1748,11 +1757,7 @@ posix_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 		return -1;
 	}
 
-	if (sock->ssl) {
-		return posix_ssl_writev(sock->ssl, iov, iovcnt);
-	} else {
-		return sendmsg(sock->fd, &msg, 0);
-	}
+	return posix_writev(sock, iov, iovcnt, 0);
 }
 
 static void
