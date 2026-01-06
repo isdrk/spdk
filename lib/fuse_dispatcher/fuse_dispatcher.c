@@ -464,68 +464,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	return 0;
 }
 
-static const struct {
-	const char *name;
-} fuse_op_names[] = {
-	[FUSE_LOOKUP]		= { "LOOKUP" },
-	[FUSE_FORGET]		= { "FORGET" },
-	[FUSE_GETATTR]		= { "GETATTR" },
-	[FUSE_SETATTR]		= { "SETATTR" },
-	[FUSE_READLINK]		= { "READLINK" },
-	[FUSE_SYMLINK]		= { "SYMLINK" },
-	[FUSE_MKNOD]		= { "MKNOD" },
-	[FUSE_MKDIR]		= { "MKDIR" },
-	[FUSE_UNLINK]		= { "UNLINK" },
-	[FUSE_RMDIR]		= { "RMDIR" },
-	[FUSE_RENAME]		= { "RENAME" },
-	[FUSE_LINK]		= { "LINK" },
-	[FUSE_OPEN]		= { "OPEN" },
-	[FUSE_READ]		= { "READ" },
-	[FUSE_WRITE]		= { "WRITE" },
-	[FUSE_STATFS]		= { "STATFS" },
-	[FUSE_RELEASE]		= { "RELEASE" },
-	[FUSE_FSYNC]		= { "FSYNC" },
-	[FUSE_SETXATTR]		= { "SETXATTR" },
-	[FUSE_GETXATTR]		= { "GETXATTR" },
-	[FUSE_LISTXATTR]	= { "LISTXATTR" },
-	[FUSE_REMOVEXATTR]	= { "REMOVEXATTR" },
-	[FUSE_FLUSH]		= { "FLUSH" },
-	[FUSE_INIT]		= { "INIT" },
-	[FUSE_OPENDIR]		= { "OPENDIR" },
-	[FUSE_READDIR]		= { "READDIR" },
-	[FUSE_RELEASEDIR]	= { "RELEASEDIR" },
-	[FUSE_FSYNCDIR]		= { "FSYNCDIR" },
-	[FUSE_GETLK]		= { "GETLK" },
-	[FUSE_SETLK]		= { "SETLK" },
-	[FUSE_SETLKW]		= { "SETLKW" },
-	[FUSE_ACCESS]		= { "ACCESS" },
-	[FUSE_CREATE]		= { "CREATE" },
-	[FUSE_INTERRUPT]	= { "INTERRUPT" },
-	[FUSE_BMAP]		= { "BMAP" },
-	[FUSE_DESTROY]		= { "DESTROY" },
-	[FUSE_IOCTL]		= { "IOCTL" },
-	[FUSE_POLL]		= { "POLL" },
-	[FUSE_NOTIFY_REPLY]	= { "NOTIFY_REPLY" },
-	[FUSE_BATCH_FORGET]	= { "BATCH_FORGET" },
-	[FUSE_FALLOCATE]	= { "FALLOCATE" },
-	[FUSE_READDIRPLUS]	= { "READDIRPLUS" },
-	[FUSE_RENAME2]		= { "RENAME2" },
-	[FUSE_LSEEK]		= { "LSEEK" },
-	[FUSE_COPY_FILE_RANGE]	= { "COPY_FILE_RANGE" },
-	[FUSE_SETUPMAPPING]	= { "SETUPMAPPING" },
-	[FUSE_REMOVEMAPPING]	= { "REMOVEMAPPING" },
-	[FUSE_SYNCFS]		= { "SYNCFS" },
-};
-
-const char *
-spdk_fuse_dispatcher_get_operation_name(uint32_t opcode)
-{
-	if (opcode >= SPDK_COUNTOF(fuse_op_names)) {
-		return "UNKNOWN";
-	}
-
-	return fuse_op_names[opcode].name;
-}
 
 static void
 fuse_dispatcher_submit_fsdev_io(struct fuse_io *fuse_io)
@@ -535,7 +473,7 @@ fuse_dispatcher_submit_fsdev_io(struct fuse_io *fuse_io)
 	SPDK_DEBUGLOG(fuse_dispatcher, "IO arrived: %" PRIu32 " (%s) len=%" PRIu32 " unique=%" PRIu64
 		      " nodeid=0x%" PRIx64 " uid=%" PRIu32 " gid=%" PRIu32 " pid=%" PRIu32
 		      " core_id=%" PRIu32 " source_id=%" PRIu16 " source_unique=%" PRIu64 "\n",
-		      fuse_io->hdr.opcode, spdk_fuse_dispatcher_get_operation_name(fuse_io->hdr.opcode),
+		      fuse_io->hdr.opcode, spdk_fsdev_get_opcode_name(fuse_io->hdr.opcode),
 		      fuse_io->hdr.len, fuse_io->hdr.unique, fuse_io->hdr.nodeid, fuse_io->hdr.uid,
 		      fuse_io->hdr.gid, fuse_io->hdr.pid, spdk_env_get_current_core(),
 		      fuse_io->source_id, fuse_io->source_unique);

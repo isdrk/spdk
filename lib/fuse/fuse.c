@@ -127,7 +127,7 @@ fsdev_fuse_request_get_name(struct fsdev_fuse_request *req)
 {
 	struct fuse_in_header *in = req->buf;
 
-	return spdk_fuse_dispatcher_get_operation_name(in->opcode);
+	return spdk_fsdev_get_opcode_name(in->opcode);
 }
 
 static struct fuse_in_header *
