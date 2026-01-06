@@ -114,53 +114,6 @@ fuse_dispatcher_fill_outhdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr
 	hdr->len = len;
 }
 
-static struct fuse_out_header *
-fuse_dispatcher_get_outhdr(struct fuse_io *fuse_io)
-{
-	struct iovec *out = fuse_io->out_iov;
-	size_t len = sizeof(struct fuse_out_header);
-
-	assert(fuse_io->out_iovcnt >= 1);
-	if (out->iov_len < len) {
-		SPDK_ERRLOG("Bad out header len: %zu < %zu\n", out->iov_len, len);
-		return NULL;
-	}
-
-	return out->iov_base;
-}
-
-static void
-fuse_dispatcher_io_complete_final(struct fuse_io *fuse_io, int error)
-{
-	spdk_fuse_dispatcher_submit_cpl_cb cpl_cb = fuse_io->cpl_cb;
-	void *cpl_cb_arg = fuse_io->cpl_cb_arg;
-
-	cpl_cb(cpl_cb_arg, error);
-}
-
-static void
-fuse_dispatcher_io_complete_hdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
-				uint32_t out_len, int error)
-{
-	assert(_fuse_op_requires_reply(fuse_io->hdr.opcode));
-	fuse_dispatcher_fill_outhdr(fuse_io, hdr, out_len, error);
-	fuse_dispatcher_io_complete_final(fuse_io, error);
-}
-
-static void
-fuse_dispatcher_io_complete(struct fuse_io *fuse_io, uint32_t out_len, int error)
-{
-	struct fuse_out_header *hdr;
-
-	hdr = fuse_dispatcher_get_outhdr(fuse_io);
-	if (!hdr) {
-		SPDK_ERRLOG("Completion failed: cannot fill out header\n");
-		return;
-	}
-
-	fuse_dispatcher_io_complete_hdr(fuse_io, hdr, out_len, error);
-}
-
 static void
 fuse_io_save_iovs(struct fuse_io *fuse_io)
 {
@@ -337,10 +290,11 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 
 	if (rc) {
 		if (_fuse_op_requires_reply(fuse_io->hdr.opcode)) {
-			fuse_dispatcher_io_complete(fuse_io, 0, rc);
-		} else {
-			fuse_dispatcher_io_complete_final(fuse_io, rc);
+			struct fuse_out_header *hdr = fuse_io->out_iov[0].iov_base;
+
+			fuse_dispatcher_fill_outhdr(fuse_io, hdr, 0, rc);
 		}
+		fuse_io->cpl_cb(fuse_io->cpl_cb_arg, rc);
 		return;
 	}
 
