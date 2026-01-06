@@ -17,6 +17,16 @@
 
 #include "spdk/linux/fuse.h"
 
+struct fuse_notify_request {
+	size_t					len;
+	void					*buf;
+	struct spdk_thread			*thread;
+	struct spdk_fsdev_notify_reply_data	reply_data;
+	spdk_fsdev_notify_reply_cb_t		reply_cb;
+	void					*reply_ctx;
+	TAILQ_ENTRY(fuse_notify_request)	tailq;
+};
+
 struct spdk_fuse_mount {
 	struct spdk_fsdev_desc		*fsdev_desc;
 	struct spdk_fuse_dispatcher	*dispatcher;
@@ -33,6 +43,10 @@ struct spdk_fuse_mount {
 	struct iovec			notify_iov;
 	TAILQ_ENTRY(spdk_fuse_mount)	tailq;
 	pthread_mutex_t			mutex;
+	pthread_t			notify_thread;
+	pthread_cond_t			notify_cond;
+	TAILQ_HEAD(, fuse_notify_request) notify_queue;
+	bool				notify_thread_shutdown;
 };
 
 struct fsdev_fuse_channel;
@@ -625,6 +639,37 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 	return rc == 0 ? count : rc;
 }
 
+static void fsdev_fuse_notify_reply_msg(void *ctx);
+
+static void
+fsdev_fuse_notify_thread_cleanup(struct spdk_fuse_mount *mount)
+{
+	struct fuse_notify_request *work, *tmp;
+
+	pthread_mutex_lock(&mount->mutex);
+	mount->notify_thread_shutdown = true;
+	pthread_cond_signal(&mount->notify_cond);
+	pthread_mutex_unlock(&mount->mutex);
+
+	pthread_join(mount->notify_thread, NULL);
+
+	pthread_mutex_lock(&mount->mutex);
+	TAILQ_FOREACH_SAFE(work, &mount->notify_queue, tailq, tmp) {
+		TAILQ_REMOVE(&mount->notify_queue, work, tailq);
+		if (work->reply_cb != NULL) {
+			assert(work->thread != NULL);
+			work->reply_data.status = -ESHUTDOWN;
+			spdk_thread_send_msg(work->thread, fsdev_fuse_notify_reply_msg, work);
+		} else {
+			free(work->buf);
+			free(work);
+		}
+	}
+	pthread_mutex_unlock(&mount->mutex);
+
+	pthread_cond_destroy(&mount->notify_cond);
+}
+
 static void
 fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 {
@@ -640,6 +685,7 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	}
 	pthread_mutex_unlock(&g_fuse.mutex);
 
+	fsdev_fuse_notify_thread_cleanup(mount);
 	if (mount->fd >= 0) {
 		close(mount->fd);
 	}
@@ -658,6 +704,7 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	}
 
 	spdk_memory_domain_destroy(mount->domain);
+
 	pthread_mutex_destroy(&mount->mutex);
 	free(mount->notify_iov.iov_base);
 	free(mount->name);
@@ -691,6 +738,67 @@ fsdev_fuse_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fs
 }
 
 static void
+fsdev_fuse_notify_reply_msg(void *ctx)
+{
+	struct fuse_notify_request *work = ctx;
+
+	assert(work->reply_cb != NULL);
+	work->reply_cb(&work->reply_data, work->reply_ctx);
+
+	free(work->buf);
+	free(work);
+}
+
+static void *
+fsdev_fuse_notify_thread_fn(void *arg)
+{
+	struct spdk_fuse_mount *mount = arg;
+	struct fuse_notify_request *work;
+	int rc;
+
+	pthread_mutex_lock(&mount->mutex);
+
+	/* Continue while not shutting down OR queue has items. The TAILQ_EMPTY check ensures
+	 * we process all queued items even after shutdown is signaled.
+	 */
+	while (!mount->notify_thread_shutdown || !TAILQ_EMPTY(&mount->notify_queue)) {
+		while (!mount->notify_thread_shutdown && TAILQ_EMPTY(&mount->notify_queue)) {
+			pthread_cond_wait(&mount->notify_cond, &mount->mutex);
+		}
+
+		work = TAILQ_FIRST(&mount->notify_queue);
+		if (work == NULL) {
+			continue;
+		}
+
+		TAILQ_REMOVE(&mount->notify_queue, work, tailq);
+		pthread_mutex_unlock(&mount->mutex);
+
+		rc = write(mount->fd, work->buf, work->len);
+		if (rc < 0) {
+			SPDK_ERRLOG("%s: failed to write notification: %s\n", mount->name,
+				    spdk_strerror(errno));
+			rc = -errno;
+		} else {
+			rc = 0;
+		}
+
+		if (work->reply_cb != NULL) {
+			assert(work->thread != NULL);
+			work->reply_data.status = rc;
+			spdk_thread_send_msg(work->thread, fsdev_fuse_notify_reply_msg, work);
+		} else {
+			free(work->buf);
+			free(work);
+		}
+		pthread_mutex_lock(&mount->mutex);
+	}
+
+	pthread_mutex_unlock(&mount->mutex);
+	return NULL;
+}
+
+static void
 fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
 		     const struct spdk_fsdev_notify_data *notify_data,
 		     spdk_fsdev_notify_reply_cb_t reply_cb, void *reply_ctx)
@@ -698,6 +806,7 @@ fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
 	struct spdk_fuse_mount *mount = ctx;
 	struct spdk_fsdev_notify_reply_data reply_data = {};
 	struct fuse_out_header *outhdr = mount->notify_iov.iov_base;
+	struct fuse_notify_request *work;
 	bool has_reply;
 	int rc;
 
@@ -709,14 +818,40 @@ fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
 		goto reply;
 	}
 
-	rc = write(mount->fd, outhdr, outhdr->len);
-	if (rc < 0) {
-		SPDK_ERRLOG("%s: failed to write notification: %s\n", mount->name,
-			    spdk_strerror(errno));
+	work = calloc(1, sizeof(*work));
+	if (work == NULL) {
+		SPDK_ERRLOG("%s: failed to allocate notify work\n", mount->name);
+		rc = -ENOMEM;
 		goto reply;
 	}
 
-	rc = 0;
+	work->len = outhdr->len;
+	work->buf = malloc(work->len);
+	if (work->buf == NULL) {
+		SPDK_ERRLOG("%s: failed to allocate notify buffer\n", mount->name);
+		free(work);
+		rc = -ENOMEM;
+		goto reply;
+	}
+
+	memcpy(work->buf, outhdr, work->len);
+	work->thread = spdk_get_thread();
+	work->reply_cb = reply_cb;
+	work->reply_ctx = reply_ctx;
+
+	pthread_mutex_lock(&mount->mutex);
+	if (mount->notify_thread_shutdown) {
+		pthread_mutex_unlock(&mount->mutex);
+		free(work->buf);
+		free(work);
+		rc = -ESHUTDOWN;
+		goto reply;
+	}
+	TAILQ_INSERT_TAIL(&mount->notify_queue, work, tailq);
+	pthread_cond_signal(&mount->notify_cond);
+	pthread_mutex_unlock(&mount->mutex);
+	return;
+
 reply:
 	if (reply_cb != NULL) {
 		reply_data.status = rc;
@@ -1091,6 +1226,25 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	if (mnt->fd < 0) {
 		rc = -errno;
 		SPDK_ERRLOG("%s: failed to open /dev/fuse: %s\n", mnt->name, spdk_strerror(-rc));
+		goto error;
+	}
+
+	mnt->notify_thread_shutdown = false;
+	TAILQ_INIT(&mnt->notify_queue);
+	rc = pthread_cond_init(&mnt->notify_cond, NULL);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to initialize notify condition variable: %s\n", mnt->name,
+			    spdk_strerror(rc));
+		rc = -rc;
+		goto error;
+	}
+
+	rc = pthread_create(&mnt->notify_thread, NULL, fsdev_fuse_notify_thread_fn, mnt);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to create notify thread: %s\n", mnt->name,
+			    spdk_strerror(rc));
+		pthread_cond_destroy(&mnt->notify_cond);
+		rc = -rc;
 		goto error;
 	}
 
