@@ -149,11 +149,13 @@ fuse_io_restore_iovs(struct fuse_io *fuse_io)
 }
 
 static void
-fuse_dispatcher_passthrough_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 
-	fuse_io_restore_iovs(fuse_io);
+	if (spdk_unlikely(fuse_io->hdr.opcode != FUSE_READ && fuse_io->hdr.opcode != FUSE_WRITE)) {
+		fuse_io_restore_iovs(fuse_io);
+	}
 	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
 	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
@@ -163,14 +165,14 @@ fuse_dispatcher_passthrough_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_i
  * Static FUSE commands handlers
  */
 static inline void
-fuse_init_fsdev_io_ex(struct fuse_io *fuse_io, spdk_fsdev_cpl_cb *cb_fn)
+fuse_init_fsdev_io_ex(struct fuse_io *fuse_io)
 {
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 
 	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, fuse_io->hdr.unique,
 			   SPDK_FSDEV_IO_FUSE, fuse_io->source_id,
-			   fuse_io->source_unique, cb_fn, fuse_io);
+			   fuse_io->source_unique, fuse_dispatcher_cpl_cb, fuse_io);
 }
 
 /* FUSE opcodes that define both a command-specific IN header and have IN
@@ -275,7 +277,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	}
 	out->memory_domain = NULL;
 
-	fuse_init_fsdev_io_ex(fuse_io, fuse_dispatcher_passthrough_cpl_cb);
+	fuse_init_fsdev_io_ex(fuse_io);
 	return 0;
 }
 
@@ -366,16 +368,6 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 }
 
 static void
-fuse_dispatcher_zcopy_fuse_io_done(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
-{
-	struct fuse_io *fuse_io = cb_arg;
-
-	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
-	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
-	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
-}
-
-static void
 fuse_dispatcher_fill_zcopy_fuse_io(struct fuse_io *fuse_io, struct fuse_in_header *in_hdr,
 				   struct iovec *in_iovs, int in_iovcnt,
 				   struct fuse_out_header *out_hdr, struct iovec *out_iovs,
@@ -387,7 +379,7 @@ fuse_dispatcher_fill_zcopy_fuse_io(struct fuse_io *fuse_io, struct fuse_in_heade
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 
 	assert(fuse_io->hdr.opcode == FUSE_READ || fuse_io->hdr.opcode == FUSE_WRITE);
-	fuse_init_fsdev_io_ex(fuse_io, fuse_dispatcher_zcopy_fuse_io_done);
+	fuse_init_fsdev_io_ex(fuse_io);
 
 	in->hdr = in_hdr;
 	in->op.raw = in_hdr + 1;
