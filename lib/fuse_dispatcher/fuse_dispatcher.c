@@ -21,11 +21,6 @@
 #define UNUSED(x) (void)(x)
 #endif
 
-struct iov_offs {
-	size_t iov_offs;
-	size_t buf_offs;
-};
-
 struct fuse_io {
 	/** For SG buffer cases, array of iovecs for input. */
 	struct iovec *in_iov;
@@ -38,9 +33,6 @@ struct fuse_io {
 
 	/** For SG buffer cases, number of iovecs in out_iov array. */
 	int out_iovcnt;
-
-	struct iov_offs in_offs;
-	struct iov_offs out_offs;
 
 	struct iovec orig_in_iov[2];
 	struct iovec orig_out_iov[1];
@@ -396,11 +388,6 @@ fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_
 	fuse_io->cpl_cb = cb_fn;
 	fuse_io->cpl_cb_arg = cb_arg;
 	fuse_io->outhdr = outhdr;
-
-	fuse_io->in_offs.iov_offs = 0;
-	fuse_io->in_offs.buf_offs = 0;
-	fuse_io->out_offs.iov_offs = 0;
-	fuse_io->out_offs.buf_offs = 0;
 
 	fuse_io->source_id = source_id;
 	fuse_io->source_unique = source_unique;
