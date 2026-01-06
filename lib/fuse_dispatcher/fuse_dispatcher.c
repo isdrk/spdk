@@ -43,8 +43,6 @@ struct fuse_io {
 	struct spdk_fuse_dispatcher *disp;
 
 	struct fuse_in_header hdr;
-	struct fuse_out_header *outhdr;
-	bool in_hdr_with_data;
 
 	uint16_t source_id;
 	uint64_t source_unique;
@@ -341,7 +339,6 @@ fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_
 	fuse_io->out_iovcnt = out_iovcnt;
 	fuse_io->cpl_cb = cb_fn;
 	fuse_io->cpl_cb_arg = cb_arg;
-	fuse_io->outhdr = outhdr;
 
 	fuse_io->source_id = source_id;
 	fuse_io->source_unique = source_unique;
