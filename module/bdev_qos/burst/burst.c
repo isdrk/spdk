@@ -581,11 +581,15 @@ global_token_bucket_get_limit(struct global_token_bucket *global_bucket, uint64_
 		*max_burst_rate = 0;
 	} else {
 		*avg_rate = global_bucket->avg_rate;
-		*max_burst_rate = global_bucket->steady_bucket.capacity;
 		if (!bdev_qos_metric_is_iops(global_bucket->metric)) {
 			/* Change from byte to mebibyte which is user visible. */
 			*avg_rate = *avg_rate / 1024 / 1024;
-			*max_burst_rate = *max_burst_rate / 1024 / 1024;
+		}
+		if (global_bucket->burst_bucket.capacity != 0) {
+			*max_burst_rate = global_bucket->steady_bucket.capacity;
+			if (!bdev_qos_metric_is_iops(global_bucket->metric)) {
+				*max_burst_rate = *max_burst_rate / 1024 / 1024;
+			}
 		}
 	}
 }
