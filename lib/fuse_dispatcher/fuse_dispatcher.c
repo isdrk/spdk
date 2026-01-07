@@ -42,8 +42,6 @@ struct fuse_io {
 	struct spdk_io_channel *ch;
 	struct spdk_fuse_dispatcher *disp;
 
-	struct fuse_in_header hdr;
-
 	uint16_t source_id;
 	uint64_t source_unique;
 };
@@ -98,6 +96,8 @@ static void
 fuse_dispatcher_fill_outhdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
 			    size_t out_len, int error)
 {
+	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	uint32_t len;
 
 	assert(error > -1000 && error <= 0);
@@ -107,7 +107,7 @@ fuse_dispatcher_fill_outhdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr
 	}
 
 	memset(hdr, 0, sizeof(*hdr));
-	hdr->unique = fuse_io->hdr.unique;
+	hdr->unique = in->hdr->unique;
 	hdr->error = error;
 	hdr->len = len;
 }
@@ -152,8 +152,9 @@ static void
 fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
+	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 
-	if (spdk_unlikely(fuse_io->hdr.opcode != FUSE_READ && fuse_io->hdr.opcode != FUSE_WRITE)) {
+	if (spdk_unlikely(in->hdr->opcode != FUSE_READ && in->hdr->opcode != FUSE_WRITE)) {
 		fuse_io_restore_iovs(fuse_io);
 	}
 	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
@@ -170,7 +171,7 @@ fuse_init_fsdev_io_ex(struct fuse_io *fuse_io)
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 
-	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, fuse_io->hdr.unique,
+	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, 0,
 			   SPDK_FSDEV_IO_FUSE, fuse_io->source_id,
 			   fuse_io->source_unique, fuse_dispatcher_cpl_cb, fuse_io);
 }
@@ -289,7 +290,10 @@ fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
 	rc = fuse_dispatcher_fill_fuse(fuse_io);
 
 	if (rc) {
-		if (_fuse_op_requires_reply(fuse_io->hdr.opcode)) {
+		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+		struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
+
+		if (_fuse_op_requires_reply(in->hdr->opcode)) {
 			struct fuse_out_header *hdr = fuse_io->out_iov[0].iov_base;
 
 			fuse_dispatcher_fill_outhdr(fuse_io, hdr, 0, rc);
@@ -378,7 +382,7 @@ fuse_dispatcher_fill_zcopy_fuse_io(struct fuse_io *fuse_io, struct fuse_in_heade
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 
-	assert(fuse_io->hdr.opcode == FUSE_READ || fuse_io->hdr.opcode == FUSE_WRITE);
+	assert(in_hdr->opcode == FUSE_READ || in_hdr->opcode == FUSE_WRITE);
 	fuse_init_fsdev_io_ex(fuse_io);
 
 	in->hdr = in_hdr;
@@ -408,7 +412,6 @@ spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp, struct spdk
 {
 	struct fuse_io *fuse_io = io_ctx;
 
-	memcpy(&fuse_io->hdr, in_hdr, sizeof(*in_hdr));
 	fuse_dispatcher_init_io(disp, fuse_io, ch, out_hdr, in_iovs, in_iovcnt,
 				out_iovs, out_iovcnt, source_id, source_unique, cb_fn, cb_ctx);
 
