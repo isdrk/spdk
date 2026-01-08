@@ -7,7 +7,7 @@
 SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
-DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring rmem fuse
+DIRS-y += bdev accel scheduler iscsi nvmf scsi vmd sock iobuf keyring rmem fuse telemetry
 
 ifeq ($(OS),Linux)
 DIRS-y += nbd
@@ -28,7 +28,7 @@ DIRS-$(CONFIG_RDMA) += rdma_provider
 # themselves. Should that tree change, these dependencies should change
 # accordingly.
 DEPDIRS-accel := iobuf
-DEPDIRS-bdev := accel vmd sock iobuf keyring
+DEPDIRS-bdev := accel vmd sock iobuf keyring telemetry
 DEPDIRS-iscsi := scsi
 DEPDIRS-nbd := bdev
 DEPDIRS-ublk := bdev
