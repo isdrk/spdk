@@ -241,3 +241,6 @@ endif
 # module/keyring
 DEPDIRS-keyring_file := log keyring util $(JSON_LIBS)
 DEPDIRS-keyring_linux := log keyring util $(JSON_LIBS)
+
+# module/telemetry
+DEPDIRS-telemetry := log util $(JSON_LIBS) thread

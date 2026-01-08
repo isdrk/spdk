@@ -1,0 +1,28 @@
+{
+	global:
+
+	# Public functions in telemetry.h
+	spdk_telemetry_init;
+	spdk_telemetry_start;
+	spdk_telemetry_stop;
+	spdk_telemetry_fini;
+	spdk_telemetry_dump_info_json;
+	spdk_telemetry_write_config_json;
+	spdk_telemetry_exporter_register;
+	spdk_telemetry_exporter_unregister;
+	spdk_telemetry_exporter_release_stats;
+	spdk_telemetry_exporter_destruct_done;
+	spdk_telemetry_module_list_add;
+
+	# Public functions in telemetry_source.h
+	spdk_telemetry_register_type;
+	spdk_telemetry_unregister_type;
+	spdk_telemetry_register_source;
+	spdk_telemetry_unregister_source;
+	spdk_telemetry_source_get_stats;
+	spdk_telemetry_source_get_num_stats;
+	spdk_telemetry_source_pull_complete;
+
+	# Everything else
+	local: *;
+};
