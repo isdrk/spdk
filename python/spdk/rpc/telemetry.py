@@ -75,3 +75,24 @@ def telemetry_disable_type(client, name: str):
         'name': name
     }
     return client.call('telemetry_disable_type', params)
+
+
+def telemetry_csv_create(client, dst_dir: str):
+    """Create telemetry CSV exporter.
+
+    Args:
+        dst_dir: path on the system directory to be used to store the CSV files
+    """
+
+    params = {
+        'dst_dir': dst_dir
+    }
+
+    return client.call('telemetry_csv_create', params)
+
+
+def telemetry_csv_delete(client):
+    """Delete telemetry CSV exporter.
+    """
+
+    return client.call('telemetry_csv_delete')

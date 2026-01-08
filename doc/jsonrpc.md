@@ -15274,3 +15274,66 @@ Example response:
   "result": true
 }
 ~~~
+
+### telemetry_csv_create {#telemetry_csv_create}
+
+Create telemetry CSV exporter.
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+dst_dir                 | Required | string  | Path on the system directory to be used to store the CSV files.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_csv_create",
+  "id": 1,
+  "params": {
+    "dst_dir": "/tmp/"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### telemetry_csv_delete {#telemetry_csv_delete}
+
+Delete telemetry CSV exporter.
+
+#### Parameters
+
+None.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_csv_delete",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~

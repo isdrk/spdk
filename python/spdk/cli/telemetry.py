@@ -49,3 +49,16 @@ def add_parser(subparsers):
     p = subparsers.add_parser('telemetry_disable_type', help='Disable telemetry type')
     p.add_argument('--name', help='Telemetry type name to disable', type=str, required=True)
     p.set_defaults(func=telemetry_disable_type)
+
+    def telemetry_csv_create(args):
+        print_json(rpc.telemetry.telemetry_csv_create(args.client, dst_dir=args.dst_dir))
+
+    p = subparsers.add_parser('telemetry_csv_create', help='Create telemetry CSV exporter')
+    p.add_argument('--dst-dir', help='Telemetry CSV exporter destination directory', type=str, required=True)
+    p.set_defaults(func=telemetry_csv_create)
+
+    def telemetry_csv_delete(args):
+        print_json(rpc.telemetry.telemetry_csv_delete(args.client))
+
+    p = subparsers.add_parser('telemetry_csv_delete', help='Delete telemetry CSV exporter')
+    p.set_defaults(func=telemetry_csv_delete)
