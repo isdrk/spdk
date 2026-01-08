@@ -15046,3 +15046,231 @@ Example response:
   ]
 }
 ~~~
+
+### telemetry_start {#telemetry_start}
+
+Start telemetry. Note, that for telemetry to be started, a telemetry exporter must be registered.
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+interval_ms             | Optional | number  | Polling interval in msec
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_start",
+  "id": 1,
+  "params": {
+      "interval_ms": 5000
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### telemetry_stop {#telemetry_stop}
+
+Stop telemetry.
+
+#### Parameters
+
+None.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_stop",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### telemetry_get_info {#telemetry_get_info}
+
+Get telemetry state.
+
+#### Parameters
+
+None.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_get_info",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "started": true,
+    "interval_ms": 5000,
+    "exporter": {
+      "name": "csv",
+      "module_specific": {}
+    }
+  }
+}
+~~~
+
+### telemetry_get_types {#telemetry_get_types}
+
+Get information about available telemetry data types.
+
+#### Parameters
+
+ Name    | Optional   | Type   | Description
+-------- | ---------- | ------ | -----------------------------------------------------------
+ name    | Optional   | string | Telemetry data type name
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_get_types",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": [
+    {
+      "name": "bdev_io_stat",
+      "enabled": false,
+      "stat_names": [
+        "bytes_read",
+        "num_read_ops",
+        "bytes_written",
+        "num_write_ops",
+        "bytes_unmapped",
+        "num_unmap_ops",
+        "bytes_copied",
+        "num_copy_ops",
+        "read_latency_ticks",
+        "max_read_latency_ticks",
+        "min_read_latency_ticks",
+        "write_latency_ticks",
+        "max_write_latency_ticks",
+        "min_write_latency_ticks",
+        "unmap_latency_ticks",
+        "max_unmap_latency_ticks",
+        "min_unmap_latency_ticks",
+        "copy_latency_ticks",
+        "max_copy_latency_ticks",
+        "min_copy_latency_ticks",
+        "ticks_rate",
+        "num_read_split",
+        "num_write_split"
+      ]
+    }
+  ]
+}
+~~~
+
+### telemetry_enable_type {#telemetry_enable_type}
+
+Enable reporting of specific telemetry data type.
+
+#### Parameters
+
+ Name    | Optional   | Type   | Description
+-------- | ---------- | ------ | -----------------------------------------------------------
+ name    | Required   | string | Name of telemetry data type to enable
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_enable_type",
+  "id": 1,
+  "params": {
+    "name": "bdev_io_stat"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### telemetry_disable_type {#telemetry_disable_type}
+
+Disable reporting of specific telemetry data type.
+
+#### Parameters
+
+ Name    | Optional   | Type   | Description
+-------- | ---------- | ------ | -----------------------------------------------------------
+ name    | Required   | string | Name of telemetry data type to disable
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_disable_type",
+  "id": 1,
+  "params": {
+    "name": "bdev_io_stat"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~

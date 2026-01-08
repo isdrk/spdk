@@ -20,4 +20,5 @@ from . import vmd
 from . import sock
 from . import vfio_user
 from . import iobuf
+from . import telemetry
 from . import parser

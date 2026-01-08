@@ -74,6 +74,7 @@ def create_parser():
     cli.vfio_user.add_parser(subparsers)
     cli.iobuf.add_parser(subparsers)
     cli.parser.add_parser(subparsers)
+    cli.telemetry.add_parser(subparsers)
     return parser, subparsers
 
 

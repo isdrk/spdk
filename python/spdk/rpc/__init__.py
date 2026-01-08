@@ -40,6 +40,7 @@ from . import mlx5
 from . import rdma_provider
 from . import client as rpc_client
 from . import rmem
+from . import telemetry
 
 
 def framework_start_init(client):
