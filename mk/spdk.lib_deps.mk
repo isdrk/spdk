@@ -245,3 +245,4 @@ DEPDIRS-keyring_linux := log keyring util $(JSON_LIBS)
 # module/telemetry
 DEPDIRS-telemetry := log util $(JSON_LIBS) thread
 DEPDIRS-event_telemetry := init telemetry
+DEPDIRS-telemetry_csv := log util $(JSON_LIBS) telemetry
