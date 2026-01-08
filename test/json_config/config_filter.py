@@ -48,6 +48,7 @@ def filter_methods(do_remove_global_rpcs):
         'accel_assign_opc',
         'accel_set_options',
         'mlx5_scan_accel_module',
+        'rdma_provider_set_opts',
         'dpdk_cryptodev_scan_accel_module',
         'dpdk_cryptodev_set_driver',
         'virtio_blk_create_transport',
