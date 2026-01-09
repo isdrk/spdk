@@ -380,12 +380,10 @@ int
 spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 				   struct iovec *iov, int iovcnt,
 				   const struct spdk_fsdev_notify_data *notify_data,
-				   uint64_t unique_id,
-				   bool *has_reply)
+				   uint64_t unique_id)
 {
 	struct fuse_out_header *out_hdr;
 	size_t buf_size;
-	bool tmp_has_reply = false;
 	int i;
 	int rc = 0;
 
@@ -413,7 +411,6 @@ spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 	}
 
 	if (rc == 0) {
-		*has_reply = tmp_has_reply;
 		spdk_copy_buf_to_iovs(iov, iovcnt, out_hdr, out_hdr->len);
 	}
 

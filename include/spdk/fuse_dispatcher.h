@@ -114,8 +114,7 @@ void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
 int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 				       struct iovec *iov, int iovcnt,
 				       const struct spdk_fsdev_notify_data *notify_data,
-				       uint64_t unique_id,
-				       bool *has_reply);
+				       uint64_t unique_id);
 
 /**
  * Get minimum buffer size required to fit FUSE notification.
