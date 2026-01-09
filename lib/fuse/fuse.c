@@ -507,70 +507,29 @@ fsdev_fuse_request_submit_cb(void *ctx, int status)
 	}
 }
 
-static bool
-fsdev_fuse_request_check_zcopy(struct fsdev_fuse_request *req,
-			       struct fuse_in_header **inhdr,
-			       struct iovec **in_iovs, int *in_iovcnt,
-			       struct fuse_out_header **outhdr,
-			       struct iovec **out_iovs, int *out_iovcnt)
-{
-	struct spdk_fuse_mount *mount = req->ch->mount;
-
-	if (mount->domain != NULL) {
-		*inhdr = fsdev_fuse_request_get_inhdr(req);
-		*outhdr = fsdev_fuse_request_get_outhdr(req);
-		switch ((*inhdr)->opcode) {
-		case FUSE_READ:
-			/* We prepare reqs in a way that the payload always starts at out_iovs[1] */
-			*out_iovs = &req->out_iovs[1];
-			*out_iovcnt = req->out_iovcnt - 1;
-			*in_iovs = NULL;
-			*in_iovcnt = 0;
-			return true;
-		case FUSE_WRITE:
-			/* We prepare reqs in a way that the payload always starts at in_iovs[1] */
-			*in_iovs = &req->in_iovs[1];
-			*in_iovcnt = req->in_iovcnt - 1;
-			*out_iovs = NULL;
-			*out_iovcnt = 0;
-			return true;
-		default:
-			break;
-		}
-	}
-
-	*in_iovs = req->in_iovs;
-	*in_iovcnt = req->in_iovcnt;
-	/* Some requests don't have a reply */
-	*out_iovs = req->out_iovcnt > 0 ? req->out_iovs : NULL;
-	*out_iovcnt = req->out_iovcnt;
-
-	return false;
-}
-
 static int
 fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fuse_request *req)
 {
 	struct spdk_fuse_mount *mount = ch->mount;
-	struct fuse_in_header *in_hdr;
-	struct fuse_out_header *out_hdr;
-	struct iovec *in_iovs, *out_iovs;
-	int in_iovcnt, out_iovcnt;
-	bool do_zcopy;
+	struct spdk_memory_domain *domain = mount->domain;
+	void *domain_ctx = NULL;
 
-	do_zcopy = fsdev_fuse_request_check_zcopy(req, &in_hdr, &in_iovs, &in_iovcnt,
-			&out_hdr, &out_iovs, &out_iovcnt);
-	if (do_zcopy) {
-		return spdk_fuse_dispatcher_submit_zcopy(ch->dispatcher, ch->ioch,
-				in_hdr, in_iovs, in_iovcnt, out_hdr, out_iovs, out_iovcnt,
-				mount->domain, ch, req->ctx, ch->source_id,
-				ch->source_unique, fsdev_fuse_request_submit_cb, req);
-	} else {
-		return spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
-				in_iovs, in_iovcnt, out_iovs, out_iovcnt,
-				req->ctx, ch->source_id, ch->source_unique,
-				fsdev_fuse_request_submit_cb, req);
+	if (domain != NULL) {
+		uint32_t opcode = fsdev_fuse_request_get_inhdr(req)->opcode;
+
+		if (opcode == FUSE_READ || opcode == FUSE_WRITE) {
+			domain_ctx = ch;
+		} else {
+			domain = NULL;
+		}
 	}
+
+	return spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
+			req->in_iovs, req->in_iovcnt,
+			req->out_iovcnt > 0 ? req->out_iovs : NULL, req->out_iovcnt,
+			req->ctx, ch->source_id, ch->source_unique,
+			domain, domain_ctx,
+			fsdev_fuse_request_submit_cb, req);
 }
 
 static int
@@ -1528,7 +1487,7 @@ fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	ctx->destroy.out_iov.iov_len = sizeof(ctx->destroy.out_hdr);
 	rc = spdk_fuse_dispatcher_submit_request(mount->dispatcher, ctx->destroy.ioch,
 			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, ctx->destroy.ctx, 0, 0,
-			fsdev_fuse_umount_fuse_destroy_cb, ctx);
+			NULL, NULL, fsdev_fuse_umount_fuse_destroy_cb, ctx);
 	if (rc != 0) {
 		fsdev_fuse_umount_fuse_destroy_cb(ctx, rc);
 	}

@@ -152,11 +152,8 @@ static void
 fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
-	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 
-	if (spdk_unlikely(in->hdr->opcode != FUSE_READ && in->hdr->opcode != FUSE_WRITE)) {
-		fuse_io_restore_iovs(fuse_io);
-	}
+	fuse_io_restore_iovs(fuse_io);
 	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
 	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
@@ -208,7 +205,8 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 }
 
 static int
-fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
+fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
+			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	struct iovec *in_iov = fuse_io->in_iov;
@@ -253,7 +251,8 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	}
 	in->iov = in_iov;
 	in->iovcnt = in_iovcnt;
-	in->memory_domain = NULL;
+	in->memory_domain = domain;
+	in->memory_domain_ctx = domain_ctx;
 
 	/* Done preparing in headers, now move to out headers if they exist. */
 
@@ -276,18 +275,20 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 		out->iov = NULL;
 		out->iovcnt = 0;
 	}
-	out->memory_domain = NULL;
+	out->memory_domain = domain;
+	out->memory_domain_ctx = domain_ctx;
 
 	fuse_init_fsdev_io_ex(fuse_io);
 	return 0;
 }
 
 static void
-fuse_dispatcher_submit_io(struct fuse_io *fuse_io)
+fuse_dispatcher_submit_io(struct fuse_io *fuse_io,
+			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
 	int rc;
 
-	rc = fuse_dispatcher_fill_fuse(fuse_io);
+	rc = fuse_dispatcher_fill_fuse(fuse_io, domain, domain_ctx);
 
 	if (rc) {
 		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
@@ -356,6 +357,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    struct iovec *in_iov, int in_iovcnt,
 				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
 				    uint16_t source_id, uint64_t source_unique,
+				    struct spdk_memory_domain *domain, void *domain_ctx,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
@@ -367,58 +369,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 
 	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
 				source_id, source_unique, clb, cb_arg);
-	fuse_dispatcher_submit_io(fuse_io);
-	return 0;
-}
-
-static void
-fuse_dispatcher_fill_zcopy_fuse_io(struct fuse_io *fuse_io, struct fuse_in_header *in_hdr,
-				   struct iovec *in_iovs, int in_iovcnt,
-				   struct fuse_out_header *out_hdr, struct iovec *out_iovs,
-				   int out_iovcnt, struct spdk_memory_domain *domain,
-				   void *domain_ctx)
-{
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
-	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
-
-	assert(in_hdr->opcode == FUSE_READ || in_hdr->opcode == FUSE_WRITE);
-	fuse_init_fsdev_io_ex(fuse_io);
-
-	in->hdr = in_hdr;
-	in->op.raw = in_hdr + 1;
-	in->iov = in_iovs;
-	in->iovcnt = in_iovcnt;
-	in->memory_domain = domain;
-	in->memory_domain_ctx = domain_ctx;
-
-	out->hdr = out_hdr;
-	out->op.raw = out_hdr + 1;
-	out->iov = out_iovs;
-	out->iovcnt = out_iovcnt;
-	out->memory_domain = domain;
-	out->memory_domain_ctx = domain_ctx;
-}
-
-int
-spdk_fuse_dispatcher_submit_zcopy(struct spdk_fuse_dispatcher *disp, struct spdk_io_channel *ch,
-				  struct fuse_in_header *in_hdr,
-				  struct iovec *in_iovs, int in_iovcnt,
-				  struct fuse_out_header *out_hdr,
-				  struct iovec *out_iovs, int out_iovcnt,
-				  struct spdk_memory_domain *domain, void *domain_ctx,
-				  void *io_ctx, uint16_t source_id, uint64_t source_unique,
-				  spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_ctx)
-{
-	struct fuse_io *fuse_io = io_ctx;
-
-	fuse_dispatcher_init_io(disp, fuse_io, ch, out_hdr, in_iovs, in_iovcnt,
-				out_iovs, out_iovcnt, source_id, source_unique, cb_fn, cb_ctx);
-
-	fuse_dispatcher_fill_zcopy_fuse_io(fuse_io, in_hdr, in_iovs, in_iovcnt,
-					   out_hdr, out_iovs, out_iovcnt, domain,
-					   domain_ctx);
-	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	fuse_dispatcher_submit_io(fuse_io, domain, domain_ctx);
 	return 0;
 }
 
