@@ -133,21 +133,6 @@ fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
 }
 
-/*
- * Static FUSE commands handlers
- */
-static inline void
-fuse_init_fsdev_io_ex(struct fuse_io *fuse_io, struct spdk_io_channel *ch,
-		      uint16_t source_id, uint64_t source_unique)
-{
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-
-	spdk_fsdev_io_init(fsdev_io, disp->desc, ch, 0,
-			   SPDK_FSDEV_IO_FUSE, source_id,
-			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
-}
-
 /* FUSE opcodes that define both a command-specific IN header and have IN
  * payload must return the size of their IN header here. This is used to
  * adjust the data iov appropriately.
@@ -187,6 +172,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 	struct iovec *in_iov = fuse_io->in_iov;
@@ -254,7 +240,9 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	out->memory_domain = domain;
 	out->memory_domain_ctx = domain_ctx;
 
-	fuse_init_fsdev_io_ex(fuse_io, ch, source_id, source_unique);
+	spdk_fsdev_io_init(fsdev_io, disp->desc, ch, 0,
+			   SPDK_FSDEV_IO_FUSE, source_id,
+			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
 	return 0;
 }
 
