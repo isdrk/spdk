@@ -22,16 +22,9 @@
 #endif
 
 struct fuse_io {
-	/** For SG buffer cases, array of iovecs for input. */
 	struct iovec *in_iov;
-
-	/** For SG buffer cases, number of iovecs in in_iov array. */
 	int in_iovcnt;
-
-	/** For SG buffer cases, array of iovecs for output. */
 	struct iovec *out_iov;
-
-	/** For SG buffer cases, number of iovecs in out_iov array. */
 	int out_iovcnt;
 
 	struct iovec orig_in_iov[2];
@@ -39,11 +32,7 @@ struct fuse_io {
 
 	spdk_fuse_dispatcher_submit_cpl_cb cpl_cb;
 	void *cpl_cb_arg;
-	struct spdk_io_channel *ch;
 	struct spdk_fuse_dispatcher *disp;
-
-	uint16_t source_id;
-	uint64_t source_unique;
 };
 
 /* To make sure that the fsdev_io that follows the fuse_io is aligned to 8 */
@@ -163,14 +152,15 @@ fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
  * Static FUSE commands handlers
  */
 static inline void
-fuse_init_fsdev_io_ex(struct fuse_io *fuse_io)
+fuse_init_fsdev_io_ex(struct fuse_io *fuse_io, struct spdk_io_channel *ch,
+		      uint16_t source_id, uint64_t source_unique)
 {
 	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 
-	spdk_fsdev_io_init(fsdev_io, disp->desc, fuse_io->ch, 0,
-			   SPDK_FSDEV_IO_FUSE, fuse_io->source_id,
-			   fuse_io->source_unique, fuse_dispatcher_cpl_cb, fuse_io);
+	spdk_fsdev_io_init(fsdev_io, disp->desc, ch, 0,
+			   SPDK_FSDEV_IO_FUSE, source_id,
+			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
 }
 
 /* FUSE opcodes that define both a command-specific IN header and have IN
@@ -206,15 +196,16 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 
 static int
 fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
+			  struct spdk_io_channel *ch,
+			  int in_iovcnt, int out_iovcnt,
+			  uint16_t source_id, uint64_t source_unique,
 			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-	struct iovec *in_iov = fuse_io->in_iov;
-	struct iovec *out_iov = fuse_io->out_iov;
-	int in_iovcnt = fuse_io->in_iovcnt;
-	int out_iovcnt = fuse_io->out_iovcnt;
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
+	struct iovec *in_iov = fuse_io->in_iov;
+	struct iovec *out_iov = fuse_io->out_iov;
 	struct fuse_in_header *in_hdr;
 	struct fuse_out_header *out_hdr;
 	size_t in_size;
@@ -278,7 +269,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	out->memory_domain = domain;
 	out->memory_domain_ctx = domain_ctx;
 
-	fuse_init_fsdev_io_ex(fuse_io);
+	fuse_init_fsdev_io_ex(fuse_io, ch, source_id, source_unique);
 	return 0;
 }
 
@@ -309,22 +300,16 @@ spdk_fuse_dispatcher_get_io_ctx_size(void)
 
 static void
 fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io,
-			struct spdk_io_channel *ch, struct fuse_out_header *outhdr,
 			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
-			uint16_t source_id, uint64_t source_unique,
 			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
 {
 	fuse_io->disp = disp;
-	fuse_io->ch = ch;
 	fuse_io->in_iov = in_iov;
 	fuse_io->in_iovcnt = in_iovcnt;
 	fuse_io->out_iov = out_iov;
 	fuse_io->out_iovcnt = out_iovcnt;
 	fuse_io->cpl_cb = cb_fn;
 	fuse_io->cpl_cb_arg = cb_arg;
-
-	fuse_io->source_id = source_id;
-	fuse_io->source_unique = source_unique;
 }
 
 int
@@ -344,9 +329,9 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 		return -ENOBUFS;
 	}
 
-	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
-				source_id, source_unique, clb, cb_arg);
-	rc = fuse_dispatcher_fill_fuse(fuse_io, domain, domain_ctx);
+	fuse_dispatcher_init_io(disp, fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
+	rc = fuse_dispatcher_fill_fuse(fuse_io, ch, in_iovcnt, out_iovcnt,
+				       source_id, source_unique, domain, domain_ctx);
 	if (rc) {
 		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 		struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
