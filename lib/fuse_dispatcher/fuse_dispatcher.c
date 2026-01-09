@@ -354,28 +354,6 @@ spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
 	free(disp);
 }
 
-static int
-fuse_dispatcher_encode_notify_fuse(struct spdk_fuse_dispatcher *disp,
-				   struct fuse_out_header *out_hdr,
-				   size_t buf_size,
-				   const struct spdk_fsdev_notify_data *notify_data)
-{
-	struct spdk_fuse_notify_request *req = notify_data->fuse;
-	struct fuse_out_header *req_out = req->iovs[0].iov_base;
-	uint64_t unique = out_hdr->unique;
-
-	if (req_out->len > buf_size) {
-		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
-			    buf_size, req_out->len);
-		return -ENOMEM;
-	}
-
-	spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
-	out_hdr->unique = unique;
-
-	return 0;
-}
-
 int
 spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 				   struct iovec *iov, int iovcnt,
@@ -396,9 +374,19 @@ spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 	}
 
 	if (notify_data) {
-		out_hdr->unique = unique_id;
 		if (notify_data->type == SPDK_FSDEV_NOTIFY_FUSE) {
-			rc = fuse_dispatcher_encode_notify_fuse(disp, out_hdr, buf_size, notify_data);
+			struct spdk_fuse_notify_request *req = notify_data->fuse;
+			struct fuse_out_header *req_out = req->iovs[0].iov_base;
+
+			if (req_out->len > buf_size) {
+				SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+					    buf_size, req_out->len);
+				rc = -ENOMEM;
+			} else {
+				spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
+				out_hdr->unique = unique_id;
+				rc = 0;
+			}
 		} else {
 			SPDK_ERRLOG("Unsupported notify type %d\n", notify_data->type);
 			rc = -EINVAL;
