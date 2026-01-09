@@ -134,11 +134,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 	struct iovec *in_iov = fuse_io->in_iov;
 	struct iovec *out_iov = fuse_io->out_iov;
-	struct fuse_in_header *in_hdr;
-	struct fuse_out_header *out_hdr;
 	size_t in_size;
-
-	in_hdr = in_iov->iov_base;
 
 	/* We may need to modify the iovs, for example if one iov contains both header
 	 * and payload. For now we just always save off the iovs and restore them later.
@@ -148,16 +144,16 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	 */
 	fuse_io_save_iovs(fuse_io);
 
-	in->hdr = in_hdr;
-	if (in_iov->iov_len == sizeof(*in_hdr)) {
+	in->hdr = in_iov->iov_base;
+	if (in_iov->iov_len == sizeof(*in->hdr)) {
 		in_iov++;
 		in_iovcnt--;
 	} else {
-		in_iov->iov_base += sizeof(*in_hdr);
-		in_iov->iov_len -= sizeof(*in_hdr);
+		in_iov->iov_base += sizeof(*in->hdr);
+		in_iov->iov_len -= sizeof(*in->hdr);
 	}
 	in->op.raw = in_iov->iov_base;
-	in_size = fuse_get_in_size(in_hdr);
+	in_size = fuse_get_in_size(in->hdr);
 	if (in_size > 0) {
 		assert(in_iov->iov_len >= in_size);
 		if (in_iov->iov_len == in_size) {
@@ -176,14 +172,13 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	/* Done preparing in headers, now move to out headers if they exist. */
 
 	if (out_iov != NULL) {
-		out_hdr = out_iov->iov_base;
-		out->hdr = out_hdr;
-		if (out_iov->iov_len == sizeof(*out_hdr)) {
+		out->hdr = out_iov->iov_base;
+		if (out_iov->iov_len == sizeof(*out->hdr)) {
 			out_iov++;
 			out_iovcnt--;
 		} else {
-			out_iov->iov_base += sizeof(*out_hdr);
-			out_iov->iov_len -= sizeof(*out_hdr);
+			out_iov->iov_base += sizeof(*out->hdr);
+			out_iov->iov_len -= sizeof(*out->hdr);
 		}
 		out->op.raw = out_iov->iov_base;
 		out->iov = out_iov;
