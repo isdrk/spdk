@@ -282,30 +282,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	return 0;
 }
 
-static void
-fuse_dispatcher_submit_io(struct fuse_io *fuse_io,
-			  struct spdk_memory_domain *domain, void *domain_ctx)
-{
-	int rc;
-
-	rc = fuse_dispatcher_fill_fuse(fuse_io, domain, domain_ctx);
-
-	if (rc) {
-		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-		struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
-
-		if (_fuse_op_requires_reply(in->hdr->opcode)) {
-			struct fuse_out_header *hdr = fuse_io->out_iov[0].iov_base;
-
-			fuse_dispatcher_fill_outhdr(fuse_io, hdr, 0, rc);
-		}
-		fuse_io->cpl_cb(fuse_io->cpl_cb_arg, rc);
-		return;
-	}
-
-	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
-}
-
 struct spdk_fuse_dispatcher *
 spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 			    spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
@@ -361,6 +337,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
+	int rc;
 
 	if (!fuse_io) {
 		SPDK_ERRLOG("Invalid argument, fuse_io is NULL\n");
@@ -369,7 +346,20 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 
 	fuse_dispatcher_init_io(disp, fuse_io, ch, NULL, in_iov, in_iovcnt, out_iov, out_iovcnt,
 				source_id, source_unique, clb, cb_arg);
-	fuse_dispatcher_submit_io(fuse_io, domain, domain_ctx);
+	rc = fuse_dispatcher_fill_fuse(fuse_io, domain, domain_ctx);
+	if (rc) {
+		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+		struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
+
+		if (_fuse_op_requires_reply(in->hdr->opcode)) {
+			struct fuse_out_header *hdr = fuse_io->out_iov[0].iov_base;
+
+			fuse_dispatcher_fill_outhdr(fuse_io, hdr, 0, rc);
+		}
+		fuse_io->cpl_cb(fuse_io->cpl_cb_arg, rc);
+	} else {
+		spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	}
 	return 0;
 }
 
