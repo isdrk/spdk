@@ -32,7 +32,6 @@ struct fuse_io {
 
 	spdk_fuse_dispatcher_submit_cpl_cb cpl_cb;
 	void *cpl_cb_arg;
-	struct spdk_fuse_dispatcher *disp;
 };
 
 /* To make sure that the fsdev_io that follows the fuse_io is aligned to 8 */
@@ -166,13 +165,13 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 
 static int
 fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
+			  struct spdk_fsdev_desc *desc,
 			  struct spdk_io_channel *ch,
 			  int in_iovcnt, int out_iovcnt,
 			  uint16_t source_id, uint64_t source_unique,
 			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-	struct spdk_fuse_dispatcher *disp = fuse_io->disp;
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
 	struct iovec *in_iov = fuse_io->in_iov;
@@ -240,7 +239,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	out->memory_domain = domain;
 	out->memory_domain_ctx = domain_ctx;
 
-	spdk_fsdev_io_init(fsdev_io, disp->desc, ch, 0,
+	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
 			   SPDK_FSDEV_IO_FUSE, source_id,
 			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
 	return 0;
@@ -272,7 +271,6 @@ fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_
 			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
 			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
 {
-	fuse_io->disp = disp;
 	fuse_io->in_iov = in_iov;
 	fuse_io->in_iovcnt = in_iovcnt;
 	fuse_io->out_iov = out_iov;
@@ -299,7 +297,7 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	}
 
 	fuse_dispatcher_init_io(disp, fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
-	rc = fuse_dispatcher_fill_fuse(fuse_io, ch, in_iovcnt, out_iovcnt,
+	rc = fuse_dispatcher_fill_fuse(fuse_io, disp->desc, ch, in_iovcnt, out_iovcnt,
 				       source_id, source_unique, domain, domain_ctx);
 	if (rc) {
 		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
