@@ -43,41 +43,6 @@ fuse_to_fsdev_io(struct fuse_io *fuse_io)
 	return (struct spdk_fsdev_io *)(((char *)fuse_io) + ALIGNED_FUSE_IO_SIZE);
 }
 
-static bool
-_fuse_op_requires_reply(uint32_t opcode)
-{
-	switch (opcode) {
-	case FUSE_FORGET:
-	case FUSE_BATCH_FORGET:
-	case FUSE_NOTIFY_REPLY:
-	case FUSE_INTERRUPT:
-		return false;
-	default:
-		return true;
-	}
-}
-
-
-static void
-fuse_dispatcher_fill_outhdr(struct fuse_io *fuse_io, struct fuse_out_header *hdr,
-			    size_t out_len, int error)
-{
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
-	uint32_t len;
-
-	assert(error > -1000 && error <= 0);
-	len = sizeof(*hdr);
-	if (error == 0) {
-		len += out_len;
-	}
-
-	memset(hdr, 0, sizeof(*hdr));
-	hdr->unique = in->hdr->unique;
-	hdr->error = error;
-	hdr->len = len;
-}
-
 static void
 fuse_io_save_iovs(struct fuse_io *fuse_io)
 {
@@ -156,7 +121,7 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 	}
 }
 
-static int
+static void
 fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 			  struct spdk_fsdev_desc *desc,
 			  struct spdk_io_channel *ch,
@@ -235,7 +200,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
 			   SPDK_FSDEV_IO_FUSE, source_id,
 			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
-	return 0;
 }
 
 size_t
@@ -267,7 +231,6 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
 				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
 	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
-	int rc;
 
 	if (!fuse_io) {
 		SPDK_ERRLOG("Invalid argument, fuse_io is NULL\n");
@@ -275,21 +238,9 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
 	}
 
 	fuse_dispatcher_init_io(fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
-	rc = fuse_dispatcher_fill_fuse(fuse_io, desc, ch, in_iovcnt, out_iovcnt,
-				       source_id, source_unique, domain, domain_ctx);
-	if (rc) {
-		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-		struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
-
-		if (_fuse_op_requires_reply(in->hdr->opcode)) {
-			struct fuse_out_header *hdr = fuse_io->out_iov[0].iov_base;
-
-			fuse_dispatcher_fill_outhdr(fuse_io, hdr, 0, rc);
-		}
-		fuse_io->cpl_cb(fuse_io->cpl_cb_arg, rc);
-	} else {
-		spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
-	}
+	fuse_dispatcher_fill_fuse(fuse_io, desc, ch, in_iovcnt, out_iovcnt,
+				  source_id, source_unique, domain, domain_ctx);
+	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
 	return 0;
 }
 
