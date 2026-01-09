@@ -41,16 +41,10 @@ typedef void (*spdk_fuse_dispatcher_notify_reply_cb)(void *cb_arg,
  * Create a FUSE fsdev dispatcher
  *
  * \param desc fsdev descriptor to work with
- * \param notify_reply_cb Callback to invoke on FUSE_NOTIFY_REPLY requests
- * \param notify_reply_cb_arg Argument that will be passed to notify_reply_cb
- *
- * NOTE: \p recovery_mode is ignored if rmem pool functionality is disabled
  *
  * \return FUSE fsdev dispatcher object on success, NULL otherwise.
  */
-struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
-		spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
-		void *notify_reply_cb_arg);
+struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc);
 
 /**
  * Get the size of the io_ctx buffer.

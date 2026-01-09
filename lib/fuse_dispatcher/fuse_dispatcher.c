@@ -43,16 +43,6 @@ struct spdk_fuse_dispatcher {
 	 * fsdev descriptor
 	 */
 	struct spdk_fsdev_desc *desc;
-
-	/**
-	 * Callback to handle FUSE_NOTIFY_REPLY requests.
-	 */
-	spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb;
-
-	/**
-	 * Context for notify_reply_cb.
-	 */
-	void *notify_reply_cb_arg;
 };
 
 static inline struct spdk_fsdev_io *
@@ -269,9 +259,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 }
 
 struct spdk_fuse_dispatcher *
-spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
-			    spdk_fuse_dispatcher_notify_reply_cb notify_reply_cb,
-			    void *notify_reply_cb_arg)
+spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
 {
 	struct spdk_fuse_dispatcher *disp;
 
@@ -282,8 +270,6 @@ spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc,
 	}
 
 	disp->desc = desc;
-	disp->notify_reply_cb = notify_reply_cb;
-	disp->notify_reply_cb_arg = notify_reply_cb_arg;
 	return disp;
 }
 
