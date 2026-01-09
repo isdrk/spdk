@@ -29,7 +29,6 @@ struct fuse_notify_request {
 
 struct spdk_fuse_mount {
 	struct spdk_fsdev_desc		*fsdev_desc;
-	struct spdk_fuse_dispatcher	*dispatcher;
 	struct spdk_memory_domain	*domain;
 	int				fd;
 	bool				mounted;
@@ -77,7 +76,6 @@ struct fsdev_fuse_domain {
 struct fsdev_fuse_channel {
 	struct spdk_fuse_mount			*mount;
 	struct spdk_io_channel			*ioch;
-	struct spdk_fuse_dispatcher		*dispatcher;
 	int					fd;
 	uint32_t				num_outstanding;
 	TAILQ_HEAD(, fsdev_fuse_request)	free_requests;
@@ -454,7 +452,6 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	ch->mount = mount;
 	/* If we can't manage to clone the fd, just fall back to using the main fd */
 	ch->fd = ch->clone_fd >= 0 ? ch->clone_fd : mount->fd;
-	ch->dispatcher = mount->dispatcher;
 
 	reqsize = sizeof(*req) + spdk_fuse_dispatcher_get_io_ctx_size();
 	ch->request_pool = calloc(mount->max_io_depth, reqsize);
@@ -524,7 +521,7 @@ fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fu
 		}
 	}
 
-	return spdk_fuse_dispatcher_submit_request(ch->dispatcher, ch->ioch,
+	return spdk_fuse_dispatcher_submit_request(mount->fsdev_desc, ch->ioch,
 			req->in_iovs, req->in_iovcnt,
 			req->out_iovcnt > 0 ? req->out_iovs : NULL, req->out_iovcnt,
 			req->ctx, ch->source_id, ch->source_unique,
@@ -655,9 +652,6 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 				     mount->mountpoint, spdk_strerror(errno));
 		}
 	}
-	if (mount->dispatcher != NULL) {
-		spdk_fuse_dispatcher_delete(mount->dispatcher);
-	}
 	if (mount->fsdev_desc != NULL) {
 		spdk_fsdev_close(mount->fsdev_desc);
 	}
@@ -768,8 +762,7 @@ fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
 	struct fuse_notify_request *work;
 	int rc;
 
-	rc = spdk_fuse_dispatcher_encode_notify(mount->dispatcher, &mount->notify_iov, 1,
-						notify_data, 0);
+	rc = spdk_fuse_dispatcher_encode_notify(&mount->notify_iov, 1, notify_data, 0);
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to encode notification: %s\n", mount->name,
 			    spdk_strerror(-rc));
@@ -1150,13 +1143,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		spdk_memory_domain_set_translation(mnt->domain, fsdev_fuse_translate_addr);
 	}
 
-	mnt->dispatcher = spdk_fuse_dispatcher_create(mnt->fsdev_desc);
-	if (mnt->dispatcher == NULL) {
-		rc = -ENOMEM;
-		goto error;
-	}
-
-	mnt->notify_iov.iov_len = spdk_fuse_dispatcher_get_notify_buf_size(mnt->dispatcher);
+	mnt->notify_iov.iov_len = spdk_fuse_dispatcher_get_notify_buf_size(mnt->fsdev_desc);
 	if (mnt->notify_iov.iov_len > 0) {
 		mnt->notify_iov.iov_base = calloc(1, mnt->notify_iov.iov_len);
 		if (mnt->notify_iov.iov_base == NULL) {
@@ -1484,7 +1471,7 @@ fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	ctx->destroy.in_iov.iov_len = sizeof(ctx->destroy.in_hdr);
 	ctx->destroy.out_iov.iov_base = &ctx->destroy.out_hdr;
 	ctx->destroy.out_iov.iov_len = sizeof(ctx->destroy.out_hdr);
-	rc = spdk_fuse_dispatcher_submit_request(mount->dispatcher, ctx->destroy.ioch,
+	rc = spdk_fuse_dispatcher_submit_request(mount->fsdev_desc, ctx->destroy.ioch,
 			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, ctx->destroy.ctx, 0, 0,
 			NULL, NULL, fsdev_fuse_umount_fuse_destroy_cb, ctx);
 	if (rc != 0) {

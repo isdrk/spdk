@@ -37,13 +37,6 @@ struct fuse_io {
 /* To make sure that the fsdev_io that follows the fuse_io is aligned to 8 */
 #define ALIGNED_FUSE_IO_SIZE SPDK_ALIGN_CEIL(sizeof(struct fuse_io), 8)
 
-struct spdk_fuse_dispatcher {
-	/**
-	 * fsdev descriptor
-	 */
-	struct spdk_fsdev_desc *desc;
-};
-
 static inline struct spdk_fsdev_io *
 fuse_to_fsdev_io(struct fuse_io *fuse_io)
 {
@@ -245,21 +238,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	return 0;
 }
 
-struct spdk_fuse_dispatcher *
-spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc)
-{
-	struct spdk_fuse_dispatcher *disp;
-
-	disp = calloc(1, sizeof(*disp));
-	if (!disp) {
-		SPDK_ERRLOG("could not allocate disp\n");
-		return NULL;
-	}
-
-	disp->desc = desc;
-	return disp;
-}
-
 size_t
 spdk_fuse_dispatcher_get_io_ctx_size(void)
 {
@@ -267,7 +245,7 @@ spdk_fuse_dispatcher_get_io_ctx_size(void)
 }
 
 static void
-fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_io,
+fuse_dispatcher_init_io(struct fuse_io *fuse_io,
 			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
 			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
 {
@@ -280,7 +258,7 @@ fuse_dispatcher_init_io(struct spdk_fuse_dispatcher *disp, struct fuse_io *fuse_
 }
 
 int
-spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
+spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
 				    struct spdk_io_channel *ch,
 				    struct iovec *in_iov, int in_iovcnt,
 				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
@@ -296,8 +274,8 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 		return -ENOBUFS;
 	}
 
-	fuse_dispatcher_init_io(disp, fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
-	rc = fuse_dispatcher_fill_fuse(fuse_io, disp->desc, ch, in_iovcnt, out_iovcnt,
+	fuse_dispatcher_init_io(fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
+	rc = fuse_dispatcher_fill_fuse(fuse_io, desc, ch, in_iovcnt, out_iovcnt,
 				       source_id, source_unique, domain, domain_ctx);
 	if (rc) {
 		struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
@@ -315,15 +293,8 @@ spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 	return 0;
 }
 
-void
-spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp)
-{
-	free(disp);
-}
-
 int
-spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
-				   struct iovec *iov, int iovcnt,
+spdk_fuse_dispatcher_encode_notify(struct iovec *iov, int iovcnt,
 				   const struct spdk_fsdev_notify_data *notify_data,
 				   uint64_t unique_id)
 {
@@ -374,11 +345,11 @@ spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
 }
 
 uint32_t
-spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp)
+spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fsdev_desc *desc)
 {
 	const uint32_t max_header_size = sizeof(struct fuse_out_header) +
 					 sizeof(struct fuse_notify_retrieve_out);
-	uint32_t buf_size = spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(disp->desc));
+	uint32_t buf_size = spdk_fsdev_get_notify_max_data_size(spdk_fsdev_desc_get_fsdev(desc));
 
 	if (buf_size) {
 		buf_size += max_header_size;

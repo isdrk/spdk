@@ -38,15 +38,6 @@ typedef void (*spdk_fuse_dispatcher_notify_reply_cb)(void *cb_arg,
 		uint64_t unique_id);
 
 /**
- * Create a FUSE fsdev dispatcher
- *
- * \param desc fsdev descriptor to work with
- *
- * \return FUSE fsdev dispatcher object on success, NULL otherwise.
- */
-struct spdk_fuse_dispatcher *spdk_fuse_dispatcher_create(struct spdk_fsdev_desc *desc);
-
-/**
  * Get the size of the io_ctx buffer.
  *
  * \return The size of struct fuse_io
@@ -56,7 +47,7 @@ size_t spdk_fuse_dispatcher_get_io_ctx_size(void);
 /**
  * Submit FUSE request
  *
- * \param disp FUSE fsdev dispatcher object.
+ * \param desc fsdev descriptor
  * \param ch I/O channel obtained from the \p spdk_fuse_dispatcher_get_io_channel.
  * \param in_iov Input IO vectors array.
  * \param in_iovcnt Size of the input IO vectors array.
@@ -78,7 +69,7 @@ size_t spdk_fuse_dispatcher_get_io_ctx_size(void);
  * NOTE: each source_id is pinned to a thread. Which means that requests with a specific source_id
  * can only be submitted on one thread. Multiple source_ids per thread are allowed.
  */
-int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
+int spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
 					struct spdk_io_channel *ch,
 					struct iovec *in_iov, int in_iovcnt,
 					struct iovec *out_iov, int out_iovcnt, void *io_ctx,
@@ -87,16 +78,8 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fuse_dispatcher *disp,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
 /**
- * Delete a FUSE fsdev dispatcher
- *
- * \param disp FUSE fsdev dispatcher object.
- */
-void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
-
-/**
  * Encode FUSE notification
  *
- * \param disp FUSE fsdev dispatcher object.
  * \param iov Output IO vectors array.
  * \param iovcnt Size of the output IO vectors array.
  * \param notify_data Notification data received from fsdev.
@@ -105,19 +88,18 @@ void spdk_fuse_dispatcher_delete(struct spdk_fuse_dispatcher *disp);
  *
  * \return 0 on success, negated errno on failure.
  */
-int spdk_fuse_dispatcher_encode_notify(struct spdk_fuse_dispatcher *disp,
-				       struct iovec *iov, int iovcnt,
+int spdk_fuse_dispatcher_encode_notify(struct iovec *iov, int iovcnt,
 				       const struct spdk_fsdev_notify_data *notify_data,
 				       uint64_t unique_id);
 
 /**
  * Get minimum buffer size required to fit FUSE notification.
  *
- * \param disp FUSE fsdev dispatcher object.
+ * \param desc fsdev descriptor
  *
  * \return notify buffer size in bytes. Zero means that notifications are not supported.
  */
-uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fuse_dispatcher *disp);
+uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fsdev_desc *desc);
 
 #ifdef __cplusplus
 }
