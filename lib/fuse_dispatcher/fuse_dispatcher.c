@@ -55,11 +55,6 @@ struct spdk_fuse_dispatcher {
 	void *notify_reply_cb_arg;
 };
 
-struct fuse_notify_reply_in {
-	int32_t error; /* 0 on success, negated errno for error */
-	uint32_t padding;
-};
-
 static inline struct spdk_fsdev_io *
 fuse_to_fsdev_io(struct fuse_io *fuse_io)
 {
