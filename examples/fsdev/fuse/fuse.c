@@ -332,6 +332,8 @@ static struct option g_options[] = {
 	{ "wait", no_argument,  NULL, FSDEV_FUSE_OPT_WAIT },
 #define FSDEV_FUSE_OPT_DAEMON 'D'
 	{ "daemon", no_argument,  NULL, FSDEV_FUSE_OPT_DAEMON },
+#define FSDEV_FUSE_OPT_FAKE_MEMORY_DOMAIN 'F'
+	{ "fake-memory-domain", no_argument,  NULL, FSDEV_FUSE_OPT_FAKE_MEMORY_DOMAIN },
 #define FSDEV_FUSE_OPT_MAX_IODEPTH 0x1000
 	{ "max-iodepth", required_argument, NULL, FSDEV_FUSE_OPT_MAX_IODEPTH },
 #define FSDEV_FUSE_OPT_MAX_XFER 0x1001
@@ -376,6 +378,9 @@ fsdev_fuse_parse_arg(int ch, char *arg)
 		break;
 	case FSDEV_FUSE_OPT_DAEMON:
 		g_app.daemon = true;
+		break;
+	case FSDEV_FUSE_OPT_FAKE_MEMORY_DOMAIN:
+		g_app.mount_opts.fake_memory_domain = true;
 		break;
 	case FSDEV_FUSE_OPT_MAX_IODEPTH:
 	case FSDEV_FUSE_OPT_MAX_XFER:
@@ -476,6 +481,7 @@ fsdev_fuse_usage(void)
 	printf(" -w, --wait                           wait for the fsdev if it's not available\n");
 	printf("     --fstype=<fstype>                use fstype as filesystem type when mounting\n");
 	printf(" -D, --daemon                         run as daemon\n");
+	printf(" -F, --fake-memory-domain             enable fake memory domain\n");
 	printf("     --ext-libs=<name1[,name2[]]>     comma-separated list of external libs to be loaded\n");
 }
 
@@ -491,7 +497,7 @@ main(int argc, char **argv)
 	spdk_app_opts_init(&opts, sizeof(opts));
 	opts.name = "fuse";
 	opts.shutdown_cb = fsdev_fuse_shutdown_cb;
-	rc = spdk_app_parse_args(argc, argv, &opts, "Df:M:w", g_options,
+	rc = spdk_app_parse_args(argc, argv, &opts, "DFf:M:w", g_options,
 				 fsdev_fuse_parse_arg, fsdev_fuse_usage);
 	if (rc != SPDK_APP_PARSE_ARGS_SUCCESS) {
 		return rc;
