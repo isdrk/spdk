@@ -298,14 +298,29 @@ fuse_dispatcher_io_complete_err(struct fuse_io *fuse_io, int err)
 }
 
 static void
-fuse_dispatcher_passthrough_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+fuse_io_save_iovs(struct fuse_io *fuse_io)
 {
-	struct fuse_io *fuse_io = cb_arg;
+	memcpy(fuse_io->orig_in_iov, fuse_io->in_iov, sizeof(fuse_io->orig_in_iov));
+	if (fuse_io->out_iov != NULL) {
+		memcpy(fuse_io->orig_out_iov, fuse_io->out_iov, sizeof(fuse_io->orig_out_iov));
+	}
+}
 
+static void
+fuse_io_restore_iovs(struct fuse_io *fuse_io)
+{
 	memcpy(fuse_io->in_iov, fuse_io->orig_in_iov, sizeof(fuse_io->orig_in_iov));
 	if (fuse_io->out_iov != NULL) {
 		memcpy(fuse_io->out_iov, fuse_io->orig_out_iov, sizeof(fuse_io->orig_out_iov));
 	}
+}
+
+static void
+fuse_dispatcher_passthrough_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+{
+	struct fuse_io *fuse_io = cb_arg;
+
+	fuse_io_restore_iovs(fuse_io);
 	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
 	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
@@ -378,7 +393,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 	 * still adds extra bits that need to be checked which may end up being a wash from
 	 * a cacheline perspective.
 	 */
-	memcpy(fuse_io->orig_in_iov, fuse_io->in_iov, sizeof(fuse_io->orig_in_iov));
+	fuse_io_save_iovs(fuse_io);
 
 	in->hdr = in_hdr;
 	if (in_iov->iov_len == sizeof(*in_hdr)) {
@@ -408,7 +423,6 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io)
 
 	if (out_iov != NULL) {
 		out_hdr = out_iov->iov_base;
-		memcpy(fuse_io->orig_out_iov, fuse_io->out_iov, sizeof(fuse_io->orig_out_iov));
 		out->hdr = out_hdr;
 		if (out_iov->iov_len == sizeof(*out_hdr)) {
 			out_iov++;
