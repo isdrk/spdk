@@ -421,7 +421,7 @@ spdk_fsdev_io_from_ctx(void *ctx)
 }
 
 /**
- * Send a SPDK_FSDEV_NOTIFY_FUSE notification.
+ * Send a notification.
  *
  * \param req Notification request.
  *

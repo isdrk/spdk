@@ -137,12 +137,6 @@ SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_io_opts) == 24, "Incorrect size");
  */
 #define SPDK_FSDEV_MAX_FUSE_OPC	64
 
-/** Notification type */
-enum spdk_fsdev_notify_type {
-	SPDK_FSDEV_NOTIFY_FUSE,
-	SPDK_FSDEV_NOTIFY_NUM_TYPES
-};
-
 /* We define it ourselves a bit higher than what's in fuse.h to avoid
  * changing ABI as new notification types are added. Currently fuse.h has
  * 9 (as of v6.18).
