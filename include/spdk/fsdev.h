@@ -589,14 +589,6 @@ uint32_t spdk_fsdev_get_notify_max_data_size(const struct spdk_fsdev *fsdev);
 bool spdk_fsdev_reset_supported(struct spdk_fsdev *fsdev);
 
 /**
- * Check whether the Filesystem device is recovered.
- *
- * \param fsdev Filesystem device to check.
- * \return true if support, false otherwise.
- */
-bool spdk_fsdev_is_recovered(struct spdk_fsdev *fsdev);
-
-/**
  * Return I/O statistics for this channel.
  *
  * \param fsdev Filesystem device.
