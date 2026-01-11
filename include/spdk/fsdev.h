@@ -114,53 +114,6 @@ struct spdk_fsdev_mount_opts {
 SPDK_STATIC_ASSERT(sizeof(struct spdk_fsdev_mount_opts) == 24, "Incorrect size");
 
 /**
- * IN/OUT Mount flags. These control user behavior with regard to the fsdev API.
- * The user provides the set of flags they'd like set and the fsdev can modify them.
- *
- * SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP: "." and ".." are valid paths for a lookup operation.
- *
- * SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA: The user will invalidate any cached data pages for
- * objects if fsdev reports a modified 'mtime'. Additionally, the user will check
- * for attribute changes (e.g. size) prior to issuing a read, rather than assuming
- * their latest cached attributes are valid.
- *
- * SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA: The user will receive cache invalidation requests
- * when necessary. This ensures that data cached by user is correctly invalidated
- * and updated.
- *
- * SPDK_FSDEV_MOUNT_WRITEBACK_CACHE: The user will maintain their own cache of write data,
- * without immediately forwarding writes to the fsdev. The user will assume their
- * cached versions of the file attributes are newer than the ones reported by fsdev.
- *
- * SPDK_FSDEV_MOUNT_POSIX_ACL: The user will assume that the fsdev is performing ACL checks
- * on setxattr_flags.
- *
- * SPDK_FSDEV_MOUNT_POSIX_LOCKS: remote locking for POSIX file locks supported.
- *
- * SPDK_FSDEV_MOUNT_FLOCK_LOCKS: remote locking for BSD style file locks supported.
- *
- * SPDK_FSDEV_MOUNT_O_TRUNC: O_TRUNC open flag supported.
- *
- * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV: See FUSE_HANDLE_KILLPRIV.
- *
- * SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2: See FUSE_HANDLE_KILLPRIV_V2.
- *
- * SPDK_FSDEV_MOUNT_DIRECT_IO_ALLOW_MMAP: Allow mmap on files opened with O_DIRECT.
- */
-#define SPDK_FSDEV_MOUNT_DOT_PATH_LOOKUP      (1 << 0)
-#define SPDK_FSDEV_MOUNT_AUTO_INVAL_DATA      (1 << 1)
-#define SPDK_FSDEV_MOUNT_EXPLICIT_INVAL_DATA  (1 << 2)
-#define SPDK_FSDEV_MOUNT_WRITEBACK_CACHE      (1 << 3)
-#define SPDK_FSDEV_MOUNT_POSIX_ACL            (1 << 4)
-#define SPDK_FSDEV_MOUNT_POSIX_LOCKS          (1 << 5)
-#define SPDK_FSDEV_MOUNT_FLOCK_LOCKS          (1 << 6)
-#define SPDK_FSDEV_MOUNT_O_TRUNC              (1 << 7)
-#define SPDK_FSDEV_MOUNT_NO_EXPORT_SUPPORT    (1 << 8)
-#define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV      (1 << 9)
-#define SPDK_FSDEV_MOUNT_HANDLE_KILLPRIV_V2   (1 << 10)
-#define SPDK_FSDEV_MOUNT_DIRECT_IO_ALLOW_MMAP (1 << 11)
-
-/**
  * Structure with optional fsdev IO parameters
  * The content of this structure must be valid until the IO is completed
  */
