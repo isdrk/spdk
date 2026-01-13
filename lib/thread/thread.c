@@ -2832,7 +2832,8 @@ _io_channel_send_msg(void *ctx)
 	pthread_mutex_unlock(&g_devlist_mutex);
 
 	if (dev == NULL) {
-		SPDK_ERRLOG("could not find io_device %p\n", c->io_device);
+		SPDK_DEBUGLOG(thread, "io_device %p was unregistered before message reached.\n",
+			      c->io_device);
 		free(c);
 		return;
 	}
@@ -2851,7 +2852,18 @@ spdk_io_channel_send_msg(struct spdk_thread *thread, void *io_device,
 			 spdk_channel_msg_fn fn, void *ctx)
 {
 	struct spdk_io_channel_call *c;
+	struct io_device *dev;
 	int rc __attribute__((unused));
+
+	pthread_mutex_lock(&g_devlist_mutex);
+	dev = io_device_get(io_device);
+	pthread_mutex_unlock(&g_devlist_mutex);
+
+	if (dev == NULL) {
+		SPDK_ERRLOG("Could not find io_device %p\n", io_device);
+		assert(false);
+		return;
+	}
 
 	c = calloc(1, sizeof(*c));
 	if (!c) {
