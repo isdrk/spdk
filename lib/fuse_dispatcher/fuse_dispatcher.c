@@ -121,20 +121,35 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 	}
 }
 
-static void
-fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
-			  struct spdk_fsdev_desc *desc,
-			  struct spdk_io_channel *ch,
-			  int in_iovcnt, int out_iovcnt,
-			  uint16_t source_id, uint64_t source_unique,
-			  struct spdk_memory_domain *domain, void *domain_ctx)
+int
+spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
+				    struct spdk_io_channel *ch,
+				    struct iovec *in_iov, int in_iovcnt,
+				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
+				    uint16_t source_id, uint64_t source_unique,
+				    struct spdk_memory_domain *domain, void *domain_ctx,
+				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
 {
+	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
-	struct iovec *in_iov = fsdev_io->internal.in_iov;
-	struct iovec *out_iov = fsdev_io->internal.out_iov;
 	size_t in_size;
+
+	if (!fuse_io) {
+		SPDK_ERRLOG("Invalid argument, fuse_io is NULL\n");
+		return -ENOBUFS;
+	}
+
+	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
+			   SPDK_FSDEV_IO_FUSE, source_id,
+			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
+	fsdev_io->internal.in_iov = in_iov;
+	fsdev_io->internal.in_iovcnt = in_iovcnt;
+	fsdev_io->internal.out_iov = out_iov;
+	fsdev_io->internal.out_iovcnt = out_iovcnt;
+	fuse_io->cpl_cb = clb;
+	fuse_io->cpl_cb_arg = cb_arg;
 
 	/* We may need to modify the iovs, for example if one iov contains both header
 	 * and payload. For now we just always save off the iovs and restore them later.
@@ -192,53 +207,14 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	out->memory_domain = domain;
 	out->memory_domain_ctx = domain_ctx;
 
-	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
-			   SPDK_FSDEV_IO_FUSE, source_id,
-			   source_unique, fuse_dispatcher_cpl_cb, fuse_io);
+	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
+	return 0;
 }
 
 size_t
 spdk_fuse_dispatcher_get_io_ctx_size(void)
 {
 	return ALIGNED_FUSE_IO_SIZE + spdk_fsdev_get_io_ctx_size();
-}
-
-static void
-fuse_dispatcher_init_io(struct fuse_io *fuse_io,
-			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
-			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
-{
-	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
-
-	fsdev_io->internal.in_iov = in_iov;
-	fsdev_io->internal.in_iovcnt = in_iovcnt;
-	fsdev_io->internal.out_iov = out_iov;
-	fsdev_io->internal.out_iovcnt = out_iovcnt;
-	fuse_io->cpl_cb = cb_fn;
-	fuse_io->cpl_cb_arg = cb_arg;
-}
-
-int
-spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
-				    struct spdk_io_channel *ch,
-				    struct iovec *in_iov, int in_iovcnt,
-				    struct iovec *out_iov, int out_iovcnt, void *io_ctx,
-				    uint16_t source_id, uint64_t source_unique,
-				    struct spdk_memory_domain *domain, void *domain_ctx,
-				    spdk_fuse_dispatcher_submit_cpl_cb clb, void *cb_arg)
-{
-	struct fuse_io *fuse_io = (struct fuse_io *) io_ctx;
-
-	if (!fuse_io) {
-		SPDK_ERRLOG("Invalid argument, fuse_io is NULL\n");
-		return -ENOBUFS;
-	}
-
-	fuse_dispatcher_init_io(fuse_io, in_iov, in_iovcnt, out_iov, out_iovcnt, clb, cb_arg);
-	fuse_dispatcher_fill_fuse(fuse_io, desc, ch, in_iovcnt, out_iovcnt,
-				  source_id, source_unique, domain, domain_ctx);
-	spdk_fsdev_io_submit(fuse_to_fsdev_io(fuse_io));
-	return 0;
 }
 
 int
