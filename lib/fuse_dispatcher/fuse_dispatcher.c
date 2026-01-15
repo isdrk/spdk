@@ -321,10 +321,16 @@ fuse_io_restore_iovs(struct fuse_io *fuse_io)
 	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
 
 	in_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->in_iovcnt, SPDK_COUNTOF(fuse_io->orig_in_iov));
-	memcpy(fuse_io->in_iov, fuse_io->orig_in_iov, in_iovcnt_to_copy * sizeof(struct iovec));
+	if (in_iovcnt_to_copy > 0) {
+		assert(fuse_io->in_iov != NULL);
+		memcpy(fuse_io->in_iov, fuse_io->orig_in_iov, in_iovcnt_to_copy * sizeof(struct iovec));
+	}
 
 	out_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->out_iovcnt, SPDK_COUNTOF(fuse_io->orig_out_iov));
-	memcpy(fuse_io->out_iov, fuse_io->orig_out_iov, out_iovcnt_to_copy * sizeof(struct iovec));
+	if (out_iovcnt_to_copy > 0) {
+		assert(fuse_io->out_iov != NULL);
+		memcpy(fuse_io->out_iov, fuse_io->orig_out_iov, out_iovcnt_to_copy * sizeof(struct iovec));
+	}
 }
 
 static void
