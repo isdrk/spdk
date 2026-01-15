@@ -2773,19 +2773,9 @@ bdev_channel_get_io(struct spdk_bdev_channel *channel)
 	return bdev_io;
 }
 
-void
-spdk_bdev_free_io(struct spdk_bdev_io *bdev_io)
+static inline void
+bdev_channel_put_io(struct spdk_bdev_mgmt_channel *ch, struct spdk_bdev_io *bdev_io)
 {
-	struct spdk_bdev_mgmt_channel *ch;
-
-	assert(bdev_io != NULL);
-	assert(bdev_io->internal.status != SPDK_BDEV_IO_STATUS_PENDING);
-
-	ch = shared_resource_to_mgmt_channel(bdev_io->internal.ch->shared_resource);
-
-	if (bdev_io->internal.f.has_buf) {
-		bdev_io_put_buf(bdev_io);
-	}
 
 	if (ch->per_thread_cache_count < ch->bdev_io_cache_size) {
 		ch->per_thread_cache_count++;
@@ -2802,6 +2792,23 @@ spdk_bdev_free_io(struct spdk_bdev_io *bdev_io)
 		assert(TAILQ_EMPTY(&ch->io_wait_queue));
 		spdk_mempool_put(g_bdev_mgr.bdev_io_pool, (void *)bdev_io);
 	}
+}
+
+void
+spdk_bdev_free_io(struct spdk_bdev_io *bdev_io)
+{
+	struct spdk_bdev_mgmt_channel *ch;
+
+	assert(bdev_io != NULL);
+	assert(bdev_io->internal.status != SPDK_BDEV_IO_STATUS_PENDING);
+
+	ch = shared_resource_to_mgmt_channel(bdev_io->internal.ch->shared_resource);
+
+	if (bdev_io->internal.f.has_buf) {
+		bdev_io_put_buf(bdev_io);
+	}
+
+	bdev_channel_put_io(ch, bdev_io);
 }
 
 static void
