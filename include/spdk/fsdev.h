@@ -913,6 +913,36 @@ struct spdk_fsdev_io {
 		/** The fsdev descriptor that was used when submitting this I/O. */
 		struct spdk_fsdev_desc *desc;
 
+		/** iovecs from caller containing fuse_in_header, command header
+		 *  and payload, for fsdev to build u_in.fuse. These are not
+		 *  used if the caller sets up u_in.fuse directly.
+		 */
+		struct iovec *in_iov;
+
+		/** Number of iovecs in in_iov. */
+		uint32_t in_iovcnt;
+
+		/** iovecs from caller containing fuse_out_header, command header
+		 *  and payload, for fsdev to build u_out.fuse. These are not
+		 *  used if the caller sets up u_out.fuse directly.
+		 */
+		struct iovec *out_iov;
+
+		/** Number of iovecs in out_iov. */
+		uint32_t out_iovcnt;
+
+		/** Copy of up to first 2 iovecs in in_iov. These are needed
+		 *  if fsdev needs to modify the original iovs when combinations
+		 *  of headers and payload appear in the same iov.
+		 */
+		struct iovec orig_in_iov[2];
+
+		/** Copy of first iovec in out_iov (if one exists). This is
+		 *  needed if fsdev needs to modify the original iovs when
+		 *  a combination of headers and payload appear in the same iov.
+		 */
+		struct iovec orig_out_iov[1];
+
 		/**
 		 * Set to true while the fsdev module submit_request function is in progress.
 		 *

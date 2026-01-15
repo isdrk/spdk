@@ -22,14 +22,6 @@
 #endif
 
 struct fuse_io {
-	struct iovec *in_iov;
-	int in_iovcnt;
-	struct iovec *out_iov;
-	int out_iovcnt;
-
-	struct iovec orig_in_iov[2];
-	struct iovec orig_out_iov[1];
-
 	spdk_fuse_dispatcher_submit_cpl_cb cpl_cb;
 	void *cpl_cb_arg;
 };
@@ -44,38 +36,46 @@ fuse_to_fsdev_io(struct fuse_io *fuse_io)
 }
 
 static void
-fuse_io_save_iovs(struct fuse_io *fuse_io)
+fuse_io_save_iovs(struct spdk_fsdev_io *fsdev_io)
 {
 	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
 
-	in_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->in_iovcnt, SPDK_COUNTOF(fuse_io->orig_in_iov));
+	in_iovcnt_to_copy = spdk_min(fsdev_io->internal.in_iovcnt,
+				     SPDK_COUNTOF(fsdev_io->internal.orig_in_iov));
 	if (in_iovcnt_to_copy > 0) {
-		assert(fuse_io->in_iov != NULL);
-		memcpy(fuse_io->orig_in_iov, fuse_io->in_iov, in_iovcnt_to_copy * sizeof(struct iovec));
+		assert(fsdev_io->internal.in_iov != NULL);
+		memcpy(fsdev_io->internal.orig_in_iov, fsdev_io->internal.in_iov,
+		       in_iovcnt_to_copy * sizeof(struct iovec));
 	}
 
-	out_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->out_iovcnt, SPDK_COUNTOF(fuse_io->orig_out_iov));
+	out_iovcnt_to_copy = spdk_min(fsdev_io->internal.out_iovcnt,
+				      SPDK_COUNTOF(fsdev_io->internal.orig_out_iov));
 	if (out_iovcnt_to_copy > 0) {
-		assert(fuse_io->out_iov != NULL);
-		memcpy(fuse_io->orig_out_iov, fuse_io->out_iov, out_iovcnt_to_copy * sizeof(struct iovec));
+		assert(fsdev_io->internal.out_iov != NULL);
+		memcpy(fsdev_io->internal.orig_out_iov, fsdev_io->internal.out_iov,
+		       out_iovcnt_to_copy * sizeof(struct iovec));
 	}
 }
 
 static void
-fuse_io_restore_iovs(struct fuse_io *fuse_io)
+fuse_io_restore_iovs(struct spdk_fsdev_io *fsdev_io)
 {
 	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
 
-	in_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->in_iovcnt, SPDK_COUNTOF(fuse_io->orig_in_iov));
+	in_iovcnt_to_copy = spdk_min(fsdev_io->internal.in_iovcnt,
+				     SPDK_COUNTOF(fsdev_io->internal.orig_in_iov));
 	if (in_iovcnt_to_copy > 0) {
-		assert(fuse_io->in_iov != NULL);
-		memcpy(fuse_io->in_iov, fuse_io->orig_in_iov, in_iovcnt_to_copy * sizeof(struct iovec));
+		assert(fsdev_io->internal.in_iov != NULL);
+		memcpy(fsdev_io->internal.in_iov, fsdev_io->internal.orig_in_iov,
+		       in_iovcnt_to_copy * sizeof(struct iovec));
 	}
 
-	out_iovcnt_to_copy = spdk_min((uint32_t)fuse_io->out_iovcnt, SPDK_COUNTOF(fuse_io->orig_out_iov));
+	out_iovcnt_to_copy = spdk_min(fsdev_io->internal.out_iovcnt,
+				      SPDK_COUNTOF(fsdev_io->internal.orig_out_iov));
 	if (out_iovcnt_to_copy > 0) {
-		assert(fuse_io->out_iov != NULL);
-		memcpy(fuse_io->out_iov, fuse_io->orig_out_iov, out_iovcnt_to_copy * sizeof(struct iovec));
+		assert(fsdev_io->internal.out_iov != NULL);
+		memcpy(fsdev_io->internal.out_iov, fsdev_io->internal.orig_out_iov,
+		       out_iovcnt_to_copy * sizeof(struct iovec));
 	}
 }
 
@@ -84,7 +84,7 @@ fuse_dispatcher_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fuse_io *fuse_io = cb_arg;
 
-	fuse_io_restore_iovs(fuse_io);
+	fuse_io_restore_iovs(fsdev_io);
 	assert(fsdev_io->u_out.fuse.hdr == NULL || status == fsdev_io->u_out.fuse.hdr->error);
 	assert(spdk_fsdev_io_get_type(fsdev_io) == SPDK_FSDEV_IO_FUSE);
 	fuse_io->cpl_cb(fuse_io->cpl_cb_arg, status);
@@ -132,8 +132,8 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
-	struct iovec *in_iov = fuse_io->in_iov;
-	struct iovec *out_iov = fuse_io->out_iov;
+	struct iovec *in_iov = fsdev_io->internal.in_iov;
+	struct iovec *out_iov = fsdev_io->internal.out_iov;
 	size_t in_size;
 
 	/* We may need to modify the iovs, for example if one iov contains both header
@@ -142,7 +142,7 @@ fuse_dispatcher_fill_fuse(struct fuse_io *fuse_io,
 	 * still adds extra bits that need to be checked which may end up being a wash from
 	 * a cacheline perspective.
 	 */
-	fuse_io_save_iovs(fuse_io);
+	fuse_io_save_iovs(fsdev_io);
 
 	in->hdr = in_iov->iov_base;
 	if (in_iov->iov_len == sizeof(*in->hdr)) {
@@ -208,10 +208,12 @@ fuse_dispatcher_init_io(struct fuse_io *fuse_io,
 			struct iovec *in_iov, int in_iovcnt, struct iovec *out_iov, int out_iovcnt,
 			spdk_fuse_dispatcher_submit_cpl_cb cb_fn, void *cb_arg)
 {
-	fuse_io->in_iov = in_iov;
-	fuse_io->in_iovcnt = in_iovcnt;
-	fuse_io->out_iov = out_iov;
-	fuse_io->out_iovcnt = out_iovcnt;
+	struct spdk_fsdev_io *fsdev_io = fuse_to_fsdev_io(fuse_io);
+
+	fsdev_io->internal.in_iov = in_iov;
+	fsdev_io->internal.in_iovcnt = in_iovcnt;
+	fsdev_io->internal.out_iov = out_iov;
+	fsdev_io->internal.out_iovcnt = out_iovcnt;
 	fuse_io->cpl_cb = cb_fn;
 	fuse_io->cpl_cb_arg = cb_arg;
 }
