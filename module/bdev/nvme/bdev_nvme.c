@@ -5,6 +5,7 @@
  *   Copyright (c) 2022 Dell Inc, or its subsidiaries. All rights reserved.
  */
 
+#include "spdk/queue_extras.h"
 #include "spdk/stdinc.h"
 
 #include "bdev_nvme.h"
@@ -25,6 +26,7 @@
 #include "spdk/string.h"
 #include "spdk/util.h"
 #include "spdk/uuid.h"
+#include "spdk/barrier.h"
 
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
@@ -4915,6 +4917,92 @@ bdev_nvme_io_channel_get_weight(struct spdk_io_channel *ch)
 	return weight;
 }
 
+static void
+bdev_nvme_bypass_cpl_cb(void *ctx, const struct spdk_nvme_cpl *cpl)
+{
+	struct nvme_bdev_io *bio = ctx;
+
+	spdk_bdev_io_complete(spdk_bdev_io_from_ctx(bio),
+			      spdk_nvme_cpl_is_success(cpl) ? SPDK_BDEV_IO_STATUS_SUCCESS : SPDK_BDEV_IO_STATUS_FAILED);
+}
+
+static int
+bdev_nvme_submit_bypass_request(struct spdk_bdev *bdev, struct spdk_io_channel *ch,
+				struct spdk_bdev_io *bdev_io,
+				struct iovec *iov, int iovcnt, uint64_t offset_blocks,
+				uint64_t num_blocks, spdk_bdev_io_completion_cb cb, void *cb_arg,
+				struct spdk_bdev_ext_io_opts *opts)
+{
+	struct nvme_bdev_io *nbdev_io = (struct nvme_bdev_io *)bdev_io->driver_ctx;
+	struct nvme_bdev_channel *nbdev_ch = spdk_io_channel_get_ctx(ch);
+	struct spdk_nvme_ns *ns;
+	struct spdk_nvme_qpair *qpair;
+	union spdk_bdev_nvme_cdw12 nvme_cdw12 = {.raw = 0};
+	uint32_t dif_check_flags = 0;
+	int rc = 0;
+
+	if (spdk_unlikely(STAILQ_FIRST(&nbdev_ch->io_path_list) != NULL &&
+			  STAILQ_NEXT(STAILQ_FIRST(&nbdev_ch->io_path_list), stailq) != NULL)) {
+		/* Sould never happen */
+		SPDK_ERRLOG("Bypass is not supported with multipath\n");
+		assert(0);
+		return -ENOTSUP;
+	}
+
+	if (spdk_unlikely(iov->iov_base == NULL)) {
+		/* Allocation of staging buffer is not supported */
+		return -EINVAL;
+	}
+
+	nbdev_io->io_path = bdev_nvme_find_io_path(nbdev_ch);
+	if (spdk_unlikely(!nbdev_io->io_path)) {
+		return -ENXIO;
+	}
+
+	ns = nbdev_io->io_path->nvme_ns->ns;
+	qpair = nbdev_io->io_path->qpair->qpair;
+
+	memset(&nbdev_io->ext_opts, 0, sizeof(nbdev_io->ext_opts));
+	nbdev_io->ext_opts.size = SPDK_SIZEOF(&nbdev_io->ext_opts, accel_sequence);
+
+	if (opts) {
+		nbdev_io->ext_opts.memory_domain = opts->memory_domain;
+		nbdev_io->ext_opts.memory_domain_ctx = opts->memory_domain_ctx;
+		nbdev_io->ext_opts.metadata = opts->metadata;
+		nbdev_io->ext_opts.accel_sequence = SPDK_GET_FIELD(opts, accel_sequence, NULL);
+		nbdev_io->ext_opts.cdw13 = SPDK_GET_FIELD(opts, nvme_cdw13.raw, 0);
+		nvme_cdw12.raw = SPDK_GET_FIELD(opts, nvme_cdw12.raw, 0);
+		if (nvme_cdw12.raw & SPDK_DIF_FLAGS_NVME_PRACT) {
+			dif_check_flags |= SPDK_DIF_FLAGS_NVME_PRACT;
+		}
+		dif_check_flags |= bdev->dif_check_flags &
+				   ~(SPDK_GET_FIELD(opts, dif_check_flags_exclude_mask, 0));
+	}
+
+	switch (bdev_io->type) {
+	case SPDK_BDEV_IO_TYPE_READ:
+		SPDK_DEBUGLOG(bdev_nvme, "bypass read %" PRIu64 " blocks with offset %#" PRIx64 "\n", num_blocks,
+			      offset_blocks);
+		nbdev_io->ext_opts.io_flags = dif_check_flags;
+		rc = spdk_nvme_ns_cmd_read_iov(ns, qpair, offset_blocks, num_blocks,
+					       bdev_nvme_bypass_cpl_cb, nbdev_io,
+					       iov, iovcnt, &nbdev_io->ext_opts);
+		break;
+	case SPDK_BDEV_IO_TYPE_WRITE:
+		SPDK_DEBUGLOG(bdev_nvme, "bypass write %" PRIu64 " blocks with offset %#" PRIx64 "\n", num_blocks,
+			      offset_blocks);
+		nbdev_io->ext_opts.io_flags = dif_check_flags | SPDK_NVME_IO_FLAGS_DIRECTIVE(
+						      nvme_cdw12.write.dtype);
+		rc = spdk_nvme_ns_cmd_write_iov(ns, qpair, offset_blocks, num_blocks,
+						bdev_nvme_bypass_cpl_cb, nbdev_io,
+						iov, iovcnt, &nbdev_io->ext_opts);
+		break;
+	default:
+		return -EINVAL;
+	}
+	return rc;
+}
+
 static const struct spdk_bdev_fn_table nvmelib_fn_table = {
 	.destruct			= bdev_nvme_destruct,
 	.submit_request			= bdev_nvme_submit_request_initial,
@@ -4930,6 +5018,7 @@ static const struct spdk_bdev_fn_table nvmelib_fn_table = {
 	.dump_device_stat_json		= bdev_nvme_dump_device_stat_json,
 	.event_type_supported		= bdev_nvme_event_type_supported,
 	.io_channel_get_weight		= bdev_nvme_io_channel_get_weight,
+	.submit_bypass_request		= bdev_nvme_submit_bypass_request,
 };
 
 typedef int (*bdev_nvme_parse_ana_log_page_cb)(
@@ -5178,6 +5267,7 @@ nbdev_create(struct spdk_bdev *disk, const char *base_name,
 		}
 	}
 	disk->optimal_io_boundary = spdk_nvme_ns_get_optimal_io_boundary(ns);
+	disk->rw_bypass_supported = true;
 
 	nsdata = spdk_nvme_ns_get_data(ns);
 	bs = spdk_nvme_ns_get_sector_size(ns);
@@ -5571,10 +5661,14 @@ nvme_bdev_add_ns(struct nvme_bdev *nbdev, struct nvme_ns *nvme_ns)
 	tmp_ns = TAILQ_FIRST(&nbdev->nvme_ns_list);
 	assert(tmp_ns != NULL);
 
-	if (tmp_ns->ns != NULL && !bdev_nvme_compare_ns(nvme_ns->ns, tmp_ns->ns)) {
-		pthread_mutex_unlock(&nbdev->mutex);
-		NVME_NS_ERRLOG(nvme_ns, "Namespaces are not identical.\n");
-		return -EINVAL;
+	if (tmp_ns->ns != NULL) {
+		if (!bdev_nvme_compare_ns(nvme_ns->ns, tmp_ns->ns)) {
+			pthread_mutex_unlock(&nbdev->mutex);
+			NVME_NS_ERRLOG(nvme_ns, "Namespaces are not identical.\n");
+			return -EINVAL;
+		}
+		tmp_ns->bdev->disk.rw_bypass_supported = false;
+		spdk_smp_mb();
 	}
 
 	nbdev->ref++;
