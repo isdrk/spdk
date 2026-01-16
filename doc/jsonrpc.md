@@ -2633,6 +2633,7 @@ before SPDK subsystems have been initialized.
  bdev_io_pool_size      | Optional   | number  | Number of spdk_bdev_io structures in shared buffer pool
  bdev_io_cache_size     | Optional   | number  | Maximum number of spdk_bdev_io structures cached per thread
  bdev_auto_examine      | Optional   | boolean | If set to false, the bdev layer will not examine every disks automatically
+ bdev_rw_bypass         | Optional   | boolean | Global tweak to enable/disable bdev bypass for all bdev modules
  iobuf_small_cache_size | Optional   | number  | Size of the small iobuf per thread cache
  iobuf_large_cache_size | Optional   | number  | Size of the large iobuf per thread cache
 

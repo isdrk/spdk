@@ -145,6 +145,7 @@ static struct spdk_bdev_opts	g_bdev_opts = {
 	.bdev_io_pool_size = SPDK_BDEV_IO_POOL_SIZE,
 	.bdev_io_cache_size = SPDK_BDEV_IO_CACHE_SIZE,
 	.bdev_auto_examine = SPDK_BDEV_AUTO_EXAMINE,
+	.bdev_rw_bypass = false,
 	.iobuf_small_cache_size = BUF_SMALL_CACHE_SIZE,
 	.iobuf_large_cache_size = BUF_LARGE_CACHE_SIZE,
 };
@@ -440,6 +441,7 @@ spdk_bdev_get_opts(struct spdk_bdev_opts *opts, size_t opts_size)
 	SET_FIELD(bdev_io_pool_size);
 	SET_FIELD(bdev_io_cache_size);
 	SET_FIELD(bdev_auto_examine);
+	SET_FIELD(bdev_rw_bypass);
 	SET_FIELD(iobuf_small_cache_size);
 	SET_FIELD(iobuf_large_cache_size);
 
@@ -487,6 +489,7 @@ spdk_bdev_set_opts(struct spdk_bdev_opts *opts)
 	SET_FIELD(bdev_io_pool_size);
 	SET_FIELD(bdev_io_cache_size);
 	SET_FIELD(bdev_auto_examine);
+	SET_FIELD(bdev_rw_bypass);
 	SET_FIELD(iobuf_small_cache_size);
 	SET_FIELD(iobuf_large_cache_size);
 
@@ -6455,6 +6458,32 @@ bdev_rw_submit(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *channel,
 }
 
 static inline int
+bdev_rw_bypass(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *bdev_ch,
+	       struct spdk_bdev_io *bdev_io,
+	       enum spdk_bdev_io_type io_type,
+	       struct iovec *iov, int iovcnt,
+	       uint64_t offset_blocks, uint64_t num_blocks,
+	       spdk_bdev_io_completion_cb cb, void *cb_arg,
+	       struct spdk_bdev_ext_io_opts *opts)
+{
+	struct spdk_bdev *bdev = desc->bdev;
+
+	/* Initialize only critical fields of bdev_io structure */
+	bdev_io->internal.ch = bdev_ch;
+	bdev_io->internal.desc = desc;
+	bdev_io->internal.cb = cb;
+	bdev_io->internal.caller_ctx = cb_arg;
+	bdev_io->internal.f.raw = 0;
+	bdev_io->internal.f.bypass = 1;
+	bdev_io->internal.status = SPDK_BDEV_IO_STATUS_PENDING;
+	bdev_io->type = io_type;
+	bdev_io->bdev = bdev;
+
+	return bdev->fn_table->submit_bypass_request(bdev, bdev_ch->channel, bdev_io, iov, iovcnt,
+			offset_blocks, num_blocks, cb, cb_arg, opts);
+}
+
+static inline int
 bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		  struct iovec *iov, int iovcnt, void *md_buf,
 		  uint64_t offset_blocks, uint64_t num_blocks,
@@ -6478,6 +6507,17 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	bdev_io = bdev_channel_get_io(channel);
 	if (spdk_unlikely(!bdev_io)) {
 		return -ENOMEM;
+	}
+
+	if (bdev->rw_bypass_supported && spdk_likely(TAILQ_EMPTY(&channel->shared_resource->nomem_io))) {
+		rc = bdev_rw_bypass(desc, channel, bdev_io, SPDK_BDEV_IO_TYPE_READ, iov, iovcnt, offset_blocks,
+				    num_blocks, cb, cb_arg, opts);
+
+		if (spdk_likely(rc == 0)) {
+			return 0;
+		}
+		/* Continue with normal read path if bypass failed */
+		SPDK_DEBUGLOG(bdev, "Bypass read failed rc %d\n", rc);
 	}
 
 	if (opts) {
@@ -6729,6 +6769,17 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	bdev_io = bdev_channel_get_io(channel);
 	if (spdk_unlikely(!bdev_io)) {
 		return -ENOMEM;
+	}
+
+	if (bdev->rw_bypass_supported && spdk_likely(TAILQ_EMPTY(&channel->shared_resource->nomem_io))) {
+		rc = bdev_rw_bypass(desc, channel, bdev_io, SPDK_BDEV_IO_TYPE_WRITE, iov, iovcnt, offset_blocks,
+				    num_blocks, cb, cb_arg, opts);
+
+		if (spdk_likely(rc == 0)) {
+			return 0;
+		}
+		/* Continue with normal write path if bypass failed */
+		SPDK_DEBUGLOG(bdev, "Bypass write failed rc %d\n", rc);
 	}
 
 	if (opts) {
@@ -8646,6 +8697,12 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 	}
 	bdev_io->internal.status = status;
 
+	if (bdev_io->internal.f.bypass) {
+		bdev_io->internal.cb(bdev_io, bdev_io->internal.status == SPDK_BDEV_IO_STATUS_SUCCESS,
+				     bdev_io->internal.caller_ctx);
+		return;
+	}
+
 	if (spdk_unlikely(bdev_io->type == SPDK_BDEV_IO_TYPE_RESET)) {
 		assert(bdev_io == bdev->internal.reset_in_progress);
 		spdk_bdev_for_each_channel(bdev, bdev_unfreeze_channel, bdev_io,
@@ -8930,6 +8987,17 @@ bdev_register(struct spdk_bdev *bdev)
 	if (!strlen(bdev->name)) {
 		SPDK_ERRLOG("Bdev name must not be an empty string\n");
 		return -EINVAL;
+	}
+
+	if (bdev->rw_bypass_supported) {
+		if (!g_bdev_opts.bdev_rw_bypass) {
+			SPDK_INFOLOG(bdev, "bdev %s supports rw bypass, but rw bypass is disabled\n", bdev->name);
+			bdev->rw_bypass_supported = false;
+		} else if (bdev->fn_table->submit_bypass_request == NULL) {
+			SPDK_ERRLOG("Bdev %s supports rw bypass, but submit_bypass_request is not implemented\n",
+				    bdev->name);
+			return -EINVAL;
+		}
 	}
 
 	/* Users often register their own I/O devices using the bdev name. In

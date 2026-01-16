@@ -42,6 +42,7 @@ def add_parser(subparsers):
                                   bdev_io_pool_size=args.bdev_io_pool_size,
                                   bdev_io_cache_size=args.bdev_io_cache_size,
                                   bdev_auto_examine=args.bdev_auto_examine,
+                                  bdev_rw_bypass=args.bdev_rw_bypass,
                                   iobuf_small_cache_size=args.iobuf_small_cache_size,
                                   iobuf_large_cache_size=args.iobuf_large_cache_size)
 
@@ -52,6 +53,9 @@ def add_parser(subparsers):
     group = p.add_mutually_exclusive_group()
     group.add_argument('-e', '--enable-auto-examine', dest='bdev_auto_examine', help='Allow to auto examine', action='store_true')
     group.add_argument('-d', '--disable-auto-examine', dest='bdev_auto_examine', help='Not allow to auto examine', action='store_false')
+    group_bypass = p.add_mutually_exclusive_group()
+    group_bypass.add_argument('--enable-rw-bypass', dest='bdev_rw_bypass', help='Enable rw bypass', action='store_true')
+    group_bypass.add_argument('--disable-rw-bypass', dest='bdev_rw_bypass', help='Disable rw bypass', action='store_false')
     p.add_argument('--iobuf-small-cache-size', help='Size of the small iobuf per thread cache', type=int)
     p.add_argument('--iobuf-large-cache-size', help='Size of the large iobuf per thread cache', type=int)
     p.set_defaults(bdev_auto_examine=True)

@@ -7,13 +7,14 @@ from .cmd_parser import *
 
 
 def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
-                     bdev_auto_examine=None, iobuf_small_cache_size=None,
+                     bdev_auto_examine=None, bdev_rw_bypass=None, iobuf_small_cache_size=None,
                      iobuf_large_cache_size=None):
     """Set parameters for the bdev subsystem.
     Args:
         bdev_io_pool_size: number of bdev_io structures in shared buffer pool (optional)
         bdev_io_cache_size: maximum number of bdev_io structures cached per thread (optional)
         bdev_auto_examine: if set to false, the bdev layer will not examine every disks automatically (optional)
+        bdev_rw_bypass: global tweak to enable/disable bdev bypass for all bdev modules (optional)
         iobuf_small_cache_size: size of the small iobuf per thread cache
         iobuf_large_cache_size: size of the large iobuf per thread cache
     """
@@ -24,6 +25,8 @@ def bdev_set_options(client, bdev_io_pool_size=None, bdev_io_cache_size=None,
         params['bdev_io_cache_size'] = bdev_io_cache_size
     if bdev_auto_examine is not None:
         params['bdev_auto_examine'] = bdev_auto_examine
+    if bdev_rw_bypass is not None:
+        params['bdev_rw_bypass'] = bdev_rw_bypass
     if iobuf_small_cache_size is not None:
         params['iobuf_small_cache_size'] = iobuf_small_cache_size
     if iobuf_large_cache_size is not None:

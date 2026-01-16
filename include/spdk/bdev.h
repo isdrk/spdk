@@ -202,9 +202,10 @@ struct spdk_bdev_opts {
 	uint32_t bdev_io_pool_size;
 	uint32_t bdev_io_cache_size;
 	bool bdev_auto_examine;
+	bool bdev_rw_bypass;
 
-	/* Hole at bytes 9-15. */
-	uint8_t reserved9[7];
+	/* Hole at bytes 10-15. */
+	uint8_t reserved9[6];
 
 	/**
 	 * The size of spdk_bdev_opts according to the caller of this library is used for ABI

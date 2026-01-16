@@ -388,6 +388,14 @@ struct spdk_bdev_fn_table {
 
 	/** Check if the block device supports a specific asynchronous event type. */
 	bool (*event_type_supported)(void *ctx, enum spdk_bdev_event_type type);
+
+	/** Process the bdev bypass IO request
+	 * The bdev_io structure is not fully initialized and all user's input is passed as is */
+	int (*submit_bypass_request)(struct spdk_bdev *bdev, struct spdk_io_channel *ch,
+				     struct spdk_bdev_io *bdev_io,
+				     struct iovec *iov, int iovcnt, uint64_t offset_blocks,
+				     uint64_t num_blocks, spdk_bdev_io_completion_cb cb, void *cb_arg,
+				     struct spdk_bdev_ext_io_opts *opts);
 };
 
 /** bdev I/O completion status */
@@ -483,6 +491,12 @@ struct spdk_bdev {
 	 * Specifies whether write IO types are disabled for this block device.
 	 */
 	bool write_disabled;
+
+	/** Specifies whether read/write bypass is supported for this block device.
+	 * If set to true then the bdev module must implement submit_bypass_request function.
+	 * User's input is passed to the submit_bypass_request function as is, with minimal checks.
+	 */
+	bool rw_bypass_supported;
 
 	/** Number of blocks required for write */
 	uint32_t write_unit_size;
@@ -1064,7 +1078,8 @@ struct spdk_bdev_io_internal_fields {
 			 */
 			uint8_t has_metadata			: 1;
 
-			uint8_t reserved			: 1;
+			/* This IO bypassed bdev layer and submitted directly to the module */
+			uint8_t bypass				: 1;
 		};
 		uint8_t raw;
 	} f;
