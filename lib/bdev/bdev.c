@@ -6469,14 +6469,21 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	void *domain_ctx = NULL, *md = NULL;
 	uint32_t dif_check_flags = 0;
 	uint32_t nvme_cdw12_raw;
+	int rc;
 
 	if (spdk_unlikely(!bdev_io_valid_blocks(bdev, offset_blocks, num_blocks))) {
 		return -EINVAL;
 	}
 
+	bdev_io = bdev_channel_get_io(channel);
+	if (spdk_unlikely(!bdev_io)) {
+		return -ENOMEM;
+	}
+
 	if (opts) {
 		if (spdk_unlikely(!_bdev_io_check_opts(opts, iov))) {
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_io;
 		}
 		md = opts->metadata;
 		domain = bdev_get_ext_io_opt(opts, memory_domain, NULL);
@@ -6488,19 +6495,23 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 			assert(md_buf == NULL);
 
 			if (spdk_unlikely(!spdk_bdev_is_md_separate(bdev))) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 
 			if (spdk_unlikely(!_is_buf_allocated(iov))) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 
 			if (spdk_unlikely(seq != NULL)) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 			if (nvme_cdw12_raw & SPDK_DIF_FLAGS_NVME_PRACT) {
 				SPDK_ERRLOG("Separate metadata with NVMe PRACT is not supported.\n");
-				return -ENOTSUP;
+				rc = -ENOTSUP;
+				goto free_io;
 			}
 			md_buf = md;
 		}
@@ -6511,15 +6522,14 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	dif_check_flags |= bdev->dif_check_flags &
 			   ~(bdev_get_ext_io_opt(opts, dif_check_flags_exclude_mask, 0));
 
-	bdev_io = bdev_channel_get_io(channel);
-	if (spdk_unlikely(!bdev_io)) {
-		return -ENOMEM;
-	}
-
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
 		       domain, domain_ctx, seq, dif_check_flags, false, 0, 0, SPDK_BDEV_IO_TYPE_READ, cb, cb_arg);
 
 	return 0;
+
+free_io:
+	bdev_channel_put_io(shared_resource_to_mgmt_channel(channel->shared_resource), bdev_io);
+	return rc;
 }
 
 static int
@@ -6707,6 +6717,7 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	uint32_t dif_check_flags = 0;
 	uint32_t nvme_cdw12_raw = 0;
 	uint32_t nvme_cdw13_raw = 0;
+	int rc;
 
 	if (spdk_unlikely(!desc->write)) {
 		return -EBADF;
@@ -6715,9 +6726,15 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		return -EINVAL;
 	}
 
+	bdev_io = bdev_channel_get_io(channel);
+	if (spdk_unlikely(!bdev_io)) {
+		return -ENOMEM;
+	}
+
 	if (opts) {
 		if (spdk_unlikely(!_bdev_io_check_opts(opts, iov))) {
-			return -EINVAL;
+			rc = -EINVAL;
+			goto free_io;
 		}
 		md = opts->metadata;
 		domain = bdev_get_ext_io_opt(opts, memory_domain, NULL);
@@ -6730,20 +6747,24 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 			assert(md_buf == NULL);
 
 			if (spdk_unlikely(!spdk_bdev_is_md_separate(bdev))) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 
 			if (spdk_unlikely(!_is_buf_allocated(iov))) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 
 			if (spdk_unlikely(seq != NULL)) {
-				return -EINVAL;
+				rc = -EINVAL;
+				goto free_io;
 			}
 
 			if (nvme_cdw12_raw & SPDK_DIF_FLAGS_NVME_PRACT) {
 				SPDK_ERRLOG("Separate metadata with NVMe PRACT is not supported.\n");
-				return -ENOTSUP;
+				rc = -ENOTSUP;
+				goto free_io;
 			}
 			md_buf = md;
 		}
@@ -6756,16 +6777,15 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	dif_check_flags |= bdev->dif_check_flags &
 			   ~(bdev_get_ext_io_opt(opts, dif_check_flags_exclude_mask, 0));
 
-	bdev_io = bdev_channel_get_io(channel);
-	if (spdk_unlikely(!bdev_io)) {
-		return -ENOMEM;
-	}
-
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
 		       domain, domain_ctx, seq, dif_check_flags, false,
 		       nvme_cdw12_raw, nvme_cdw13_raw, SPDK_BDEV_IO_TYPE_WRITE, cb, cb_arg);
 
 	return 0;
+
+free_io:
+	bdev_channel_put_io(shared_resource_to_mgmt_channel(channel->shared_resource), bdev_io);
+	return rc;
 }
 
 static int
