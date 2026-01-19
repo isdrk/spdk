@@ -220,7 +220,7 @@ endif
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
-DEPDIRS-event_fsdev := event_rmem init fsdev
+DEPDIRS-event_fsdev := event_accel event_rmem init fsdev
 DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-event_rdma_provider := init rdma_provider rdma_utils
