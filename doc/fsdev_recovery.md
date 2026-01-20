@@ -4,7 +4,6 @@
 
 * @ref rmem
 * @ref fsdev_recovery
-* @ref fuse_dispatcher_recovery
 
 ## Recovery Memory abstraction {#rmem}
 
@@ -31,10 +30,3 @@ An fsdev module might support recovery. The fsdev module that supports recovery:
   * during the fsdev lifetime, saves the data needed for the recovery using the `spdk_rmem_pool_get` and `spdk_rmem_entry_write` APIs
   * destroys (`spdk_rmem_pool_destroy`) the rmem_pool(s) used by the fsdev module upon the fsdev deletion
 * makes the `is_recovered` callback return true if the fsdev state has been restored, false otherwise
-
-## FUSE dispatcher recovery {#fuse_dispatcher_recovery}
-
-The FUSE dispatcher supports recovery.
-
-Upon creation (`spdk_fuse_dispatcher_create`), the FUSE dispatcher uses the `spdk_fsdev_is_recovered` API
-to check whether the underlying fsdev has been recovered and acts accordingly.

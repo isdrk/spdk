@@ -95,9 +95,8 @@ DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
 DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma
-DEPDIRS-fuse_dispatcher := log util fsdev
 DEPDIRS-rmem := log $(JSON_LIBS)
-DEPDIRS-fuse := dma fsdev fuse_dispatcher log thread util
+DEPDIRS-fuse := dma fsdev log thread util
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-fuse += rdma_utils
 endif
@@ -235,7 +234,7 @@ DEPDIRS-event_fuse := event_fsdev fsdev fuse init json jsonrpc log rpc util
 ifeq ($(CONFIG_VFIO_USER),y)
 DEPDIRS-vfu_device := $(BDEV_DEPS_THREAD) scsi vfu_tgt
 ifeq ($(CONFIG_FSDEV),y)
-DEPDIRS-vfu_device += fsdev fuse_dispatcher
+DEPDIRS-vfu_device += fsdev
 endif
 endif
 

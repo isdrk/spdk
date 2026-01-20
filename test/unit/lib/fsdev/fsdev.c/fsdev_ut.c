@@ -195,6 +195,9 @@ ut_fsdev_reset(void *ctx, spdk_fsdev_reset_done_cb cb, void *cb_arg)
 	ut_call_record_simple_param_ptr(ut_fsdev_reset, ctx);
 
 	if (!ut_reset_leak_io) {
+		if (ut_oustanding_io->u_out.fuse.hdr != NULL) {
+			ut_oustanding_io->u_out.fuse.hdr->error = -ESTALE;
+		}
 		spdk_fsdev_io_complete(ut_oustanding_io, -ESTALE);
 		ut_oustanding_io = NULL;
 	}

@@ -510,6 +510,8 @@ spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *desc,
 	fsdev_io->internal.in_submit_request = false;
 	fsdev_io->internal.source_id = source_id;
 	fsdev_io->internal.source_unique = source_unique;
+	fsdev_io->internal.in_iovcnt = 0;
+	fsdev_io->internal.out_iovcnt = 0;
 
 	fsdev_io->fsdev = spdk_fsdev_desc_get_fsdev(desc);
 }
@@ -1085,6 +1087,9 @@ fsdev_reset_purge_channel_msg_cb(struct spdk_io_channel_iter *i)
 		clear_delayed_io(ch);
 		while (!TAILQ_EMPTY(&ch->io_submitted)) {
 			struct spdk_fsdev_io *fsdev_io = TAILQ_FIRST(&ch->io_submitted);
+			if (fsdev_io->u_out.fuse.hdr != NULL) {
+				fsdev_io->u_out.fuse.hdr->error = -ECANCELED;
+			}
 			spdk_fsdev_io_complete(fsdev_io, -ECANCELED);
 		}
 	}
@@ -1535,6 +1540,50 @@ spdk_fsdev_get_name(const struct spdk_fsdev *fsdev)
 	return fsdev->name;
 }
 
+static void
+fsdev_io_save_iovs(struct spdk_fsdev_io *fsdev_io)
+{
+	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
+
+	in_iovcnt_to_copy = spdk_min(fsdev_io->internal.in_iovcnt,
+				     SPDK_COUNTOF(fsdev_io->internal.orig_in_iov));
+	if (in_iovcnt_to_copy > 0) {
+		assert(fsdev_io->internal.in_iov != NULL);
+		memcpy(fsdev_io->internal.orig_in_iov, fsdev_io->internal.in_iov,
+		       in_iovcnt_to_copy * sizeof(struct iovec));
+	}
+
+	out_iovcnt_to_copy = spdk_min(fsdev_io->internal.out_iovcnt,
+				      SPDK_COUNTOF(fsdev_io->internal.orig_out_iov));
+	if (out_iovcnt_to_copy > 0) {
+		assert(fsdev_io->internal.out_iov != NULL);
+		memcpy(fsdev_io->internal.orig_out_iov, fsdev_io->internal.out_iov,
+		       out_iovcnt_to_copy * sizeof(struct iovec));
+	}
+}
+
+static void
+fsdev_io_restore_iovs(struct spdk_fsdev_io *fsdev_io)
+{
+	size_t in_iovcnt_to_copy, out_iovcnt_to_copy;
+
+	in_iovcnt_to_copy = spdk_min(fsdev_io->internal.in_iovcnt,
+				     SPDK_COUNTOF(fsdev_io->internal.orig_in_iov));
+	if (in_iovcnt_to_copy > 0) {
+		assert(fsdev_io->internal.in_iov != NULL);
+		memcpy(fsdev_io->internal.in_iov, fsdev_io->internal.orig_in_iov,
+		       in_iovcnt_to_copy * sizeof(struct iovec));
+	}
+
+	out_iovcnt_to_copy = spdk_min(fsdev_io->internal.out_iovcnt,
+				      SPDK_COUNTOF(fsdev_io->internal.orig_out_iov));
+	if (out_iovcnt_to_copy > 0) {
+		assert(fsdev_io->internal.out_iov != NULL);
+		memcpy(fsdev_io->internal.out_iov, fsdev_io->internal.orig_out_iov,
+		       out_iovcnt_to_copy * sizeof(struct iovec));
+	}
+}
+
 static inline void
 fsdev_io_complete(void *ctx)
 {
@@ -1579,6 +1628,9 @@ fsdev_io_complete(void *ctx)
 	 */
 	submit_tsc = fsdev_io->internal.submit_tsc;
 
+	fsdev_io_restore_iovs(fsdev_io);
+	assert(fsdev_io->u_out.fuse.hdr == NULL ||
+	       fsdev_io->internal.status == fsdev_io->u_out.fuse.hdr->error);
 	fsdev_io->internal.usr_cb_fn(fsdev_io->internal.usr_cb_arg,
 				     fsdev_io->internal.status, fsdev_io);
 
@@ -2237,6 +2289,124 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 
 	free(out_hdr);
 	return rc;
+}
+
+/* FUSE opcodes that define both a command-specific IN header and have IN
+ * payload must return the size of their IN header here. This is used to
+ * adjust the data iov appropriately.
+ */
+static size_t
+fuse_get_in_size(struct fuse_in_header *in_hdr)
+{
+	switch (in_hdr->opcode) {
+	case FUSE_CREATE:
+		return sizeof(struct fuse_create_in);
+	case FUSE_BATCH_FORGET:
+		return sizeof(struct fuse_batch_forget_in);
+	case FUSE_LINK:
+		return sizeof(struct fuse_link_in);
+	case FUSE_MKNOD:
+		return sizeof(struct fuse_mknod_in);
+	case FUSE_MKDIR:
+		return sizeof(struct fuse_mkdir_in);
+	case FUSE_RENAME:
+		return sizeof(struct fuse_rename_in);
+	case FUSE_RENAME2:
+		return sizeof(struct fuse_rename2_in);
+	case FUSE_WRITE:
+		return sizeof(struct fuse_write_in);
+	case FUSE_IOCTL:
+		return sizeof(struct fuse_ioctl_in);
+	default:
+		return 0;
+	}
+}
+
+int
+spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
+				    struct spdk_fsdev_desc *desc,
+				    struct spdk_io_channel *ch,
+				    struct iovec *in_iov, int in_iovcnt,
+				    struct iovec *out_iov, int out_iovcnt,
+				    uint16_t source_id, uint64_t source_unique,
+				    struct spdk_memory_domain *domain, void *domain_ctx,
+				    spdk_fsdev_cpl_cb clb, void *cb_arg)
+{
+	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
+	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
+	size_t in_size;
+
+	if (!fsdev_io) {
+		SPDK_ERRLOG("Invalid argument, fsdev_io is NULL\n");
+		return -ENOBUFS;
+	}
+
+	spdk_fsdev_io_init(fsdev_io, desc, ch, 0,
+			   SPDK_FSDEV_IO_FUSE, source_id,
+			   source_unique, clb, cb_arg);
+	fsdev_io->internal.in_iov = in_iov;
+	fsdev_io->internal.in_iovcnt = in_iovcnt;
+	fsdev_io->internal.out_iov = out_iov;
+	fsdev_io->internal.out_iovcnt = out_iovcnt;
+
+	/* We may need to modify the iovs, for example if one iov contains both header
+	 * and payload. For now we just always save off the iovs and restore them later.
+	 * A future optimization could be saving them off only when necessary, but this
+	 * still adds extra bits that need to be checked which may end up being a wash from
+	 * a cacheline perspective.
+	 */
+	fsdev_io_save_iovs(fsdev_io);
+
+	in->hdr = in_iov->iov_base;
+	if (in_iov->iov_len == sizeof(*in->hdr)) {
+		in_iov++;
+		in_iovcnt--;
+	} else {
+		in_iov->iov_base += sizeof(*in->hdr);
+		in_iov->iov_len -= sizeof(*in->hdr);
+	}
+	in->op.raw = in_iov->iov_base;
+	in_size = fuse_get_in_size(in->hdr);
+	if (in_size > 0) {
+		assert(in_iov->iov_len >= in_size);
+		if (in_iov->iov_len == in_size) {
+			in_iov++;
+			in_iovcnt--;
+		} else {
+			in_iov->iov_base += in_size;
+			in_iov->iov_len -= in_size;
+		}
+	}
+	in->iov = in_iov;
+	in->iovcnt = in_iovcnt;
+	in->memory_domain = domain;
+	in->memory_domain_ctx = domain_ctx;
+
+	/* Done preparing in headers, now move to out headers if they exist. */
+
+	if (out_iov != NULL) {
+		out->hdr = out_iov->iov_base;
+		if (out_iov->iov_len == sizeof(*out->hdr)) {
+			out_iov++;
+			out_iovcnt--;
+		} else {
+			out_iov->iov_base += sizeof(*out->hdr);
+			out_iov->iov_len -= sizeof(*out->hdr);
+		}
+		out->op.raw = out_iov->iov_base;
+		out->iov = out_iov;
+		out->iovcnt = out_iovcnt;
+	} else {
+		out->hdr = NULL;
+		out->op.raw = NULL;
+		out->iov = NULL;
+		out->iovcnt = 0;
+	}
+	out->memory_domain = domain;
+	out->memory_domain_ctx = domain_ctx;
+
+	spdk_fsdev_io_submit(fsdev_io);
+	return 0;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(fsdev)

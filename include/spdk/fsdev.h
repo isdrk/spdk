@@ -1035,6 +1035,41 @@ void spdk_fsdev_io_init(struct spdk_fsdev_io *fsdev_io, struct spdk_fsdev_desc *
 void spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io);
 
 /**
+ * Build and submit I/O request from FUSE iovecs
+ *
+ * \param fsdev_io fsdev_io data buffer to be built and submitted by this function
+ * \param desc fsdev descriptor
+ * \param ch I/O channel
+ * \param in_iov Input IO vectors array.
+ * \param in_iovcnt Size of the input IO vectors array.
+ * \param out_iov Output IO vectors array.
+ * \param out_iovcnt Size of the output IO vectors array.
+ * \param source_id Source ID
+ * \param source_unique per Source ID unique value
+ * \param domain Memory domain describing the data buffers.
+ * \param domain_ctx Memory domain context.
+ * \param cb Completion callback.
+ * \param cb_arg Context to be passed to the completion callback.
+ *
+ * \return 0 on success. On success, the callback will always
+ * be called (even if the request ultimately failed). Return
+ * negated errno on failure, in which case the callback will not be called.
+ *  -ENOBUFS - the request cannot be submitted due to a lack of the internal IO objects
+ *  -EINVAL - the request cannot be submitted as some FUSE request data is incorrect
+ *
+ * NOTE: each source_id is pinned to a thread. Which means that requests with a specific source_id
+ * can only be submitted on one thread. Multiple source_ids per thread are allowed.
+ */
+int spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
+					struct spdk_fsdev_desc *desc,
+					struct spdk_io_channel *ch,
+					struct iovec *in_iov, int in_iovcnt,
+					struct iovec *out_iov, int out_iovcnt,
+					uint16_t source_id, uint64_t source_unique,
+					struct spdk_memory_domain *domain, void *domain_ctx,
+					spdk_fsdev_cpl_cb cb, void *cb_arg);
+
+/**
  * Specify submission and/or completions delays for I/O for the specified fsdev.
  *
  * 99% completion delay means that 1-out-of-100 I/O on each channel will incur
@@ -1068,6 +1103,7 @@ int spdk_fsdev_set_delays(struct spdk_fsdev *fsdev, uint64_t submit_us,
 int spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 			     const struct spdk_fsdev_notify_data *notify_data,
 			     uint64_t unique_id);
+
 
 #ifdef __cplusplus
 }

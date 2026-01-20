@@ -9,15 +9,6 @@ for application developers consuming the fsdev API is defined in `include/spdk/f
 code for people writing fsdev modules can be found in `include/spdk/fsdev_module.h`.  Currently, the
 only available fsdev module is @ref fsdev_aio.
 
-## FUSE dispatcher {#fuse_dispatcher}
-
-FUSE dispatcher library is a helper library for facilitating the translation between FUSE commands
-and the fsdev API.  It parses the FUSE "in" headers, translates them to the appropriate
-`spdk_fsdev_*` interface, and builds the FUSE "out" headers from the response.  It's also
-responsible for mounting and unmounting fsdevs on `FUSE_INIT` and `FUSE_DESTROY`, respectively.
-
-`fuse_dispatcher` is used by both @ref fuse_tgt and @ref vfu_virtio_fs.
-
 ## virtio-fs target {#vfu_virtio_fs}
 
 The fsdev library, along with @ref fuse_dispatcher, is used to implement a vfio-user target

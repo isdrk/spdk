@@ -142,7 +142,6 @@ FILESYSTEM DEVICE (FSDEV) LAYER
 M:	Jim Harris <jim.harris@nvidia.com>
 M:	Ben Walker <ben@nvidia.com>
 F:	lib/fsdev/
-F:	lib/fuse_dispatcher/
 F:	module/fsdev/
 F:	module/event/subsystems/fsdev/
 S:	Supported

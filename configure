@@ -117,7 +117,7 @@ function usage() {
 	echo "                           be searched."
 	echo " --with-fuse               Build FUSE components for mounting a blobfs filesystem."
 	echo " --without-fuse            No path required."
-	echo " --with-fsdev              Build fsdev and fuse_dispatcher library components"
+	echo " --with-fsdev              Build fsdev library components"
 	echo " --without-fsdev           No path required"
 	echo " --with-nvme-cuse          Build NVMe driver with support for CUSE-based character devices."
 	echo " --without-nvme-cuse       No path required."

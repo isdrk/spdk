@@ -4,7 +4,6 @@
 #include "spdk/config.h"
 #include "spdk/dma.h"
 #include "spdk/fuse.h"
-#include "spdk/fuse_dispatcher.h"
 #include "spdk/log.h"
 #include "spdk/stdinc.h"
 #include "spdk/string.h"
@@ -295,7 +294,7 @@ fsdev_fuse_request_prep_read(struct fsdev_fuse_request *req, size_t inlen)
 	/* Make sure the out header is 8B aligned */
 	buf = fsdev_fuse_set_iov(&req->out_iovs[0], &req->out_iovcnt, buf,
 				 sizeof(struct fuse_out_header), 8, &total);
-	/* Make sure the out iov is limited to the requested size, as fuse_dispatcher and some
+	/* Make sure the out iov is limited to the requested size, as some
 	 * fsdevs only rely on the iovs and don't look at the size */
 	buf = fsdev_fuse_set_iov(&req->out_iovs[1], &req->out_iovcnt, buf,
 				 spdk_min(hdr->size, req->len - total), 1, &total);
@@ -453,7 +452,7 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	/* If we can't manage to clone the fd, just fall back to using the main fd */
 	ch->fd = ch->clone_fd >= 0 ? ch->clone_fd : mount->fd;
 
-	reqsize = sizeof(*req) + spdk_fuse_dispatcher_get_io_ctx_size();
+	reqsize = sizeof(*req) + spdk_fsdev_get_io_ctx_size();
 	ch->request_pool = calloc(mount->max_io_depth, reqsize);
 	if (ch->request_pool == NULL) {
 		goto error;
@@ -482,7 +481,7 @@ error:
 }
 
 static void
-fsdev_fuse_request_submit_cb(void *ctx, int status)
+fsdev_fuse_request_submit_cb(void *ctx, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fsdev_fuse_request *req = ctx;
 	struct fsdev_fuse_channel *ch = req->ch;
@@ -521,10 +520,11 @@ fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fu
 		}
 	}
 
-	return spdk_fuse_dispatcher_submit_request(mount->fsdev_desc, ch->ioch,
+	return spdk_fsdev_io_submit_from_fuse_iovs((struct spdk_fsdev_io *)req->ctx,
+			mount->fsdev_desc, ch->ioch,
 			req->in_iovs, req->in_iovcnt,
 			req->out_iovcnt > 0 ? req->out_iovs : NULL, req->out_iovcnt,
-			req->ctx, ch->source_id, ch->source_unique,
+			ch->source_id, ch->source_unique,
 			domain, domain_ctx,
 			fsdev_fuse_request_submit_cb, req);
 }
@@ -1431,7 +1431,7 @@ fsdev_fuse_umount_cleanup(void *_ctx)
 }
 
 static void
-fsdev_fuse_umount_fuse_destroy_cb(void *cb_ctx, int status)
+fsdev_fuse_umount_fuse_destroy_cb(void *cb_ctx, int status, struct spdk_fsdev_io *fsdev_io)
 {
 	struct fsdev_fuse_umount_ctx *ctx = cb_ctx;
 
@@ -1453,15 +1453,15 @@ fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	struct spdk_fuse_mount *mount = ctx->mount;
 	int rc;
 
-	ctx->destroy.ctx = calloc(1, spdk_fuse_dispatcher_get_io_ctx_size());
+	ctx->destroy.ctx = calloc(1, spdk_fsdev_get_io_ctx_size());
 	if (ctx->destroy.ctx == NULL) {
-		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM);
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM, NULL);
 		return;
 	}
 
 	ctx->destroy.ioch = spdk_fsdev_get_io_channel(mount->fsdev_desc);
 	if (ctx->destroy.ioch == NULL) {
-		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM);
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, -ENOMEM, NULL);
 		return;
 	}
 
@@ -1471,11 +1471,11 @@ fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	ctx->destroy.in_iov.iov_len = sizeof(ctx->destroy.in_hdr);
 	ctx->destroy.out_iov.iov_base = &ctx->destroy.out_hdr;
 	ctx->destroy.out_iov.iov_len = sizeof(ctx->destroy.out_hdr);
-	rc = spdk_fuse_dispatcher_submit_request(mount->fsdev_desc, ctx->destroy.ioch,
-			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, ctx->destroy.ctx, 0, 0,
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(ctx->destroy.ctx, mount->fsdev_desc, ctx->destroy.ioch,
+			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, 0, 0,
 			NULL, NULL, fsdev_fuse_umount_fuse_destroy_cb, ctx);
 	if (rc != 0) {
-		fsdev_fuse_umount_fuse_destroy_cb(ctx, rc);
+		fsdev_fuse_umount_fuse_destroy_cb(ctx, rc, NULL);
 	}
 }
 

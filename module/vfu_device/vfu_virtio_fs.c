@@ -20,7 +20,7 @@
 #include "spdk/string.h"
 #include "spdk/likely.h"
 #include "spdk/pci_ids.h"
-#include "spdk/fuse_dispatcher.h"
+#include "spdk/fsdev.h"
 #include "spdk/linux/fuse.h"
 
 #include "vfu_virtio_internal.h"
@@ -168,7 +168,7 @@ virtio_fs_req_finish(struct virtio_fs_req *fs_req, uint32_t status)
 }
 
 static void
-virtio_fs_fuse_req_done(void *cb_arg, int error)
+virtio_fs_fuse_req_done(void *cb_arg, int error, struct spdk_fsdev_io *fsdev_io)
 {
 	struct virtio_fs_req *fs_req = cb_arg;
 	virtio_fs_req_finish(fs_req, -error);
@@ -218,8 +218,9 @@ virtio_fs_process_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_vi
 	/* we only have one thread here */
 	fs_endpoint->source_unique++;
 
-	spdk_fuse_dispatcher_submit_request(fs_endpoint->fsdev_desc, fs_endpoint->io_channel,
-					    in_iov, in_iovcnt, out_iov, out_iovcnt, fs_req->io_ctx,
+	spdk_fsdev_io_submit_from_fuse_iovs(fs_req->io_ctx, fs_endpoint->fsdev_desc,
+					    fs_endpoint->io_channel,
+					    in_iov, in_iovcnt, out_iov, out_iovcnt,
 					    0, fs_endpoint->source_unique, NULL, NULL,
 					    virtio_fs_fuse_req_done, fs_req);
 	return 0;
@@ -250,7 +251,7 @@ virtio_fs_alloc_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_virt
 		return NULL;
 	}
 
-	fs_req->io_ctx = calloc(1, spdk_fuse_dispatcher_get_io_ctx_size());
+	fs_req->io_ctx = calloc(1, spdk_fsdev_get_io_ctx_size());
 	if (!fs_req->io_ctx) {
 		free(fs_req);
 		return NULL;
