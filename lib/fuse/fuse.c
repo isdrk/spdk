@@ -1143,7 +1143,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		spdk_memory_domain_set_translation(mnt->domain, fsdev_fuse_translate_addr);
 	}
 
-	mnt->notify_iov.iov_len = spdk_fuse_dispatcher_get_notify_buf_size(mnt->fsdev_desc);
+	mnt->notify_iov.iov_len = spdk_fsdev_get_notify_max_data_size(fsdev);
 	if (mnt->notify_iov.iov_len > 0) {
 		mnt->notify_iov.iov_base = calloc(1, mnt->notify_iov.iov_len);
 		if (mnt->notify_iov.iov_base == NULL) {

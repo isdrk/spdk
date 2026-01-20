@@ -92,15 +92,6 @@ int spdk_fuse_dispatcher_encode_notify(struct iovec *iov, int iovcnt,
 				       const struct spdk_fsdev_notify_data *notify_data,
 				       uint64_t unique_id);
 
-/**
- * Get minimum buffer size required to fit FUSE notification.
- *
- * \param desc fsdev descriptor
- *
- * \return notify buffer size in bytes. Zero means that notifications are not supported.
- */
-uint32_t spdk_fuse_dispatcher_get_notify_buf_size(struct spdk_fsdev_desc *desc);
-
 #ifdef __cplusplus
 }
 #endif
