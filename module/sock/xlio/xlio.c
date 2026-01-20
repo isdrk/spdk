@@ -1061,7 +1061,7 @@ xlio_sock_writev_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 	uint32_t mkey = 0;
 
 	if (sock->rc != 0) {
-		spdk_sock_request_complete(&sock->base, req, sock->rc);
+		spdk_sock_request_complete(&sock->base, req, -sock->rc);
 		return;
 	}
 
@@ -1088,7 +1088,7 @@ xlio_sock_writev_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 		iov = SPDK_SOCK_REQUEST_IOV(req, 0);
 		rc = xlio_socket_sendv(sock->xlio_sock, iov, req->iovcnt, &attr);
 		if (rc < 0) {
-			spdk_sock_request_complete(&sock->base, req, rc);
+			spdk_sock_request_complete(&sock->base, req, -errno);
 			return;
 		}
 
@@ -1113,7 +1113,7 @@ xlio_sock_writev_async(struct spdk_sock *_sock, struct spdk_sock_request *req)
 
 		rc = xlio_socket_send(sock->xlio_sock, translation.addr, iov->iov_len, &attr);
 		if (rc < 0) {
-			spdk_sock_request_complete(&sock->base, req, rc);
+			spdk_sock_request_complete(&sock->base, req, -errno);
 			return;
 		}
 	}
