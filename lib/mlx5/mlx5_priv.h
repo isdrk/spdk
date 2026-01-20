@@ -326,9 +326,12 @@ void mlx5_qp_dump_sq_wqe(struct spdk_mlx5_qp *qp, int n_wqe_bb);
 void mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index);
 void mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index);
 void mlx5_cq_dump_cqe(struct mlx5_hw_cq *hw_cq, struct mlx5_cqe64 *_cqe);
+void mlx5_umr_mb_dump(struct spdk_mlx5_umr_mb_pool_obj *mb, const char *name,
+		      uint32_t offset, uint32_t len);
 #else
 #define mlx5_qp_dump_sq_wqe(...) do { } while (0)
 #define mlx5_qp_dump_rq_wqe(...) do { } while (0)
+#define mlx5_umr_mb_dump(...) do { } while (0)
 #define mlx5_srq_dump_wqe(...) do { } while (0)
 #define mlx5_cq_dump_cqe(...) do { } while (0)
 #endif

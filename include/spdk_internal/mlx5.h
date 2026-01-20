@@ -193,6 +193,7 @@ struct spdk_mlx5_umr_attr {
 	uint32_t mkey; /* User Memory Region key to configure */
 	uint32_t umr_len;
 	uint16_t sge_count;
+	struct spdk_mlx5_umr_mb_pool_obj *mb;
 };
 
 enum spdk_mlx5_encryption_order {

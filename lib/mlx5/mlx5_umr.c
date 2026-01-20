@@ -750,10 +750,10 @@ spdk_mlx5_psv_pool_put(struct spdk_mlx5_psv_pool_obj **ppsv)
 }
 
 static inline void
-_mlx5_set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords,
-			   uint64_t mkey_mask)
+_mlx5_set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint8_t flags,
+			   uint32_t klms_octowords, uint64_t mkey_mask)
 {
-	ctrl->flags |= MLX5_WQE_UMR_CTRL_FLAG_INLINE;
+	ctrl->flags |= flags;
 	ctrl->klm_octowords = htobe16(klms_octowords);
 	/*
 	 * Going to modify two properties of KLM mkey:
@@ -768,13 +768,20 @@ _mlx5_set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_oct
 static inline void
 mlx5_set_umr_ctrl_seg_mtt(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
 {
-	_mlx5_set_umr_ctrl_seg_mtt(ctrl, klms_octowords, 0);
+	_mlx5_set_umr_ctrl_seg_mtt(ctrl, MLX5_WQE_UMR_CTRL_FLAG_INLINE, klms_octowords, 0);
 }
 
 static inline void
 mlx5_set_umr_ctrl_seg_mtt_sig(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
 {
-	_mlx5_set_umr_ctrl_seg_mtt(ctrl, klms_octowords, MLX5_WQE_UMR_CTRL_MKEY_MASK_SIG_ERR);
+	_mlx5_set_umr_ctrl_seg_mtt(ctrl, MLX5_WQE_UMR_CTRL_FLAG_INLINE, klms_octowords,
+				   MLX5_WQE_UMR_CTRL_MKEY_MASK_SIG_ERR);
+}
+
+static inline void
+mlx5_set_umr_ctrl_seg_mb(struct mlx5_wqe_umr_ctrl_seg *ctrl, uint32_t klms_octowords)
+{
+	_mlx5_set_umr_ctrl_seg_mtt(ctrl, 0, klms_octowords, 0);
 }
 
 static inline void
@@ -1053,7 +1060,7 @@ mlx5_umr_configure_with_wrap_around_crypto(struct spdk_mlx5_qp *qp,
 	 * sizeof(gen_ctrl) + sizeof(umr_ctrl) == MLX5_SEND_WQE_BB,
 	 * so do not need to worry about wqe buffer wrap around.
 	 *
-	 * build genenal ctrl segment
+	 * build general ctrl segment
 	 */
 	gen_ctrl = ctrl;
 	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
@@ -1154,7 +1161,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (spdk_unlikely(!umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count || umr_attr->mb != NULL)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1328,7 +1335,7 @@ spdk_mlx5_umr_configure_trans_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (spdk_unlikely(!umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count || umr_attr->mb != NULL)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1477,9 +1484,9 @@ mlx5_umr_configure_with_wrap_around(struct spdk_mlx5_qp *dv_qp, struct spdk_mlx5
 	dv_qp->tx_available -= umr_wqe_n_bb;
 }
 
-int
-spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
-			uint64_t wr_id, uint32_t flags)
+static int
+mlx5_umr_configure_inline(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+			  uint64_t wr_id, uint32_t flags)
 {
 	struct mlx5_hw_qp *hw = &qp->hw;
 	uint32_t pi, to_end, umr_wqe_n_bb;
@@ -1525,6 +1532,132 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	}
 
 	return 0;
+}
+
+static uint32_t
+mlx5_umr_mb_write_sge(struct spdk_mlx5_umr_mb_pool_obj *mb, struct ibv_sge *sge, uint16_t num_sges)
+{
+	struct mlx5_wqe_umr_klm_seg *klm;
+	uint16_t i, aligned_num_sges = SPDK_ALIGN_CEIL(num_sges, 4);
+
+	assert(mb->size >= aligned_num_sges * sizeof(*klm));
+	klm = (struct mlx5_wqe_umr_klm_seg *)mb->ptr;
+	for (i = 0; i < num_sges; i++) {
+		mlx5_set_umr_inline_klm_seg(klm, &sge[i]);
+		klm++;
+	}
+
+	for (; i < aligned_num_sges; i++) {
+		memset(klm, 0, sizeof(*klm));
+		klm++;
+	}
+
+	mlx5_umr_mb_dump(mb, "KLM", 0, sizeof(*klm) * aligned_num_sges);
+	return sizeof(*klm) * aligned_num_sges;
+}
+
+static uint32_t
+mlx5_umr_mb_get_sge_size(uint16_t num_sges)
+{
+	return sizeof(struct mlx5_wqe_umr_klm_seg) * SPDK_ALIGN_CEIL(num_sges, 4);
+}
+
+static int
+mlx5_umr_configure_mb(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+		      uint64_t wr_id, uint32_t flags)
+{
+	struct mlx5_hw_qp *hw = &qp->hw;
+	uint32_t pi, to_end, umr_wqe_n_bb;
+	uint32_t wqe_size, sge_size;
+	uint8_t fm_ce_se;
+	struct mlx5_wqe_ctrl_seg *ctrl;
+	struct mlx5_wqe_ctrl_seg *gen_ctrl;
+	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
+	struct mlx5_wqe_mkey_context_seg *mkey_ctx;
+	struct mlx5_wqe_data_seg *umr_ptr;
+	struct spdk_mlx5_umr_mb_pool_obj *mb = umr_attr->mb;
+
+	qp->extra_flags = qp->cached_extra_flags;
+
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	/* If sge is NULL, we assume that the user has already filled in UMR MB */
+	if (umr_attr->sge != NULL) {
+		sge_size = mlx5_umr_mb_write_sge(mb, umr_attr->sge, umr_attr->sge_count);
+	} else {
+		sge_size = mlx5_umr_mb_get_sge_size(umr_attr->sge_count);
+		assert(sge_size <= mb->size);
+	}
+
+	/*
+	 * UMR WQE LAYOUT:
+	 * ----------------------------------------------
+	 * | gen_ctrl | umr_ctrl | mkey_ctx |  umr_ptr  |
+	 * ----------------------------------------------
+	 *   16bytes    48bytes    64bytes     16bytes
+	 *
+	 */
+	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) +
+		   sizeof(struct mlx5_wqe_mkey_context_seg) + sizeof(struct mlx5_wqe_data_seg);
+
+	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
+	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
+		return -ENOMEM;
+	}
+
+	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
+
+	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
+	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
+	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
+
+	/*
+	 * sizeof(gen_ctrl) + sizeof(umr_ctrl) == MLX5_SEND_WQE_BB,
+	 * so do not need to worry about wqe buffer wrap around.
+	 *
+	 * build genenal ctrl segment
+	 */
+	gen_ctrl = ctrl;
+	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
+			  hw->qp_num, fm_ce_se,
+			  SPDK_CEIL_DIV(wqe_size, 16), 0,
+			  htobe32(umr_attr->mkey));
+
+	/* build umr ctrl segment */
+	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
+	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
+	mlx5_set_umr_ctrl_seg_mb(umr_ctrl, sge_size >> 4);
+	mlx5_set_umr_ctrl_seg_bsf_size(umr_ctrl, 0);
+
+	/* build mkey context segment */
+	mkey_ctx = mlx5_qp_get_next_wqebb(hw, &to_end, ctrl);
+	memset(mkey_ctx, 0, sizeof(*mkey_ctx));
+	mkey_ctx->len = htobe64(umr_attr->umr_len);
+
+	umr_ptr = mlx5_qp_get_next_wqebb(hw, &to_end, mkey_ctx);
+	umr_ptr->byte_count = 0; /* reserved, must be zero */
+	umr_ptr->lkey = htobe32(mb->mkey);
+	umr_ptr->addr = htobe64((uintptr_t)mb->ptr);
+
+	mlx5_qp_submit_sq_wqe(qp, ctrl, umr_wqe_n_bb, pi);
+
+	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
+	assert(qp->tx_available >= umr_wqe_n_bb);
+	qp->tx_available -= umr_wqe_n_bb;
+
+	return 0;
+}
+
+int
+spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_attr,
+			uint64_t wr_id, uint32_t flags)
+{
+	if (umr_attr->mb != NULL) {
+		return mlx5_umr_configure_mb(qp, umr_attr, wr_id, flags);
+	} else {
+		return mlx5_umr_configure_inline(qp, umr_attr, wr_id, flags);
+	}
 }
 
 static inline void
@@ -1806,7 +1939,7 @@ spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (spdk_unlikely(!umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count || umr_attr->mb != NULL)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1862,7 +1995,7 @@ spdk_mlx5_umr_configure_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (spdk_unlikely(!umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count || umr_attr->mb != NULL)) {
 		return -EINVAL;
 	}
 

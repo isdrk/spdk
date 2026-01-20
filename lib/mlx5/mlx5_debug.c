@@ -69,6 +69,40 @@ mlx5_qp_dump_rq_wqe(struct spdk_mlx5_qp *qp, int index)
 }
 
 void
+mlx5_umr_mb_dump(struct spdk_mlx5_umr_mb_pool_obj *mb, const char *name, uint32_t offset,
+		 uint32_t len)
+{
+	uint32_t *data;
+	int n_wqe_bb;
+	int i;
+
+	if (!SPDK_LOG_mlx5_wqe_dump.enabled) {
+		return;
+	}
+
+	assert(mb);
+	assert(offset + len <= mb->size);
+	assert((len & 0x3f) == 0); /* must be aligned to 64B */
+
+	n_wqe_bb = len >> 6;
+	data = (uint32_t *)(mb->ptr + offset);
+
+	SPDK_DEBUGLOG(mlx5_wqe_dump, "%s: mkey 0x%x, addr %p\n", name, mb->mkey, data);
+	for (i = 0; i < n_wqe_bb; i++) {
+		fprintf(stderr,
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n"
+			"%08" PRIx32 " %08" PRIx32 " %08" PRIx32 " %08" PRIx32 "\n",
+			be32toh(data[0]),  be32toh(data[1]),  be32toh(data[2]),  be32toh(data[3]),
+			be32toh(data[4]),  be32toh(data[5]),  be32toh(data[6]),  be32toh(data[7]),
+			be32toh(data[8]),  be32toh(data[9]),  be32toh(data[10]), be32toh(data[11]),
+			be32toh(data[12]), be32toh(data[13]), be32toh(data[14]), be32toh(data[15]));
+		data += 16;
+	}
+}
+
+void
 mlx5_srq_dump_wqe(struct spdk_mlx5_srq *srq, int index)
 {
 	uint32_t *wqe;
