@@ -77,21 +77,6 @@ int spdk_fuse_dispatcher_submit_request(struct spdk_fsdev_desc *desc,
 					struct spdk_memory_domain *domain, void *domain_ctx,
 					spdk_fuse_dispatcher_submit_cpl_cb cb, void *cb_arg);
 
-/**
- * Encode FUSE notification
- *
- * \param iov Output IO vectors array.
- * \param iovcnt Size of the output IO vectors array.
- * \param notify_data Notification data received from fsdev.
- * Pass NULL to encode "empty" notification that is used to indicate device reset.
- * \param unique_id Unique ID of the notification.
- *
- * \return 0 on success, negated errno on failure.
- */
-int spdk_fuse_dispatcher_encode_notify(struct iovec *iov, int iovcnt,
-				       const struct spdk_fsdev_notify_data *notify_data,
-				       uint64_t unique_id);
-
 #ifdef __cplusplus
 }
 #endif

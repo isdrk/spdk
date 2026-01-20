@@ -2189,6 +2189,57 @@ spdk_fsdev_set_delays(struct spdk_fsdev *fsdev, uint64_t submit_us,
 	return 0;
 }
 
+int
+spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
+			 const struct spdk_fsdev_notify_data *notify_data,
+			 uint64_t unique_id)
+{
+	struct fuse_out_header *out_hdr;
+	size_t buf_size;
+	int i;
+	int rc = 0;
+
+	for (i = 0, buf_size = 0; i < iovcnt; buf_size += iov[i].iov_len, ++i);
+	assert(buf_size >= sizeof(struct fuse_out_header));
+	out_hdr = malloc(buf_size);
+	if (!out_hdr) {
+		SPDK_ERRLOG("Failed to allocate bounce buffer for fuse notification, buf_size %lu\n", buf_size);
+		return -ENOMEM;
+	}
+
+	if (notify_data) {
+		if (notify_data->type == SPDK_FSDEV_NOTIFY_FUSE) {
+			struct spdk_fuse_notify_request *req = notify_data->fuse;
+			struct fuse_out_header *req_out = req->iovs[0].iov_base;
+
+			if (req_out->len > buf_size) {
+				SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+					    buf_size, req_out->len);
+				rc = -ENOMEM;
+			} else {
+				spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
+				out_hdr->unique = unique_id;
+				rc = 0;
+			}
+		} else {
+			SPDK_ERRLOG("Unsupported notify type %d\n", notify_data->type);
+			rc = -EINVAL;
+		}
+	} else {
+		/* error and unique set to zero indicate device reset to driver */
+		out_hdr->len = sizeof(*out_hdr);
+		out_hdr->error = 0;
+		out_hdr->unique = 0;
+	}
+
+	if (rc == 0) {
+		spdk_copy_buf_to_iovs(iov, iovcnt, out_hdr, out_hdr->len);
+	}
+
+	free(out_hdr);
+	return rc;
+}
+
 SPDK_LOG_REGISTER_COMPONENT(fsdev)
 
 static void

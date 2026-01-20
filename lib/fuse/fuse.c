@@ -762,7 +762,7 @@ fsdev_fuse_notify_cb(struct spdk_fsdev *fsdev, void *ctx,
 	struct fuse_notify_request *work;
 	int rc;
 
-	rc = spdk_fuse_dispatcher_encode_notify(&mount->notify_iov, 1, notify_data, 0);
+	rc = spdk_fsdev_encode_notify(&mount->notify_iov, 1, notify_data, 0);
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to encode notification: %s\n", mount->name,
 			    spdk_strerror(-rc));

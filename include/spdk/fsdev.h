@@ -1054,6 +1054,21 @@ void spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io);
 int spdk_fsdev_set_delays(struct spdk_fsdev *fsdev, uint64_t submit_us,
 			  uint64_t complete_us, uint64_t complete_99_us);
 
+/**
+ * Encode FUSE notification
+ *
+ * \param iov Output IO vectors array.
+ * \param iovcnt Size of the output IO vectors array.
+ * \param notify_data Notification data received from fsdev.
+ * Pass NULL to encode "empty" notification that is used to indicate device reset.
+ * \param unique_id Unique ID of the notification.
+ *
+ * \return 0 on success, negated errno on failure.
+ */
+int spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
+			     const struct spdk_fsdev_notify_data *notify_data,
+			     uint64_t unique_id);
+
 #ifdef __cplusplus
 }
 #endif
