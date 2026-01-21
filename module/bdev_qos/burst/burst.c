@@ -567,9 +567,10 @@ global_token_bucket_refill(struct global_token_bucket *global_bucket)
 	}
 	spdk_spin_unlock(&global_bucket->spinlock);
 
-	if (to_global > 0) {
+	if (to_global > 0 || global_bucket->burst_bucket.tokens > 0) {
 		/* Excess tokens are back to the global pool to maintain work-conserving
-		 * behavior.
+		 * behavior. Also allow burst credits to transfer even when there is no
+		 * excess refill to the global pool.
 		 */
 		_global_token_bucket_refill(global_bucket, to_global);
 	}
