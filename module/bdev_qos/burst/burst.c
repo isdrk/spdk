@@ -260,6 +260,8 @@ bdev_qos_mode_str(enum bdev_qos_mode mode)
 		return "strict";
 	case BDEV_QOS_MODE_BURST_READY:
 		return "burst_ready";
+	case BDEV_QOS_MODE_EARNED_BURST:
+		return "earned_burst";
 	default:
 		return NULL;
 	}
@@ -1650,6 +1652,8 @@ rpc_decode_qos_mode(const struct spdk_json_val *val, void *out)
 		*qos_mode = BDEV_QOS_MODE_STRICT;
 	} else if (spdk_json_strequal(val, "burst_ready") == true) {
 		*qos_mode = BDEV_QOS_MODE_BURST_READY;
+	} else if (spdk_json_strequal(val, "earned_burst") == true) {
+		*qos_mode = BDEV_QOS_MODE_EARNED_BURST;
 	} else {
 		SPDK_NOTICELOG("Invalid parameter value: qos_mode\n");
 		return -EINVAL;
