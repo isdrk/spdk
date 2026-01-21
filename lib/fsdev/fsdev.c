@@ -2322,6 +2322,20 @@ fuse_get_in_size(struct fuse_in_header *in_hdr)
 	}
 }
 
+static bool
+fuse_op_requires_reply(uint32_t opc)
+{
+	switch (opc) {
+	case FUSE_FORGET:
+	case FUSE_BATCH_FORGET:
+	case FUSE_NOTIFY_REPLY:
+	case FUSE_INTERRUPT:
+		return false;
+	default:
+		return true;
+	}
+}
+
 int
 spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 				    struct spdk_fsdev_desc *desc,
@@ -2357,6 +2371,11 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	 * a cacheline perspective.
 	 */
 	fsdev_io_save_iovs(fsdev_io);
+
+	if (in_iov == NULL || in_iov[0].iov_len < sizeof(*in->hdr)) {
+		SPDK_ERRLOG("Invalid in_iov, must have fuse_in_header\n");
+		return -EINVAL;
+	}
 
 	in->hdr = in_iov->iov_base;
 	if (in_iov->iov_len == sizeof(*in->hdr)) {
@@ -2407,6 +2426,11 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	in->memory_domain_ctx = domain_ctx;
 
 	/* Done preparing in headers, now move to out headers if they exist. */
+	if (fuse_op_requires_reply(in->hdr->opcode) &&
+	    (out_iov == NULL || out_iov[0].iov_len < sizeof(*out->hdr))) {
+		SPDK_ERRLOG("Invalid out_iov, must have fuse_out_header\n");
+		return -EINVAL;
+	}
 
 	if (out_iov != NULL) {
 		out->hdr = out_iov->iov_base;
