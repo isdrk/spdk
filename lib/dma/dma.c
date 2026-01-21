@@ -557,3 +557,25 @@ spdk_dma_device_type_get_name(enum spdk_dma_device_type type)
 		return "UNKNOWN";
 	}
 }
+
+bool
+spdk_memory_domain_operation_supported(struct spdk_memory_domain *domain,
+				       enum spdk_dma_operation_type type)
+{
+	switch (type) {
+	case SPDK_DMA_PULL:
+		return domain->pull_cb != NULL;
+	case SPDK_DMA_PUSH:
+		return domain->push_cb != NULL;
+	case SPDK_DMA_MEMZERO:
+		return domain->memzero_cb != NULL;
+	case SPDK_DMA_TRANSLATE:
+		return domain->translate_cb != NULL;
+	case SPDK_DMA_TRANSFER:
+		return domain->transfer_cb != NULL;
+	case SPDK_DMA_INVALIDATE:
+		return domain->invalidate_cb != NULL;
+	default:
+		return false;
+	}
+}

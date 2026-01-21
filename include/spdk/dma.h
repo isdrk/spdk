@@ -44,6 +44,16 @@ enum spdk_dma_device_type {
 
 struct spdk_memory_domain;
 
+/** Operation types */
+enum spdk_dma_operation_type {
+	SPDK_DMA_PULL,
+	SPDK_DMA_PUSH,
+	SPDK_DMA_MEMZERO,
+	SPDK_DMA_TRANSLATE,
+	SPDK_DMA_TRANSFER,
+	SPDK_DMA_INVALIDATE,
+};
+
 /**
  * Definition of completion callback to be called by pull, push or memzero functions.
  *
@@ -522,6 +532,17 @@ int spdk_memory_domain_update_notification_unsubscribe(void *user_ctx);
  * \return string representing name for the DMA device type
  */
 const char *spdk_dma_device_type_get_name(enum spdk_dma_device_type type);
+
+/**
+ * Checks if the memory domain supports given operation.
+ *
+ * \param domain Memory domain.
+ * \param type Operation type.
+ *
+ * \return true if the memory domain supports this operation.
+ */
+bool spdk_memory_domain_operation_supported(struct spdk_memory_domain *domain,
+		enum spdk_dma_operation_type type);
 
 #ifdef __cplusplus
 }
