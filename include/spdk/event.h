@@ -293,6 +293,12 @@ const struct spdk_cpuset *spdk_app_get_core_mask(void);
 
 #define SPDK_APP_GETOPT_STRING "c:de:ghi:m:n:p:r:s:uvA:B:L:RW:"
 
+/**
+ * Long option values reserved for application-specific getopt_long() options.
+ * Values below SPDK_APP_LONG_OPT_BASE are reserved for framework options.
+ */
+#define SPDK_APP_LONG_OPT_BASE	1000
+
 enum spdk_app_parse_args_rvals {
 	SPDK_APP_PARSE_ARGS_HELP = 0,
 	SPDK_APP_PARSE_ARGS_SUCCESS = 1,
