@@ -1905,7 +1905,7 @@ nvme_tcp_build_contig_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req
 	pdu->iovs[0].iov_len = req->payload.payload_size;
 	pdu->data_iovcnt = 1;
 
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_CONTIG);
 
 	return 0;
 }
@@ -1922,7 +1922,7 @@ nvme_tcp_build_sgl_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *t
 	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
 
 	assert(req->payload.payload_size != 0);
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_SGL);
 	assert(req->payload.reset_sgl_fn != NULL);
 	assert(req->payload.next_sge_fn != NULL);
 	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload.payload_offset);
@@ -1963,7 +1963,7 @@ nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 	struct nvme_request *req = &tcp_req->req;
 	struct nvme_tcp_qpair *tqpair = nvme_tcp_qpair(tcp_req->req.qpair);;
 	int rc;
-	enum nvme_payload_type payload_type = nvme_payload_type(&req->payload);
+	enum nvme_payload_type payload_type = nvme_req_payload_type(req);
 	enum spdk_nvme_data_transfer xfer;
 	uint32_t max_in_capsule_data_size;
 

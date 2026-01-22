@@ -1358,7 +1358,7 @@ nvme_pcie_qpair_build_contig_hw_sgl_request(struct spdk_nvme_qpair *qpair, struc
 	uint32_t nseg = 0;
 
 	assert(req->payload.payload_size != 0);
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_CONTIG);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_CONTIG);
 
 	sgl = tr->u.sgl;
 	req->cmd.psdt = SPDK_NVME_PSDT_SGL_MPTR_CONTIG;
@@ -1444,7 +1444,7 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	 * Build scattered payloads.
 	 */
 	assert(req->payload.payload_size != 0);
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_SGL);
 	assert(req->payload.reset_sgl_fn != NULL);
 	assert(req->payload.next_sge_fn != NULL);
 	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload.payload_offset);
@@ -1577,7 +1577,7 @@ nvme_pcie_qpair_build_prps_sgl_request(struct spdk_nvme_qpair *qpair, struct nvm
 	/*
 	 * Build scattered payloads.
 	 */
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_SGL);
 	assert(req->payload.reset_sgl_fn != NULL);
 	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload.payload_offset);
 
@@ -1712,7 +1712,7 @@ nvme_pcie_qpair_submit_request(struct spdk_nvme_qpair *qpair, struct nvme_reques
 	req->cmd.psdt = SPDK_NVME_PSDT_PRP;
 
 	if (req->payload.payload_size != 0) {
-		payload_type = nvme_payload_type(&req->payload);
+		payload_type = nvme_req_payload_type(req);
 		/* According to the specification, PRPs shall be used for all
 		 *  Admin commands for NVMe over PCIe implementations.
 		 */

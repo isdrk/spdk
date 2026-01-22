@@ -275,17 +275,6 @@ struct nvme_payload {
 		.md = (md_), \
 	}
 
-static inline enum nvme_payload_type
-nvme_payload_type(const struct nvme_payload *payload) {
-	if (payload->reset_sgl_fn)
-	{
-		return NVME_PAYLOAD_TYPE_SGL;
-	} else
-	{
-		return NVME_PAYLOAD_TYPE_CONTIG;
-	}
-}
-
 struct nvme_error_cmd {
 	bool				do_not_submit;
 	uint64_t			timeout_tsc;
@@ -395,6 +384,11 @@ struct nvme_request {
 };
 
 typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
+
+static inline enum nvme_payload_type
+nvme_req_payload_type(const struct nvme_request *req) {
+	return req->payload.reset_sgl_fn ? NVME_PAYLOAD_TYPE_SGL : NVME_PAYLOAD_TYPE_CONTIG;
+}
 
 struct nvme_completion_poll_status {
 	struct spdk_nvme_cpl	cpl;
