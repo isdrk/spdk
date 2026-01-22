@@ -243,6 +243,7 @@ struct bdevperf_job {
 	uint64_t			io_failed;
 	uint64_t			io_timeout;
 	uint64_t			io_completed_at_warmup_end;
+	uint64_t			io_completed_at_drain_start;
 	uint64_t			prev_io_completed;
 	double				ema_io_per_second;
 	int				current_queue_depth;
@@ -261,6 +262,7 @@ struct bdevperf_job {
 	TAILQ_HEAD(, bdevperf_task)	task_list;
 	TAILQ_HEAD(, bdevperf_task)	throttled_task_list;
 	uint64_t			run_time_in_usec;
+	uint64_t			drain_start_tsc;
 
 	/* keep channel's histogram data before being destroyed */
 	struct spdk_histogram_data	*histogram;
@@ -499,18 +501,34 @@ parse_workload_type(enum job_config_rw ret)
  * - Periodic dump: Use g_periodic_dump_stat_mode (CMA, EMA, or IA)
  *
  * Note: If configuring warmup time, please use EMA or IA for periodic dump to avoid confusing results.
+ *
+ * Warmup and drain exclusion:
+ * - Warmpup period (before g_warmup_finished): Excluded from the final CMA result
+ * - Drain period (after g_drain_started):
+ *   * Excluded from the FINAL CMA result only
+ *   * Included in PERIODIC dumps (to show real-time behavior)
+ * - Final CMA result = I/Os completed during steady state only
  */
 static double
-get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec)
+get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec, bool is_final_result)
 {
-	uint64_t valid_io_completed, valid_io_time_in_usec;
+	uint64_t valid_io_completed, valid_io_time_in_usec, drain_start_time_in_usec;
 
 	if (!g_warmup_finished) {
 		/* In warmup, use everything from start. */
 		valid_io_completed = job->io_completed;
 		valid_io_time_in_usec = io_time_in_usec;
+	} else if (is_final_result && job->drain_start_tsc != 0) {
+		/* In draining (final result only), use I/Os completed during steady state only (exclude
+		 * warmup and drain).
+		 */
+		drain_start_time_in_usec = (job->drain_start_tsc - g_start_tsc) * SPDK_SEC_TO_USEC /
+					   spdk_get_ticks_hz();
+
+		valid_io_completed = job->io_completed_at_drain_start - job->io_completed_at_warmup_end;
+		valid_io_time_in_usec = drain_start_time_in_usec - g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
 	} else {
-		/* In steady state, subtract the warmup garbage from the total. */
+		/* In steady state (or periodic dump during drain), subtract the warmup garbage from the total. */
 		valid_io_completed = job->io_completed - job->io_completed_at_warmup_end;
 		valid_io_time_in_usec = io_time_in_usec - g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
 	}
@@ -591,7 +609,8 @@ static void
 bdevperf_job_get_stats(struct bdevperf_job *job,
 		       struct bdevperf_stats *job_stats,
 		       uint64_t time_in_usec,
-		       enum bdevperf_stat_mode stat_mode)
+		       enum bdevperf_stat_mode stat_mode,
+		       bool is_final_result)
 {
 	double io_per_second, mb_per_second, failed_per_second, timeout_per_second;
 	double average_latency = 0.0, min_latency, max_latency;
@@ -601,7 +620,7 @@ bdevperf_job_get_stats(struct bdevperf_job *job,
 
 	switch (stat_mode) {
 	case STAT_MODE_CMA:
-		io_per_second = get_cma_io_per_second(job, time_in_usec);
+		io_per_second = get_cma_io_per_second(job, time_in_usec, is_final_result);
 		break;
 	case STAT_MODE_EMA:
 		io_per_second = get_ema_io_per_second(job);
@@ -993,7 +1012,7 @@ bdevperf_test_done(void *ctx)
 		spdk_cpuset_or(&cpu_mask, spdk_thread_get_cpumask(job->thread));
 		memset(&job_stats, 0, sizeof(job_stats));
 		/* Always use cumulative average (CMA) for the final result. */
-		bdevperf_job_get_stats(job, &job_stats, job->run_time_in_usec, STAT_MODE_CMA);
+		bdevperf_job_get_stats(job, &job_stats, job->run_time_in_usec, STAT_MODE_CMA, true);
 		bdevperf_job_stats_accumulate(&g_stats.total, &job_stats);
 		performance_dump_job_stdout(job, &job_stats);
 		if (w) {
@@ -1179,6 +1198,14 @@ bdevperf_job_drain(void *ctx)
 	}
 
 	job->is_draining = true;
+
+	/* Capture IO counters at the start of draining to exclude drain period from
+	 * the final CMA result.
+	 */
+	if (job->drain_start_tsc == 0) {
+		job->drain_start_tsc = spdk_get_ticks();
+		job->io_completed_at_drain_start = job->io_completed;
+	}
 
 	return -1;
 }
@@ -1838,11 +1865,29 @@ _performance_dump_done(void *ctx)
 {
 	struct bdevperf_aggregate_stats *aggregate = ctx;
 	struct bdevperf_stats *stats = &aggregate->total;
+	struct bdevperf_job *job;
 	double average_latency;
+	bool any_job_draining = false;
+
+	/* Check if any job is draining */
+	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
+		if (job->drain_start_tsc != 0) {
+			any_job_draining = true;
+			break;
+		}
+	}
 
 	if (g_summarize_performance) {
+		const char *status_prefix = "";
+
+		if (!g_warmup_finished) {
+			status_prefix = "[Warmup] ";
+		} else if (any_job_draining) {
+			status_prefix = "[Draining] ";
+		}
+
 		printf("%s%12.2f IOPS, %8.2f MiB/s",
-		       g_warmup_finished ? "" : "[Warmup] ",
+		       status_prefix,
 		       stats->total_io_per_second, stats->total_mb_per_second);
 		printf("\r");
 	} else {
@@ -1880,7 +1925,7 @@ _performance_dump(void *ctx)
 		time_in_usec = stats->total.io_time_in_usec;
 	}
 
-	bdevperf_job_get_stats(job, &job_stats, time_in_usec, g_periodic_dump_stat_mode);
+	bdevperf_job_get_stats(job, &job_stats, time_in_usec, g_periodic_dump_stat_mode, false);
 	bdevperf_job_stats_accumulate(&stats->total, &job_stats);
 	if (!g_summarize_performance) {
 		performance_dump_job_stdout(stats->current_job, &job_stats);
@@ -2266,6 +2311,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	job->abort = g_abort;
 	job_init_rw(job, config->rw);
 	job->md_check = spdk_bdev_get_dif_type(job->bdev) == SPDK_DIF_DISABLE;
+	job->drain_start_tsc = 0;
 
 	if ((job->io_size % data_block_size) != 0) {
 		SPDK_ERRLOG("IO size (%d) is not multiples of data block size of bdev %s (%"PRIu32")\n",
