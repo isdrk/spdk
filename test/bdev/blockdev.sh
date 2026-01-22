@@ -421,7 +421,9 @@ function qos_function_test() {
 	if [ $iops_limit -gt $qos_lower_iops_limit ]; then
 
 		# Run bdevperf with IOPS rate limit on bdev 1
-		$rpc_py bdev_set_qos_limit --rw_ios_per_sec $iops_limit $QOS_DEV_1
+		$rpc_py bdev_qos_create -m burst qos_service_1
+		$rpc_py bdev_qos_add_bdev qos_service_1 $QOS_DEV_1
+		$rpc_py bdev_burst_qos_set_limit qos_service_1 rw_iops $iops_limit
 		run_test "bdev_qos_iops" run_qos_test $iops_limit IOPS $QOS_DEV_1
 
 		# Run bdevperf with bandwidth rate limit on bdev 2
@@ -431,12 +433,20 @@ function qos_function_test() {
 		if [ $bw_limit -lt $qos_lower_bw_limit ]; then
 			bw_limit=$qos_lower_bw_limit
 		fi
-		$rpc_py bdev_set_qos_limit --rw_mbytes_per_sec $bw_limit $QOS_DEV_2
+		$rpc_py bdev_qos_create -m burst qos_service_2
+		$rpc_py bdev_qos_add_bdev qos_service_2 $QOS_DEV_2
+		$rpc_py bdev_burst_qos_set_limit qos_service_2 rw_mbps $bw_limit -i 4096 -z 4096 -a 4096
 		run_test "bdev_qos_bw" run_qos_test $bw_limit BANDWIDTH $QOS_DEV_2
 
 		# Run bdevperf with additional read only bandwidth rate limit on bdev 1
-		$rpc_py bdev_set_qos_limit --r_mbytes_per_sec $qos_lower_bw_limit $QOS_DEV_1
+		$rpc_py bdev_burst_qos_set_limit qos_service_1 r_mbps $qos_lower_bw_limit -i 4096 -z 4096 -a 4096
+
 		run_test "bdev_qos_ro_bw" run_qos_test $qos_lower_bw_limit BANDWIDTH $QOS_DEV_1
+
+		$rpc_py bdev_qos_remove_bdev qos_service_1 $QOS_DEV_1
+		$rpc_py bdev_qos_destroy qos_service_1
+		$rpc_py bdev_qos_remove_bdev qos_service_2 $QOS_DEV_2
+		$rpc_py bdev_qos_destroy qos_service_2
 	else
 		echo "Actual IOPS without limiting is too low - exit testing"
 	fi
