@@ -8,6 +8,10 @@ function create_job() {
 	local job_section=$1
 	local rw=$2
 	local filename=$3
+	local bs=${4:-1024}
+	local rwmixread=${5:-70}
+	local iodepth=${6:-256}
+	local cpumask=${7:-0xff}
 
 	if [[ $job_section == "global" ]]; then
 		cat <<- EOF
@@ -19,11 +23,16 @@ function create_job() {
 	cat <<- EOF
 		${job}
 		filename=${filename}
-		bs=1024
-		rwmixread=70
+		bs=${bs}
+	EOF
+	# Only output rwmixread if mode is randrw (mixed read/write)
+	if [[ $rw == "randrw" ]]; then
+		echo "rwmixread=${rwmixread}"
+	fi
+	cat <<- EOF
 		rw=${rw}
-		iodepth=256
-		cpumask=0xff
+		iodepth=${iodepth}
+		cpumask=${cpumask}
 	EOF
 }
 
