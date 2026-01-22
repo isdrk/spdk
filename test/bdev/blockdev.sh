@@ -378,7 +378,7 @@ function get_io_result() {
 	if [ $limit_type = IOPS ]; then
 		iostat_result=$(awk '{print $2}' <<< $iostat_result)
 	elif [ $limit_type = BANDWIDTH ]; then
-		iostat_result=$(awk '{print $6}' <<< $iostat_result)
+		iostat_result=$(awk '{print $3}' <<< $iostat_result)
 	fi
 
 	echo ${iostat_result/.*/}
