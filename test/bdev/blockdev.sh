@@ -372,16 +372,33 @@ function fio_test_suite() {
 
 function get_io_result() {
 	local limit_type=$1
-	local qos_dev=$2
-	local iostat_result
-	iostat_result=$($rootdir/scripts/iostat.py -d -i 1 -t $QOS_RUN_TIME | grep $qos_dev | tail -1)
-	if [ $limit_type = IOPS ]; then
-		iostat_result=$(awk '{print $2}' <<< $iostat_result)
-	elif [ $limit_type = BANDWIDTH ]; then
-		iostat_result=$(awk '{print $3}' <<< $iostat_result)
+	shift # Remove first argument, rest are bdev names
+	local qos_devs=("$@")
+	local iostat_output
+	local total_result=0
+	local dev_result
+
+	if [ "$limit_type" != IOPS ] && [ "$limit_type" != BANDWIDTH ]; then
+		echo "Invalid limit type: $limit_type" >&2
+		exit 1
 	fi
 
-	echo ${iostat_result/.*/}
+	iostat_output=$($rootdir/scripts/iostat.py -d -i 1 -t $QOS_RUN_TIME)
+
+	# For each bdev, get its result and sum them up
+	for qos_dev in "${qos_devs[@]}"; do
+		iostat_result=$(grep "$qos_dev" <<< "$iostat_output" | tail -1)
+		if [ $limit_type = IOPS ]; then
+			dev_result=$(awk '{print $2}' <<< $iostat_result)
+		elif [ $limit_type = BANDWIDTH ]; then
+			dev_result=$(awk '{print $3}' <<< $iostat_result)
+		fi
+		# Remove decimal point and add to total
+		dev_result=${dev_result/.*/}
+		total_result=$((total_result + dev_result))
+	done
+
+	echo $total_result
 }
 
 function run_qos_test() {
