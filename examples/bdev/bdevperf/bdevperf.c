@@ -1575,13 +1575,19 @@ _bdevperf_submit_task(struct bdevperf_job *job, struct bdevperf_task *task)
 	job->current_queue_depth++;
 }
 
+static inline bool
+bdevperf_job_is_throttled(struct bdevperf_job *job)
+{
+	return job->throttled || !TAILQ_EMPTY(&job->throttled_task_list);
+}
+
 static void
 bdevperf_submit_task(void *arg)
 {
 	struct bdevperf_task	*task = arg;
 	struct bdevperf_job	*job = task->job;
 
-	if (spdk_unlikely(job->throttled || !TAILQ_EMPTY(&job->throttled_task_list))) {
+	if (spdk_unlikely(bdevperf_job_is_throttled(job))) {
 		TAILQ_INSERT_TAIL(&job->throttled_task_list, task, link);
 		return;
 	}
