@@ -510,20 +510,46 @@ function qos_function_test() {
 	fi
 }
 
+function gen_qos_json_config() {
+	# Generate JSON config and output to stdout (caller redirects to file)
+	jq . <<- JSON
+		{
+		  "subsystems": [
+		    {
+		      "subsystem": "bdev",
+		      "config": [
+		        {
+		          "method": "bdev_malloc_create",
+		          "params": {
+		            "name": "$QOS_DEV_1",
+		            "num_blocks": 128,
+		            "block_size": 512
+		          }
+		        },
+		        {
+		          "method": "bdev_null_create",
+		          "params": {
+		            "name": "$QOS_DEV_2",
+		            "num_blocks": 128,
+		            "block_size": 512
+		          }
+		        }
+		      ]
+		    }
+		  ]
+		}
+	JSON
+}
+
 function qos_test_suite() {
 	local qos_perf_time=$((QOS_RUN_TIME * 3 + 10))
 
-	# Run bdevperf with QoS disabled first
-	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread --interval-avg -t $qos_perf_time "$env_ctx" &
+	# Run bdevperf with JSON config for bdevs, RPC for job config, and QoS disabled first
+	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread --interval-avg -t $qos_perf_time --json <(gen_qos_json_config) "$env_ctx" &
 	QOS_PID=$!
 	echo "Process qos testing pid: $QOS_PID"
 	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
 	waitforlisten $QOS_PID
-
-	$rpc_py bdev_malloc_create -b $QOS_DEV_1 128 512
-	waitforbdev $QOS_DEV_1
-	$rpc_py bdev_null_create $QOS_DEV_2 128 512
-	waitforbdev $QOS_DEV_2
 
 	$rootdir/examples/bdev/bdevperf/bdevperf.py perform_tests &
 	qos_function_test
