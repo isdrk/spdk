@@ -398,11 +398,14 @@ function run_qos_test() {
 	# QoS realization is related with bytes transferred. It currently has some variation.
 	if [ $qos_result -lt $lower_limit ] || [ $qos_result -gt $upper_limit ]; then
 		echo "Failed to limit the io read rate of NULL bdev by qos"
-		$rpc_py bdev_malloc_delete $QOS_DEV_1
-		$rpc_py bdev_null_delete $QOS_DEV_2
-		killprocess $QOS_PID
+		qos_test_cleanup
 		exit 1
 	fi
+}
+
+function qos_test_cleanup() {
+	killprocess "$QOS_PID"
+	wait "$QOS_PID" 2> /dev/null || true
 }
 
 function qos_function_test() {
@@ -446,7 +449,7 @@ function qos_test_suite() {
 	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread -t $qos_perf_time "$env_ctx" &
 	QOS_PID=$!
 	echo "Process qos testing pid: $QOS_PID"
-	trap 'cleanup; killprocess $QOS_PID; exit 1' SIGINT SIGTERM EXIT
+	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
 	waitforlisten $QOS_PID
 
 	$rpc_py bdev_malloc_create -b $QOS_DEV_1 128 512
@@ -457,9 +460,7 @@ function qos_test_suite() {
 	$rootdir/examples/bdev/bdevperf/bdevperf.py perform_tests &
 	qos_function_test
 
-	$rpc_py bdev_malloc_delete $QOS_DEV_1
-	$rpc_py bdev_null_delete $QOS_DEV_2
-	killprocess $QOS_PID
+	qos_test_cleanup
 	trap - SIGINT SIGTERM EXIT
 }
 
