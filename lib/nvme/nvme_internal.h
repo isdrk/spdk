@@ -1530,9 +1530,7 @@ nvme_request_clear(struct nvme_request *req)
 static inline void nvme_free_request(struct nvme_request *req);
 
 static inline struct nvme_request *
-nvme_allocate_request(struct spdk_nvme_qpair *qpair,
-		      const struct nvme_payload *payload, uint32_t payload_size, uint32_t md_size,
-		      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+nvme_allocate_request(struct spdk_nvme_qpair *qpair)
 {
 	struct nvme_request *req;
 
@@ -1544,10 +1542,6 @@ nvme_allocate_request(struct spdk_nvme_qpair *qpair,
 	STAILQ_REMOVE_HEAD(qpair->active_free_req, stailq);
 	qpair->num_outstanding_reqs++;
 
-	NVME_INIT_REQUEST(req, cb_fn, cb_arg, *payload, payload_size, md_size);
-
-	req->qpair = qpair;
-
 	return req;
 }
 
@@ -1556,11 +1550,19 @@ nvme_allocate_request_contig(struct spdk_nvme_qpair *qpair,
 			     void *buffer, uint32_t payload_size,
 			     spdk_nvme_cmd_cb cb_fn, void *cb_arg)
 {
+	struct nvme_request *req;
 	struct nvme_payload payload;
 
 	payload = NVME_PAYLOAD_CONTIG(buffer, NULL);
 
-	return nvme_allocate_request(qpair, &payload, payload_size, 0, cb_fn, cb_arg);
+	req = nvme_allocate_request(qpair);
+	if (req == NULL) {
+		return NULL;
+	}
+
+	NVME_INIT_REQUEST(req, cb_fn, cb_arg, payload, payload_size, 0);
+	req->qpair = qpair;
+	return req;
 }
 
 static inline struct nvme_request *
