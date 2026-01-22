@@ -456,7 +456,7 @@ function qos_test_suite() {
 	local qos_perf_time=$((QOS_RUN_TIME * 3 + 10))
 
 	# Run bdevperf with QoS disabled first
-	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread -t $qos_perf_time "$env_ctx" &
+	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread --interval-avg -t $qos_perf_time "$env_ctx" &
 	QOS_PID=$!
 	echo "Process qos testing pid: $QOS_PID"
 	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
