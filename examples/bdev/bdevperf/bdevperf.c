@@ -2811,13 +2811,8 @@ static void
 bdevperf_construct_multithread_job_configs(void)
 {
 	struct spdk_bdev *bdev;
-	uint32_t i;
-	uint32_t num_cores;
-
-	num_cores = 0;
-	SPDK_ENV_FOREACH_CORE(i) {
-		num_cores++;
-	}
+	/* g_all_cpuset is initialized in bdevperf_run() before job construction. */
+	uint32_t num_cores = spdk_cpuset_count(&g_all_cpuset);
 
 	if (num_cores == 0) {
 		g_run_rc = -EINVAL;
