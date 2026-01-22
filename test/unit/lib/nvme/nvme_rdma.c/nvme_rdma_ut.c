@@ -213,6 +213,7 @@ test_nvme_rdma_build_sgl_request(void)
 	rdma_req.req = &req;
 
 	req.payload = NVME_PAYLOAD_SGL(nvme_rdma_ut_reset_sgl, nvme_rdma_ut_next_sge, &bio, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_SGL;
 	req.qpair = &rqpair.qpair;
 
 	for (i = 0; i < NVME_RDMA_MAX_SGL_DESCRIPTORS; i++) {
@@ -320,6 +321,7 @@ test_nvme_rdma_build_sgl_inline_request(void)
 	rdma_req.req = &req;
 
 	req.payload = NVME_PAYLOAD_SGL(nvme_rdma_ut_reset_sgl, nvme_rdma_ut_next_sge, &bio, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_SGL;
 	req.qpair = &rqpair.qpair;
 
 	/* Test case 1: single inline SGL. Expected: PASS */
@@ -380,6 +382,7 @@ test_nvme_rdma_build_contig_request(void)
 	rdma_req.req = &req;
 
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_CONTIG;
 	req.qpair = &rqpair.qpair;
 
 	/* Test case 1: contig request. Expected: PASS */
@@ -423,6 +426,7 @@ test_nvme_rdma_build_contig_inline_request(void)
 	rdma_req.req = &req;
 
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_CONTIG;
 	req.qpair = &rqpair.qpair;
 
 	/* Test case 1: single inline SGL. Expected: PASS */
@@ -852,6 +856,7 @@ test_nvme_rdma_req_init(void)
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
 	/* case 1: req->payload_size == 0, expect: pass. */
 	req.payload.payload_size = 0;
+	req.payload_type = NVME_PAYLOAD_TYPE_CONTIG;
 	rqpair.qpair.ctrlr->ioccsz_bytes = 1024;
 	rqpair.qpair.ctrlr->icdoff = 0;
 	rdma_req.req = &req;
@@ -873,6 +878,7 @@ test_nvme_rdma_req_init(void)
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
 	req.payload.payload_offset = 0;
 	req.payload.payload_size = 1024;
+	req.payload_type = NVME_PAYLOAD_TYPE_CONTIG;
 	rc = nvme_rdma_req_init(&rqpair, &rdma_req);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(req.cmd.dptr.sgl1.unkeyed.type == SPDK_NVME_SGL_TYPE_DATA_BLOCK);
@@ -889,6 +895,7 @@ test_nvme_rdma_req_init(void)
 	req.payload = NVME_PAYLOAD_CONTIG((void *)0xdeadbeef, NULL);
 	req.payload.payload_offset = 0;
 	req.payload.payload_size = 1024;
+	req.payload_type = NVME_PAYLOAD_TYPE_CONTIG;
 	rc = nvme_rdma_req_init(&rqpair, &rdma_req);
 	CU_ASSERT(rc == 0);
 	CU_ASSERT(req.cmd.dptr.sgl1.keyed.type == SPDK_NVME_SGL_TYPE_KEYED_DATA_BLOCK);
@@ -902,6 +909,7 @@ test_nvme_rdma_req_init(void)
 	/* icd_supported is true */
 	rqpair.qpair.ctrlr->icdoff = 0;
 	req.payload = NVME_PAYLOAD_SGL(nvme_rdma_ut_reset_sgl, nvme_rdma_ut_next_sge, &bio, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_SGL;
 	req.qpair = &rqpair.qpair;
 	bio.iovpos = 0;
 	req.payload.payload_offset = 0;
@@ -923,6 +931,7 @@ test_nvme_rdma_req_init(void)
 	/* icd_supported is false */
 	rqpair.qpair.ctrlr->icdoff = 1;
 	req.payload = NVME_PAYLOAD_SGL(nvme_rdma_ut_reset_sgl, nvme_rdma_ut_next_sge, &bio, NULL);
+	req.payload_type = NVME_PAYLOAD_TYPE_SGL;
 	req.qpair = &rqpair.qpair;
 	bio.iovpos = 0;
 	req.payload.payload_offset = 0;
