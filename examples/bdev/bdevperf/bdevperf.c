@@ -1596,16 +1596,13 @@ bdevperf_submit_task(void *arg)
 }
 
 static void
-bdevperf_job_resumed(struct spdk_io_channel *ch, void *cb_arg)
+bdevperf_job_retry_tasks(struct bdevperf_job *job)
 {
-	struct bdevperf_job *job = cb_arg;
 	TAILQ_HEAD(, bdevperf_task) tmp_head;
 	struct bdevperf_task *task, *ttmp;
 
 	TAILQ_INIT(&tmp_head);
 	TAILQ_SWAP(&tmp_head, &job->throttled_task_list, bdevperf_task, link);
-
-	job->throttled = false;
 
 	TAILQ_FOREACH_SAFE(task, &tmp_head, link, ttmp) {
 		if (!job->throttled) {
@@ -1618,6 +1615,16 @@ bdevperf_job_resumed(struct spdk_io_channel *ch, void *cb_arg)
 
 	TAILQ_SWAP(&tmp_head, &job->throttled_task_list, bdevperf_task, link);
 	TAILQ_CONCAT(&job->throttled_task_list, &tmp_head, link);
+}
+
+static void
+bdevperf_job_resumed(struct spdk_io_channel *ch, void *cb_arg)
+{
+	struct bdevperf_job *job = cb_arg;
+
+	job->throttled = false;
+
+	bdevperf_job_retry_tasks(job);
 }
 
 static void
