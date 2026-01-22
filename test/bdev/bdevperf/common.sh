@@ -10,14 +10,13 @@ function create_job() {
 	local filename=$3
 
 	if [[ $job_section == "global" ]]; then
-		cat <<- EOF >> "$testdir"/test.conf
+		cat <<- EOF
 			[global]
 			filename=${filename}
 		EOF
 	fi
 	job="[${job_section}]"
-	echo $global
-	cat <<- EOF >> "$testdir"/test.conf
+	cat <<- EOF
 		${job}
 		filename=${filename}
 		bs=1024
