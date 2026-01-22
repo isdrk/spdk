@@ -72,6 +72,7 @@ static bool g_abort = false;
 static bool g_error_to_exit = false;
 static int g_queue_depth = 0;
 static uint64_t g_time_in_usec;
+static uint64_t g_total_time_in_usec;
 static bool g_summarize_performance = true;
 static uint64_t g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
 static uint64_t g_show_performance_period_num = 0;
@@ -503,8 +504,7 @@ parse_workload_type(enum job_config_rw ret)
  * Note: If configuring warmup time, please use EMA or IA for periodic dump to avoid confusing results.
  *
  * Warmup and drain exclusion:
- * - Warmpup period (before g_warmup_finished): Excluded from the final CMA result
- * - Drain period (after g_drain_started):
+ * - Warmup period (before g_warmup_finished) and drain period (after g_drain_started):
  *   * Excluded from the FINAL CMA result only
  *   * Included in PERIODIC dumps (to show real-time behavior)
  * - Final CMA result = I/Os completed during steady state only
@@ -975,8 +975,8 @@ bdevperf_test_done(void *ctx)
 	struct bdevperf_stats job_stats = {0};
 	struct spdk_cpuset cpu_mask;
 
-	if (g_time_in_usec) {
-		g_stats.total.io_time_in_usec = g_time_in_usec;
+	if (g_total_time_in_usec) {
+		g_stats.total.io_time_in_usec = g_total_time_in_usec;
 
 		if (!g_run_rc && g_performance_dump_active) {
 			spdk_thread_send_msg(spdk_get_thread(), bdevperf_test_done, NULL);
@@ -989,9 +989,9 @@ bdevperf_test_done(void *ctx)
 	if (g_shutdown) {
 		g_shutdown_tsc = spdk_get_ticks() - g_start_tsc;
 		time_in_usec = g_shutdown_tsc * SPDK_SEC_TO_USEC / spdk_get_ticks_hz();
-		g_time_in_usec = (g_time_in_usec > time_in_usec) ? time_in_usec : g_time_in_usec;
+		g_total_time_in_usec = (g_total_time_in_usec > time_in_usec) ? time_in_usec : g_total_time_in_usec;
 		printf("Received shutdown signal, test time was about %.6f seconds\n",
-		       (double)g_time_in_usec / SPDK_SEC_TO_USEC);
+		       (double)g_total_time_in_usec / SPDK_SEC_TO_USEC);
 	}
 	/* Send RPC response if g_run_rc indicate success, or shutdown request was sent to bdevperf.
 	 * rpc_perform_tests_cb will send error response in case of error.
@@ -1848,7 +1848,7 @@ bdevperf_job_run(void *ctx)
 	 * completes, another will be submitted. */
 
 	/* Start a timer to stop this I/O chain when the run is over */
-	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job, g_time_in_usec);
+	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job, g_total_time_in_usec);
 	if (job->reset) {
 		job->reset_timer = SPDK_POLLER_REGISTER(reset_job, job,
 							10 * SPDK_SEC_TO_USEC);
@@ -1955,6 +1955,8 @@ check_and_process_warmup(uint64_t io_time_in_usec)
 
 	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
 		job->io_completed_at_warmup_end = job->io_completed;
+		job->prev_io_completed = job->io_completed;
+		job->ema_io_per_second = 0;
 	}
 
 	printf("--- Warmup Completed. Stats Reset. ---\n");
@@ -1965,11 +1967,17 @@ performance_statistics_thread(void *arg)
 {
 	struct bdevperf_aggregate_stats *aggregate;
 	struct bdevperf_stats *stats;
+	uint64_t time_in_usec;
 
 
 	if (g_performance_dump_active) {
 		return -1;
 	}
+
+	g_show_performance_period_num++;
+	time_in_usec = g_show_performance_period_num * g_show_performance_period_in_usec;
+
+	check_and_process_warmup(time_in_usec);
 
 	g_performance_dump_active = true;
 
@@ -1980,11 +1988,7 @@ performance_statistics_thread(void *arg)
 	stats = &aggregate->total;
 	stats->min_latency = (double)UINT64_MAX;
 
-	g_show_performance_period_num++;
-
-	stats->io_time_in_usec = g_show_performance_period_num * g_show_performance_period_in_usec;
-
-	check_and_process_warmup(stats->io_time_in_usec);
+	stats->io_time_in_usec = time_in_usec;
 
 	/* Iterate all of the jobs to gather stats
 	 * These jobs will not get removed here until a final performance dump is run,
@@ -2014,7 +2018,8 @@ bdevperf_test(void)
 		return;
 	}
 
-	printf("Running I/O for %" PRIu64 " seconds...\n", g_time_in_usec / (uint64_t)SPDK_SEC_TO_USEC);
+	printf("Running I/O for %" PRIu64 " seconds...\n",
+	       g_total_time_in_usec / (uint64_t)SPDK_SEC_TO_USEC);
 	fflush(stdout);
 
 	/* Start a timer to dump performance numbers */
@@ -3342,6 +3347,8 @@ verify_test_params(void)
 		goto out;
 	}
 	g_time_in_usec = g_time_in_sec * SPDK_SEC_TO_USEC;
+	g_total_time_in_usec = g_time_in_usec +
+			       (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
 
 	if (g_timeout_in_sec < 0) {
 		goto out;
