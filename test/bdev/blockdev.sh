@@ -8,6 +8,7 @@ testdir=$(readlink -f $(dirname $0))
 rootdir=$(readlink -f $testdir/../..)
 source $rootdir/test/common/autotest_common.sh
 source $testdir/nbd_common.sh
+source $testdir/bdevperf/common.sh
 
 rpc_py=rpc_cmd
 conf_file="$testdir/bdev.json"
@@ -544,8 +545,11 @@ function gen_qos_json_config() {
 function qos_test_suite() {
 	local qos_perf_time=$((QOS_RUN_TIME * 3 + 10))
 
-	# Run bdevperf with JSON config for bdevs, RPC for job config, and QoS disabled first
-	"$rootdir/build/examples/bdevperf" -z -m 0x2 -q 256 -o 4096 -w randread --interval-avg -t $qos_perf_time --json <(gen_qos_json_config) "$env_ctx" &
+	# Run bdevperf with JSON config for bdevs, INI config for jobs, and QoS disabled first
+	"$rootdir/build/examples/bdevperf" -z -m 0x2 --interval-avg -t $qos_perf_time --json <(gen_qos_json_config) -j <(
+		create_job "job0" "randread" "$QOS_DEV_1" 4096 100 256 0x2
+		create_job "job1" "randread" "$QOS_DEV_2" 4096 100 256 0x2
+	) "$env_ctx" &
 	QOS_PID=$!
 	echo "Process qos testing pid: $QOS_PID"
 	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
