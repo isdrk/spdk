@@ -111,8 +111,8 @@ spdk_nvme_ctrlr_cmd_iov_raw_with_md(struct spdk_nvme_ctrlr *ctrlr,
 		return -ENOMEM;
 	}
 	NVME_INIT_REQUEST_SGL(req, cb_fn, cb_arg, reset_sgl_fn, next_sge_fn, cb_arg, md_buf, len, md_len, 0,
-		0);
-		req->qpair = qpair;
+			      0);
+	req->qpair = qpair;
 
 	memcpy(&req->cmd, cmd, sizeof(req->cmd));
 
