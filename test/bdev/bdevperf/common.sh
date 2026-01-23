@@ -22,15 +22,19 @@ function create_job() {
 	job="[${job_section}]"
 	cat <<- EOF
 		${job}
-		filename=${filename}
 		bs=${bs}
 	EOF
+	if [[ -n $filename ]]; then
+		echo "filename=${filename}"
+	fi
 	# Only output rwmixread if mode is randrw (mixed read/write)
 	if [[ $rw == "randrw" ]]; then
 		echo "rwmixread=${rwmixread}"
 	fi
+	if [[ -n $rw ]]; then
+		echo "rw=${rw}"
+	fi
 	cat <<- EOF
-		rw=${rw}
 		iodepth=${iodepth}
 		cpumask=${cpumask}
 	EOF
