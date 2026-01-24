@@ -2196,10 +2196,9 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 {
 	struct fuse_out_header *out_hdr;
 	size_t buf_size;
-	int i;
 	int rc = 0;
 
-	for (i = 0, buf_size = 0; i < iovcnt; buf_size += iov[i].iov_len, ++i);
+	buf_size = spdk_iov_length(iov, iovcnt);
 	assert(buf_size >= sizeof(struct fuse_out_header));
 	out_hdr = malloc(buf_size);
 	if (!out_hdr) {
