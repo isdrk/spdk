@@ -546,7 +546,7 @@ accel_mlx5_translate_addr(void *addr, size_t size, struct spdk_memory_domain *do
 }
 
 static inline int
-accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
+accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge, int sge_cnt,
 			  struct accel_mlx5_iov_sgl *iovs, uint32_t lkey, uint32_t len, uint32_t *_remaining,
 			  struct spdk_memory_domain *domain, void *domain_ctx)
 {
@@ -558,7 +558,7 @@ accel_mlx5_fill_block_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 
 	*_remaining = len;
 
-	while (remaining && i < (int)ACCEL_MLX5_MAX_SGE) {
+	while (remaining && i < sge_cnt) {
 		size = spdk_min(remaining, iovs->iov->iov_len - iovs->iov_offset);
 		addr = (void *)iovs->iov->iov_base + iovs->iov_offset;
 		if (!lkey) {
@@ -711,8 +711,9 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 	length = num_blocks * block_size;
 	SPDK_DEBUGLOG(accel_mlx5, "task %p, domain %p, len %u, blocks %u\n", task, task->src_domain, length,
 		      num_blocks);
-	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, &mlx5_task->src, src_lkey, length, &remaining,
-				       task->src_domain, task->src_domain_ctx);
+	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, SPDK_COUNTOF(sge->src_sge), &mlx5_task->src,
+				       src_lkey, length, &remaining, task->src_domain,
+				       task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
 			rc = -EINVAL;
@@ -768,7 +769,8 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 
 	if (!mlx5_task->inplace) {
 		SPDK_DEBUGLOG(accel_mlx5, "task %p, dst sge, domain %p, len %u\n", task, task->dst_domain, length);
-		rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, &mlx5_task->dst, dst_lkey, length, &remaining,
+		rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, SPDK_COUNTOF(sge->dst_sge),
+					       &mlx5_task->dst, dst_lkey, length, &remaining,
 					       task->dst_domain, task->dst_domain_ctx);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -1122,8 +1124,8 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 	 * limitation on ACCEL_MLX5_MAX_SGE. If this is the case then remaining is not zero */
 	assert(mlx5_task->dst.iov->iov_len > mlx5_task->dst.iov_offset);
 	dst_len = mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset;
-	rc = accel_mlx5_fill_block_sge(qp, sgl.src_sge, &mlx5_task->src, 0, dst_len, &remaining,
-				       task->src_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl.src_sge, SPDK_COUNTOF(sgl.src_sge),
+				       &mlx5_task->src, 0, dst_len, &remaining, task->src_domain,
 				       task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -1136,8 +1138,8 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 	assert(dst_len > remaining);
 	dst_len -= remaining;
 
-	rc = accel_mlx5_fill_block_sge(qp, sgl.dst_sge, &mlx5_task->dst, 0, dst_len,  &remaining,
-				       task->dst_domain,
+	rc = accel_mlx5_fill_block_sge(qp, sgl.dst_sge, SPDK_COUNTOF(sgl.dst_sge),
+				       &mlx5_task->dst, 0, dst_len,  &remaining, task->dst_domain,
 				       task->dst_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -1363,8 +1365,9 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	assert(mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_ENCRYPT_AND_CRC32C ||
 	       mlx5_task->mlx5_opcode == ACCEL_MLX5_OPC_CRC32C_AND_DECRYPT);
 
-	rc = accel_mlx5_fill_block_sge(qp, sgl->src_sge, &mlx5_task->src, src_lkey, req_len, &remaining,
-				       task->src_domain, task->src_domain_ctx);
+	rc = accel_mlx5_fill_block_sge(qp, sgl->src_sge, SPDK_COUNTOF(sgl->src_sge), &mlx5_task->src,
+				       src_lkey, req_len, &remaining, task->src_domain,
+				       task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
 			rc = -EINVAL;
@@ -1379,7 +1382,8 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	umr_sge_count = sgl->src_sge_count = rc;
 
 	if (!mlx5_task->inplace) {
-		rc = accel_mlx5_fill_block_sge(qp, sgl->dst_sge, &mlx5_task->dst, dst_lkey, req_len, &remaining,
+		rc = accel_mlx5_fill_block_sge(qp, sgl->dst_sge, SPDK_COUNTOF(sgl->dst_sge),
+					       &mlx5_task->dst, dst_lkey, req_len, &remaining,
 					       task->dst_domain, task->dst_domain_ctx);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -1853,7 +1857,8 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	uint32_t remaining;
 	int rc;
 
-	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, &mlx5_task->src, 0, task->nbytes, &remaining,
+	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, SPDK_COUNTOF(sge->src_sge),
+				       &mlx5_task->src, 0, task->nbytes, &remaining,
 				       task->src_domain, task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -1866,7 +1871,8 @@ accel_mlx5_crc_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	sge->src_sge_count = rc;
 
 	if (!mlx5_task->inplace) {
-		rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, &mlx5_task->dst, 0, task->nbytes, &remaining,
+		rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, SPDK_COUNTOF(sge->dst_sge),
+					       &mlx5_task->dst, 0, task->nbytes, &remaining,
 					       task->dst_domain, task->dst_domain_ctx);
 		if (spdk_unlikely(rc <= 0)) {
 			if (rc == 0) {
@@ -2188,8 +2194,8 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 
 
 	for (i = 0; i < num_ops - 1; i++) {
-		sge_count = accel_mlx5_fill_block_sge(qp, sge, sgl_ptr, 0, umr_len[i], &remaining, domain,
-						      domain_ctx);
+		sge_count = accel_mlx5_fill_block_sge(qp, sge, SPDK_COUNTOF(sge), sgl_ptr, 0,
+						      umr_len[i], &remaining, domain, domain_ctx);
 		if (spdk_unlikely(sge_count <= 0)) {
 			rc = (sge_count == 0) ? -EINVAL : sge_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
@@ -2222,8 +2228,8 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	} else {
 		umr_offset = 0;
 		mlx5_task->last_mkey_idx = i;
-		sge_count = accel_mlx5_fill_block_sge(qp, sge, sgl_ptr, 0, umr_len[i], &remaining, domain,
-						      domain_ctx);
+		sge_count = accel_mlx5_fill_block_sge(qp, sge, SPDK_COUNTOF(sge), sgl_ptr, 0,
+						      umr_len[i], &remaining, domain, domain_ctx);
 		if (spdk_unlikely(sge_count <= 0)) {
 			rc = (sge_count == 0) ? -EINVAL : sge_count;
 			SPDK_ERRLOG("failed set RDMA sge, rc %d\n", rc);
@@ -2708,8 +2714,9 @@ accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 
 	mlx5_task->num_wrs = 0;
 
-	rc = accel_mlx5_fill_block_sge(qp, src_sge, &mlx5_task->src, 0, task->nbytes, &remaining,
-				       task->src_domain, task->src_domain_ctx);
+	rc = accel_mlx5_fill_block_sge(qp, src_sge, SPDK_COUNTOF(src_sge), &mlx5_task->src, 0,
+				       task->nbytes, &remaining, task->src_domain,
+				       task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0 || remaining)) {
 		rc = rc ? rc : -EINVAL;
 		SPDK_ERRLOG("Failed to set src sge, rc %d, remaining %u\n", rc, remaining);
@@ -2911,8 +2918,9 @@ accel_mlx5_crypto_mkey_ext_qp_task_process(struct accel_mlx5_task *mlx5_task)
 	block_size = task->block_size;
 	SPDK_DEBUGLOG(accel_mlx5, "task %p, src sge, domain %p, len %"PRIu64"\n", task,
 		      task->src_domain, task->nbytes);
-	rc = accel_mlx5_fill_block_sge(qp, sge.src_sge, &mlx5_task->src, 0, task->nbytes,
-				       &remaining, task->src_domain, task->src_domain_ctx);
+	rc = accel_mlx5_fill_block_sge(qp, sge.src_sge, SPDK_COUNTOF(sge.src_sge),
+				       &mlx5_task->src, 0, task->nbytes, &remaining,
+				       task->src_domain, task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
 			rc = -EINVAL;
@@ -3284,7 +3292,8 @@ accel_mlx5_dif_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	uint32_t remaining;
 	int rc;
 
-	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, &mlx5_task->src, 0, src_len, &remaining,
+	rc = accel_mlx5_fill_block_sge(qp, sge->src_sge, SPDK_COUNTOF(sge->src_sge),
+				       &mlx5_task->src, 0, src_len, &remaining,
 				       task->src_domain, task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -3296,7 +3305,8 @@ accel_mlx5_dif_task_fill_sge(struct accel_mlx5_task *mlx5_task, struct accel_mlx
 	assert(remaining == 0);
 	sge->src_sge_count = rc;
 
-	rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, &mlx5_task->dst, 0, dst_len, &remaining,
+	rc = accel_mlx5_fill_block_sge(qp, sge->dst_sge, SPDK_COUNTOF(sge->dst_sge),
+				       &mlx5_task->dst, 0, dst_len, &remaining,
 				       task->dst_domain, task->dst_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
@@ -3554,8 +3564,8 @@ accel_mlx5_dif_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 
 	mlx5_task->num_wrs = 0;
 	/* At this moment we have as many requests as can be submitted to a qp */
-	rc = accel_mlx5_fill_block_sge(qp, sges, &mlx5_task->src, 0, umr_len, &remaining, task->src_domain,
-				       task->src_domain_ctx);
+	rc = accel_mlx5_fill_block_sge(qp, sges, SPDK_COUNTOF(sges), &mlx5_task->src, 0, umr_len,
+				       &remaining, task->src_domain, task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
 			rc = -EINVAL;

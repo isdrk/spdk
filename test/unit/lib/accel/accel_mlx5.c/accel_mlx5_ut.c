@@ -531,13 +531,15 @@ test_accel_mlx5_fill_block_sge(void)
 
 	accel_mlx5_iov_sgl_init(&sgl, iovs, 2);
 
-	rc = accel_mlx5_fill_block_sge(&qp, sges, &sgl, 0, 0x5000, &remaining, &domain, NULL);
+	rc = accel_mlx5_fill_block_sge(&qp, sges, SPDK_COUNTOF(sges), &sgl, 0, 0x5000, &remaining,
+				       &domain, NULL);
 	CU_ASSERT(rc == 2);
 	CU_ASSERT(remaining == 0);
 
 	accel_mlx5_iov_sgl_init(&sgl, iovs, 2);
 
-	rc = accel_mlx5_fill_block_sge(&qp, sges, &sgl, 0, 0x5000, &remaining, NULL, NULL);
+	rc = accel_mlx5_fill_block_sge(&qp, sges, SPDK_COUNTOF(sges), &sgl, 0, 0x5000, &remaining,
+				       NULL, NULL);
 	CU_ASSERT(rc == 2);
 	CU_ASSERT(remaining == 0);
 }
