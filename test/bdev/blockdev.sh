@@ -370,6 +370,49 @@ function fio_test_suite() {
 	trap - SIGINT SIGTERM EXIT
 }
 
+function qos_skip_first_sample() {
+	local sample_time=$1
+	local skip_first_sample=${QOS_SKIP_FIRST_SAMPLE:-1}
+
+	# iostat outputs one sample per second; only skip the first sample when we
+	# have more than one second of runtime so data remains to average.
+	if [ "$sample_time" -le 1 ]; then
+		skip_first_sample=0
+	fi
+
+	echo "$skip_first_sample"
+}
+
+function qos_iostat_avg_value() {
+	local mode=$1
+	local qos_dev=$2
+	local skip_first_sample=$3
+	local iostat_output=$4
+
+	awk -v dev="$qos_dev" -v skip="$skip_first_sample" -v mode="$mode" '
+		$1 == dev {
+			if (mode == "IOPS") {
+				value = $2
+			} else if (mode == "BANDWIDTH") {
+				value = $3 + $4
+			} else if (mode == "READ_BW") {
+				value = $3
+			} else if (mode == "WRITE_BW") {
+				value = $4
+			} else {
+				next
+			}
+			last = value
+			if (skip == 0 || seen > 0) { sum += value; count++ }
+			seen++
+		}
+		END {
+			if (count > 0) { print sum / count }
+			else { print last }
+		}
+	' <<< "$iostat_output"
+}
+
 function get_io_result() {
 	local limit_type=$1
 	shift # Remove first argument, rest are bdev names
@@ -377,24 +420,22 @@ function get_io_result() {
 	local iostat_output
 	local total_result=0
 	local dev_result
+	local sample_time=$QOS_RUN_TIME
+	local skip_first_sample
 
 	if [ "$limit_type" != IOPS ] && [ "$limit_type" != BANDWIDTH ]; then
 		echo "Invalid limit type: $limit_type" >&2
 		exit 1
 	fi
 
-	iostat_output=$($rootdir/scripts/iostat.py -d -i 1 -t $QOS_RUN_TIME)
+	skip_first_sample=$(qos_skip_first_sample "$sample_time")
+	iostat_output=$($rootdir/scripts/iostat.py -d -i 1 -t $sample_time)
 
 	# For each bdev, get its result and sum them up
 	for qos_dev in "${qos_devs[@]}"; do
-		iostat_result=$(grep "$qos_dev" <<< "$iostat_output" | tail -1)
-		if [ $limit_type = IOPS ]; then
-			dev_result=$(awk '{print $2}' <<< $iostat_result)
-		elif [ $limit_type = BANDWIDTH ]; then
-			dev_result=$(awk '{print $3}' <<< $iostat_result)
-		fi
-		# Remove decimal point and add to total
-		dev_result=${dev_result/.*/}
+		dev_result=$(qos_iostat_avg_value "$limit_type" "$qos_dev" "$skip_first_sample" "$iostat_output")
+		# Convert to integer (handles scientific notation) and add to total
+		dev_result=$(printf "%.0f" "$dev_result")
 		total_result=$((total_result + dev_result))
 	done
 
@@ -406,7 +447,7 @@ function run_qos_test() {
 	local qos_result=0
 
 	qos_result=$(get_io_result $2 $3)
-	if [ $2 = BANDWIDTH ]; then
+	if [ "$2" = BANDWIDTH ]; then
 		qos_limit=$((qos_limit * 1024))
 	fi
 	lower_limit=$((qos_limit * 9 / 10))
