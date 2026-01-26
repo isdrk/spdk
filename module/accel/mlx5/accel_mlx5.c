@@ -26,7 +26,7 @@
 #define ACCEL_MLX5_CQ_SIZE (1024u)
 #define ACCEL_MLX5_NUM_MKEYS (2048u)
 #define ACCEL_MLX5_RECOVER_POLLER_PERIOD_US (10000)
-#define ACCEL_MLX5_MAX_SGE (16u)
+#define ACCEL_MLX5_MAX_INLINE_SGE (16u)
 #define ACCEL_MLX5_SGE_SIZE (16u)
 #define ACCEL_MLX5_MAX_WC (32u)
 #define ACCEL_MLX5_MAX_MKEYS_IN_TASK (16u)
@@ -125,8 +125,8 @@ struct accel_mlx5_module {
 struct accel_mlx5_sge {
 	uint32_t src_sge_count;
 	uint32_t dst_sge_count;
-	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
-	struct ibv_sge dst_sge[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_INLINE_SGE];
+	struct ibv_sge dst_sge[ACCEL_MLX5_MAX_INLINE_SGE];
 };
 
 struct accel_mlx5_iov_sgl {
@@ -805,7 +805,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 				SPDK_DEBUGLOG(accel_mlx5, "task %p, unwind dst sge for %u bytes\n", task, dt);
 				accel_mlx5_iov_sgl_unwind(&mlx5_task->dst, task->d.iovcnt, dt);
 				sge->dst_sge_count = accel_mlx5_sge_unwind(sge->dst_sge, sge->dst_sge_count, dt);
-				assert(sge->dst_sge_count > 0 && sge->dst_sge_count <= ACCEL_MLX5_MAX_SGE);
+				assert(sge->dst_sge_count > 0 && sge->dst_sge_count <= ACCEL_MLX5_MAX_INLINE_SGE);
 				if (!sge->dst_sge_count) {
 					return -ERANGE;
 				}
@@ -816,7 +816,7 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 			/* The same for src iov_sgl and sge. In worst case we can unwind SRC 2 times */
 			accel_mlx5_iov_sgl_unwind(&mlx5_task->src, task->s.iovcnt, dt);
 			sge->src_sge_count = accel_mlx5_sge_unwind(sge->src_sge, sge->src_sge_count, dt);
-			assert(sge->src_sge_count > 0 && sge->src_sge_count <= ACCEL_MLX5_MAX_SGE);
+			assert(sge->src_sge_count > 0 && sge->src_sge_count <= ACCEL_MLX5_MAX_INLINE_SGE);
 			if (!sge->src_sge_count) {
 				return -ERANGE;
 			}
@@ -1039,11 +1039,11 @@ accel_mlx5_crypto_task_init(struct accel_mlx5_task *mlx5_task)
 			/* Last req may consume less blocks */
 			mlx5_task->blocks_per_req = spdk_min(num_blocks, g_accel_mlx5.attr.crypto_split_blocks);
 		} else {
-			if (task->s.iovcnt > ACCEL_MLX5_MAX_SGE || task->d.iovcnt > ACCEL_MLX5_MAX_SGE) {
+			if (task->s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE || task->d.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE) {
 				uint32_t max_sge_count = spdk_max(task->s.iovcnt, task->d.iovcnt);
 
-				assert(SPDK_CEIL_DIV(max_sge_count, ACCEL_MLX5_MAX_SGE) <= UINT16_MAX);
-				mlx5_task->num_reqs = SPDK_CEIL_DIV(max_sge_count, ACCEL_MLX5_MAX_SGE);
+				assert(SPDK_CEIL_DIV(max_sge_count, ACCEL_MLX5_MAX_INLINE_SGE) <= UINT16_MAX);
+				mlx5_task->num_reqs = SPDK_CEIL_DIV(max_sge_count, ACCEL_MLX5_MAX_INLINE_SGE);
 				mlx5_task->blocks_per_req = SPDK_CEIL_DIV(num_blocks, mlx5_task->num_reqs);
 				SPDK_DEBUGLOG(accel_mlx5, "task %p, src_iovs %u, dst_iovs %u, num_reqs %u, "
 					      "blocks/req %u, blocks %u\n", task, task->s.iovcnt, task->d.iovcnt,
@@ -1121,7 +1121,7 @@ accel_mlx5_copy_task_process_one(struct accel_mlx5_task *mlx5_task, struct accel
 	int rc;
 
 	/* Limit one RDMA_WRITE by length of dst buffer. Not all src buffers may fit into one dst buffer due to
-	 * limitation on ACCEL_MLX5_MAX_SGE. If this is the case then remaining is not zero */
+	 * limitation on ACCEL_MLX5_MAX_INLINE_SGE. If this is the case then remaining is not zero */
 	assert(mlx5_task->dst.iov->iov_len > mlx5_task->dst.iov_offset);
 	dst_len = mlx5_task->dst.iov->iov_len - mlx5_task->dst.iov_offset;
 	rc = accel_mlx5_fill_block_sge(qp, sgl.src_sge, SPDK_COUNTOF(sgl.src_sge),
@@ -1242,7 +1242,7 @@ accel_mlx5_get_copy_task_count(struct iovec *src_iov, uint32_t src_iovcnt,
 			dst_offset += src_len;
 			src_offset = 0;
 			src++;
-			if (++src_sge_count >= ACCEL_MLX5_MAX_SGE) {
+			if (++src_sge_count >= ACCEL_MLX5_MAX_INLINE_SGE) {
 				num_ops++;
 				src_sge_count = 0;
 			}
@@ -1286,10 +1286,10 @@ accel_mlx5_copy_task_init(struct accel_mlx5_task *mlx5_task)
 	}
 #endif
 
-	if (spdk_likely(task->s.iovcnt <= ACCEL_MLX5_MAX_SGE)) {
+	if (spdk_likely(task->s.iovcnt <= ACCEL_MLX5_MAX_INLINE_SGE)) {
 		mlx5_task->num_reqs = task->d.iovcnt;
 	} else if (task->d.iovcnt == 1) {
-		mlx5_task->num_reqs = SPDK_CEIL_DIV(task->s.iovcnt, ACCEL_MLX5_MAX_SGE);
+		mlx5_task->num_reqs = SPDK_CEIL_DIV(task->s.iovcnt, ACCEL_MLX5_MAX_INLINE_SGE);
 	} else {
 		mlx5_task->num_reqs = accel_mlx5_get_copy_task_count(task->s.iovs, task->s.iovcnt,
 				      task->d.iovs, task->d.iovcnt);
@@ -1401,7 +1401,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 
 	if (gen_signature && !encrypt) {
 		/* Ensure that there is a free sge */
-		if (umr_sge_count >= ACCEL_MLX5_MAX_SGE) {
+		if (umr_sge_count >= ACCEL_MLX5_MAX_INLINE_SGE) {
 			SPDK_ERRLOG("No space left for crc_dst in sge\n");
 			return -EINVAL;
 		}
@@ -1577,7 +1577,7 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	/*
-	 * TODO: Find a better solution and do not fail the task if sge_count == ACCEL_MLX5_MAX_SGE
+	 * TODO: Find a better solution and do not fail the task if sge_count == ACCEL_MLX5_MAX_INLINE_SGE
 	 *
 	 * For now, the CRC offload feature is only used to calculate the data digest for write
 	 * operations in the NVMe TCP initiator. Since one continues buffer is allocted for each IO
@@ -1586,7 +1586,7 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 	/* Last request, add crc_dst to the sges */
 	if (mlx5_task->num_submitted_reqs + 1 == mlx5_task->num_reqs) {
 		/* Ensure that there is a free sge */
-		if (sge_count >= ACCEL_MLX5_MAX_SGE) {
+		if (sge_count >= ACCEL_MLX5_MAX_INLINE_SGE) {
 			SPDK_ERRLOG("No space left for crc_dst in sge\n");
 			return -EINVAL;
 		}
@@ -1952,7 +1952,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 	 * Add the crc destination to the end of sge. A free entry must be available for CRC
 	 * because the task init function reserved it.
 	 */
-	assert(sge_count < ACCEL_MLX5_MAX_SGE);
+	assert(sge_count < ACCEL_MLX5_MAX_INLINE_SGE);
 	if (check_op) {
 		mlx5_task->psv->crc = *mlx5_task->base.crc_dst ^ UINT32_MAX;
 	}
@@ -1996,8 +1996,8 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 {
 	int umr_idx = 0;
 	int rdma_idx = 0;
-	int umr_iovcnt = spdk_min(umr_iovs->iovcnt, (int)ACCEL_MLX5_MAX_SGE);
-	int rdma_iovcnt = spdk_min(rdma_iovs->iovcnt, (int)ACCEL_MLX5_MAX_SGE);
+	int umr_iovcnt = spdk_min(umr_iovs->iovcnt, (int)ACCEL_MLX5_MAX_INLINE_SGE);
+	int rdma_iovcnt = spdk_min(rdma_iovs->iovcnt, (int)ACCEL_MLX5_MAX_INLINE_SGE);
 	size_t umr_iov_offset;
 	size_t rdma_iov_offset;
 	size_t umr_len = 0;
@@ -2030,7 +2030,7 @@ accel_mlx5_crc_task_fill_umr_sge(struct accel_mlx5_qp *qp, struct ibv_sge *sge,
 			remaining = umr_sge_len - rdma_sge_len;
 			while (remaining) {
 				rdma_idx++;
-				if (rdma_idx == (int)ACCEL_MLX5_MAX_SGE) {
+				if (rdma_idx == (int)ACCEL_MLX5_MAX_INLINE_SGE) {
 					break;
 				}
 				rdma_sge_len = rdma_iovs->iov[rdma_idx].iov_len;
@@ -2090,7 +2090,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	uint16_t i;
 	int rc;
 	size_t umr_len[ACCEL_MLX5_MAX_MKEYS_IN_TASK];
-	struct ibv_sge sge[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge sge[ACCEL_MLX5_MAX_INLINE_SGE];
 	struct spdk_memory_domain *domain;
 	void *domain_ctx;
 	uint64_t ts;
@@ -2239,7 +2239,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 	}
 	if ((mlx5_task->num_completed_reqs + i + 1) == mlx5_task->num_reqs) {
 		/* Ensure that there is a free sge for the CRC destination. */
-		assert(sge_count < (int)ACCEL_MLX5_MAX_SGE);
+		assert(sge_count < (int)ACCEL_MLX5_MAX_INLINE_SGE);
 		/* Add the crc destination to the end of sge. */
 		if (check_op) {
 			mlx5_task->psv->crc = *mlx5_task->base.crc_dst ^ UINT32_MAX;
@@ -2383,21 +2383,21 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 	bool copy_crc_op = (opcode == SPDK_ACCEL_OPC_COPY_CRC32C);
 
 	/*
-	 * One operation is enough if both iovs fit into ACCEL_MLX5_MAX_SGE.
+	 * One operation is enough if both iovs fit into ACCEL_MLX5_MAX_INLINE_SGE.
 	 * One SGE is reserved for CRC on dst_iov for copy_crc operations and on src_iov for others.
 	 */
 	if (copy_crc_op) {
-		if (src_iovcnt <= ACCEL_MLX5_MAX_SGE && (dst_iovcnt + 1) <= ACCEL_MLX5_MAX_SGE) {
+		if (src_iovcnt <= ACCEL_MLX5_MAX_INLINE_SGE && (dst_iovcnt + 1) <= ACCEL_MLX5_MAX_INLINE_SGE) {
 			return 1;
 		}
 	} else {
-		if (dst_iovcnt <= ACCEL_MLX5_MAX_SGE && (src_iovcnt + 1) <= ACCEL_MLX5_MAX_SGE) {
+		if (dst_iovcnt <= ACCEL_MLX5_MAX_INLINE_SGE && (src_iovcnt + 1) <= ACCEL_MLX5_MAX_INLINE_SGE) {
 			return 1;
 		}
 	}
 
 	while (src_idx < src_iovcnt && dst_idx < dst_iovcnt) {
-		if (num_src_sge > ACCEL_MLX5_MAX_SGE || num_dst_sge > ACCEL_MLX5_MAX_SGE) {
+		if (num_src_sge > ACCEL_MLX5_MAX_INLINE_SGE || num_dst_sge > ACCEL_MLX5_MAX_INLINE_SGE) {
 			num_ops++;
 			num_src_sge = 1;
 			num_dst_sge = 1;
@@ -2417,14 +2417,14 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 		if (src_len < dst_len) {
 			/* Advance src_iov to reach the point that corresponds to the end of the current dst_iov. */
 			num_sge = accel_mlx5_advance_iovec(&src_iov[src_idx],
-							   spdk_min(ACCEL_MLX5_MAX_SGE + 1 - num_src_sge,
+							   spdk_min(ACCEL_MLX5_MAX_INLINE_SGE + 1 - num_src_sge,
 									   src_iovcnt - src_idx),
 							   &src_offset, &dst_len);
 			src_idx += num_sge;
 			num_src_sge += num_sge;
 			if (dst_len != 0) {
 				/*
-				 * ACCEL_MLX5_MAX_SGE is reached on src_iov, and dst_len bytes
+				 * ACCEL_MLX5_MAX_INLINE_SGE is reached on src_iov, and dst_len bytes
 				 * are left on the current dst_iov.
 				 */
 				dst_offset = dst_iov[dst_idx].iov_len - dst_len;
@@ -2437,14 +2437,14 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 		} else { /* src_len > dst_len */
 			/* Advance dst_iov to reach the point that corresponds to the end of the current src_iov. */
 			num_sge = accel_mlx5_advance_iovec(&dst_iov[dst_idx],
-							   spdk_min(ACCEL_MLX5_MAX_SGE + 1 - num_dst_sge,
+							   spdk_min(ACCEL_MLX5_MAX_INLINE_SGE + 1 - num_dst_sge,
 									   dst_iovcnt - dst_idx),
 							   &dst_offset, &src_len);
 			dst_idx += num_sge;
 			num_dst_sge += num_sge;
 			if (src_len != 0) {
 				/*
-				 * ACCEL_MLX5_MAX_SGE is reached on dst_iov, and src_len bytes
+				 * ACCEL_MLX5_MAX_INLINE_SGE is reached on dst_iov, and src_len bytes
 				 * are left on the current src_iov.
 				 */
 				src_offset = src_iov[src_idx].iov_len - src_len;
@@ -2461,8 +2461,8 @@ accel_mlx5_get_crc_task_count(struct iovec *src_iov, uint32_t src_iovcnt, struct
 	 * An extra operation is needed if no space is left on dst_iov (for copy_crc operations)
 	 * or src_iov (for others) because CRC takes one SGE.
 	 */
-	if ((copy_crc_op && num_dst_sge > ACCEL_MLX5_MAX_SGE) ||
-	    (!copy_crc_op && num_src_sge > ACCEL_MLX5_MAX_SGE)) {
+	if ((copy_crc_op && num_dst_sge > ACCEL_MLX5_MAX_INLINE_SGE) ||
+	    (!copy_crc_op && num_src_sge > ACCEL_MLX5_MAX_INLINE_SGE)) {
 		num_ops++;
 	}
 
@@ -2487,7 +2487,7 @@ accel_mlx5_crc_task_init(struct accel_mlx5_task *mlx5_task)
 	accel_mlx5_iov_sgl_init(&mlx5_task->src, task->s.iovs, task->s.iovcnt);
 	if (mlx5_task->inplace) {
 		/* One entry is reserved for CRC */
-		mlx5_task->num_reqs = SPDK_CEIL_DIV(mlx5_task->src.iovcnt + 1, ACCEL_MLX5_MAX_SGE);
+		mlx5_task->num_reqs = SPDK_CEIL_DIV(mlx5_task->src.iovcnt + 1, ACCEL_MLX5_MAX_INLINE_SGE);
 	} else {
 		accel_mlx5_iov_sgl_init(&mlx5_task->dst, task->d.iovs, task->d.iovcnt);
 		mlx5_task->num_reqs = accel_mlx5_get_crc_task_count(mlx5_task->src.iov, mlx5_task->src.iovcnt,
@@ -2658,7 +2658,7 @@ accel_mlx5_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 
 	assert(g_accel_mlx5.attr.enable_driver);
 
-	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
+	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE)) {
 		/* With `external mkey` we can't split task or register several UMRs */
 		SPDK_ERRLOG("src buffer is too fragmented\n");
 		return -EINVAL;
@@ -2696,7 +2696,7 @@ static inline int
 accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
-	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_INLINE_SGE];
 	struct spdk_mlx5_umr_attr umr_attr = {
 		.mkey = mlx5_task->mkeys[0]->mkey,
 		.sge = src_sge,
@@ -2785,7 +2785,7 @@ accel_mlx5_crypto_mkey_task_init_common(struct accel_mlx5_task *mlx5_task,
 	int rc;
 	bool crypto_key_ok;
 
-	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_SGE)) {
+	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE)) {
 		/* With `external mkey` we can't split task or register several UMRs */
 		SPDK_ERRLOG("src buffer is too fragmented\n");
 		return -EINVAL;
@@ -3184,7 +3184,7 @@ accel_mlx5_dif_task_init(struct accel_mlx5_task *mlx5_task)
 	uint32_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
 	int rc;
 
-	if (spdk_max(task->s.iovcnt, task->d.iovcnt) > ACCEL_MLX5_MAX_SGE) {
+	if (spdk_max(task->s.iovcnt, task->d.iovcnt) > ACCEL_MLX5_MAX_INLINE_SGE) {
 		/* Only a single request is supported for now. */
 		SPDK_ERRLOG("buffer is too fragmented\n");
 		return -ENOTSUP;
@@ -3510,7 +3510,7 @@ accel_mlx5_dif_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 	uint32_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
 	int rc;
 
-	if (spdk_max(task->s.iovcnt, task->d.iovcnt) > ACCEL_MLX5_MAX_SGE) {
+	if (spdk_max(task->s.iovcnt, task->d.iovcnt) > ACCEL_MLX5_MAX_INLINE_SGE) {
 		SPDK_ERRLOG("buffer is too fragmented\n");
 		return -ENOTSUP;
 	}
@@ -3538,7 +3538,7 @@ accel_mlx5_dif_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
-	struct ibv_sge sges[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge sges[ACCEL_MLX5_MAX_INLINE_SGE];
 	uint32_t sge_count, remaining, umr_len;
 	enum spdk_mlx5_sig_type mem_sig_type, wire_sig_type;
 	uint64_t ts;
@@ -4501,8 +4501,8 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 
 	mlx5_qp_attr.cap.max_send_wr = g_accel_mlx5.attr.qp_size;
 	mlx5_qp_attr.cap.max_recv_wr = 0;
-	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_SGE;
-	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_SGE;
+	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_INLINE_SGE;
+	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_INLINE_SGE;
 	mlx5_qp_attr.aes_xts_inc_64 = (dev->dev_ctx->caps.crypto_supported == 1) ?
 				      dev->dev_ctx->caps.crypto.tweak_inc_64 : false;
 
@@ -4943,7 +4943,7 @@ accel_mlx5_mkeys_create(struct ibv_pd *pd, uint32_t num_mkeys, uint32_t flags)
 	}
 
 	pool_param.flags = flags;
-	pool_param.max_sges = ACCEL_MLX5_MAX_SGE;
+	pool_param.max_sges = ACCEL_MLX5_MAX_INLINE_SGE;
 
 	return spdk_mlx5_mkey_pool_init(&pool_param, pd);
 }
@@ -4971,7 +4971,7 @@ accel_mlx5_umr_mb_create(struct accel_mlx5_dev_ctx *dev_ctx)
 	struct spdk_mlx5_umr_mb_pool_param params = {
 		.mb_count = g_accel_mlx5.attr.num_requests,
 		.map = dev_ctx->map,
-		.mb_size = SPDK_ALIGN_CEIL(ACCEL_MLX5_MAX_SGE * ACCEL_MLX5_SGE_SIZE, 64)
+		.mb_size = SPDK_ALIGN_CEIL(ACCEL_MLX5_MAX_INLINE_SGE * ACCEL_MLX5_SGE_SIZE, 64),
 	};
 
 	dev_ctx->umr_mb_pool = spdk_mlx5_umr_mb_pool_create(&params, dev_ctx->pd);

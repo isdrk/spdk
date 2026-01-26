@@ -520,7 +520,7 @@ test_accel_mlx5_fill_block_sge(void)
 	struct spdk_memory_domain domain;
 	struct iovec iovs[2];
 	struct accel_mlx5_iov_sgl sgl;
-	struct ibv_sge sges[ACCEL_MLX5_MAX_SGE];
+	struct ibv_sge sges[ACCEL_MLX5_MAX_INLINE_SGE];
 	uint32_t remaining = 0;
 	int rc;
 
