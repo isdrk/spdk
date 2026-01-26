@@ -27,6 +27,8 @@
 #define ACCEL_MLX5_NUM_MKEYS (2048u)
 #define ACCEL_MLX5_RECOVER_POLLER_PERIOD_US (10000)
 #define ACCEL_MLX5_MAX_INLINE_SGE (16u)
+#define ACCEL_MLX5_MAX_MB_SGE (256u)
+#define ACCEL_MLX5_MAX_SGE ACCEL_MLX5_MAX_MB_SGE
 #define ACCEL_MLX5_SGE_SIZE (16u)
 #define ACCEL_MLX5_MAX_WC (32u)
 #define ACCEL_MLX5_MAX_MKEYS_IN_TASK (16u)
@@ -479,6 +481,7 @@ accel_mlx5_task_fail(struct accel_mlx5_task *task, int rc)
 			break;
 		case ACCEL_MLX5_OPC_MKEY:
 			spdk_mlx5_mkey_pool_put(dev->mkeys, task->mkeys[0]);
+			accel_mlx5_task_free_umr_mb(task);
 			break;
 		default:
 			break;
@@ -2655,12 +2658,16 @@ accel_mlx5_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
+	size_t max_sges;
+	int rc;
 
 	assert(g_accel_mlx5.attr.enable_driver);
-
-	if (spdk_unlikely(task->s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE)) {
+	max_sges = g_accel_mlx5.attr.umr_memory_buffer ? ACCEL_MLX5_MAX_MB_SGE :
+		   ACCEL_MLX5_MAX_INLINE_SGE;
+	if (spdk_unlikely(task->s.iovcnt > max_sges)) {
 		/* With `external mkey` we can't split task or register several UMRs */
-		SPDK_ERRLOG("src buffer is too fragmented\n");
+		SPDK_ERRLOG("src buffer is too fragmented: %u (max: %zu)\n", task->s.iovcnt,
+			    max_sges);
 		return -EINVAL;
 	}
 	if (spdk_unlikely(task->src_domain == spdk_accel_get_memory_domain())) {
@@ -2684,6 +2691,14 @@ accel_mlx5_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 		accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
 		return -ENOMEM;
 	}
+	if (task->s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE) {
+		rc = accel_mlx5_task_alloc_umr_mb(mlx5_task, 1);
+		if (spdk_unlikely(rc != 0)) {
+			spdk_mlx5_mkey_pool_put(dev->mkeys, mlx5_task->mkeys[0]);
+			accel_mlx5_dev_nomem_task_mkey(dev, mlx5_task);
+			return -ENOMEM;
+		}
+	}
 	mlx5_task->num_ops = 1;
 
 	SPDK_DEBUGLOG(accel_mlx5, "mkey task num_blocks %u, src_len %zu\n", mlx5_task->num_reqs,
@@ -2696,9 +2711,10 @@ static inline int
 accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_accel_task *task = &mlx5_task->base;
-	struct ibv_sge src_sge[ACCEL_MLX5_MAX_INLINE_SGE];
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
 	struct spdk_mlx5_umr_attr umr_attr = {
 		.mkey = mlx5_task->mkeys[0]->mkey,
+		.mb = mlx5_task->num_mbs ? mlx5_task->umr_mb[0] : NULL,
 		.sge = src_sge,
 		.umr_len = task->nbytes,
 	};
@@ -2724,6 +2740,7 @@ accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 
 	umr_attr.sge_count = rc;
+
 	rc = spdk_mlx5_umr_configure(qp->qp, &umr_attr, (uint64_t)mlx5_task,
 				     SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
@@ -2746,6 +2763,7 @@ accel_mlx5_mkey_task_continue(struct accel_mlx5_task *task)
 	struct accel_mlx5_qp *qp = task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	uint16_t qp_slot = accel_mlx5_dev_get_available_slots(dev, qp);
+	int rc;
 
 	if (spdk_unlikely(qp_slot == 0)) {
 		accel_mlx5_dev_nomem_task_qdepth_repeat(dev, task);
@@ -2756,6 +2774,14 @@ accel_mlx5_mkey_task_continue(struct accel_mlx5_task *task)
 		if (spdk_unlikely(!task->mkeys[0])) {
 			accel_mlx5_dev_nomem_task_mkey_repeat(dev, task);
 			return -ENOMEM;
+		}
+		if (task->base.s.iovcnt > ACCEL_MLX5_MAX_INLINE_SGE) {
+			rc = accel_mlx5_task_alloc_umr_mb(task, 1);
+			if (spdk_unlikely(rc != 0)) {
+				spdk_mlx5_mkey_pool_put(dev->mkeys, task->mkeys[0]);
+				accel_mlx5_dev_nomem_task_mkey_repeat(dev, task);
+				return -ENOMEM;
+			}
 		}
 		task->num_ops = 1;
 	}
@@ -2772,6 +2798,7 @@ accel_mlx5_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 	assert(mlx5_task->base.seq);
 
 	spdk_mlx5_mkey_pool_put(dev->mkeys, mlx5_task->mkeys[0]);
+	accel_mlx5_task_free_umr_mb(mlx5_task);
 	spdk_accel_task_complete(&mlx5_task->base, 0);
 }
 
@@ -4128,6 +4155,7 @@ accel_mlx5_task_reset(struct accel_mlx5_task *mlx5_task)
 	mlx5_task->num_submitted_reqs = 0;
 	mlx5_task->num_ops = 0;
 	mlx5_task->num_reqs = 0;
+	mlx5_task->num_mbs = 0;
 	mlx5_task->raw = 0;
 }
 
@@ -4943,7 +4971,9 @@ accel_mlx5_mkeys_create(struct ibv_pd *pd, uint32_t num_mkeys, uint32_t flags)
 	}
 
 	pool_param.flags = flags;
-	pool_param.max_sges = ACCEL_MLX5_MAX_INLINE_SGE;
+	pool_param.max_sges = g_accel_mlx5.attr.umr_memory_buffer ?
+			      ACCEL_MLX5_MAX_MB_SGE :
+			      ACCEL_MLX5_MAX_INLINE_SGE;
 
 	return spdk_mlx5_mkey_pool_init(&pool_param, pd);
 }
@@ -4971,7 +5001,7 @@ accel_mlx5_umr_mb_create(struct accel_mlx5_dev_ctx *dev_ctx)
 	struct spdk_mlx5_umr_mb_pool_param params = {
 		.mb_count = g_accel_mlx5.attr.num_requests,
 		.map = dev_ctx->map,
-		.mb_size = SPDK_ALIGN_CEIL(ACCEL_MLX5_MAX_INLINE_SGE * ACCEL_MLX5_SGE_SIZE, 64),
+		.mb_size = SPDK_ALIGN_CEIL(ACCEL_MLX5_MAX_MB_SGE * ACCEL_MLX5_SGE_SIZE, 64),
 	};
 
 	dev_ctx->umr_mb_pool = spdk_mlx5_umr_mb_pool_create(&params, dev_ctx->pd);
