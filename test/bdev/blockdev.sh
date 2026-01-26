@@ -414,6 +414,19 @@ function qos_iostat_avg_value() {
 	' <<< "$iostat_output"
 }
 
+function qos_check_range() {
+	local measured=$1
+	local lower=$2
+	local upper=$3
+	local message=$4
+
+	if [ "$measured" -lt "$lower" ] || [ "$measured" -gt "$upper" ]; then
+		echo "$message"
+		qos_test_cleanup
+		exit 1
+	fi
+}
+
 function get_io_result() {
 	local limit_type=$1
 	shift # Remove first argument, rest are bdev names
@@ -441,6 +454,25 @@ function get_io_result() {
 	done
 
 	echo $total_result
+}
+
+function get_io_result_rw_pair() {
+	local qos_dev=$1
+	local iostat_output
+	local read_result
+	local write_result
+	local sample_time=$QOS_RUN_TIME
+	local skip_first_sample
+
+	skip_first_sample=$(qos_skip_first_sample "$sample_time")
+	iostat_output=$($rootdir/scripts/iostat.py -d -i 1 -t $sample_time)
+
+	read_result=$(qos_iostat_avg_value "READ_BW" "$qos_dev" "$skip_first_sample" "$iostat_output")
+	write_result=$(qos_iostat_avg_value "WRITE_BW" "$qos_dev" "$skip_first_sample" "$iostat_output")
+	read_result=$(printf "%.0f" "$read_result")
+	write_result=$(printf "%.0f" "$write_result")
+
+	echo "$read_result $write_result"
 }
 
 function run_qos_test() {
@@ -538,7 +570,7 @@ function gen_qos_json_config() {
 		          "method": "bdev_malloc_create",
 		          "params": {
 		            "name": "$QOS_DEV_1",
-		            "num_blocks": 128,
+		            "num_blocks": 4096,
 		            "block_size": 512
 		          }
 		        },
@@ -546,7 +578,7 @@ function gen_qos_json_config() {
 		          "method": "bdev_null_create",
 		          "params": {
 		            "name": "$QOS_DEV_2",
-		            "num_blocks": 128,
+		            "num_blocks": 4096,
 		            "block_size": 512
 		          }
 		        }
@@ -571,6 +603,187 @@ function qos_test_suite() {
 
 	qos_run_bdevperf_tests
 	qos_function_test
+
+	qos_test_cleanup
+	trap - SIGINT SIGTERM EXIT
+}
+
+# Validate basic IOPS limiting for a single bdev.
+function qos_basic_iops_limit_test() {
+	local qos_service=$1
+	local qos_dev=$2
+	local qos_limit=$3
+	local measured_iops
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_service
+	$rpc_py bdev_qos_add_bdev $qos_service $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops $qos_limit
+
+	measured_iops=$(get_io_result IOPS $qos_dev)
+	lower_limit=$((qos_limit * 9 / 10))
+	upper_limit=$((qos_limit * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io read rate of $qos_dev by qos: expected ~$qos_limit IOPS, got $measured_iops"
+}
+
+# Validate basic bandwidth limiting for a single bdev.
+function qos_basic_bw_limit_test() {
+	local qos_service=$1
+	local qos_limit_mbps=$2
+	local qos_dev=$3
+	local measured_bw
+	local qos_limit_kib
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_service
+	$rpc_py bdev_qos_add_bdev $qos_service $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_mbps $qos_limit_mbps -i 4096 -z 4096 -a 4096
+
+	sleep 1
+	measured_bw=$(get_io_result BANDWIDTH $qos_dev)
+	qos_limit_kib=$((qos_limit_mbps * 1024))
+	lower_limit=$((qos_limit_kib * 9 / 10))
+	upper_limit=$((qos_limit_kib * 11 / 10))
+	qos_check_range "$measured_bw" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io bandwidth of $qos_dev by qos: expected ~$qos_limit_mbps MiB/s, got $measured_bw KiB/s"
+}
+
+# Validate read-only QoS while write traffic is also present.
+function qos_basic_rw_bw_limit_test() {
+	local qos_service=$1
+	local qos_read_mbps=$2
+	local qos_dev=$3
+	local expected_read_mbps=$4
+	local expected_write_mbps=$5
+	local measured_read_bw
+	local measured_write_bw
+	local expected_read_kib
+	local expected_write_kib
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_service
+	$rpc_py bdev_qos_add_bdev $qos_service $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_service r_mbps $qos_read_mbps -i 4096 -z 4096 -a 4096
+
+	sleep 1
+	read -r measured_read_bw measured_write_bw < <(get_io_result_rw_pair $qos_dev)
+	expected_read_kib=$((expected_read_mbps * 1024))
+	expected_write_kib=$((expected_write_mbps * 1024))
+	lower_limit=$((expected_read_kib * 9 / 10))
+	upper_limit=$((expected_read_kib * 11 / 10))
+	qos_check_range "$measured_read_bw" "$lower_limit" "$upper_limit" \
+		"Failed to limit the read bandwidth of $qos_dev by qos: expected ~$expected_read_mbps MiB/s, got $measured_read_bw KiB/s"
+	lower_limit=$((expected_write_kib * 9 / 10))
+	upper_limit=$((expected_write_kib * 11 / 10))
+	qos_check_range "$measured_write_bw" "$lower_limit" "$upper_limit" \
+		"Unexpected write bandwidth for $qos_dev: expected ~$expected_write_mbps MiB/s, got $measured_write_bw KiB/s"
+}
+
+# Validate combined IOPS + bandwidth limiting on the same bdev.
+function qos_basic_iops_bw_limit_test() {
+	local qos_service=$1
+	local qos_dev=$2
+	local qos_iops_limit=$3
+	local qos_mbps_limit=$4
+	local measured_iops
+	local measured_bw
+	local qos_limit_kib
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_service
+	$rpc_py bdev_qos_add_bdev $qos_service $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops $qos_iops_limit
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_mbps $qos_mbps_limit -i 131072 -z 131072 -a 131072
+
+	sleep 1
+	measured_iops=$(get_io_result IOPS $qos_dev)
+	measured_bw=$(get_io_result BANDWIDTH $qos_dev)
+
+	lower_limit=$((qos_iops_limit * 9 / 10))
+	upper_limit=$((qos_iops_limit * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_limit IOPS, got $measured_iops"
+
+	qos_limit_kib=$((qos_mbps_limit * 1024))
+	lower_limit=$((qos_limit_kib * 9 / 10))
+	upper_limit=$((qos_limit_kib * 11 / 10))
+	qos_check_range "$measured_bw" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io bandwidth of $qos_dev by qos: expected ~$qos_mbps_limit MiB/s, got $measured_bw KiB/s"
+}
+
+# Run basic QoS limiting suite for IOPS/BW cases.
+function qos_test_basic_limiting_suite() {
+	local perf_time=$((QOS_RUN_TIME * 2 + 10))
+	local qos_service_iops="qos_service_fixed_iops"
+	local qos_service_bw="qos_service_fixed_bw"
+	local qos_service_rw_bw="qos_service_rw_bw"
+	local qos_service_iops_bw="qos_service_iops_bw"
+	local qos_limit=2000
+	local qos_bw_limit=8
+	local qos_read_bw_limit=8
+	local qos_iops_bw_limit=2000
+	local qos_mbps_limit=32
+	local workload_iops=4000
+	local workload_bw_mbps=16
+	local workload_rw_mbps=16
+
+	qos_start_bdevperf "Process qos fixed IOPS testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-iops $workload_iops \
+		--json <(gen_qos_json_config) -j <(
+			create_job "job0" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
+
+	qos_run_bdevperf_tests
+	qos_basic_iops_limit_test $qos_service_iops $QOS_DEV_1 $qos_limit
+	kill $PERF_PID 2> /dev/null || true
+	wait $PERF_PID 2> /dev/null || true
+
+	qos_test_cleanup
+
+	qos_start_bdevperf "Process qos fixed BW testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-mbps $workload_bw_mbps \
+		--json <(gen_qos_json_config) -j <(
+			create_job "job0" "write" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_basic_bw_limit_test $qos_service_bw $qos_bw_limit $QOS_DEV_1
+	kill $PERF_PID 2> /dev/null || true
+	wait $PERF_PID 2> /dev/null || true
+
+	qos_test_cleanup
+
+	qos_start_bdevperf "Process qos read/write BW testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-mbps $workload_rw_mbps \
+		--json <(gen_qos_json_config) -j <(
+			create_job "job_read" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+			create_job "job_write" "randwrite" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_basic_rw_bw_limit_test $qos_service_rw_bw $qos_read_bw_limit $QOS_DEV_1 $qos_read_bw_limit $workload_rw_mbps
+	kill $PERF_PID 2> /dev/null || true
+	wait $PERF_PID 2> /dev/null || true
+
+	qos_test_cleanup
+
+	qos_start_bdevperf "Process qos IOPS/BW testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time \
+		--json <(gen_qos_json_config) -j <(
+			create_job "job_large" "randrw" "$QOS_DEV_1" 131072 100 64 0x2
+			create_job "job_small" "randrw" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_basic_iops_bw_limit_test $qos_service_iops_bw $QOS_DEV_1 $qos_iops_bw_limit $qos_mbps_limit
+	kill $PERF_PID 2> /dev/null || true
+	wait $PERF_PID 2> /dev/null || true
 
 	qos_test_cleanup
 	trap - SIGINT SIGTERM EXIT
@@ -938,6 +1151,7 @@ run_test "bdev_json_nonarray" $rootdir/build/examples/bdevperf --json "$nonarray
 
 if [[ $test_type == bdev ]]; then
 	run_test "bdev_qos" qos_test_suite "$env_ctx"
+	run_test "bdev_qos_limiting" qos_test_basic_limiting_suite "$env_ctx"
 	run_test "bdev_qd_sampling" qd_sampling_test_suite "$env_ctx"
 	run_test "bdev_error" error_test_suite "$env_ctx"
 	run_test "bdev_stat" stat_test_suite "$env_ctx"
