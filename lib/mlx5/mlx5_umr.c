@@ -55,6 +55,8 @@ struct mlx5_mkey_attr {
 	uint32_t log_entity_size;
 	struct mlx5_wqe_data_seg *klm;
 	uint32_t klm_count;
+	/* Max number of KLMs. If 0, the default will be used. */
+	uint32_t max_klm_count;
 	/* Size of bsf in octowords. If 0 then bsf is disabled */
 	uint32_t bsf_octowords;
 	bool crypto_en;
@@ -100,7 +102,7 @@ static TAILQ_HEAD(mlx5_mkey_pool_head,
 		  spdk_mlx5_mkey_pool) g_mkey_pools = TAILQ_HEAD_INITIALIZER(g_mkey_pools);
 static pthread_mutex_t g_mkey_pool_lock = PTHREAD_MUTEX_INITIALIZER;
 
-#define SPDK_KLM_MAX_TRANSLATION_ENTRIES_NUM   128
+#define MLX5_MKEY_MAX_KLM_COUNT 128
 
 static struct mlx5_mkey *
 mlx5_mkey_create(struct ibv_pd *pd, struct mlx5_mkey_attr *attr)
@@ -166,7 +168,7 @@ mlx5_mkey_create(struct ibv_pd *pd, struct mlx5_mkey_attr *attr)
 	DEVX_SET(mkc, mkc, qpn, 0xffffff);
 	DEVX_SET(mkc, mkc, pd, pd_id);
 	DEVX_SET(mkc, mkc, translations_octword_size,
-		 SPDK_KLM_MAX_TRANSLATION_ENTRIES_NUM);
+		 attr->max_klm_count ? attr->max_klm_count : MLX5_MKEY_MAX_KLM_COUNT);
 	DEVX_SET(mkc, mkc, relaxed_ordering_write,
 		 attr->relaxed_ordering_write);
 	DEVX_SET(mkc, mkc, relaxed_ordering_read,
@@ -243,7 +245,8 @@ mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 
 static int
 mlx5_mkey_pool_create_mkey(struct mlx5_mkey **_mkey, struct ibv_pd *pd,
-			   struct mlx5_relaxed_ordering_caps *caps, uint32_t flags)
+			   struct mlx5_relaxed_ordering_caps *caps, uint32_t flags,
+			   uint32_t max_sges)
 {
 	struct mlx5_mkey *mkey;
 	struct mlx5_mkey_attr mkey_attr = {};
@@ -263,6 +266,8 @@ mlx5_mkey_pool_create_mkey(struct mlx5_mkey **_mkey, struct ibv_pd *pd,
 	if (flags & SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE) {
 		bsf_size += 64;
 	}
+	/* TODO: check that this doesn't exceed mlx5_ifc_cmd_hca_cap_bits.log_max_klm_list_size */
+	mkey_attr.max_klm_count = max_sges;
 	mkey_attr.bsf_octowords = bsf_size / 16;
 
 	mkey = mlx5_mkey_create(pd, &mkey_attr);
@@ -351,7 +356,8 @@ mlx5_mkey_pool_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd *pd)
 	new_pool->pd = pd;
 	new_pool->flags = params->flags;
 	for (j = 0; j < params->mkey_count; j++) {
-		rc = mlx5_mkey_pool_create_mkey(&mkeys[j], pd, &caps, params->flags);
+		rc = mlx5_mkey_pool_create_mkey(&mkeys[j], pd, &caps, params->flags,
+						params->max_sges);
 		if (rc) {
 			goto err;
 		}

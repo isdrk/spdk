@@ -135,6 +135,7 @@ struct spdk_mlx5_mkey_pool_param {
 	uint32_t cache_per_thread;
 	/* enum spdk_mlx5_mkey_pool_flags */
 	uint32_t flags;
+	uint32_t max_sges;
 };
 
 struct spdk_mlx5_psv_pool_obj;

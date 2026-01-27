@@ -4888,6 +4888,7 @@ accel_mlx5_mkeys_create(struct ibv_pd *pd, uint32_t num_mkeys, uint32_t flags)
 	}
 
 	pool_param.flags = flags;
+	pool_param.max_sges = ACCEL_MLX5_MAX_SGE;
 
 	return spdk_mlx5_mkey_pool_init(&pool_param, pd);
 }
