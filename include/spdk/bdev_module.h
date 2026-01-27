@@ -25,6 +25,7 @@
 #include "spdk/util.h"
 #include "spdk/uuid.h"
 #include "spdk/bdev_reservations.h"
+#include "spdk/telemetry_source.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -824,6 +825,13 @@ struct spdk_bdev {
 
 		/** Bdev name used for quick lookup */
 		struct spdk_bdev_name bdev_name;
+
+		struct __bdev_internal_telemetry {
+			/** Telemetry source for this bdev. */
+			struct spdk_telemetry_source *source_iostat;
+			/** Stats structure to be used while pulling the telemetry stats. */
+			struct spdk_bdev_io_stat io_stat;
+		} telemetry;
 	} internal;
 };
 

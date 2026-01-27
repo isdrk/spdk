@@ -58,3 +58,4 @@ SPDK_SUBSYSTEM_DEPEND(bdev, iobuf)
 #ifdef CONFIG_RDMA
 SPDK_SUBSYSTEM_DEPEND(bdev, rdma_provider)
 #endif
+SPDK_SUBSYSTEM_DEPEND(bdev, telemetry)

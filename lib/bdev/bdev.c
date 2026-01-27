@@ -30,6 +30,7 @@
 #include "spdk_internal/assert.h"
 #include "spdk_internal/bdev.h"
 #include "spdk_internal/bdev_qos_module.h"
+#include "spdk/telemetry_source.h"
 
 #ifdef SPDK_CONFIG_VTUNE
 #include "ittnotify.h"
@@ -102,6 +103,8 @@ struct spdk_bdev_mgr {
 
 	TAILQ_HEAD(, spdk_bdev_qos) qos_list;
 
+	struct spdk_telemetry_type *telemetry_type_iostat;
+
 #ifdef SPDK_CONFIG_VTUNE
 	__itt_domain	*domain;
 #endif
@@ -116,6 +119,7 @@ static struct spdk_bdev_mgr g_bdev_mgr = {
 	.async_bdev_opens = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.async_bdev_opens),
 	.qos_modules = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.qos_modules),
 	.qos_list = TAILQ_HEAD_INITIALIZER(g_bdev_mgr.qos_list),
+	.telemetry_type_iostat = NULL,
 };
 
 static void
@@ -2401,6 +2405,52 @@ bdev_qos_modules_init(void)
 	return 0;
 }
 
+static const char *bdev_io_stat_fields[] = {
+	"bytes_read",
+	"num_read_ops",
+	"bytes_written",
+	"num_write_ops",
+	"bytes_unmapped",
+	"num_unmap_ops",
+	"bytes_copied",
+	"num_copy_ops",
+	"read_latency_ticks",
+	"max_read_latency_ticks",
+	"min_read_latency_ticks",
+	"write_latency_ticks",
+	"max_write_latency_ticks",
+	"min_write_latency_ticks",
+	"unmap_latency_ticks",
+	"max_unmap_latency_ticks",
+	"min_unmap_latency_ticks",
+	"copy_latency_ticks",
+	"max_copy_latency_ticks",
+	"min_copy_latency_ticks",
+	"ticks_rate",
+	"num_read_split",
+	"num_write_split",
+};
+
+SPDK_STATIC_ASSERT(
+	SPDK_COUNTOF(bdev_io_stat_fields) * sizeof(uint64_t) == offsetof(struct spdk_bdev_io_stat,
+			io_error),
+	"bdev_io_stat_fields array size mismatch the io_stat structure size");
+
+static int
+bdev_telemetry_init(void)
+{
+	int rc;
+
+	rc = spdk_telemetry_register_type("bdev_io_stat", bdev_io_stat_fields,
+					  SPDK_COUNTOF(bdev_io_stat_fields), &g_bdev_mgr.telemetry_type_iostat);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to register bdev io stat telemetry type: %d\n", rc);
+		return rc;
+	}
+
+	SPDK_DEBUGLOG(bdev, "bdev_io_stat telemetry type registered\n");
+	return 0;
+}
 void
 spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 {
@@ -2452,6 +2502,14 @@ spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 		return;
 	}
 
+
+	rc = bdev_telemetry_init();
+	if (rc != 0) {
+		SPDK_ERRLOG("bdev telemetry init failed\n");
+		bdev_init_complete(-1);
+		return;
+	}
+
 #ifdef SPDK_CONFIG_VTUNE
 	g_bdev_mgr.domain = __itt_domain_create("spdk_bdev");
 #endif
@@ -2484,6 +2542,12 @@ bdev_mgr_unregister_cb(void *io_device)
 		}
 
 		spdk_mempool_free(g_bdev_mgr.bdev_io_pool);
+	}
+
+	if (g_bdev_mgr.telemetry_type_iostat) {
+		spdk_telemetry_unregister_type(g_bdev_mgr.telemetry_type_iostat);
+		SPDK_DEBUGLOG(bdev, "bdev_io_stat telemetry type unregistered\n");
+		g_bdev_mgr.telemetry_type_iostat = NULL;
 	}
 
 	spdk_free(g_bdev_mgr.zero_buffer);
@@ -8968,6 +9032,96 @@ spdk_bdev_io_get_io_channel(struct spdk_bdev_io *bdev_io)
 	return bdev_io->internal.ch->channel;
 }
 
+static void
+bdev_io_stat_pull_io_stat_done_cb(struct spdk_bdev *bdev, struct spdk_bdev_io_stat *stat,
+				  void *cb_arg, int rc)
+{
+	struct spdk_telemetry_source *src = bdev->internal.telemetry.source_iostat;
+	uint64_t *stats;
+	uint64_t num_stats;
+
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to get device stat for bdev %s\n", bdev->name);
+		spdk_telemetry_source_pull_complete(src, rc);
+		return;
+	}
+
+	stats = spdk_telemetry_source_get_stats(src);
+	num_stats = spdk_telemetry_source_get_num_stats(src);
+
+	assert(stats != NULL);
+	assert(num_stats == SPDK_COUNTOF(bdev_io_stat_fields));
+	assert(num_stats == 23);
+
+	SPDK_UNUSED(num_stats);
+
+	stats[0] = stat->bytes_read;
+	stats[1] = stat->num_read_ops;
+	stats[2] = stat->bytes_written;
+	stats[3] = stat->num_write_ops;
+	stats[4] = stat->bytes_unmapped;
+	stats[5] = stat->num_unmap_ops;
+	stats[6] = stat->bytes_copied;
+	stats[7] = stat->num_copy_ops;
+	stats[8] = stat->read_latency_ticks;
+	stats[9] = stat->max_read_latency_ticks;
+	stats[10] = stat->min_read_latency_ticks;
+	stats[11] = stat->write_latency_ticks;
+	stats[12] = stat->max_write_latency_ticks;
+	stats[13] = stat->min_write_latency_ticks;
+	stats[14] = stat->unmap_latency_ticks;
+	stats[15] = stat->max_unmap_latency_ticks;
+	stats[16] = stat->min_unmap_latency_ticks;
+	stats[17] = stat->copy_latency_ticks;
+	stats[18] = stat->max_copy_latency_ticks;
+	stats[19] = stat->min_copy_latency_ticks;
+	stats[20] = stat->ticks_rate;
+	stats[21] = stat->num_read_split;
+	stats[22] = stat->num_write_split;
+
+	spdk_telemetry_source_pull_complete(src, 0);
+}
+
+static void
+bdev_io_stat_pull_cb(void *pull_cb_arg, struct spdk_telemetry_source *src)
+{
+	struct spdk_bdev *bdev = pull_cb_arg;
+	uint64_t *stats;
+	uint64_t num_stats;
+
+	assert(bdev->internal.telemetry.source_iostat == src);
+
+	stats = spdk_telemetry_source_get_stats(src);
+	num_stats = spdk_telemetry_source_get_num_stats(src);
+
+	assert(stats != NULL);
+	assert(num_stats == SPDK_COUNTOF(bdev_io_stat_fields));
+
+	SPDK_UNUSED(stats);
+	SPDK_UNUSED(num_stats);
+
+	spdk_bdev_get_device_stat(bdev, &bdev->internal.telemetry.io_stat, SPDK_BDEV_RESET_STAT_NONE,
+				  bdev_io_stat_pull_io_stat_done_cb, bdev);
+}
+
+static int
+bdev_register_telemetry(struct spdk_bdev *bdev)
+{
+	int ret;
+
+	ret = spdk_telemetry_register_source(g_bdev_mgr.telemetry_type_iostat, bdev->name,
+					     bdev_io_stat_pull_cb, bdev,
+					     &bdev->internal.telemetry.source_iostat);
+	if (ret) {
+		SPDK_ERRLOG("Failed to register telemetry source for bdev %s: %d\n", bdev->name, ret);
+		return ret;
+	}
+
+	SPDK_DEBUGLOG(bdev, "Telemetry source for bdev %s registered\n", bdev->name);
+
+	return 0;
+}
+
 static int
 bdev_register(struct spdk_bdev *bdev)
 {
@@ -9108,6 +9262,17 @@ bdev_register(struct spdk_bdev *bdev)
 				sizeof(struct spdk_bdev_channel),
 				bdev_name);
 
+	ret = bdev_register_telemetry(bdev);
+	if (ret != 0) {
+		spdk_io_device_unregister(__bdev_to_io_dev(bdev), NULL);
+		if (strcmp(bdev->name, uuid) != 0) {
+			spdk_bdev_alias_del(bdev, uuid);
+		}
+		bdev_free_io_stat(bdev->internal.stat);
+		spdk_spin_destroy(&bdev->internal.spinlock);
+		free(bdev_name);
+		return ret;
+	}
 	/*
 	 * Register bdev name only after the bdev object is ready.
 	 * After bdev_name_add returns, it is possible for other threads to start using the bdev,
@@ -9121,6 +9286,7 @@ bdev_register(struct spdk_bdev *bdev)
 		}
 		bdev_free_io_stat(bdev->internal.stat);
 		spdk_spin_destroy(&bdev->internal.spinlock);
+		spdk_telemetry_unregister_source(bdev->internal.telemetry.source_iostat);
 		free(bdev_name);
 		return ret;
 	}
@@ -9146,6 +9312,12 @@ bdev_destroy_cb(void *io_device)
 	if (bdev->internal.unregister_td != spdk_get_thread()) {
 		spdk_thread_send_msg(bdev->internal.unregister_td, bdev_destroy_cb, io_device);
 		return;
+	}
+
+	if (bdev->internal.telemetry.source_iostat) {
+		spdk_telemetry_unregister_source(bdev->internal.telemetry.source_iostat);
+		SPDK_DEBUGLOG(bdev, "Telemetry source for bdev %s unregistered\n", bdev->name);
+		bdev->internal.telemetry.source_iostat = NULL;
 	}
 
 	cb_fn = bdev->internal.unregister_cb;

@@ -70,7 +70,7 @@ DEPDIRS-net := log util $(JSON_LIBS)
 DEPDIRS-notify := log util $(JSON_LIBS)
 DEPDIRS-trace := log util $(JSON_LIBS)
 
-DEPDIRS-bdev := accel log util thread $(JSON_LIBS) notify trace dma
+DEPDIRS-bdev := accel log util thread $(JSON_LIBS) notify trace dma telemetry
 DEPDIRS-blobfs := log thread blob trace util
 DEPDIRS-event := log util thread $(JSON_LIBS) trace init
 DEPDIRS-init := jsonrpc json log rpc thread util
@@ -196,7 +196,7 @@ DEPDIRS-fsdev_aio := $(FSDEV_DEPS_THREAD)
 DEPDIRS-event_accel := init accel event_iobuf
 DEPDIRS-event_vmd := init vmd $(JSON_LIBS) log thread util
 
-DEPDIRS-event_bdev := init bdev event_accel event_vmd event_sock event_iobuf event_keyring
+DEPDIRS-event_bdev := init bdev event_accel event_vmd event_sock event_iobuf event_keyring event_telemetry
 
 DEPDIRS-event_scheduler := event init json log
 

@@ -9,6 +9,7 @@
 
 #include "common/lib/ut_multithread.c"
 
+#include "telemetry/telemetry.c"
 #include "bdev/bdev.c"
 #include "lvol/lvol.c"
 #include "bdev/malloc/bdev_malloc.c"
@@ -772,9 +773,20 @@ subsystem_init_cb(int rc, void *ctx)
 	assert(rc == 0);
 }
 
+static bool fini_done = false;
+
 static void
 bdev_fini_cb(void *arg)
 {
+	fini_done = true;
+}
+
+static void
+telemetry_fini_cb(void *cb_arg, int rc)
+{
+	assert(rc == 0);
+
+	fini_done = true;
 }
 
 int
@@ -813,12 +825,28 @@ main(int argc, char **argv)
 		SPDK_ERRLOG("Failed to initialize accel\n");
 		abort();
 	}
+	rc = spdk_telemetry_init();
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to initialize telemetry\n");
+		abort();
+	}
 	spdk_bdev_initialize(bdev_init_cb, NULL);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();
 
+	fini_done = false;
 	spdk_bdev_finish(bdev_fini_cb, NULL);
+	/* Wait for the bdev subsystem to finish, so we can finalize telemetry */
+	while (!fini_done) {
+		poll_threads();
+	}
+	fini_done = false;
+	spdk_telemetry_fini(telemetry_fini_cb, NULL);
+	/* Wait for the telemetry subsystem to finish, so we can finalize the rest */
+	while (!fini_done) {
+		poll_threads();
+	}
 	spdk_accel_finish(bdev_fini_cb, NULL);
 	spdk_iobuf_finish(bdev_fini_cb, NULL);
 
