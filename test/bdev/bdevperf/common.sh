@@ -12,6 +12,8 @@ function create_job() {
 	local rwmixread=${5:-70}
 	local iodepth=${6:-256}
 	local cpumask=${7:-0xff}
+	local rate_iops=${8:-}
+	local rate_mbps=${9:-}
 
 	if [[ $job_section == "global" ]]; then
 		cat <<- EOF
@@ -38,6 +40,12 @@ function create_job() {
 		iodepth=${iodepth}
 		cpumask=${cpumask}
 	EOF
+	if [[ -n $rate_iops ]]; then
+		echo "rate_iops=${rate_iops}"
+	fi
+	if [[ -n $rate_mbps ]]; then
+		echo "rate_mbps=${rate_mbps}"
+	fi
 }
 
 function get_num_jobs() {
