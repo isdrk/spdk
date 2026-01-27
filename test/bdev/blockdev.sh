@@ -633,6 +633,14 @@ function gen_qos_json_config() {
 		            "num_blocks": 4096,
 		            "block_size": 512
 		          }
+		        },
+		        {
+		          "method": "bdev_null_create",
+		          "params": {
+		            "name": "$QOS_DEV_3",
+		            "num_blocks": 4096,
+		            "block_size": 512
+		          }
 		        }
 		      ]
 		    }
@@ -838,6 +846,83 @@ function qos_hier_bw_limit_test() {
 		"Unexpected bandwidth for $qos_dev: expected ~$expected_mbps MiB/s, got $measured_bw KiB/s"
 }
 
+function qos_aggregate_iops_limit_test() {
+	local qos_leaf=$1
+	local dev_a=$2
+	local dev_b=$3
+	local dev_c=$4
+	local qos_limit=$5
+	local expected_total_iops=$6
+	local expected_child_iops=$7
+	local measured_a_iops
+	local measured_b_iops
+	local measured_c_iops
+	local measured_total_iops
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_leaf
+	$rpc_py bdev_qos_add_bdev $qos_leaf $dev_a
+	$rpc_py bdev_qos_add_bdev $qos_leaf $dev_b
+	$rpc_py bdev_qos_add_bdev $qos_leaf $dev_c
+	$rpc_py bdev_burst_qos_set_limit $qos_leaf rw_iops $qos_limit
+
+	sleep 1
+	read -r measured_a_iops measured_b_iops measured_c_iops measured_total_iops \
+		< <(get_iops_list_and_total $dev_a $dev_b $dev_c)
+
+	lower_limit=$((expected_total_iops * 9 / 10))
+	upper_limit=$((expected_total_iops * 11 / 10))
+	qos_check_range "$measured_total_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected aggregated IOPS: expected ~$expected_total_iops IOPS, got $measured_total_iops"
+	lower_limit=$((expected_child_iops * 8 / 10))
+	upper_limit=$((expected_child_iops * 12 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev A IOPS: expected ~$expected_child_iops IOPS, got $measured_a_iops"
+	qos_check_range "$measured_b_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev B IOPS: expected ~$expected_child_iops IOPS, got $measured_b_iops"
+	qos_check_range "$measured_c_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev C IOPS: expected ~$expected_child_iops IOPS, got $measured_c_iops"
+}
+
+function qos_noisy_neighbor_iops_limit_test() {
+	local qos_leaf=$1
+	local dev_a=$2
+	local dev_b=$3
+	local qos_limit=$4
+	local iops_headroom=$5
+	local guaranteed_iops=$6
+	local aggregate_limit=$7
+	local measured_a_iops
+	local measured_b_iops
+	local measured_total_iops
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_leaf
+	$rpc_py bdev_qos_add_bdev $qos_leaf $dev_a
+	$rpc_py bdev_qos_add_bdev $qos_leaf $dev_b
+	$rpc_py bdev_burst_qos_set_limit $qos_leaf rw_iops $qos_limit
+
+	sleep 1
+	read -r measured_a_iops measured_b_iops measured_total_iops < <(get_iops_list_and_total $dev_a $dev_b)
+
+	lower_limit=$((aggregate_limit * 9 / 10))
+	upper_limit=$((aggregate_limit * 11 / 10))
+	qos_check_range "$measured_total_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected aggregated IOPS: expected ~$aggregate_limit IOPS, got $measured_total_iops"
+
+	lower_limit=$((iops_headroom * 8 / 10))
+	upper_limit=$((iops_headroom * 12 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev A IOPS: expected ~$iops_headroom IOPS, got $measured_a_iops"
+
+	lower_limit=$((guaranteed_iops * 8 / 10))
+	upper_limit=$((guaranteed_iops * 12 / 10))
+	qos_check_range "$measured_b_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev B IOPS: expected ~$guaranteed_iops IOPS, got $measured_b_iops"
+}
+
 # Run basic QoS limiting suite for IOPS/BW cases.
 function qos_test_basic_limiting_suite() {
 	local perf_time=$((QOS_RUN_TIME * 2 + 10))
@@ -985,6 +1070,54 @@ function qos_test_hierarchy_suite() {
 	qos_hier_bw_limit_test $qos_root_bw $qos_child_bw $dev_a $root_read_mbps $child_rw_mbps $child_rw_mbps
 	wait $PERF_PID
 	qos_test_cleanup
+	trap - SIGINT SIGTERM EXIT
+}
+
+function qos_test_agg_bdevs_suite() {
+	local perf_time=$((QOS_RUN_TIME + 10))
+	local qos_leaf="qos_leaf_agg"
+	local dev_a=$QOS_DEV_1
+	local dev_b=$QOS_DEV_2
+	local dev_c=$QOS_DEV_3
+	local qos_limit=4000
+	local workload_iops=8000
+	local expected_each_iops=$((qos_limit / 3))
+	local aggregate_limit=10000
+	local background_iops=20000
+	local guaranteed_iops=1000
+	local iops_headroom=$((aggregate_limit - guaranteed_iops))
+
+	# Phase 1: aggregate IOPS cap across three bdevs.
+	qos_start_bdevperf "Process qos aggregation bdevs testing pid:" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-iops $workload_iops \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$dev_a" 4096 100 64 0x2
+			create_job "job_b" "randread" "$dev_b" 4096 100 64 0x2
+			create_job "job_c" "randread" "$dev_c" 4096 100 64 0x2
+		) "$env_ctx"
+	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
+
+	qos_run_bdevperf_tests
+	qos_aggregate_iops_limit_test $qos_leaf $dev_a $dev_b $dev_c $qos_limit $qos_limit $expected_each_iops
+	wait $PERF_PID
+	qos_test_cleanup
+
+	# Phase 2: verifies work-conserving using noisy neighbor.
+	qos_start_bdevperf "Process qos aggregation noisy neighbor testing pid:" \
+		-m 0x2 -z --interval-avg -t $perf_time \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$dev_a" 4096 100 64 0x2 $background_iops
+			create_job "job_b" "randread" "$dev_b" 4096 100 64 0x2 $guaranteed_iops
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_noisy_neighbor_iops_limit_test $qos_leaf $dev_a $dev_b $aggregate_limit \
+		$iops_headroom $guaranteed_iops $aggregate_limit
+	wait $PERF_PID
+	qos_test_cleanup
+
 	trap - SIGINT SIGTERM EXIT
 }
 
@@ -1233,6 +1366,7 @@ function bdev_crypto_enomem() {
 #-----------------------------------------------------
 QOS_DEV_1="Malloc_0"
 QOS_DEV_2="Null_1"
+QOS_DEV_3="Null_2"
 QOS_RUN_TIME=5
 
 if [ $(uname -s) = Linux ]; then
@@ -1352,6 +1486,7 @@ if [[ $test_type == bdev ]]; then
 	run_test "bdev_qos" qos_test_suite "$env_ctx"
 	run_test "bdev_qos_limiting" qos_test_basic_limiting_suite "$env_ctx"
 	run_test "bdev_qos_hierarchy" qos_test_hierarchy_suite "$env_ctx"
+	run_test "bdev_qos_aggregate_bdevs" qos_test_agg_bdevs_suite "$env_ctx"
 	run_test "bdev_qd_sampling" qd_sampling_test_suite "$env_ctx"
 	run_test "bdev_error" error_test_suite "$env_ctx"
 	run_test "bdev_stat" stat_test_suite "$env_ctx"
