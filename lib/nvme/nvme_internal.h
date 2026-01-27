@@ -306,15 +306,12 @@ struct nvme_request {
 	uint16_t			num_children;
 
 	/**
-	 * Timeout ticks for error injection requests, can be extended in future
-	 * to support per-request timeout feature.
-	 */
-	uint64_t			timeout_tsc;
-
-	/**
 	 * Data payload for this request's command.
 	 */
 	struct nvme_payload		payload;
+
+	/** Sequence of accel operations associated with this request */
+	void				*accel_sequence;
 
 	spdk_nvme_cmd_cb		cb_fn;
 	void				*cb_arg;
@@ -328,6 +325,11 @@ struct nvme_request {
 	 */
 	uint64_t			submit_tick;
 
+	/**
+	 * Timeout ticks for error injection requests, can be extended in future
+	 * to support per-request timeout feature.
+	 */
+	uint64_t			timeout_tsc;
 	/**
 	 * The active admin request can be moved to a per process pending
 	 *  list based on the saved pid to tell which process it belongs
@@ -380,9 +382,6 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		user_cb_fn;
 	void				*user_cb_arg;
 	void				*user_buffer;
-
-	/** Sequence of accel operations associated with this request */
-	void				*accel_sequence;
 };
 
 typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
