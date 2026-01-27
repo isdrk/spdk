@@ -475,6 +475,58 @@ function get_io_result_rw_pair() {
 	echo "$read_result $write_result"
 }
 
+# Return IOPS for a list of bdevs plus their total.
+function get_iops_list_and_total() {
+	local sample_time=$QOS_RUN_TIME
+	local devs=("$@")
+	local last_idx=$((${#devs[@]} - 1))
+	local iostat_result
+	local skip_first_sample
+
+	if [ ${#devs[@]} -gt 0 ] && [[ "${devs[$last_idx]}" =~ ^[0-9]+$ ]]; then
+		sample_time="${devs[$last_idx]}"
+		unset 'devs[$last_idx]'
+	fi
+
+	skip_first_sample=$(qos_skip_first_sample "$sample_time")
+	iostat_result=$($rootdir/scripts/iostat.py -d -i 1 -t $sample_time)
+	awk -v list="${devs[*]}" -v skip_first_sample="$skip_first_sample" '
+		BEGIN {
+			n = split(list, names, " ")
+			for (i = 1; i <= n; i++) {
+				idx[names[i]] = i
+			}
+			sample = 0
+		}
+		$1 == "Device" {
+			sample++
+			next
+		}
+		skip_first_sample && sample == 1 {
+			next
+		}
+		$1 in idx {
+			vals[$1] = $2 + 0
+		}
+		END {
+			total = 0
+			for (i = 1; i <= n; i++) {
+				name = names[i]
+				val = (name in vals) ? vals[name] : 0
+				total += val
+				printf "%d", val
+				if (i < n) {
+					printf " "
+				}
+			}
+			if (n > 0) {
+				printf " "
+			}
+			printf "%d\n", total
+		}
+	' <<< "$iostat_result"
+}
+
 function run_qos_test() {
 	local qos_limit=$1
 	local qos_result=0
@@ -716,6 +768,76 @@ function qos_basic_iops_bw_limit_test() {
 		"Failed to limit the io bandwidth of $qos_dev by qos: expected ~$qos_mbps_limit MiB/s, got $measured_bw KiB/s"
 }
 
+# Validate hierarchical IOPS limits across two bdevs.
+function qos_hier_iops_limit_test() {
+	local qos_root=$1
+	local qos_child_a=$2
+	local qos_child_b=$3
+	local dev_a=$4
+	local dev_b=$5
+	local root_iops_limit=$6
+	local child_iops_limit=$7
+	local expected_total_iops=$8
+	local expected_child_iops=$9
+	local measured_a_iops
+	local measured_b_iops
+	local measured_total_iops
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_root
+	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_child_a
+	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_child_b
+	$rpc_py bdev_qos_add_bdev $qos_child_a $dev_a
+	$rpc_py bdev_qos_add_bdev $qos_child_b $dev_b
+	$rpc_py bdev_burst_qos_set_limit $qos_root rw_iops $root_iops_limit
+	$rpc_py bdev_burst_qos_set_limit $qos_child_a rw_iops $child_iops_limit
+	$rpc_py bdev_burst_qos_set_limit $qos_child_b rw_iops $child_iops_limit
+
+	sleep 1
+	read -r measured_a_iops measured_b_iops measured_total_iops < <(get_iops_list_and_total $dev_a $dev_b)
+
+	lower_limit=$((expected_total_iops * 9 / 10))
+	upper_limit=$((expected_total_iops * 11 / 10))
+	qos_check_range "$measured_total_iops" "$lower_limit" "$upper_limit" \
+		"Failed to enforce total QoS limit: expected ~$expected_total_iops IOPS, got $measured_total_iops"
+
+	lower_limit=$((expected_child_iops * 8 / 10))
+	upper_limit=$((expected_child_iops * 12 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected child A IOPS: expected ~$expected_child_iops IOPS, got $measured_a_iops"
+	qos_check_range "$measured_b_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected child B IOPS: expected ~$expected_child_iops IOPS, got $measured_b_iops"
+}
+
+# Validate hierarchical bandwidth limits on a bdev.
+function qos_hier_bw_limit_test() {
+	local qos_root=$1
+	local qos_child=$2
+	local qos_dev=$3
+	local root_read_mbps=$4
+	local child_rw_mbps=$5
+	local expected_mbps=$6
+	local measured_bw
+	local expected_kib
+	local lower_limit
+	local upper_limit
+
+	$rpc_py bdev_qos_create -m burst $qos_root
+	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_child
+	$rpc_py bdev_qos_add_bdev $qos_child $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_root r_mbps $root_read_mbps -i 4096 -z 4096 -a 4096
+	$rpc_py bdev_burst_qos_set_limit $qos_child rw_mbps $child_rw_mbps -i 4096 -z 4096 -a 4096
+
+	sleep 1
+	measured_bw=$(get_io_result BANDWIDTH $qos_dev)
+	expected_kib=$((expected_mbps * 1024))
+	lower_limit=$((expected_kib * 9 / 10))
+	upper_limit=$((expected_kib * 11 / 10))
+	qos_check_range "$measured_bw" "$lower_limit" "$upper_limit" \
+		"Unexpected bandwidth for $qos_dev: expected ~$expected_mbps MiB/s, got $measured_bw KiB/s"
+}
+
 # Run basic QoS limiting suite for IOPS/BW cases.
 function qos_test_basic_limiting_suite() {
 	local perf_time=$((QOS_RUN_TIME * 2 + 10))
@@ -785,6 +907,83 @@ function qos_test_basic_limiting_suite() {
 	kill $PERF_PID 2> /dev/null || true
 	wait $PERF_PID 2> /dev/null || true
 
+	qos_test_cleanup
+	trap - SIGINT SIGTERM EXIT
+}
+
+# Run hierarchical QoS suite for IOPS/BW limits.
+function qos_test_hierarchy_suite() {
+	local perf_time=$((QOS_RUN_TIME + 10))
+	local qos_root="qos_root_iops"
+	local qos_child_a="qos_child_a"
+	local qos_child_b="qos_child_b"
+	local qos_root_bw="qos_root_bw"
+	local qos_child_bw="qos_child_bw"
+	local dev_a="$QOS_DEV_1"
+	local dev_b="$QOS_DEV_2"
+	local root_iops_limit=10000
+	local child_iops_limit=8000
+	local root_iops_limit2=20000
+	local child_iops_limit2=5000
+	local root_read_mbps=8
+	local child_rw_mbps=16
+	local workload_bw_mbps=32
+
+	# Phase 1: enforce root/child IOPS limits.
+	qos_start_bdevperf "Process qos hierarchical testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$dev_a" 4096 100 64 0x2
+			create_job "job_b" "randread" "$dev_b" 4096 100 64 0x2
+		) "$env_ctx"
+	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
+
+	qos_run_bdevperf_tests
+	qos_hier_iops_limit_test $qos_root $qos_child_a $qos_child_b $dev_a $dev_b \
+		$root_iops_limit $child_iops_limit $root_iops_limit $((root_iops_limit / 2))
+	wait $PERF_PID
+	qos_test_cleanup
+
+	# Phase 2: enforce tighter child IOPS limits under a higher root cap.
+	qos_start_bdevperf "Process qos hierarchical testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$dev_a" 4096 100 64 0x2
+			create_job "job_b" "randread" "$dev_b" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_hier_iops_limit_test $qos_root $qos_child_a $qos_child_b $dev_a $dev_b \
+		$root_iops_limit2 $child_iops_limit2 $((child_iops_limit2 * 2)) $child_iops_limit2
+	wait $PERF_PID
+	qos_test_cleanup
+
+	# Phase 3: enforce hierarchical read bandwidth limit.
+	qos_start_bdevperf "Process qos hierarchical read BW testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-mbps $workload_bw_mbps \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_read" "read" "$dev_a" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_hier_bw_limit_test $qos_root_bw $qos_child_bw $dev_a $root_read_mbps $child_rw_mbps $root_read_mbps
+	wait $PERF_PID
+	qos_test_cleanup
+
+	# Phase 4: enforce hierarchical write bandwidth limit.
+	qos_start_bdevperf "Process qos hierarchical write BW testing pid" \
+		-m 0x2 -z --interval-avg -t $perf_time --rate-mbps $workload_bw_mbps \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_write" "write" "$dev_a" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_hier_bw_limit_test $qos_root_bw $qos_child_bw $dev_a $root_read_mbps $child_rw_mbps $child_rw_mbps
+	wait $PERF_PID
 	qos_test_cleanup
 	trap - SIGINT SIGTERM EXIT
 }
@@ -1152,6 +1351,7 @@ run_test "bdev_json_nonarray" $rootdir/build/examples/bdevperf --json "$nonarray
 if [[ $test_type == bdev ]]; then
 	run_test "bdev_qos" qos_test_suite "$env_ctx"
 	run_test "bdev_qos_limiting" qos_test_basic_limiting_suite "$env_ctx"
+	run_test "bdev_qos_hierarchy" qos_test_hierarchy_suite "$env_ctx"
 	run_test "bdev_qd_sampling" qd_sampling_test_suite "$env_ctx"
 	run_test "bdev_error" error_test_suite "$env_ctx"
 	run_test "bdev_stat" stat_test_suite "$env_ctx"
