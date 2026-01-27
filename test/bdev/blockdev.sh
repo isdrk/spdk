@@ -462,6 +462,21 @@ function run_qos_test() {
 	fi
 }
 
+function qos_start_bdevperf() {
+	local message=$1
+	shift
+
+	"$rootdir/build/examples/bdevperf" "$@" &
+	QOS_PID=$!
+	echo "$message: $QOS_PID"
+	waitforlisten $QOS_PID
+}
+
+function qos_run_bdevperf_tests() {
+	$rootdir/examples/bdev/bdevperf/bdevperf.py perform_tests &
+	PERF_PID=$!
+}
+
 function qos_test_cleanup() {
 	killprocess "$QOS_PID"
 	wait "$QOS_PID" 2> /dev/null || true
@@ -546,16 +561,15 @@ function qos_test_suite() {
 	local qos_perf_time=$((QOS_RUN_TIME * 3 + 10))
 
 	# Run bdevperf with JSON config for bdevs, INI config for jobs, and QoS disabled first
-	"$rootdir/build/examples/bdevperf" -z -m 0x2 --interval-avg -t $qos_perf_time --json <(gen_qos_json_config) -j <(
-		create_job "job0" "randread" "$QOS_DEV_1" 4096 100 256 0x2
-		create_job "job1" "randread" "$QOS_DEV_2" 4096 100 256 0x2
-	) "$env_ctx" &
-	QOS_PID=$!
-	echo "Process qos testing pid: $QOS_PID"
+	qos_start_bdevperf "Process qos testing pid" \
+		-z -m 0x2 --interval-avg -t $qos_perf_time \
+		--json <(gen_qos_json_config) -j <(
+			create_job "job0" "randread" "$QOS_DEV_1" 4096 100 256 0x2
+			create_job "job1" "randread" "$QOS_DEV_2" 4096 100 256 0x2
+		) "$env_ctx"
 	trap 'cleanup; qos_test_cleanup; exit 1' SIGINT SIGTERM EXIT
-	waitforlisten $QOS_PID
 
-	$rootdir/examples/bdev/bdevperf/bdevperf.py perform_tests &
+	qos_run_bdevperf_tests
 	qos_function_test
 
 	qos_test_cleanup
