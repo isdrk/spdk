@@ -46,6 +46,7 @@ struct mlx5_mkey_caps {
 	bool relaxed_ordering_read;
 	bool relaxed_ordering_write_umr;
 	bool relaxed_ordering_read_umr;
+	uint64_t max_klm_count;
 };
 
 struct mlx5_mkey_attr {
@@ -241,6 +242,8 @@ mlx5_query_mkey_caps(struct ibv_context *context, struct mlx5_mkey_caps *caps)
 					   out, capability.cmd_hca_cap.relaxed_ordering_write_umr);
 	caps->relaxed_ordering_read_umr = DEVX_GET(query_hca_cap_out,
 					  out, capability.cmd_hca_cap.relaxed_ordering_read_umr);
+	caps->max_klm_count = 1ull << DEVX_GET(query_hca_cap_out, out,
+					       capability.cmd_hca_cap.log_max_klm_list_size);
 	return 0;
 }
 
@@ -267,7 +270,11 @@ mlx5_mkey_pool_create_mkey(struct mlx5_mkey **_mkey, struct ibv_pd *pd,
 	if (flags & SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE) {
 		bsf_size += 64;
 	}
-	/* TODO: check that this doesn't exceed mlx5_ifc_cmd_hca_cap_bits.log_max_klm_list_size */
+	if (max_sges > caps->max_klm_count) {
+		SPDK_ERRLOG("Unsupported max number of SGEs: %u (max supported: %"PRIu64")\n",
+			    max_sges, caps->max_klm_count);
+		return -EINVAL;
+	}
 	mkey_attr.max_klm_count = max_sges;
 	mkey_attr.bsf_octowords = bsf_size / 16;
 
