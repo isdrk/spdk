@@ -769,6 +769,7 @@ test_nvme_free_request(void)
 	STAILQ_INIT(&qpair.free_req);
 	qpair.active_free_req = &qpair.free_req;
 	match_req.qpair->reserved_req = NULL;
+	match_req.qpair_reserved = false;
 
 	nvme_free_request(&match_req);
 	req = STAILQ_FIRST(&match_req.qpair->free_req);
