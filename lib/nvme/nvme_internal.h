@@ -1521,7 +1521,6 @@ nvme_request_clear(struct nvme_request *req)
 		req->payload.payload_offset = _payload_offset;	\
 		req->payload.md_offset = _md_offset;		\
 		req->payload.opts = NULL;			\
-		req->submit_tick = 0;				\
 		req->accel_sequence = NULL;			\
 		req->payload_type = NVME_PAYLOAD_TYPE_CONTIG;	\
 	} while (0);
@@ -1540,7 +1539,6 @@ nvme_request_clear(struct nvme_request *req)
 		req->payload.payload_offset = _payload_offset;	\
 		req->payload.md_offset = _md_offset;		\
 		req->payload.opts = NULL;			\
-		req->submit_tick = 0;				\
 		req->accel_sequence = NULL;			\
 		req->payload_type = NVME_PAYLOAD_TYPE_SGL;	\
 	} while (0);
@@ -1558,7 +1556,6 @@ nvme_request_clear(struct nvme_request *req)
 		req->payload.payload_offset = _payload_offset;	\
 		req->payload.md_offset = _md_offset;		\
 		req->payload.opts = NULL;			\
-		req->submit_tick = 0;				\
 		req->accel_sequence = NULL;			\
 		req->payload_type = NVME_PAYLOAD_TYPE_IOV;	\
 	} while (0);
