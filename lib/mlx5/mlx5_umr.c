@@ -41,7 +41,7 @@
 
 RB_HEAD(mlx5_mkeys_tree, spdk_mlx5_mkey_pool_obj);
 
-struct mlx5_relaxed_ordering_caps {
+struct mlx5_mkey_caps {
 	bool relaxed_ordering_write;
 	bool relaxed_ordering_read;
 	bool relaxed_ordering_write_umr;
@@ -213,8 +213,7 @@ mlx5_mkey_destroy(struct mlx5_mkey *mkey)
 }
 
 static int
-mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
-				 struct mlx5_relaxed_ordering_caps *caps)
+mlx5_query_mkey_caps(struct ibv_context *context, struct mlx5_mkey_caps *caps)
 {
 	uint8_t in[DEVX_ST_SZ_BYTES(query_hca_cap_in)] = {};
 	uint8_t out[DEVX_ST_SZ_BYTES(query_hca_cap_out)] = {};
@@ -247,7 +246,7 @@ mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 
 static int
 mlx5_mkey_pool_create_mkey(struct mlx5_mkey **_mkey, struct ibv_pd *pd,
-			   struct mlx5_relaxed_ordering_caps *caps, uint32_t flags,
+			   struct mlx5_mkey_caps *caps, uint32_t flags,
 			   uint32_t max_sges)
 {
 	struct mlx5_mkey *mkey;
@@ -331,7 +330,7 @@ mlx5_mkey_pool_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd *pd)
 {
 	struct spdk_mlx5_mkey_pool *new_pool;
 	struct mlx5_mkey **mkeys;
-	struct mlx5_relaxed_ordering_caps caps;
+	struct mlx5_mkey_caps caps;
 	uint32_t j, pdn;
 	int rc;
 	char pool_name[32];
@@ -342,7 +341,7 @@ mlx5_mkey_pool_init(struct spdk_mlx5_mkey_pool_param *params, struct ibv_pd *pd)
 		goto err;
 	}
 	TAILQ_INSERT_TAIL(&g_mkey_pools, new_pool, link);
-	rc = mlx5_query_relaxed_ordering_caps(pd->context, &caps);
+	rc = mlx5_query_mkey_caps(pd->context, &caps);
 	if (rc) {
 		SPDK_ERRLOG("Failed to get relaxed ordering capabilities, dev %s\n",
 			    pd->context->device->dev_name);
