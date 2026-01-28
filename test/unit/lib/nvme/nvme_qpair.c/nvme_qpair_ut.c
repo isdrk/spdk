@@ -161,7 +161,7 @@ test_nvme_qpair_process_completions(void)
 {
 	struct spdk_nvme_qpair		admin_qp = {0};
 	struct spdk_nvme_qpair		qpair = {0};
-	struct spdk_nvme_ctrlr		ctrlr = {{0}};
+	struct spdk_nvme_ctrlr		ctrlr = {0};
 	struct nvme_request		dummy_1 = {{0}};
 	struct nvme_request		dummy_2 = {{0}};
 	int				rc;
