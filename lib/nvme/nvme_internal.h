@@ -469,17 +469,6 @@ struct nvme_auth {
 
 struct spdk_nvme_qpair {
 	struct spdk_nvme_ctrlr			*ctrlr;
-	const struct spdk_nvme_transport	*transport;
-	nvme_request_stailq_t			*active_free_req;
-	nvme_request_stailq_t			free_req;
-	nvme_request_stailq_t			queued_req;
-	struct spdk_nvme_transport_poll_group	*poll_group;
-
-	/* List entry for spdk_nvme_transport_poll_group::qpairs */
-	STAILQ_ENTRY(spdk_nvme_qpair)		poll_group_stailq;
-	struct spdk_nvme_ctrlr_process		*active_proc;
-
-	uint32_t				num_outstanding_reqs;
 
 	uint16_t				id;
 
@@ -523,14 +512,34 @@ struct spdk_nvme_qpair {
 
 	/* Entries below here are not touched in the main I/O path. */
 	enum spdk_nvme_transport_type		trtype;
+
+	uint32_t				num_outstanding_reqs;
+
+	nvme_request_stailq_t			*active_free_req;
+	nvme_request_stailq_t			free_req;
+	nvme_request_stailq_t			queued_req;
+
+	const struct spdk_nvme_transport	*transport;
+
+	/* List entry for spdk_nvme_transport_poll_group::qpairs */
+	STAILQ_ENTRY(spdk_nvme_qpair)		poll_group_stailq;
+
+	struct spdk_nvme_transport_poll_group	*poll_group;
+
+	struct spdk_nvme_qpair_io_stats		io_stats;
+
+	/* Entries below here are not touched in the main I/O path. */
 	/** Commands opcode in this list will return error */
 	TAILQ_HEAD(, nvme_error_cmd)		err_cmd_head;
 	/** Requests in this list will return error */
-	nvme_request_stailq_t			err_req_head;
+	STAILQ_HEAD(, nvme_request)		err_req_head;
+
+	struct spdk_nvme_ctrlr_process		*active_proc;
 
 	void					*poll_group_tailq_head;
 
-	struct spdk_nvme_qpair_io_stats		io_stats;
+	/* request object used only for this qpair's FABRICS/CONNECT command (if needed) */
+	struct nvme_request			*reserved_req;
 
 	struct nvme_completion_poll_status	*fabric_poll_status;
 
@@ -546,8 +555,6 @@ struct spdk_nvme_qpair {
 
 	/* In-band authentication state */
 	struct nvme_auth			auth;
-	/* request object used only for this qpair's FABRICS/CONNECT command (if needed) */
-	struct nvme_request			*reserved_req;
 };
 
 struct spdk_nvme_poll_group {
