@@ -222,7 +222,7 @@ mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 
 	DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
 	DEVX_SET(query_hca_cap_in, in, op_mod,
-		 MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE_CAP_2);
+		 MLX5_SET_HCA_CAP_OP_MOD_GENERAL_DEVICE);
 	ret = mlx5dv_devx_general_cmd(context, in, sizeof(in),
 				      out, sizeof(out));
 	if (ret) {
