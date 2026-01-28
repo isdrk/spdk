@@ -923,6 +923,134 @@ function qos_noisy_neighbor_iops_limit_test() {
 		"Unexpected bdev B IOPS: expected ~$guaranteed_iops IOPS, got $measured_b_iops"
 }
 
+function qos_dynamic_throttle_iops_limit_test() {
+	local qos_service=$1
+	local qos_dev=$2
+	local qos_iops_initial=$3
+	local qos_iops_high=$4
+	local qos_iops_low=$5
+	local baseline_iops
+	local measured_iops
+	local lower_limit
+	local upper_limit
+
+	sleep 1
+	baseline_iops=$(get_io_result IOPS $qos_dev)
+
+	$rpc_py bdev_qos_create -m burst $qos_service
+	$rpc_py bdev_qos_add_bdev $qos_service $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops $qos_iops_initial
+
+	sleep 1
+	measured_iops=$(get_io_result IOPS $qos_dev)
+
+	lower_limit=$((qos_iops_initial * 9 / 10))
+	upper_limit=$((qos_iops_initial * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_initial, got $measured_iops"
+
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops $qos_iops_high
+
+	sleep 1
+	measured_iops=$(get_io_result IOPS $qos_dev)
+
+	lower_limit=$((qos_iops_high * 9 / 10))
+	upper_limit=$((qos_iops_high * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_high, got $measured_iops"
+
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops $qos_iops_low
+
+	sleep 1
+	measured_iops=$(get_io_result IOPS $qos_dev)
+
+	lower_limit=$((qos_iops_low * 9 / 10))
+	upper_limit=$((qos_iops_low * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_initial, got $measured_iops"
+
+	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops 0
+
+	sleep 7
+	measured_iops=$(get_io_result IOPS $qos_dev)
+	lower_limit=$((baseline_iops * 9 / 10))
+	upper_limit=$((baseline_iops * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Failed to restore IOPS after removing QoS for $qos_dev: expected ~$baseline_iops, got $measured_iops"
+}
+
+function qos_dynamic_tree_change_test() {
+	local qos_root=$1
+	local qos_leaf_a=$2
+	local qos_leaf_b=$3
+	local qos_dev_a=$4
+	local qos_dev_b=$5
+	local qos_iops_root=$6
+	local expected_total_iops=$qos_iops_root
+	local expected_each_iops=$((qos_iops_root / 2))
+	local baseline_a_iops
+	local baseline_b_iops
+	local measured_a_iops
+	local measured_b_iops
+	local measured_total_iops
+	local lower_limit
+	local upper_limit
+
+	sleep 1
+	baseline_a_iops=$(get_io_result IOPS $qos_dev_a)
+	baseline_b_iops=$(get_io_result IOPS $qos_dev_b)
+
+	$rpc_py bdev_qos_create -m burst $qos_root
+	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_leaf_a
+	$rpc_py bdev_qos_add_bdev $qos_leaf_a $qos_dev_a
+	$rpc_py bdev_burst_qos_set_limit $qos_root rw_iops $qos_iops_root
+
+	sleep 1
+	measured_a_iops=$(get_io_result IOPS $qos_dev_a)
+
+	lower_limit=$((qos_iops_root * 9 / 10))
+	upper_limit=$((qos_iops_root * 11 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Failed to limit the io IOPS of $qos_dev_a by qos: expected ~$qos_iops_root, got $measured_a_iops"
+
+	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_leaf_b
+	$rpc_py bdev_qos_add_bdev $qos_leaf_b $qos_dev_b
+
+	sleep 1
+
+	read -r measured_a_iops measured_b_iops measured_total_iops < <(get_iops_list_and_total $qos_dev_a $qos_dev_b)
+
+	lower_limit=$((expected_total_iops * 9 / 10))
+	upper_limit=$((expected_total_iops * 11 / 10))
+	qos_check_range "$measured_total_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected aggregated IOPS: expected ~$expected_total_iops IOPS, got $measured_total_iops"
+
+	lower_limit=$((expected_each_iops * 8 / 10))
+	upper_limit=$((expected_each_iops * 12 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev A IOPS: expected ~$expected_each_iops IOPS, got $measured_a_iops"
+	qos_check_range "$measured_b_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdev B IOPS: expected ~$expected_each_iops IOPS, got $measured_b_iops"
+
+	$rpc_py bdev_qos_remove_bdev $qos_leaf_a $qos_dev_a
+	$rpc_py bdev_qos_remove_bdev $qos_leaf_b $qos_dev_b
+	$rpc_py bdev_qos_destroy $qos_leaf_a
+	$rpc_py bdev_qos_destroy $qos_leaf_b
+	$rpc_py bdev_qos_destroy $qos_root
+
+	sleep 7
+	measured_a_iops=$(get_io_result IOPS $qos_dev_a)
+	measured_b_iops=$(get_io_result IOPS $qos_dev_b)
+	lower_limit=$((baseline_a_iops * 9 / 10))
+	upper_limit=$((baseline_a_iops * 11 / 10))
+	qos_check_range "$measured_a_iops" "$lower_limit" "$upper_limit" \
+		"Failed to restore IOPS after removing QoS for $qos_dev_a: expected ~$baseline_a_iops, got $measured_a_iops"
+	lower_limit=$((baseline_b_iops * 9 / 10))
+	upper_limit=$((baseline_b_iops * 11 / 10))
+	qos_check_range "$measured_b_iops" "$lower_limit" "$upper_limit" \
+		"Failed to restore IOPS after removing QoS for $qos_dev_b: expected ~$baseline_b_iops, got $measured_b_iops"
+}
+
 # Run basic QoS limiting suite for IOPS/BW cases.
 function qos_test_basic_limiting_suite() {
 	local perf_time=$((QOS_RUN_TIME * 2 + 10))
@@ -1119,6 +1247,49 @@ function qos_test_agg_bdevs_suite() {
 	qos_test_cleanup
 
 	trap - SIGINT SIGTERM EXIT
+}
+
+function qos_test_dynamic_change_suite() {
+	local throttle_test_perf_time=$((QOS_RUN_TIME * 5 + 20))
+	local tree_test_perf_time=$((QOS_RUN_TIME * 6 + 20))
+	local qos_service="qos_service"
+	local qos_root="qos_root"
+	local qos_leaf_a="qos_leaf_a"
+	local qos_leaf_b="qos_leaf_b"
+	local workload_iops=40000
+	local qos_iops_initial=5000
+	local qos_iops_high=20000
+	local qos_iops_low=2000
+	local qos_iops_root=20000
+
+	trap 'cleanup; qos_test_cleanup; exit 1' ERR SIGINT SIGTERM EXIT
+
+	qos_start_bdevperf "Process dynamic throttling testing pid:" \
+		-m 0x2 -z --interval-avg -t $throttle_test_perf_time --rate-iops $workload_iops \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_dynamic_throttle_iops_limit_test $qos_service $QOS_DEV_1 $qos_iops_initial $qos_iops_high $qos_iops_low
+	wait $PERF_PID
+	qos_test_cleanup
+
+	qos_start_bdevperf "Process dynamic QoS tree change testing pid:" \
+		-m 0x2 -z --interval-avg -t $tree_test_perf_time --rate-iops $workload_iops \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+			create_job "job_b" "randread" "$QOS_DEV_2" 4096 100 64 0x2
+		) "$env_ctx"
+
+	qos_run_bdevperf_tests
+	qos_dynamic_tree_change_test $qos_root $qos_leaf_a $qos_leaf_b $QOS_DEV_1 $QOS_DEV_2 $qos_iops_root
+	wait $PERF_PID
+	qos_test_cleanup
+
+	trap - ERR SIGINT SIGTERM EXIT
 }
 
 function error_test_suite() {
@@ -1487,6 +1658,7 @@ if [[ $test_type == bdev ]]; then
 	run_test "bdev_qos_limiting" qos_test_basic_limiting_suite "$env_ctx"
 	run_test "bdev_qos_hierarchy" qos_test_hierarchy_suite "$env_ctx"
 	run_test "bdev_qos_aggregate_bdevs" qos_test_agg_bdevs_suite "$env_ctx"
+	run_test "bdev_qos_dynamic_change" qos_test_dynamic_change_suite "$env_ctx"
 	run_test "bdev_qd_sampling" qd_sampling_test_suite "$env_ctx"
 	run_test "bdev_error" error_test_suite "$env_ctx"
 	run_test "bdev_stat" stat_test_suite "$env_ctx"
