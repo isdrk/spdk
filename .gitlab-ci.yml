@@ -53,9 +53,14 @@ autotest-vm_host-matrix:
   extends: .autotest-template
   parallel:
     matrix:
-      - TEST_TYPE: [nvme, accel, fsdev, bdev, nvmf-rdma, nvmf-tcp]
+      - TEST_TYPE: [nvme, accel, fsdev, bdev, nvmf-rdma, nvmf-tcp, autobuild-check-so]
   script:
     - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
+    - |
+      if [ "$TEST_TYPE" = "autobuild-check-so" ]; then
+        git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
+        test/make/check_so_deps.sh -c .ci/autotest-autobuild-check-so.conf -a test/make/abi
+      fi
 
 test-crypto-job:
   extends: .autotest-template
@@ -101,16 +106,6 @@ code-style-job:
   script:
     - ./scripts/check_format.sh
 
-autobuild-check-so-deps-job:
-  extends: .autotest-template
-  variables:
-    TEST_TYPE: autobuild
-  script:
-    - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
-    - ./configure --with-rdma=mlx5_dv --enable-debug --enable-werror --with-shared && make -j8
-    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
-    - sudo ./test/make/check_so_deps.sh
-
 test-virtio-fs-app:
   stage: test
   tags: [vm_host, x86_64]
@@ -134,8 +129,6 @@ autotest-summary-job:
     - job: autotest-vm_host-matrix
       artifacts: true
     - job: test-crypto-job
-      artifacts: true
-    - job: autobuild-check-so-deps-job
       artifacts: true
   script:
     - .ci/autotest_summary.sh
