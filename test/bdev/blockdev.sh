@@ -527,6 +527,100 @@ function get_iops_list_and_total() {
 	' <<< "$iostat_result"
 }
 
+# Parse bdevperf log and average IOPS across a 1-based sample window.
+# We scan periodic "IOPS" lines from bdevperf output, skip any "[Delay]" samples,
+# and treat the first non-delay sample as index 1. The function averages samples
+# where the 1-based index is within [start_idx, end_idx], inclusive.
+function get_bdevperf_iops_avg_from_log() {
+	local log_file=$1
+	local start_idx=$2
+	local end_idx=$3
+
+	tr '\r' '\n' < "$log_file" | awk -v start="$start_idx" -v end="$end_idx" '
+		/IOPS,/ {
+			if ($0 ~ /\[Delay\]/) {
+				next
+			}
+			speed = ""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^IOPS,?$/ || $i ~ /IOPS,/) {
+					speed = $(i - 1)
+					break
+				}
+			}
+			if (speed == "") {
+				next
+			}
+			gsub(/[^0-9.]/, "", speed)
+			active++
+			if (active >= start && active <= end) {
+				sum += speed
+				count++
+			}
+		}
+		END {
+			if (count == 0) {
+				exit 1
+			}
+			print int(sum / count)
+		}
+	'
+}
+
+# Dump per-sample IOPS from bdevperf across a 1-based window.
+# We scan periodic "IOPS" lines, skip "[Delay]" entries, and treat the first
+# non-delay sample as index 1. For samples in [start_idx, end_idx], print the
+# sample index and raw IOPS to help debugging window selection.
+function qos_dump_bdevperf_iops_window() {
+	local log_file=$1
+	local start_idx=$2
+	local end_idx=$3
+
+	tr '\r' '\n' < "$log_file" | awk -v start="$start_idx" -v end="$end_idx" '
+		/IOPS,/ {
+			if ($0 ~ /\[Delay\]/) {
+				next
+			}
+			speed = ""
+			for (i = 1; i <= NF; i++) {
+				if ($i ~ /^IOPS,?$/ || $i ~ /IOPS,/) {
+					speed = $(i - 1)
+					break
+				}
+			}
+			if (speed == "") {
+				next
+			}
+			gsub(/[^0-9.]/, "", speed)
+			active++
+			if (active >= start && active <= end) {
+				printf "bdevperf sample %d iops %s\n", active, speed
+			}
+		}
+	'
+}
+
+function qos_check_bdevperf_iops_window() {
+	local log_file=$1
+	local expected_iops=$2
+	local start_idx=$3
+	local end_idx=$4
+	local measured_iops
+	local lower_limit
+	local upper_limit
+
+	if ! measured_iops=$(get_bdevperf_iops_avg_from_log "$log_file" "$start_idx" "$end_idx"); then
+		echo "Failed to parse bdevperf periodic IOPS from $log_file"
+		qos_test_cleanup
+		exit 1
+	fi
+
+	lower_limit=$((expected_iops * 9 / 10))
+	upper_limit=$((expected_iops * 11 / 10))
+	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
+		"Unexpected bdevperf IOPS: expected ~$expected_iops IOPS, got $measured_iops"
+}
+
 function run_qos_test() {
 	local qos_limit=$1
 	local qos_result=0
@@ -551,6 +645,17 @@ function qos_start_bdevperf() {
 	shift
 
 	"$rootdir/build/examples/bdevperf" "$@" &
+	QOS_PID=$!
+	echo "$message: $QOS_PID"
+	waitforlisten $QOS_PID
+}
+
+function qos_start_bdevperf_with_log_file() {
+	local message=$1
+	local log_file=$2
+	shift 2
+
+	"$rootdir/build/examples/bdevperf" "$@" > "$log_file" 2>&1 &
 	QOS_PID=$!
 	echo "$message: $QOS_PID"
 	waitforlisten $QOS_PID
@@ -1051,6 +1156,70 @@ function qos_dynamic_tree_change_test() {
 		"Failed to restore IOPS after removing QoS for $qos_dev_b: expected ~$baseline_b_iops, got $measured_b_iops"
 }
 
+function qos_burst_ready_mode_test() {
+	local qos_burst_ready=$1
+	local qos_dev=$2
+	local qos_iops_limit=$3
+	local workload_iops=$4
+	local log_file=$5
+	local stats_period_ms=$6
+	local burst_start_ms=$7
+	local burst_end_ms=$8
+	local steady_start_ms=$9
+	local steady_end_ms=${10}
+	local burst_start_idx=$((burst_start_ms / stats_period_ms))
+	local burst_end_idx=$((burst_end_ms / stats_period_ms))
+	local steady_start_idx=$((steady_start_ms / stats_period_ms))
+	local steady_end_idx=$((steady_end_ms / stats_period_ms))
+
+	$rpc_py bdev_qos_create -m burst $qos_burst_ready
+	$rpc_py bdev_qos_add_bdev $qos_burst_ready $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_burst_ready rw_iops $qos_iops_limit -m burst_ready
+
+	wait $PERF_PID
+
+	# Burst is expected after initial delay, then settle to the steady limit
+	qos_check_bdevperf_iops_window "$log_file" "$workload_iops" "$burst_start_idx" "$burst_end_idx"
+	qos_check_bdevperf_iops_window "$log_file" "$qos_iops_limit" "$steady_start_idx" "$steady_end_idx"
+}
+
+function qos_earned_burst_mode_test() {
+	local log_file=$1
+	local qos_earned_burst=$2
+	local qos_dev=$3
+	local qos_iops_limit=$4
+	local burst_iops=$5
+	local burst_time=$6
+	local stats_period_ms=$7
+	local burst_start_ms=$8
+	local burst_end_ms=$9
+	local dump_start_ms=${10}
+	local dump_end_ms=${11}
+	local steady_start_ms=${12}
+	local steady_end_ms=${13}
+	local burst_start_idx=$((burst_start_ms / stats_period_ms))
+	local burst_end_idx=$((burst_end_ms / stats_period_ms))
+	local dump_start_idx=$((dump_start_ms / stats_period_ms))
+	local dump_end_idx=$((dump_end_ms / stats_period_ms))
+	local steady_start_idx=$((steady_start_ms / stats_period_ms))
+	local steady_end_idx=$((steady_end_ms / stats_period_ms))
+
+	qos_run_bdevperf_tests
+	$rpc_py bdev_qos_create -m burst $qos_earned_burst
+	$rpc_py bdev_qos_add_bdev $qos_earned_burst $qos_dev
+	$rpc_py bdev_burst_qos_set_limit $qos_earned_burst rw_iops $qos_iops_limit \
+		-m earned_burst --max-burst-rate $burst_iops --max-burst-time-in-sec $burst_time
+
+	wait $PERF_PID
+
+	# Burst is expected after initial delay, then settle to the steady limit
+	# Include a dump window here to aid debugging; burst_ready mode skips it
+	# because the behavior is simpler and the extra output adds noise.
+	qos_dump_bdevperf_iops_window "$log_file" "$dump_start_idx" "$dump_end_idx"
+	qos_check_bdevperf_iops_window "$log_file" "$burst_iops" "$burst_start_idx" "$burst_end_idx"
+	qos_check_bdevperf_iops_window "$log_file" "$qos_iops_limit" "$steady_start_idx" "$steady_end_idx"
+}
+
 # Run basic QoS limiting suite for IOPS/BW cases.
 function qos_test_basic_limiting_suite() {
 	local perf_time=$((QOS_RUN_TIME * 2 + 10))
@@ -1290,6 +1459,84 @@ function qos_test_dynamic_change_suite() {
 	qos_test_cleanup
 
 	trap - ERR SIGINT SIGTERM EXIT
+}
+
+function qos_test_burst_suite() {
+	local burst_ready_perf_time
+	local earned_burst_perf_time
+	local burst_ready_qos="qos_burst_ready"
+	local burst_ready_iops_limit=10000
+	local burst_ready_workload_iops=12000
+	local burst_ready_start_delay=3
+	local burst_ready_stats_period=0.1
+	local burst_ready_stats_period_ms=100
+	local log_file
+	local burst_ready_burst_start_ms=500
+	local burst_ready_burst_end_ms=4500
+	local burst_ready_steady_start_ms=6000
+	local burst_ready_steady_end_ms=10000
+	local earned_burst_qos="qos_earned_burst"
+	local earned_burst_iops_limit=5000
+	local earned_burst_iops=7000
+	local earned_burst_time=5
+	local earned_burst_start_delay=5
+	local earned_burst_stats_period=0.1
+	local earned_burst_stats_period_ms=100
+	local earned_burst_burst_start_ms=200
+	local earned_burst_burst_end_ms=4800
+	local earned_burst_dump_start_ms=0
+	local earned_burst_dump_end_ms=7900
+	local earned_burst_steady_start_ms=5500
+	local earned_burst_steady_end_ms=9500
+	local perf_buffer_sec=2
+
+	burst_ready_perf_time=$((burst_ready_start_delay + (burst_ready_steady_end_ms + 999) / 1000 + perf_buffer_sec))
+	earned_burst_perf_time=$((earned_burst_start_delay + (earned_burst_steady_end_ms + 999) / 1000 + perf_buffer_sec))
+
+	log_file=$(mktemp /tmp/bdevperf_burst_ready.XXXXXX)
+
+	# stats-period in seconds; use 100ms for burst checks
+	qos_start_bdevperf_with_log_file "Process qos burst_ready testing pid" "$log_file" \
+		-m 0x2 -z -t $burst_ready_perf_time --rate-iops $burst_ready_workload_iops \
+		--start-delay $burst_ready_start_delay --stats-period $burst_ready_stats_period --interval-avg \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+	trap 'cleanup; qos_test_cleanup; rm -f "$log_file"; exit 1' SIGINT SIGTERM EXIT
+
+	qos_run_bdevperf_tests
+	qos_burst_ready_mode_test $burst_ready_qos $QOS_DEV_1 $burst_ready_iops_limit $burst_ready_workload_iops \
+		"$log_file" "$burst_ready_stats_period_ms" \
+		"$burst_ready_burst_start_ms" "$burst_ready_burst_end_ms" \
+		"$burst_ready_steady_start_ms" "$burst_ready_steady_end_ms"
+
+	qos_test_cleanup
+	rm -f "$log_file"
+	trap - SIGINT SIGTERM EXIT
+
+	log_file=$(mktemp /tmp/bdevperf_earned_burst.XXXXXX)
+
+	# stats-period in seconds; use 100ms for burst checks
+	qos_start_bdevperf_with_log_file "Process qos earned_burst testing pid" "$log_file" \
+		-m 0x2 -z -t $earned_burst_perf_time \
+		--start-delay $earned_burst_start_delay --stats-period $earned_burst_stats_period --interval-avg \
+		--json <(gen_qos_json_config) \
+		-j <(
+			create_job "job_a" "randread" "$QOS_DEV_1" 4096 100 64 0x2
+		) "$env_ctx"
+	trap 'cleanup; qos_test_cleanup; rm -f "$log_file"; exit 1' SIGINT SIGTERM EXIT
+
+	qos_earned_burst_mode_test "$log_file" "$earned_burst_qos" "$QOS_DEV_1" \
+		"$earned_burst_iops_limit" "$earned_burst_iops" "$earned_burst_time" \
+		"$earned_burst_stats_period_ms" \
+		"$earned_burst_burst_start_ms" "$earned_burst_burst_end_ms" \
+		"$earned_burst_dump_start_ms" "$earned_burst_dump_end_ms" \
+		"$earned_burst_steady_start_ms" "$earned_burst_steady_end_ms"
+
+	qos_test_cleanup
+	rm -f "$log_file"
+	trap - SIGINT SIGTERM EXIT
 }
 
 function error_test_suite() {
@@ -1659,6 +1906,7 @@ if [[ $test_type == bdev ]]; then
 	run_test "bdev_qos_hierarchy" qos_test_hierarchy_suite "$env_ctx"
 	run_test "bdev_qos_aggregate_bdevs" qos_test_agg_bdevs_suite "$env_ctx"
 	run_test "bdev_qos_dynamic_change" qos_test_dynamic_change_suite "$env_ctx"
+	run_test "bdev_qos_burst" qos_test_burst_suite "$env_ctx"
 	run_test "bdev_qd_sampling" qd_sampling_test_suite "$env_ctx"
 	run_test "bdev_error" error_test_suite "$env_ctx"
 	run_test "bdev_stat" stat_test_suite "$env_ctx"
