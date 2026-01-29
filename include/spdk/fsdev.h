@@ -198,12 +198,11 @@ enum spdk_fsdev_notify_type {
 	SPDK_FSDEV_NOTIFY_NUM_TYPES
 };
 
-#define SPDK_FSDEV_MAX_NOTIFY_OPC 16
-
-/* We define it ourselves a bit higher than FUSE_NOTIFY_CODE_MAX to avoid
- * changing ABI as new notification types are added.
+/* We define it ourselves a bit higher than what's in fuse.h to avoid
+ * changing ABI as new notification types are added. Currently fuse.h has
+ * 9 (as of v6.18).
  */
-SPDK_STATIC_ASSERT(SPDK_FSDEV_MAX_NOTIFY_OPC >= FUSE_NOTIFY_CODE_MAX, "max notify opc");
+#define SPDK_FSDEV_MAX_NOTIFY_OPC 16
 
 /**
  * fsdev IO statistics

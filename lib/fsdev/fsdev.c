@@ -141,6 +141,8 @@ static const char *fsdev_notify_type_names[] = {
 	[FUSE_NOTIFY_RETRIEVE] = "retrieve",
 	[FUSE_NOTIFY_DELETE] = "delete",
 	[FUSE_NOTIFY_RESEND] = "resend",
+	[FUSE_NOTIFY_INC_EPOCH] = "inc_epoch",
+	[FUSE_NOTIFY_PRUNE] = "prune",
 };
 
 static struct spdk_fsdev_module *g_resume_fsdev_module = NULL;
@@ -2127,7 +2129,7 @@ const char *
 fsdev_notify_type_get_name(int type)
 {
 	return (type < (int)SPDK_COUNTOF(fsdev_notify_type_names)) ?
-	       fsdev_notify_type_names[type] : NULL;
+	       fsdev_notify_type_names[type] : "unknown";
 }
 
 int
