@@ -1040,14 +1040,17 @@ void spdk_fsdev_io_submit(struct spdk_fsdev_io *fsdev_io);
  * \param fsdev_io fsdev_io data buffer to be built and submitted by this function
  * \param desc fsdev descriptor
  * \param ch I/O channel
- * \param in_iov Input IO vectors array.
+ * \param in_iov Input IO vectors array containing FUSE headers (and payload if domain is NULL).
  * \param in_iovcnt Size of the input IO vectors array.
- * \param out_iov Output IO vectors array.
+ * \param out_iov Output IO vectors array containing FUSE headers (and payload if domain is NULL).
  * \param out_iovcnt Size of the output IO vectors array.
  * \param source_id Source ID
  * \param source_unique per Source ID unique value
- * \param domain Memory domain describing the data buffers.
+ * \param domain Memory domain describing the data buffers. If non-NULL, must be FUSE_READ or
+ *               FUSE_WRITE opcode and domain_iov/domain_iovcnt describe the payload buffers.
  * \param domain_ctx Memory domain context.
+ * \param domain_iov IO vectors array for payload when domain is non-NULL.
+ * \param domain_iovcnt Size of the domain IO vectors array.
  * \param cb Completion callback.
  * \param cb_arg Context to be passed to the completion callback.
  *
@@ -1067,6 +1070,7 @@ int spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 					struct iovec *out_iov, int out_iovcnt,
 					uint16_t source_id, uint64_t source_unique,
 					struct spdk_memory_domain *domain, void *domain_ctx,
+					struct iovec *domain_iov, int domain_iovcnt,
 					spdk_fsdev_cpl_cb cb, void *cb_arg);
 
 /**

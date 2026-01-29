@@ -2330,6 +2330,7 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 				    struct iovec *out_iov, int out_iovcnt,
 				    uint16_t source_id, uint64_t source_unique,
 				    struct spdk_memory_domain *domain, void *domain_ctx,
+				    struct iovec *domain_iov, int domain_iovcnt,
 				    spdk_fsdev_cpl_cb clb, void *cb_arg)
 {
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
@@ -2377,8 +2378,31 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 			in_iov->iov_len -= in_size;
 		}
 	}
-	in->iov = in_iov;
-	in->iovcnt = in_iovcnt;
+
+	if (domain != NULL) {
+		/* Memory domain is only supported for FUSE_READ and FUSE_WRITE.
+		 * When domain is non-NULL, the in_iov/out_iov should only contain
+		 * headers, and domain_iov describes the payload buffers.
+		 */
+		if (in->hdr->opcode != FUSE_READ && in->hdr->opcode != FUSE_WRITE) {
+			assert(false);
+			return -EINVAL;
+		}
+		if (in_iovcnt != 0) {
+			assert(false);
+			return -EINVAL;
+		}
+		if (in->hdr->opcode == FUSE_WRITE) {
+			in->iov = domain_iov;
+			in->iovcnt = domain_iovcnt;
+		} else {
+			in->iov = NULL;
+			in->iovcnt = 0;
+		}
+	} else {
+		in->iov = in_iov;
+		in->iovcnt = in_iovcnt;
+	}
 	in->memory_domain = domain;
 	in->memory_domain_ctx = domain_ctx;
 
@@ -2394,8 +2418,22 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 			out_iov->iov_len -= sizeof(*out->hdr);
 		}
 		out->op.raw = out_iov->iov_base;
-		out->iov = out_iov;
-		out->iovcnt = out_iovcnt;
+		if (domain != NULL) {
+			if (out_iovcnt != 0) {
+				assert(false);
+				return -EINVAL;
+			}
+			if (in->hdr->opcode == FUSE_READ) {
+				out->iov = domain_iov;
+				out->iovcnt = domain_iovcnt;
+			} else {
+				out->iov = NULL;
+				out->iovcnt = 0;
+			}
+		} else {
+			out->iov = out_iov;
+			out->iovcnt = out_iovcnt;
+		}
 	} else {
 		out->hdr = NULL;
 		out->op.raw = NULL;

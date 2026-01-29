@@ -509,12 +509,28 @@ fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fu
 	struct spdk_fuse_mount *mount = ch->mount;
 	struct spdk_memory_domain *domain = mount->domain;
 	void *domain_ctx = NULL;
+	struct iovec *in_iov = req->in_iovs;
+	int in_iovcnt = req->in_iovcnt;
+	struct iovec *out_iov = req->out_iovcnt > 0 ? req->out_iovs : NULL;
+	int out_iovcnt = req->out_iovcnt;
+	struct iovec *domain_iov = NULL;
+	int domain_iovcnt = 0;
 
 	if (domain != NULL) {
 		uint32_t opcode = fsdev_fuse_request_get_inhdr(req)->opcode;
 
-		if (opcode == FUSE_READ || opcode == FUSE_WRITE) {
+		if (opcode == FUSE_READ) {
+			/* READ: in_iovs has headers only, out_iovs[0] is header, out_iovs[1] is payload */
 			domain_ctx = ch;
+			domain_iov = &req->out_iovs[1];
+			domain_iovcnt = req->out_iovcnt - 1;
+			out_iovcnt = 1;
+		} else if (opcode == FUSE_WRITE) {
+			/* WRITE: in_iovs[0] is headers, in_iovs[1] is payload, out_iovs has headers only */
+			domain_ctx = ch;
+			domain_iov = &req->in_iovs[1];
+			domain_iovcnt = req->in_iovcnt - 1;
+			in_iovcnt = 1;
 		} else {
 			domain = NULL;
 		}
@@ -522,10 +538,10 @@ fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fu
 
 	return spdk_fsdev_io_submit_from_fuse_iovs((struct spdk_fsdev_io *)req->ctx,
 			mount->fsdev_desc, ch->ioch,
-			req->in_iovs, req->in_iovcnt,
-			req->out_iovcnt > 0 ? req->out_iovs : NULL, req->out_iovcnt,
+			in_iov, in_iovcnt,
+			out_iov, out_iovcnt,
 			ch->source_id, ch->source_unique,
-			domain, domain_ctx,
+			domain, domain_ctx, domain_iov, domain_iovcnt,
 			fsdev_fuse_request_submit_cb, req);
 }
 
@@ -1473,7 +1489,7 @@ fsdev_fuse_destroy_channels_done(struct spdk_io_channel_iter *i, int status)
 	ctx->destroy.out_iov.iov_len = sizeof(ctx->destroy.out_hdr);
 	rc = spdk_fsdev_io_submit_from_fuse_iovs(ctx->destroy.ctx, mount->fsdev_desc, ctx->destroy.ioch,
 			&ctx->destroy.in_iov, 1, &ctx->destroy.out_iov, 1, 0, 0,
-			NULL, NULL, fsdev_fuse_umount_fuse_destroy_cb, ctx);
+			NULL, NULL, NULL, 0, fsdev_fuse_umount_fuse_destroy_cb, ctx);
 	if (rc != 0) {
 		fsdev_fuse_umount_fuse_destroy_cb(ctx, rc, NULL);
 	}

@@ -221,7 +221,7 @@ virtio_fs_process_req(struct vfu_virtio_endpoint *virtio_endpoint, struct vfu_vi
 	spdk_fsdev_io_submit_from_fuse_iovs(fs_req->io_ctx, fs_endpoint->fsdev_desc,
 					    fs_endpoint->io_channel,
 					    in_iov, in_iovcnt, out_iov, out_iovcnt,
-					    0, fs_endpoint->source_unique, NULL, NULL,
+					    0, fs_endpoint->source_unique, NULL, NULL, NULL, 0,
 					    virtio_fs_fuse_req_done, fs_req);
 	return 0;
 }
