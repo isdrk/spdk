@@ -42,7 +42,6 @@
 RB_HEAD(mlx5_mkeys_tree, spdk_mlx5_mkey_pool_obj);
 
 struct mlx5_relaxed_ordering_caps {
-	bool relaxed_ordering_write_pci_enabled;
 	bool relaxed_ordering_write;
 	bool relaxed_ordering_read;
 	bool relaxed_ordering_write_umr;
@@ -230,10 +229,13 @@ mlx5_query_relaxed_ordering_caps(struct ibv_context *context,
 		return ret;
 	}
 
-	caps->relaxed_ordering_write_pci_enabled = DEVX_GET(query_hca_cap_out,
-			out, capability.cmd_hca_cap.relaxed_ordering_write_pci_enabled);
 	caps->relaxed_ordering_write = DEVX_GET(query_hca_cap_out, out,
 						capability.cmd_hca_cap.relaxed_ordering_write);
+	if (!caps->relaxed_ordering_write) {
+		caps->relaxed_ordering_write =
+			DEVX_GET(query_hca_cap_out, out,
+				 capability.cmd_hca_cap.relaxed_ordering_write_pci_enabled);
+	}
 	caps->relaxed_ordering_read = DEVX_GET(query_hca_cap_out, out,
 					       capability.cmd_hca_cap.relaxed_ordering_read);
 	caps->relaxed_ordering_write_umr = DEVX_GET(query_hca_cap_out,
