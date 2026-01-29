@@ -437,6 +437,16 @@ void
 spdk_rdma_utils_finish(void)
 {
 	struct rdma_utils_device *dev, *tmp;
+	struct spdk_rdma_utils_mem_map *map, *tmp_map;
+
+	pthread_mutex_lock(&g_rdma_mr_maps_mutex);
+	LIST_FOREACH_SAFE(map, &g_rdma_utils_mr_maps, link, tmp_map) {
+		SPDK_WARNLOG("Freeing RDMA memory map %p (%p), with ref_count %d\n", map, map->map, map->ref_count);
+		LIST_REMOVE(map, link);
+		spdk_mem_map_free(&map->map);
+		_rdma_free_mem_map(map);
+	}
+	pthread_mutex_unlock(&g_rdma_mr_maps_mutex);
 
 	pthread_mutex_lock(&g_dev_mutex);
 
