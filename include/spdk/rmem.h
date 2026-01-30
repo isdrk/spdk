@@ -183,6 +183,26 @@ void spdk_rmem_entry_write(struct spdk_rmem_entry *entry, const void *buf);
 int spdk_rmem_entry_read(struct spdk_rmem_entry *entry, void *buf);
 
 /**
+ * Get direct pointer to rmem entry data.
+ *
+ * Returns a pointer to the entry's data in the mmap'd shared memory region.
+ * This allows direct read access without copying.
+ *
+ * WARNING: The returned pointer will become invalid after calling
+ * spdk_rmem_entry_write() on the same entry, due to the internal mirror-copy
+ * mechanism. After any write operation, call this function again to get the
+ * updated pointer.
+ *
+ * WARNING: Do not modify the data through this pointer directly, as this
+ * bypasses the atomic write mechanism and will result in data corruption
+ * on crash. Use spdk_rmem_entry_write() for all modifications.
+ *
+ * \param entry Entry object.
+ * \return Pointer to the entry's data.
+ */
+void *spdk_rmem_entry_get_ptr(struct spdk_rmem_entry *entry);
+
+/**
  * Release rmem entry.
  *
  * \param entry Entry object.

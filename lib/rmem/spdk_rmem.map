@@ -14,6 +14,7 @@
 	spdk_rmem_pool_get;
 	spdk_rmem_entry_write;
 	spdk_rmem_entry_read;
+	spdk_rmem_entry_get_ptr;
 	spdk_rmem_entry_release;
 	spdk_rmem_pool_num_entries;
 	spdk_rmem_dump_info_json;

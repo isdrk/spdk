@@ -724,6 +724,12 @@ spdk_rmem_entry_read(struct spdk_rmem_entry *entry, void *buf)
 	return rc;
 }
 
+void *
+spdk_rmem_entry_get_ptr(struct spdk_rmem_entry *entry)
+{
+	return rmem_pool_entry_data(entry);
+}
+
 void
 spdk_rmem_entry_release(struct spdk_rmem_entry *entry)
 {
