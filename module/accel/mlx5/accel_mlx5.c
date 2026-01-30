@@ -4542,6 +4542,9 @@ accel_mlx5_destroy_cb(void *io_device, void *ctx_buf)
 		if (dev->crypto_sig_mkeys) {
 			spdk_mlx5_mkey_pool_put_ref(dev->crypto_sig_mkeys);
 		}
+		if (dev->mmap) {
+			spdk_rdma_utils_free_mem_map(&dev->mmap);
+		}
 		spdk_spin_lock(&g_accel_mlx5.lock);
 		accel_mlx5_add_stats(&g_accel_mlx5.stats, &dev->stats);
 		spdk_spin_unlock(&g_accel_mlx5.lock);
