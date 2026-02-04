@@ -662,7 +662,10 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 				uint32_t num_blocks, uint64_t wr_id, uint32_t flags)
 {
 	struct spdk_mlx5_umr_crypto_attr cattr;
-	struct spdk_mlx5_umr_attr umr_attr;
+	struct spdk_mlx5_umr_attr umr_attr = {
+		.mkey = mkey,
+		.sge = sge->src_sge,
+	};
 	struct spdk_accel_task *task = &mlx5_task->base;
 	uint32_t length, remaining = 0, block_size = task->block_size;
 	int rc;
@@ -724,8 +727,6 @@ accel_mlx5_configure_crypto_umr(struct accel_mlx5_task *mlx5_task, struct accel_
 		SPDK_ERRLOG("unsupported block size %u\n", block_size);
 		return -EINVAL;
 	}
-	umr_attr.mkey = mkey;
-	umr_attr.sge = sge->src_sge;
 
 	if (!mlx5_task->inplace) {
 		SPDK_DEBUGLOG(accel_mlx5, "task %p, dst sge, domain %p, len %u\n", task, task->dst_domain, length);
@@ -1308,7 +1309,15 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	struct spdk_accel_task *task = &mlx5_task->base;
 	struct spdk_mlx5_umr_crypto_attr cattr;
 	struct spdk_mlx5_umr_trans_sig_attr sattr;
-	struct spdk_mlx5_umr_attr umr_attr;
+	struct spdk_mlx5_umr_attr umr_attr = {
+		.mkey = mkey->mkey,
+		.sge = sgl->src_sge,
+		/*
+		 * umr_len is the size of data addressed by MKey in memory and includes
+		 * the size of the signature if it exists in memory.
+		 */
+		.umr_len = encrypt ? req_len : req_len + sizeof(*crc),
+	};
 	uint32_t remaining;
 	uint32_t umr_sge_count;
 	int rc;
@@ -1383,14 +1392,7 @@ accel_mlx5_configure_crypto_and_sig_umr(struct accel_mlx5_task *mlx5_task,
 	sattr.init = init_signature;
 	sattr.check_gen = gen_signature;
 
-	umr_attr.mkey = mkey->mkey;
-	/*
-	 * umr_len is the size of data addressed by MKey in memory and includes
-	 * the size of the signature if it exists in memory.
-	 */
-	umr_attr.umr_len = encrypt ? req_len : req_len + sizeof(*crc);
 	umr_attr.sge_count = umr_sge_count;
-	umr_attr.sge = sgl->src_sge;
 
 	return spdk_mlx5_umr_configure_trans_sig_crypto(qp->qp, &umr_attr, &sattr, &cattr, 0, 0);
 }
@@ -2649,9 +2651,13 @@ accel_mlx5_mkey_task_init(struct accel_mlx5_task *mlx5_task)
 static inline int
 accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 {
-	struct spdk_mlx5_umr_attr umr_attr;
-	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
 	struct spdk_accel_task *task = &mlx5_task->base;
+	struct ibv_sge src_sge[ACCEL_MLX5_MAX_SGE];
+	struct spdk_mlx5_umr_attr umr_attr = {
+		.mkey = mlx5_task->mkeys[0]->mkey,
+		.sge = src_sge,
+		.umr_len = task->nbytes,
+	};
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
 	uint32_t remaining = 0;
@@ -2671,11 +2677,8 @@ accel_mlx5_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 		SPDK_ERRLOG("Failed to set src sge, rc %d, remaining %u\n", rc, remaining);
 		return rc;
 	}
-	umr_attr.mkey = mlx5_task->mkeys[0]->mkey;
-	umr_attr.sge = src_sge;
-	umr_attr.sge_count = rc;
-	umr_attr.umr_len = task->nbytes;
 
+	umr_attr.sge_count = rc;
 	rc = spdk_mlx5_umr_configure(qp->qp, &umr_attr, (uint64_t)mlx5_task,
 				     SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE);
 	if (spdk_unlikely(rc)) {
@@ -2848,12 +2851,16 @@ static inline int
 accel_mlx5_crypto_mkey_ext_qp_task_process(struct accel_mlx5_task *mlx5_task)
 {
 	struct spdk_mlx5_umr_crypto_attr cattr;
-	struct spdk_mlx5_umr_attr umr_attr;
-	struct accel_mlx5_sge sge;
 	struct spdk_accel_task *task = &mlx5_task->base;
+	struct accel_mlx5_sge sge;
+	struct spdk_mlx5_umr_attr umr_attr = {
+		.mkey = mlx5_task->mkeys[0]->mkey,
+		.sge = sge.src_sge,
+		.umr_len = task->nbytes,
+	};
 	struct accel_mlx5_qp *qp = mlx5_task->qp;
 	struct accel_mlx5_dev *dev = qp->dev;
-	uint32_t block_size, length, remaining, num_blocks, mkey;
+	uint32_t block_size, remaining, num_blocks;
 	int rc;
 
 	if (spdk_unlikely(!mlx5_task->num_ops)) {
@@ -2864,11 +2871,10 @@ accel_mlx5_crypto_mkey_ext_qp_task_process(struct accel_mlx5_task *mlx5_task)
 
 	num_blocks = mlx5_task->num_blocks;
 	block_size = task->block_size;
-	mkey = mlx5_task->mkeys[0]->mkey;
-	length = task->nbytes;
-	SPDK_DEBUGLOG(accel_mlx5, "task %p, src sge, domain %p, len %u\n", task, task->src_domain, length);
-	rc = accel_mlx5_fill_block_sge(qp, sge.src_sge, &mlx5_task->src, 0, length, &remaining,
-				       task->src_domain, task->src_domain_ctx);
+	SPDK_DEBUGLOG(accel_mlx5, "task %p, src sge, domain %p, len %"PRIu64"\n", task,
+		      task->src_domain, task->nbytes);
+	rc = accel_mlx5_fill_block_sge(qp, sge.src_sge, &mlx5_task->src, 0, task->nbytes,
+				       &remaining, task->src_domain, task->src_domain_ctx);
 	if (spdk_unlikely(rc <= 0)) {
 		if (rc == 0) {
 			rc = -EINVAL;
@@ -2891,16 +2897,13 @@ accel_mlx5_crypto_mkey_ext_qp_task_process(struct accel_mlx5_task *mlx5_task)
 		SPDK_ERRLOG("unsupported block size %u\n", block_size);
 		return -EINVAL;
 	}
-	umr_attr.mkey = mkey;
-	umr_attr.sge = sge.src_sge;
 
 	SPDK_DEBUGLOG(accel_mlx5,
-		      "task %p: bs %u, iv %"PRIu64", enc_on_tx %d, tweak_mode %d, len %u, dv_mkey %x, blocks %u\n",
+		      "task %p: bs %u, iv %"PRIu64", enc_on_tx %d, tweak_mode %d, len %"PRIu64", dv_mkey %x, blocks %u\n",
 		      mlx5_task, task->block_size, cattr.xts_iv, mlx5_task->enc_order, cattr.tweak_mode,
-		      length, mkey, num_blocks);
+		      task->nbytes, umr_attr.mkey, num_blocks);
 
 	umr_attr.sge_count = sge.src_sge_count;
-	umr_attr.umr_len = length;
 	mlx5_task->num_processed_blocks += num_blocks;
 
 	rc = spdk_mlx5_umr_configure_crypto(mlx5_task->crypto_external_qp.ext_qp, &umr_attr, &cattr, 0, 0);
