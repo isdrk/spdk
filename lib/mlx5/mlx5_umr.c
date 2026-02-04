@@ -1154,7 +1154,7 @@ spdk_mlx5_umr_configure_crypto(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_att
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1328,7 +1328,7 @@ spdk_mlx5_umr_configure_trans_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1486,7 +1486,7 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1806,7 +1806,7 @@ spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 	qp->extra_flags = qp->cached_extra_flags;
@@ -1862,7 +1862,7 @@ spdk_mlx5_umr_configure_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_
 	uint32_t wqe_size, mtt_size;
 	uint32_t inline_klm_size;
 
-	if (!spdk_unlikely(umr_attr->sge_count)) {
+	if (spdk_unlikely(!umr_attr->sge_count)) {
 		return -EINVAL;
 	}
 
