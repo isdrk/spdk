@@ -4161,6 +4161,16 @@ spdk_accel_get_buf_align(enum spdk_accel_opcode opcode,
 	return info.required_alignment;
 }
 
+uint32_t
+spdk_accel_get_max_segments(enum spdk_accel_opcode opcode,
+			    const struct spdk_accel_operation_exec_ctx *ctx)
+{
+	struct spdk_accel_opcode_info info;
+
+	accel_get_operation_info(opcode, ctx, &info);
+	return info.max_segments > 0 ? info.max_segments : UINT32_MAX;
+}
+
 struct spdk_accel_module_if *
 spdk_accel_get_module(const char *name)
 {

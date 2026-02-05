@@ -62,6 +62,7 @@
 	spdk_accel_get_opts;
 	spdk_accel_get_opcode_stats;
 	spdk_accel_get_buf_align;
+	spdk_accel_get_max_segments;
 	spdk_accel_get_opcode_name;
 	spdk_accel_get_opc_memory_domains;
 	spdk_accel_submit_compress_ext;

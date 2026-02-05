@@ -1369,14 +1369,18 @@ void spdk_accel_get_opcode_stats(struct spdk_io_channel *ch, enum spdk_accel_opc
 				 struct spdk_accel_opcode_stats *stats, size_t size);
 
 /**
- * Context for the `spdk_accel_get_buf_align()` function.  Depending on the operation, some of the
- * fields might be unused.
+ * Operation execution context.  Depending on the operation type and/or type of capability being
+ * queried, some of the fields might be unused.
  */
 struct spdk_accel_operation_exec_ctx {
 	/** Size of this structure in bytes */
 	size_t size;
 	/** Block size in bytes, required for encrypt and decrypt */
 	uint32_t block_size;
+	/**
+	 * The result of this operation will be transferred via spdk_memory_domain_transfer_data().
+	 */
+	bool use_data_transfer;
 };
 
 /**
@@ -1391,6 +1395,19 @@ struct spdk_accel_operation_exec_ctx {
  */
 uint8_t spdk_accel_get_buf_align(enum spdk_accel_opcode opcode,
 				 const struct spdk_accel_operation_exec_ctx *ctx);
+
+/**
+ * Get the maximum number of segments supported by a module/driver to execute a given operation.  If
+ * an operation has both source and destination, this number refers to the size of either of them
+ * individually (i.e. max_segments = min(max_src_segments, max_dst_segments)).
+ *
+ * \param opcode Opcode.
+ * \param ctx Context in which the operation will be executed.
+ *
+ * \return Maximum number of segments.
+ */
+uint32_t spdk_accel_get_max_segments(enum spdk_accel_opcode opcode,
+				     const struct spdk_accel_operation_exec_ctx *ctx);
 
 /**
  * Return memory domains used by specific opcode.

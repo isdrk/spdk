@@ -164,6 +164,15 @@ struct spdk_accel_opcode_info {
 	 * value of 0 means that the buffers don't need to be aligned.
 	 */
 	uint8_t required_alignment;
+
+	/**
+	 * Maximum number of segments supported by a module/driver to execute a given operation.  If
+	 * an operation has both source and destination, this number refers to the size of either of
+	 * them individually (i.e. max_segments = min(max_src_segments, max_dst_segments)).
+	 *
+	 * The value of 0 means that there is no limit.
+	 */
+	uint32_t max_segments;
 };
 
 struct spdk_accel_module_if {
