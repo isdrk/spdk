@@ -1078,6 +1078,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 {
 	struct spdk_fuse_mount *mnt;
 	struct spdk_fsdev *fsdev;
+	struct spdk_fsdev_open_opts open_opts = {};
 	struct stat st;
 	char mopts[128];
 	int rc;
@@ -1135,7 +1136,11 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	rc = spdk_fsdev_open(name, fsdev_fuse_fsdev_event_cb, mnt, &mnt->fsdev_desc);
+	open_opts.size = SPDK_SIZEOF(&open_opts, max_xfer_size);
+	open_opts.event_cb_fn = fsdev_fuse_fsdev_event_cb;
+	open_opts.event_cb_ctx = mnt;
+	open_opts.max_xfer_size = mnt->max_xfer_size;
+	rc = spdk_fsdev_open_ext(name, &open_opts, &mnt->fsdev_desc);
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to open fsdev: %s\n", mnt->name, spdk_strerror(-rc));
 		goto error;
