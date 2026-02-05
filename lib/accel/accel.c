@@ -4132,23 +4132,32 @@ spdk_accel_get_opcode_stats(struct spdk_io_channel *ch, enum spdk_accel_opcode o
 #undef SET_FIELD
 }
 
+static void
+accel_get_operation_info(enum spdk_accel_opcode opcode,
+			 const struct spdk_accel_operation_exec_ctx *ctx,
+			 struct spdk_accel_opcode_info *info)
+{
+	struct spdk_accel_module_if *module = g_modules_opc[opcode].module;
+	int rc = -ENOTSUP;
+
+	memset(info, 0, sizeof(*info));
+	if (g_accel_driver != NULL && g_accel_driver->get_operation_info != NULL) {
+		rc = g_accel_driver->get_operation_info(opcode, ctx, info);
+	}
+
+	if (rc == -ENOTSUP && module->get_operation_info != NULL) {
+		memset(info, 0, sizeof(*info));
+		module->get_operation_info(opcode, ctx, info);
+	}
+}
+
 uint8_t
 spdk_accel_get_buf_align(enum spdk_accel_opcode opcode,
 			 const struct spdk_accel_operation_exec_ctx *ctx)
 {
-	struct spdk_accel_module_if *module = g_modules_opc[opcode].module;
-	struct spdk_accel_opcode_info info = {};
-	int rc = -ENOTSUP;
+	struct spdk_accel_opcode_info info;
 
-	if (g_accel_driver != NULL && g_accel_driver->get_operation_info != NULL) {
-		rc = g_accel_driver->get_operation_info(opcode, ctx, &info);
-	}
-
-	if (rc == -ENOTSUP && module->get_operation_info != NULL) {
-		memset(&info, 0, sizeof(info));
-		module->get_operation_info(opcode, ctx, &info);
-	}
-
+	accel_get_operation_info(opcode, ctx, &info);
 	return info.required_alignment;
 }
 
