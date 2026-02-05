@@ -8,6 +8,7 @@
 	spdk_fsdev_get_by_name;
 	spdk_fsdev_get_module_name;
 	spdk_fsdev_open;
+	spdk_fsdev_open_ext;
 	spdk_fsdev_close;
 	spdk_fsdev_get_name;
 	spdk_fsdev_desc_get_fsdev;

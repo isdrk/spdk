@@ -2012,14 +2012,14 @@ fsdev_desc_alloc(struct spdk_fsdev *fsdev, spdk_fsdev_event_cb_t event_cb, void 
 }
 
 int
-spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb, void *event_ctx,
-		struct spdk_fsdev_desc **_desc)
+spdk_fsdev_open_ext(const char *fsdev_name, struct spdk_fsdev_open_opts *opts,
+		    struct spdk_fsdev_desc **_desc)
 {
 	struct spdk_fsdev_desc *desc;
 	struct spdk_fsdev *fsdev;
 	int rc;
 
-	if (event_cb == NULL) {
+	if (SPDK_GET_FIELD(opts, event_cb_fn, NULL) == NULL) {
 		SPDK_ERRLOG("Missing event callback function\n");
 		return -EINVAL;
 	}
@@ -2033,7 +2033,9 @@ spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb, void *ev
 		return -ENODEV;
 	}
 
-	rc = fsdev_desc_alloc(fsdev, event_cb, event_ctx, &desc);
+	rc = fsdev_desc_alloc(fsdev,
+			      SPDK_GET_FIELD(opts, event_cb_fn, NULL),
+			      SPDK_GET_FIELD(opts, event_cb_ctx, NULL), &desc);
 	if (rc != 0) {
 		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		return rc;
@@ -2048,6 +2050,19 @@ spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb, void *ev
 	*_desc = desc;
 	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 	return rc;
+}
+
+int
+spdk_fsdev_open(const char *name, spdk_fsdev_event_cb_t event_cb_fn, void *event_cb_ctx,
+		struct spdk_fsdev_desc **desc)
+{
+	struct spdk_fsdev_open_opts opts = {
+		.size = SPDK_SIZEOF(&opts, event_cb_ctx),
+		.event_cb_fn = event_cb_fn,
+		.event_cb_ctx = event_cb_ctx,
+	};
+
+	return spdk_fsdev_open_ext(name, &opts, desc);
 }
 
 static void

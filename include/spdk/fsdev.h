@@ -308,6 +308,27 @@ const char *spdk_fsdev_get_module_name(const struct spdk_fsdev *fsdev);
 int spdk_fsdev_open(const char *fsdev_name, spdk_fsdev_event_cb_t event_cb,
 		    void *event_ctx, struct spdk_fsdev_desc **desc);
 
+struct spdk_fsdev_open_opts {
+	/** Size of this structure */
+	size_t			size;
+	/** Event notification callback */
+	spdk_fsdev_event_cb_t	event_cb_fn;
+	/** Event notification context */
+	void			*event_cb_ctx;
+};
+
+/**
+ * Open a filesystem device for I/O operations.
+ *
+ * \param name Filesystem device name to open.
+ * \param opts Open options.
+ * \param desc Open descriptor.
+ *
+ * \return 0 on success, negative errno otherwise.
+ */
+int spdk_fsdev_open_ext(const char *name, struct spdk_fsdev_open_opts *opts,
+			struct spdk_fsdev_desc **desc);
+
 /**
  * Close a previously opened filesystem device.
  *
