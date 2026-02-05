@@ -391,6 +391,26 @@ struct spdk_thread *spdk_fsdev_io_get_thread(struct spdk_fsdev_io *fsdev_io);
  */
 struct spdk_io_channel *spdk_fsdev_io_get_io_channel(struct spdk_fsdev_io *fsdev_io);
 
+/**
+ * Get the maximum segment size supported by the user sending this I/O.  This value is the same for
+ * all I/Os and is valid until receiving FUSE_DESTROY or the next FUSE_INIT.
+ *
+ * \param fsdev_io I/O
+ *
+ * \return Maximum number of segments.
+ */
+uint32_t spdk_fsdev_io_get_max_segments(struct spdk_fsdev_io *fsdev_io);
+
+/**
+ * Get the maximum transfer size supported by the user sending this I/O.  This value is the same for
+ * all I/Os and is valid until receiving FUSE_DESTROY or the next FUSE_INIT.
+ *
+ * \param fsdev_io I/O
+ *
+ * \return Maximum transfer size.
+ */
+uint32_t spdk_fsdev_io_get_max_xfer_size(struct spdk_fsdev_io *fsdev_io);
+
 typedef void (*spdk_fsdev_io_cleanup_cb)(void *cb_arg);
 
 /**

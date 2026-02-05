@@ -188,6 +188,8 @@ struct spdk_fsdev_desc {
 	bool				closed;
 	struct spdk_spinlock		spinlock;
 	uint32_t			refs;
+	uint32_t			max_segments;
+	uint32_t			max_xfer_size;
 	TAILQ_ENTRY(spdk_fsdev_desc)	link;
 };
 
@@ -1716,6 +1718,18 @@ spdk_fsdev_io_get_io_channel(struct spdk_fsdev_io *fsdev_io)
 	return fsdev_io->internal.ch->channel;
 }
 
+uint32_t
+spdk_fsdev_io_get_max_segments(struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_io->internal.desc->max_segments;
+}
+
+uint32_t
+spdk_fsdev_io_get_max_xfer_size(struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_io->internal.desc->max_xfer_size;
+}
+
 static int
 fsdev_register(struct spdk_fsdev *fsdev)
 {
@@ -2039,6 +2053,16 @@ spdk_fsdev_open_ext(const char *fsdev_name, struct spdk_fsdev_open_opts *opts,
 	if (rc != 0) {
 		spdk_spin_unlock(&g_fsdev_mgr.spinlock);
 		return rc;
+	}
+
+	desc->max_segments = SPDK_GET_FIELD(opts, max_segments, 0);
+	if (desc->max_segments == 0) {
+		desc->max_segments = UINT32_MAX;
+	}
+
+	desc->max_xfer_size = SPDK_GET_FIELD(opts, max_xfer_size, 0);
+	if (desc->max_xfer_size == 0) {
+		desc->max_xfer_size = UINT32_MAX;
 	}
 
 	rc = fsdev_open(fsdev, desc);

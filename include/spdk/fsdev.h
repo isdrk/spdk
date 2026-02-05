@@ -315,6 +315,10 @@ struct spdk_fsdev_open_opts {
 	spdk_fsdev_event_cb_t	event_cb_fn;
 	/** Event notification context */
 	void			*event_cb_ctx;
+	/** Maximum number of segments per I/O operation */
+	uint32_t		max_segments;
+	/** Maximum size of payload in a single I/O operation */
+	uint32_t		max_xfer_size;
 };
 
 /**
