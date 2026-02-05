@@ -6131,6 +6131,51 @@ accel_mlx5_execute_sequence(struct spdk_io_channel *_ch, struct spdk_accel_seque
 	return _accel_mlx5_submit_tasks(accel_ch, mlx5_task);
 }
 
+static int
+accel_mlx5_get_operation_info(enum spdk_accel_opcode opcode,
+			      const struct spdk_accel_operation_exec_ctx *ctx,
+			      struct spdk_accel_opcode_info *info)
+{
+	bool use_data_transfer;
+
+	if (!accel_mlx5_supports_opcode(opcode)) {
+		return -ENOTSUP;
+	}
+
+	/*
+	 * If the user doesn't pass us ctx->use_data_transfer, we assume it's true, since that's
+	 * more restrictive.
+	 */
+	use_data_transfer = SPDK_GET_FIELD(ctx, use_data_transfer, true);
+	if (!use_data_transfer) {
+		/* There's no limit if we do the RDMA ourselves */
+		info->max_segments = UINT32_MAX;
+		switch (opcode) {
+		case SPDK_ACCEL_OPC_DIF_GENERATE_COPY:
+		case SPDK_ACCEL_OPC_DIF_VERIFY_COPY:
+			/* Except for DIF which is limited to ACCEL_MLX5_MAX_INLINE_SGE */
+			info->max_segments = ACCEL_MLX5_MAX_INLINE_SGE;
+			break;
+		default:
+			break;
+		}
+	} else {
+		info->max_segments = ACCEL_MLX5_MAX_INLINE_SGE;
+		switch (opcode) {
+		case SPDK_ACCEL_OPC_COPY:
+			if (g_accel_mlx5.attr.enable_driver &&
+			    g_accel_mlx5.attr.umr_memory_buffer) {
+				info->max_segments = ACCEL_MLX5_MAX_MB_SGE;
+			}
+			break;
+		default:
+			break;
+		}
+	}
+
+	return 0;
+}
+
 static struct accel_mlx5_module g_accel_mlx5 = {
 	.module = {
 		.module_init		= accel_mlx5_init,
@@ -6146,6 +6191,7 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 		.crypto_supports_cipher	= accel_mlx5_crypto_supports_cipher,
 		.crypto_supports_tweak_mode	= accel_mlx5_crypto_supports_tweak_mode,
 		.get_memory_domains	= accel_mlx5_get_memory_domains,
+		.get_operation_info	= accel_mlx5_get_operation_info,
 	},
 	.attr = {
 		.qp_size = ACCEL_MLX5_QP_SIZE,
@@ -6162,7 +6208,8 @@ static struct accel_mlx5_module g_accel_mlx5 = {
 static struct spdk_accel_driver g_accel_mlx5_driver = {
 	.name			= SPDK_MLX5_DRIVER_NAME,
 	.execute_sequence	= accel_mlx5_execute_sequence,
-	.get_io_channel		= accel_mlx5_get_io_channel
+	.get_io_channel		= accel_mlx5_get_io_channel,
+	.get_operation_info	= accel_mlx5_get_operation_info,
 };
 
 SPDK_ACCEL_MODULE_REGISTER(mlx5, &g_accel_mlx5.module)
