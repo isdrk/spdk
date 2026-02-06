@@ -3377,6 +3377,20 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_periodic_dump_stat_mode = STAT_MODE_IA;
 	} else if (ch == DISABLE_STATS_SUMMARY_OPT_IDX) {
 		g_summarize_performance = false;
+	} else if (ch == STATS_PERIOD_OPT_IDX) {
+		char *endptr;
+		double period;
+
+		errno = 0;
+		period = strtod(arg, &endptr);
+		if (errno || arg == endptr || *endptr != '\0' || period <= 0) {
+			fprintf(stderr, "Illegal stats period value %s\n", arg);
+			return -EINVAL;
+		}
+		g_show_performance_period_in_usec = (uint64_t)(period * SPDK_SEC_TO_USEC);
+		if (g_show_performance_period_in_usec == 0) {
+			g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
+		}
 	} else {
 		tmp = spdk_strtoll(arg, 10);
 		if (tmp < 0) {
@@ -3404,9 +3418,6 @@ bdevperf_parse_arg(int ch, char *arg)
 		case EXP_MOVING_AVG_OPT_IDX:
 			g_show_performance_ema_period = tmp;
 			g_periodic_dump_stat_mode = STAT_MODE_EMA;
-			break;
-		case STATS_PERIOD_OPT_IDX:
-			g_show_performance_period_in_usec = tmp * SPDK_SEC_TO_USEC;
 			break;
 		case WARMUP_TIME_OPT_IDX:
 			g_warmup_time_in_sec = tmp;
