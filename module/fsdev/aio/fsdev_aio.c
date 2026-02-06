@@ -5477,15 +5477,14 @@ setup_root(struct aio_fsdev *vfsdev)
 		return res;
 	}
 
-	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_mode,
-			"/");
+	vfsdev->root = file_object_create_unsafe(vfsdev, NULL, fd, stat.st_mode, "/");
+	close(fd);
 	if (!vfsdev->root) {
 		SPDK_ERRLOG("Cannot alloc root\n");
-		close(fd);
 		return -ENOMEM;
 	}
 
-	SPDK_INFOLOG(fsdev_aio, "root (%s) fd=%d\n", vfsdev->root_path, fd);
+	SPDK_INFOLOG(fsdev_aio, "root (%s)\n", vfsdev->root_path);
 	return 0;
 }
 
