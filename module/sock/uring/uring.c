@@ -1110,6 +1110,8 @@ sock_uring_group_reap(struct spdk_uring_sock_group_impl *group, int max, int max
 				bid = flags >> IORING_CQE_BUFFER_SHIFT;
 				tracker = &group->trackers[bid];
 
+				/* We should never encounter a NULL buf here because we only add trackers
+				 * with valid buffers to free_trackers, and only those are added to the ring */
 				assert(tracker->buf != NULL);
 				assert(tracker->buflen != 0);
 
@@ -1417,8 +1419,14 @@ uring_sock_group_impl_buf_pool_alloc(struct spdk_uring_sock_group_impl *group_im
 		tracker->buf = spdk_malloc(URING_MAX_RECV_SIZE, PAGE_SIZE, NULL, SPDK_ENV_NUMA_ID_ANY,
 					   SPDK_MALLOC_DMA);
 		if (tracker->buf == NULL) {
-			uring_sock_group_impl_buf_pool_free(group_impl);
-			return -ENOMEM;
+			/* If allocation fails, skip this tracker but continue with others */
+			tracker->buf = NULL;
+			tracker->len = 0;
+			tracker->buflen = 0;
+			tracker->ctx = NULL;
+			tracker->id = i;
+			/* Don't add to free_trackers - only trackers with valid buffers are added */
+			continue;
 		}
 
 		tracker->len = URING_MAX_RECV_SIZE;
@@ -1436,6 +1444,7 @@ static struct spdk_sock_group_impl *
 uring_sock_group_impl_create(void)
 {
 	struct spdk_uring_sock_group_impl *group_impl;
+	int rc;
 
 	group_impl = calloc(1, sizeof(*group_impl));
 	if (group_impl == NULL) {
@@ -1453,9 +1462,12 @@ uring_sock_group_impl_create(void)
 
 	TAILQ_INIT(&group_impl->pending_recv);
 
-	if (uring_sock_group_impl_buf_pool_alloc(group_impl) < 0) {
-		SPDK_ERRLOG("Failed to create buffer ring."
-			    "uring sock implementation is likely not supported on this kernel.\n");
+	rc = uring_sock_group_impl_buf_pool_alloc(group_impl);
+	if (rc < 0) {
+		SPDK_ERRLOG("Failed to create buffer ring (errno=%d: %s). "
+			    "This may indicate that io_uring buffer rings are not supported on this kernel, "
+			    "or could be due to resource limits or memory allocation issues.\n",
+			    -rc, spdk_strerror(-rc));
 		io_uring_queue_exit(&group_impl->uring);
 		free(group_impl);
 		return NULL;
