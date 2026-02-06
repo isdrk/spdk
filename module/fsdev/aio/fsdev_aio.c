@@ -1653,9 +1653,11 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	init_out->max_readahead = vfsdev->mount_opts.max_readahead;
 	init_out->max_background = 0xffff;
 	init_out->congestion_threshold = 0xffff;
-	init_out->max_write = vfsdev->mount_opts.max_xfer_size;
+	init_out->max_write = spdk_min(spdk_fsdev_io_get_max_xfer_size(fsdev_io),
+				       vfsdev->mount_opts.max_xfer_size);
+	init_out->max_pages = spdk_min(spdk_fsdev_io_get_max_segments(fsdev_io),
+				       init_out->max_write / 4096);
 	init_out->time_gran = 1;
-	init_out->max_pages = vfsdev->mount_opts.max_xfer_size / 4096;
 
 	if (vfsdev->opts.writeback_cache_enabled && (init_in->flags & FUSE_WRITEBACK_CACHE)) {
 		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
