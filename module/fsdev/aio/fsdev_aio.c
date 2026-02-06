@@ -1385,74 +1385,6 @@ fsdev_aio_op_releasedir(struct spdk_io_channel *_ch, struct spdk_fsdev_io *fsdev
 	return fsdev_aio_do_release(fsdev_io);
 }
 
-static int
-fsdev_aio_set_init_opts(struct aio_fsdev *vfsdev, const struct fuse_init_in *init_in,
-			struct fuse_init_out *init_out)
-{
-	uint64_t flags;
-	uint32_t flags2;
-	uint64_t aio_flags = 0;
-
-	assert(init_out	!= NULL);
-	assert(init_in != NULL);
-	assert(init_in->major == FUSE_KERNEL_VERSION);
-	assert(init_in->minor >= 31);
-
-	UNUSED(vfsdev);
-
-	memset(init_out, 0, sizeof(*init_out));
-
-	init_out->major = FUSE_KERNEL_VERSION;
-	init_out->minor = spdk_min(init_in->minor, spdk_min(FSDEV_AIO_FUSE_KERNEL_MINOR_VERSION,
-				   FUSE_KERNEL_MINOR_VERSION));
-	init_out->max_readahead = vfsdev->mount_opts.max_readahead;
-	init_out->max_background = 0xffff;
-	init_out->congestion_threshold = 0xffff;
-	init_out->max_write = vfsdev->mount_opts.max_xfer_size;
-	init_out->time_gran = 1;
-	init_out->max_pages = vfsdev->mount_opts.max_xfer_size / 4096;
-
-	if (vfsdev->opts.writeback_cache_enabled && (init_in->flags & FUSE_WRITEBACK_CACHE)) {
-		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
-		vfsdev->opts.writeback_cache_enabled = true;
-		SPDK_WARNLOG("Enabling writeback cache is unsafe and requires additional "
-			     "synchronization from the applications\n");
-		aio_flags |= FUSE_WRITEBACK_CACHE;
-	}
-
-	flags2 = (init_in->flags & FUSE_INIT_EXT) ? init_in->flags2 : 0;
-	flags = ((uint64_t)flags2 << 32) | init_in->flags;
-	aio_flags |=
-		FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_DONT_MASK |
-		FUSE_HAS_IOCTL_DIR | FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
-		FUSE_NO_OPEN_SUPPORT | FUSE_PARALLEL_DIROPS | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
-		FUSE_NO_OPENDIR_SUPPORT | FUSE_SUBMOUNTS | FUSE_INIT_EXT |
-		FUSE_EXPORT_SUPPORT | FUSE_AUTO_INVAL_DATA |  FUSE_EXPLICIT_INVAL_DATA | FUSE_POSIX_ACL |
-		FUSE_POSIX_LOCKS | FUSE_FLOCK_LOCKS | FUSE_ATOMIC_O_TRUNC | FUSE_NO_EXPORT_SUPPORT |
-		FUSE_DIRECT_IO_ALLOW_MMAP;
-	if (init_out->minor >= 33) {
-		aio_flags |= FUSE_SETXATTR_EXT;
-	}
-	flags &= aio_flags;
-	init_out->flags = (uint32_t)(flags);
-	init_out->flags2 = (uint32_t)(flags >> 32);
-
-	vfsdev->mount_opts.flags = flags;
-
-	/* The AIO doesn't apply any additional restrictions, so we just accept the requested opts */
-
-	SPDK_INFOLOG(fsdev_aio, "INIT: %" PRIu32 ".%" PRIu32 "\n", init_out->major, init_out->minor);
-	SPDK_INFOLOG(fsdev_aio, "flags: 0x%08" PRIx64 "\n", flags);
-	SPDK_INFOLOG(fsdev_aio, "max_readahead: %" PRIu32 "\n", init_out->max_readahead);
-	SPDK_INFOLOG(fsdev_aio, "max_write: %" PRIu32 "\n", init_out->max_write);
-	SPDK_INFOLOG(fsdev_aio, "max_pages: %" PRIu32 "\n", init_out->max_pages);
-	SPDK_INFOLOG(fsdev_aio, "max_background: %" PRIu16 "\n", init_out->max_background);
-	SPDK_INFOLOG(fsdev_aio, "congestion_threshold: %" PRIu16 "\n", init_out->congestion_threshold);
-	SPDK_INFOLOG(fsdev_aio, "time_gran: %" PRIu32 "\n", init_out->time_gran);
-
-	return 0;
-}
-
 static void
 fsdev_aio_fanotify_close(struct aio_fsdev *vfsdev)
 {
@@ -1696,6 +1628,7 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	struct fuse_out_header *out_hdr = fsdev_io->u_out.fuse.hdr;
 	struct fuse_init_in *init_in = fsdev_io->u_in.fuse.op.init;
 	struct fuse_init_out *init_out = fsdev_io->u_out.fuse.op.init;
+	uint64_t flags, flags2, aio_flags = 0;
 
 	fsdev_aio_do_destroy(vfsdev);
 
@@ -1710,9 +1643,57 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		}
 	}
 #endif
+	assert(init_in->major == FUSE_KERNEL_VERSION);
+	assert(init_in->minor >= 31);
 
-	fsdev_aio_set_init_opts(vfsdev, init_in, init_out);
-	assert(out_hdr != NULL);
+	memset(init_out, 0, sizeof(*init_out));
+	init_out->major = FUSE_KERNEL_VERSION;
+	init_out->minor = spdk_min(init_in->minor, spdk_min(FSDEV_AIO_FUSE_KERNEL_MINOR_VERSION,
+				   FUSE_KERNEL_MINOR_VERSION));
+	init_out->max_readahead = vfsdev->mount_opts.max_readahead;
+	init_out->max_background = 0xffff;
+	init_out->congestion_threshold = 0xffff;
+	init_out->max_write = vfsdev->mount_opts.max_xfer_size;
+	init_out->time_gran = 1;
+	init_out->max_pages = vfsdev->mount_opts.max_xfer_size / 4096;
+
+	if (vfsdev->opts.writeback_cache_enabled && (init_in->flags & FUSE_WRITEBACK_CACHE)) {
+		/* The writeback_cache_enabled was enabled upon creation => we follow the opts */
+		vfsdev->opts.writeback_cache_enabled = true;
+		SPDK_WARNLOG("Enabling writeback cache is unsafe and requires additional "
+			     "synchronization from the applications\n");
+		aio_flags |= FUSE_WRITEBACK_CACHE;
+	}
+
+	flags2 = (init_in->flags & FUSE_INIT_EXT) ? init_in->flags2 : 0;
+	flags = ((uint64_t)flags2 << 32) | init_in->flags;
+	aio_flags |=
+		FUSE_ASYNC_READ | FUSE_BIG_WRITES | FUSE_DONT_MASK |
+		FUSE_HAS_IOCTL_DIR | FUSE_DO_READDIRPLUS | FUSE_READDIRPLUS_AUTO | FUSE_ASYNC_DIO |
+		FUSE_NO_OPEN_SUPPORT | FUSE_PARALLEL_DIROPS | FUSE_MAX_PAGES | FUSE_CACHE_SYMLINKS |
+		FUSE_NO_OPENDIR_SUPPORT | FUSE_SUBMOUNTS | FUSE_INIT_EXT |
+		FUSE_EXPORT_SUPPORT | FUSE_AUTO_INVAL_DATA |  FUSE_EXPLICIT_INVAL_DATA | FUSE_POSIX_ACL |
+		FUSE_POSIX_LOCKS | FUSE_FLOCK_LOCKS | FUSE_ATOMIC_O_TRUNC | FUSE_NO_EXPORT_SUPPORT |
+		FUSE_DIRECT_IO_ALLOW_MMAP;
+	if (init_out->minor >= 33) {
+		aio_flags |= FUSE_SETXATTR_EXT;
+	}
+	flags &= aio_flags;
+	init_out->flags = (uint32_t)(flags);
+	init_out->flags2 = (uint32_t)(flags >> 32);
+
+	vfsdev->mount_opts.flags = flags;
+
+	/* The AIO doesn't apply any additional restrictions, so we just accept the requested opts */
+	SPDK_INFOLOG(fsdev_aio, "INIT: %" PRIu32 ".%" PRIu32 "\n", init_out->major, init_out->minor);
+	SPDK_INFOLOG(fsdev_aio, "flags: 0x%08" PRIx64 "\n", flags);
+	SPDK_INFOLOG(fsdev_aio, "max_readahead: %" PRIu32 "\n", init_out->max_readahead);
+	SPDK_INFOLOG(fsdev_aio, "max_write: %" PRIu32 "\n", init_out->max_write);
+	SPDK_INFOLOG(fsdev_aio, "max_pages: %" PRIu32 "\n", init_out->max_pages);
+	SPDK_INFOLOG(fsdev_aio, "max_background: %" PRIu16 "\n", init_out->max_background);
+	SPDK_INFOLOG(fsdev_aio, "congestion_threshold: %" PRIu16 "\n", init_out->congestion_threshold);
+	SPDK_INFOLOG(fsdev_aio, "time_gran: %" PRIu32 "\n", init_out->time_gran);
+
 	out_hdr->len += sizeof(*init_out);
 	file_object_ref(vfsdev->root);
 
