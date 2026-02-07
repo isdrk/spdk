@@ -2,6 +2,7 @@
  * Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  */
 #include "spdk/fuse.h"
+#include "spdk/fsdev.h"
 #include "spdk/init.h"
 #include "spdk/json.h"
 #include "spdk/stdinc.h"

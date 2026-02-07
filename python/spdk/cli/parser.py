@@ -747,10 +747,12 @@ def add_parser(subparsers):
         rpc.fuse.fuse_mount(args.client, fsdev=args.fsdev, mountpoint=args.mountpoint,
                             max_xfer_size=args.max_xfer_size, max_io_depth=args.max_io_depth,
                             clone_fd=args.clone_fd, fstype=args.fstype, options=args.options,
-                            fake_memory_domain=args.fake_memory_domain)
+                            fake_memory_domain=args.fake_memory_domain,
+                            socket_path=args.socket_path)
     p = subparsers.add_parser('fuse_mount', help='Mount fsdev via FUSE')
     p.add_argument('fsdev', metavar='FSDEV', help='Name of the fsdev to mount')
-    p.add_argument('mountpoint', metavar='MOUNTPOINT', help='Directory where to mount the fsdev')
+    p.add_argument('mountpoint', metavar='MOUNTPOINT', nargs='?', default=None,
+                   help='Directory where to mount the fsdev')
     p.add_argument('--max-io-depth', type=int, help='Maximum I/O depth on each core per mount')
     p.add_argument('--max-xfer-size', type=int, help='Maximum transfer size')
     p.add_argument('--no-clone', help='Use the same /dev/fuse fd on all cores',
@@ -759,6 +761,7 @@ def add_parser(subparsers):
     p.add_argument('-o', '--options', help='Comma-separated list of mount(2) options')
     p.add_argument('--fake-memory-domain', help='Pass fake memory domain in READ/WRITE requests',
                    action='store_true')
+    p.add_argument('--socket-path', help='Unix socket path for socket mode (mutually exclusive with mountpoint)')
     p.set_defaults(func=fuse_mount)
 
     def fuse_umount(args):

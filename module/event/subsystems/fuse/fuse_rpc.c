@@ -12,6 +12,7 @@ struct rpc_fuse_mount {
 	char				*fsdev;
 	char				*mountpoint;
 	char				*fstype;
+	char				*socket_path;
 	struct spdk_fuse_mount_opts	opts;
 };
 
@@ -106,6 +107,7 @@ static const struct spdk_json_object_decoder rpc_fuse_mount_opts_decoders[] = {
 	{ "fake_memory_domain", opts_offsetof(fake_memory_domain), spdk_json_decode_bool, true },
 	{ "options", 0, rpc_fuse_decode_mount_options, true },
 	{ "fstype", offsetof(struct rpc_fuse_mount, fstype), spdk_json_decode_string, true },
+	{ "socket_path", offsetof(struct rpc_fuse_mount, socket_path), spdk_json_decode_string, true },
 };
 
 #undef opts_offsetof
@@ -129,6 +131,7 @@ free_rpc_fuse_mount(struct rpc_fuse_mount *rpc)
 	free(rpc->fsdev);
 	free(rpc->mountpoint);
 	free(rpc->fstype);
+	free(rpc->socket_path);
 	free(rpc);
 }
 
@@ -167,9 +170,25 @@ rpc_fuse_mount(struct spdk_jsonrpc_request *request, const struct spdk_json_val 
 		goto error;
 	}
 
+	/* mountpoint and socket_path are mutually exclusive */
+	if (ctx->socket_path != NULL && ctx->mountpoint != NULL && ctx->mountpoint[0] != '\0') {
+		rc = -EINVAL;
+		spdk_jsonrpc_send_error_response(request, rc, "mountpoint and socket_path are mutually exclusive");
+		free_rpc_fuse_mount(ctx);
+		return;
+	}
+	if (ctx->socket_path == NULL && (ctx->mountpoint == NULL || ctx->mountpoint[0] == '\0')) {
+		rc = -EINVAL;
+		spdk_jsonrpc_send_error_response(request, rc, "mountpoint is required when socket_path is not set");
+		free_rpc_fuse_mount(ctx);
+		return;
+	}
+
 	ctx->request = request;
 	ctx->opts.fstype = ctx->fstype ? ctx->fstype : ctx->opts.fstype;
-	rc = spdk_fuse_mount(ctx->fsdev, ctx->mountpoint, &ctx->opts, rpc_fuse_mount_cb, ctx);
+	ctx->opts.socket_path = ctx->socket_path;
+	rc = spdk_fuse_mount(ctx->fsdev, ctx->socket_path != NULL ? NULL : ctx->mountpoint,
+			     &ctx->opts, rpc_fuse_mount_cb, ctx);
 	if (rc == 0) {
 		return;
 	}
@@ -262,6 +281,9 @@ rpc_fuse_get_mounts_for_each_mount_cb(struct spdk_fuse_mount *mount, void *ctx)
 	spdk_json_write_named_string(w, "fsdev", spdk_fsdev_get_name(fsdev));
 	if (spdk_fuse_mount_get_mountpoint(mount) != NULL) {
 		spdk_json_write_named_string(w, "mountpoint", spdk_fuse_mount_get_mountpoint(mount));
+	}
+	if (spdk_fuse_mount_get_socket_path(mount) != NULL) {
+		spdk_json_write_named_string(w, "socket_path", spdk_fuse_mount_get_socket_path(mount));
 	}
 	spdk_json_write_object_end(w);
 

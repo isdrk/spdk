@@ -13,6 +13,7 @@
 	spdk_fuse_for_each_mount;
 	spdk_fuse_mount_get_fsdev;
 	spdk_fuse_mount_get_mountpoint;
+	spdk_fuse_mount_get_socket_path;
 
 	local: *;
 };

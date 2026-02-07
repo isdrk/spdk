@@ -27,6 +27,13 @@ struct spdk_fuse_mount_opts {
 	uint64_t	flags;
 	/** Enable fake memory dmain */
 	bool		fake_memory_domain;
+	/**
+	 * Directory path for socket mode (must already exist).
+	 * If set, lib/fuse will listen on Unix sockets instead of /dev/fuse.
+	 * One socket per CPU core is created as {socket_path}/0, {socket_path}/1, etc.
+	 * mount() syscall is skipped.
+	 */
+	const char	*socket_path;
 };
 
 /**
@@ -98,6 +105,15 @@ struct spdk_fsdev *spdk_fuse_mount_get_fsdev(struct spdk_fuse_mount *mount);
  * \return path where the fsdev is mounted.
  */
 const char *spdk_fuse_mount_get_mountpoint(struct spdk_fuse_mount *mount);
+
+/**
+ * Return the socket path for a socket-mode mount.
+ *
+ * \param mount FUSE mount.
+ *
+ * \return Socket path, or NULL if not in socket mode.
+ */
+const char *spdk_fuse_mount_get_socket_path(struct spdk_fuse_mount *mount);
 
 struct spdk_fuse_poll_group;
 

@@ -45,6 +45,9 @@ struct spdk_fuse_mount {
 	pthread_cond_t			notify_cond;
 	TAILQ_HEAD(, fuse_notify_request) notify_queue;
 	bool				notify_thread_shutdown;
+	/* Socket mode fields */
+	char				*socket_path;
+	int				*listen_fds;
 };
 
 struct fsdev_fuse_channel;
@@ -90,6 +93,13 @@ struct fsdev_fuse_channel {
 	uint16_t				source_id;
 	uint64_t				source_unique;
 	STAILQ_HEAD(, fsdev_fuse_domain)	domains;
+	/* Socket mode: index of socket this channel handles */
+	uint32_t				socket_idx;
+	int					listen_fd;
+	/* Socket mode: stream receive buffer for message framing */
+	void					*recv_buf;
+	size_t					recv_len;
+	size_t					recv_offset;
 };
 
 struct spdk_fuse_poll_group {
@@ -119,6 +129,12 @@ struct {
 
 #define FSDEV_FUSE_MIN_MAX_XFER_SIZE 4096
 
+static bool
+fsdev_fuse_mount_is_socket_mode(struct spdk_fuse_mount *mount)
+{
+	return mount->socket_path != NULL;
+}
+
 static const char *
 fsdev_fuse_request_get_name(struct fsdev_fuse_request *req)
 {
@@ -145,6 +161,28 @@ fsdev_fuse_request_get_outhdr(struct fsdev_fuse_request *req)
 	return req->out_iovs[0].iov_base;
 }
 
+static int
+fsdev_fuse_write_socket(struct fsdev_fuse_channel *ch, void *buf, uint32_t len)
+{
+	uint32_t offset = 0;
+	ssize_t rc;
+
+	while (offset < len) {
+		rc = write(ch->fd, buf + offset, len - offset);
+		if (rc < 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				continue;
+			}
+
+			return -errno;
+		}
+
+		offset += rc;
+	}
+
+	return 0;
+}
+
 static void
 fsdev_fuse_request_complete(struct fsdev_fuse_request *req)
 {
@@ -154,7 +192,7 @@ fsdev_fuse_request_complete(struct fsdev_fuse_request *req)
 	struct fuse_out_header *out = fsdev_fuse_request_get_outhdr(req);
 	struct fuse_init_out *init_out;
 	bool do_reply = true;
-	int rc, errsv;
+	int rc = 0;
 
 	switch (in->opcode) {
 	case FUSE_INIT:
@@ -175,14 +213,29 @@ fsdev_fuse_request_complete(struct fsdev_fuse_request *req)
 		break;
 	}
 
-	if (do_reply) {
+	/* In socket mode, we want to complete all requests */
+	if (fsdev_fuse_mount_is_socket_mode(mount)) {
+		struct fuse_out_header noreply_header = {};
+
+		if (!do_reply) {
+			out = &noreply_header;
+			out->len = sizeof(*out);
+			out->unique = req->unique;
+		}
+
+		rc = fsdev_fuse_write_socket(ch, out, out->len);
+	} else if (do_reply) {
 		assert(out->len <= spdk_iov_length(req->out_iovs, req->out_iovcnt));
 		rc = write(ch->fd, out, out->len);
 		if (rc < 0) {
-			errsv = errno;
-			SPDK_ERRLOG("%s: failed to write %s response: %s\n", mount->name,
-				    fsdev_fuse_request_get_name(req), spdk_strerror(errsv));
+			rc = -errno;
 		}
+	}
+
+	if (rc < 0) {
+		SPDK_ERRLOG("%s: failed to write %s response: %s\n",
+			    mount->name, fsdev_fuse_request_get_name(req),
+			    spdk_strerror(-rc));
 	}
 
 	TAILQ_INSERT_HEAD(&ch->free_requests, req, tailq);
@@ -366,6 +419,166 @@ fsdev_fuse_request_prep(struct fsdev_fuse_request *req, size_t inlen)
 	return rc;
 }
 
+static int
+fsdev_fuse_channel_listen(struct fsdev_fuse_channel *ch)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct sockaddr_un addr;
+	char path[PATH_MAX];
+	int fd = -1, rc;
+
+	pthread_mutex_lock(&mount->mutex);
+	if (mount->listen_fds[ch->socket_idx] >= 0) {
+		SPDK_ERRLOG("%s: another channel is already listening on core %u\n",
+			    mount->name, ch->socket_idx);
+		rc = -EINVAL;
+		goto error;
+	}
+
+	rc = snprintf(path, sizeof(path), "%s/%u", mount->socket_path, ch->socket_idx);
+	if (rc < 0 || rc >= (int)sizeof(path)) {
+		SPDK_ERRLOG("Socket path too long: %s/%u\n", mount->socket_path, ch->socket_idx);
+		rc = -ENAMETOOLONG;
+		goto error;
+	}
+
+	/* Remove existing socket file if it exists */
+	unlink(path);
+	fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+	if (fd < 0) {
+		rc = -errno;
+		SPDK_ERRLOG("Failed to create socket %s: %s\n", path, spdk_strerror(-rc));
+		goto error;
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	rc = snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path);
+	if (rc < 0 || rc >= (int)sizeof(addr.sun_path)) {
+		rc = -ENAMETOOLONG;
+		goto error;
+	}
+
+	rc = bind(fd, (struct sockaddr *)&addr, sizeof(addr));
+	if (rc < 0) {
+		rc = -errno;
+		SPDK_ERRLOG("Failed to bind socket %s: %s\n", path, spdk_strerror(-rc));
+		goto error;
+	}
+
+	rc = listen(fd, 1);
+	if (rc < 0) {
+		rc = -errno;
+		SPDK_ERRLOG("Failed to listen on socket %s: %s\n", path, spdk_strerror(-rc));
+		unlink(path);
+		goto error;
+	}
+
+	mount->listen_fds[ch->socket_idx] = fd;
+	ch->listen_fd = fd;
+	pthread_mutex_unlock(&mount->mutex);
+
+	return 0;
+error:
+	pthread_mutex_unlock(&mount->mutex);
+	if (fd >= 0) {
+		close(fd);
+	}
+	return rc;
+}
+
+static void
+fsdev_fuse_channel_stop_listen(struct fsdev_fuse_channel *ch)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	char path[PATH_MAX];
+
+	if (ch->listen_fd < 0) {
+		return;
+	}
+
+	close(ch->listen_fd);
+	snprintf(path, sizeof(path), "%s/%u", mount->socket_path, ch->socket_idx);
+	unlink(path);
+
+	pthread_mutex_lock(&mount->mutex);
+	assert(ch->listen_fd == mount->listen_fds[ch->socket_idx]);
+	mount->listen_fds[ch->socket_idx] = -1;
+	pthread_mutex_unlock(&mount->mutex);
+}
+
+static int
+fsdev_fuse_channel_accept(struct fsdev_fuse_channel *ch)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	int fd;
+
+	assert(fsdev_fuse_mount_is_socket_mode(mount));
+	fd = accept4(mount->listen_fds[ch->socket_idx], NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+	if (fd < 0) {
+		if (errno == EAGAIN || errno == EWOULDBLOCK) {
+			return -1;
+		}
+
+		SPDK_ERRLOG("%s: failed to accept connection: %s\n", mount->name,
+			    spdk_strerror(errno));
+		return -1;
+	}
+
+	SPDK_INFOLOG(fuse, "%s: socket %u connected fd=%d\n", mount->name,
+		     ch->socket_idx, fd);
+	ch->fd = fd;
+	return 0;
+}
+
+static void
+fsdev_fuse_cleanup_sockets(struct spdk_fuse_mount *mount)
+{
+	free(mount->listen_fds);
+	mount->listen_fds = NULL;
+}
+
+static int
+fsdev_fuse_setup_sockets(struct spdk_fuse_mount *mount, const char *socket_path)
+{
+	struct stat st;
+	uint32_t i, num_sockets;
+	int rc;
+
+	rc = stat(socket_path, &st);
+	if (rc != 0) {
+		rc = -errno;
+		SPDK_ERRLOG("Socket path %s: %s (must be an existing directory)\n",
+			    socket_path, spdk_strerror(-rc));
+		return rc;
+	}
+	if (!S_ISDIR(st.st_mode)) {
+		SPDK_ERRLOG("Socket path %s is not a directory (sockets will be created as "
+			    "path/0, path/1, ...)\n", socket_path);
+		return -ENOTDIR;
+	}
+
+	num_sockets = spdk_env_get_core_count();
+	mount->socket_path = strdup(socket_path);
+	if (mount->socket_path == NULL) {
+		return -ENOMEM;
+	}
+
+	mount->listen_fds = calloc(num_sockets, sizeof(int));
+	if (mount->listen_fds == NULL) {
+		free(mount->socket_path);
+		mount->socket_path = NULL;
+		return -ENOMEM;
+	}
+
+	/* Initialize all fds to -1; actual sockets are created per-channel */
+	for (i = 0; i < num_sockets; i++) {
+		mount->listen_fds[i] = -1;
+	}
+
+	return 0;
+}
+
 static void
 fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 {
@@ -378,6 +591,12 @@ fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 	}
 	if (ch->ioch != NULL) {
 		spdk_put_io_channel(ch->ioch);
+	}
+	if (ch->listen_fd >= 0) {
+		fsdev_fuse_channel_stop_listen(ch);
+		if (ch->fd >= 0) {
+			close(ch->fd);
+		}
 	}
 	if (ch->clone_fd > 0) {
 		close(ch->clone_fd);
@@ -393,6 +612,7 @@ fsdev_fuse_channel_destroy(struct fsdev_fuse_channel *ch)
 #endif
 		free(domain);
 	}
+	free(ch->recv_buf);
 	free(ch->request_pool);
 	free(ch);
 }
@@ -426,6 +646,7 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	struct fsdev_fuse_channel *ch;
 	struct fsdev_fuse_request *req;
 	size_t i, reqsize;
+	int rc;
 
 	ch = calloc(1, sizeof(*ch));
 	if (ch == NULL) {
@@ -433,8 +654,30 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	}
 
 	ch->clone_fd = -1;
-	if (mount->clone_fd) {
-		ch->clone_fd = fsdev_fuse_clone_fuse_fd(mount);
+	ch->listen_fd = -1;
+	ch->fd = -1;
+	ch->mount = mount;
+	ch->source_id = (uint16_t)spdk_env_get_core_index(spdk_env_get_current_core());
+
+	if (fsdev_fuse_mount_is_socket_mode(mount)) {
+		ch->socket_idx = ch->source_id % spdk_env_get_core_count();
+		rc = fsdev_fuse_channel_listen(ch);
+		if (rc != 0) {
+			goto error;
+		}
+
+		ch->recv_len = mount->max_xfer_size + 4096;
+		ch->recv_offset = 0;
+		ch->recv_buf = malloc(ch->recv_len);
+		if (ch->recv_buf == NULL) {
+			goto error;
+		}
+	} else {
+		if (mount->clone_fd) {
+			ch->clone_fd = fsdev_fuse_clone_fuse_fd(mount);
+		}
+		/* If we can't manage to clone the fd, just fall back to using the main fd */
+		ch->fd = ch->clone_fd >= 0 ? ch->clone_fd : mount->fd;
 	}
 
 	ch->ioch = spdk_fsdev_get_io_channel(mount->fsdev_desc);
@@ -448,9 +691,6 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 
 	/* Bump poll group's refcount to make sure it doesn't disappear */
 	ch->poll_group = spdk_io_channel_get_ctx(spdk_get_io_channel(&g_fuse));
-	ch->mount = mount;
-	/* If we can't manage to clone the fd, just fall back to using the main fd */
-	ch->fd = ch->clone_fd >= 0 ? ch->clone_fd : mount->fd;
 
 	reqsize = sizeof(*req) + spdk_fsdev_get_io_ctx_size();
 	ch->request_pool = calloc(mount->max_io_depth, reqsize);
@@ -471,8 +711,6 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 
 		TAILQ_INSERT_TAIL(&ch->free_requests, req, tailq);
 	}
-
-	ch->source_id = (uint16_t)spdk_env_get_core_index(spdk_env_get_current_core());
 
 	return ch;
 error:
@@ -500,6 +738,20 @@ fsdev_fuse_request_submit_cb(void *ctx, int status, struct spdk_fsdev_io *fsdev_
 	ch->num_outstanding--;
 	if (ch->drain.cb_fn != NULL && ch->num_outstanding == 0) {
 		ch->drain.cb_fn(ch->drain.cb_ctx, ch);
+	}
+}
+
+static uint64_t
+fsdev_fuse_request_get_source_unique(struct fsdev_fuse_request *req)
+{
+	struct fsdev_fuse_channel *ch = req->ch;
+	struct spdk_fuse_mount *mount = ch->mount;
+
+	/* In socket mode, use FUSE unique from request as source_unique */
+	if (fsdev_fuse_mount_is_socket_mode(mount)) {
+		return fsdev_fuse_request_get_inhdr(req)->unique;
+	} else {
+		return ++ch->source_unique;
 	}
 }
 
@@ -540,9 +792,108 @@ fsdev_fuse_channel_submit_request(struct fsdev_fuse_channel *ch, struct fsdev_fu
 			mount->fsdev_desc, ch->ioch,
 			in_iov, in_iovcnt,
 			out_iov, out_iovcnt,
-			ch->source_id, ch->source_unique,
+			ch->source_id, fsdev_fuse_request_get_source_unique(req),
 			domain, domain_ctx, domain_iov, domain_iovcnt,
 			fsdev_fuse_request_submit_cb, req);
+}
+
+static int
+fsdev_fuse_channel_read_socket(struct fsdev_fuse_channel *ch, struct fsdev_fuse_request **_req)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct fsdev_fuse_request *req;
+	uint32_t msg_len;
+	int rc;
+
+	if (ch->recv_offset < sizeof(struct fuse_in_header) ||
+	    ch->recv_offset < ((struct fuse_in_header *)ch->recv_buf)->len) {
+		rc = read(ch->fd, (char *)ch->recv_buf + ch->recv_offset,
+			  ch->recv_len - ch->recv_offset);
+		if (rc < 0) {
+			return -errno;
+		} else if (rc == 0) {
+			SPDK_INFOLOG(fuse, "%s: socket %u disconnected\n", mount->name,
+				     ch->socket_idx);
+			close(ch->fd);
+			ch->fd = -1;
+			ch->recv_offset = 0;
+			return -EAGAIN;
+		}
+
+		SPDK_DEBUGLOG(fuse, "%s: read %d bytes from socket %u fd=%d (recv_offset "
+			      "%zu -> %zu)\n", mount->name, rc, ch->socket_idx, ch->fd,
+			      ch->recv_offset, ch->recv_offset + (size_t)rc);
+		ch->recv_offset += (size_t)rc;
+	}
+
+	/* Need at least a full header */
+	if (ch->recv_offset < sizeof(struct fuse_in_header)) {
+		return -EAGAIN;
+	}
+
+	msg_len = ((struct fuse_in_header *)ch->recv_buf)->len;
+	if (msg_len < sizeof(struct fuse_in_header) || msg_len > ch->recv_len) {
+		SPDK_ERRLOG("%s: bad message length %u\n", mount->name, msg_len);
+		return -EBADMSG;
+	}
+
+	/* Need the full message body */
+	if (ch->recv_offset < msg_len) {
+		return -EAGAIN;
+	}
+
+	/* Grab a free request */
+	req = TAILQ_FIRST(&ch->free_requests);
+	if (req == NULL) {
+		return -EAGAIN;
+	}
+
+	/* Copy this one message into the request buffer */
+	memcpy(req->buf, ch->recv_buf, msg_len);
+
+	/* Consume it from recv_buf; keep any leftover bytes */
+	ch->recv_offset -= msg_len;
+	if (ch->recv_offset > 0) {
+		memmove(ch->recv_buf, (char *)ch->recv_buf + msg_len,
+			ch->recv_offset);
+	}
+
+	SPDK_DEBUGLOG(fuse, "%s: parsed message len=%u, leftover=%zu\n",
+		      mount->name, msg_len, ch->recv_offset);
+
+	TAILQ_REMOVE(&ch->free_requests, req, tailq);
+	*_req = req;
+
+	return msg_len;
+}
+
+static int
+fsdev_fuse_channel_read_fuse(struct fsdev_fuse_channel *ch, struct fsdev_fuse_request **_req)
+{
+	struct spdk_fuse_mount *mount = ch->mount;
+	struct fsdev_fuse_request *req;
+	int rc;
+
+	req = TAILQ_FIRST(&ch->free_requests);
+	if (req == NULL) {
+		return -EAGAIN;
+	}
+
+	rc = read(ch->fd, req->buf, req->len);
+	if (rc < 0) {
+		return -errno;
+	}
+
+	if (rc < (int)sizeof(struct fuse_in_header)) {
+		SPDK_ERRLOG("%s: read partial request (%d < %zu)\n",
+			    mount->name, rc, sizeof(struct fuse_in_header));
+		return -EBADMSG;
+	}
+
+	TAILQ_REMOVE(&ch->free_requests, req, tailq);
+	*_req = req;
+
+	return rc;
 }
 
 static int
@@ -552,34 +903,36 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 	struct fsdev_fuse_request *req;
 	int rc = 0, count = 0;
 
+	/* Socket mode: try to accept connection if not connected */
+	if (spdk_unlikely(ch->fd < 0)) {
+		rc = fsdev_fuse_channel_accept(ch);
+		if (rc != 0) {
+			/* No connection yet, nothing to poll */
+			return 0;
+		}
+	}
+
 	while (1) {
 		req = TAILQ_FIRST(&ch->pending_requests);
 		if (req != NULL) {
 			TAILQ_REMOVE(&ch->pending_requests, req, tailq);
 		} else {
-			req = TAILQ_FIRST(&ch->free_requests);
-			if (req == NULL) {
-				break;
+			if (fsdev_fuse_mount_is_socket_mode(mount)) {
+				rc = fsdev_fuse_channel_read_socket(ch, &req);
+			} else {
+				rc = fsdev_fuse_channel_read_fuse(ch, &req);
 			}
 
-			rc = read(ch->fd, req->buf, req->len);
 			if (rc < 0) {
-				if (errno == EAGAIN) {
+				if (rc == -EAGAIN || rc == -EWOULDBLOCK) {
 					rc = 0;
-				} else if (errno != ENODEV) {
-					SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(errno));
+				} else if (rc != -ENODEV) {
+					SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(-rc));
 				}
+
 				break;
 			}
 
-			if (rc < (int)sizeof(struct fuse_in_header)) {
-				SPDK_ERRLOG("%s: read partial request (%d < %zu)\n",
-					    mount->name, rc, sizeof(struct fuse_in_header));
-				rc = -EBADMSG;
-				break;
-			}
-
-			TAILQ_REMOVE(&ch->free_requests, req, tailq);
 			rc = fsdev_fuse_request_prep(req, (size_t)rc);
 			if (rc != 0) {
 				fsdev_fuse_request_complete_manual(req, rc);
@@ -588,7 +941,6 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 		}
 
 		ch->num_outstanding++;
-		ch->source_unique++;
 		SPDK_DEBUGLOG(fuse, "%s: processing %s\n", mount->name,
 			      fsdev_fuse_request_get_name(req));
 
@@ -662,6 +1014,10 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	}
 	if (mount->fd >= 0) {
 		close(mount->fd);
+	}
+	if (fsdev_fuse_mount_is_socket_mode(mount)) {
+		fsdev_fuse_cleanup_sockets(mount);
+		free(mount->socket_path);
 	}
 	if (mount->mounted && mount->mountpoint != NULL) {
 		rc = umount2(mount->mountpoint, MNT_DETACH);
@@ -1246,7 +1602,16 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		}
 	}
 
-	if (mnt->mountpoint != NULL) {
+	/* Check for socket mode */
+	if (SPDK_GET_FIELD(opts, socket_path, NULL) != NULL) {
+		rc = fsdev_fuse_setup_sockets(mnt, opts->socket_path);
+		if (rc != 0) {
+			goto error;
+		}
+		SPDK_INFOLOG(fuse, "%s: socket mode, listening at %s (%u socket%s)\n",
+			     mnt->name, mnt->socket_path, spdk_env_get_core_count(),
+			     spdk_env_get_core_count() == 1 ? "" : "s");
+	} else if (mnt->mountpoint != NULL) {
 		rc = fsdev_fuse_do_mount(mnt,
 					 SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
 					 SPDK_GET_FIELD(opts, flags, 0));
@@ -1672,6 +2037,7 @@ fsdev_fuse_poll_group_create_cb(void *io_device, void *ctx)
 
 	TAILQ_INIT(&group->active_channels);
 	TAILQ_INIT(&group->inactive_channels);
+
 	return 0;
 }
 
@@ -1712,6 +2078,12 @@ const char *
 spdk_fuse_mount_get_mountpoint(struct spdk_fuse_mount *mount)
 {
 	return mount->mountpoint;
+}
+
+const char *
+spdk_fuse_mount_get_socket_path(struct spdk_fuse_mount *mount)
+{
+	return mount->socket_path;
 }
 
 int
