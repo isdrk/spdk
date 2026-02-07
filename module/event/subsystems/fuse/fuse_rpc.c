@@ -119,7 +119,7 @@ rpc_fuse_decode_mount_opts(const struct spdk_json_val *val, void *out)
 
 static const struct spdk_json_object_decoder rpc_fuse_mount_decoders[] = {
 	{ "fsdev", offsetof(struct rpc_fuse_mount, fsdev), spdk_json_decode_string },
-	{ "mountpoint", offsetof(struct rpc_fuse_mount, mountpoint), spdk_json_decode_string },
+	{ "mountpoint", offsetof(struct rpc_fuse_mount, mountpoint), spdk_json_decode_string, true },
 	{ "options", 0, rpc_fuse_decode_mount_opts, true },
 };
 
@@ -207,12 +207,15 @@ rpc_fuse_umount_for_each_mount(struct spdk_fuse_mount *mount, void *_ctx)
 {
 	struct rpc_fuse_umount *ctx = _ctx;
 	struct spdk_fsdev *fsdev = spdk_fuse_mount_get_fsdev(mount);
+	const char *path;
 
 	if (strcmp(ctx->name, spdk_fsdev_get_name(fsdev)) == 0) {
 		ctx->mount = mount;
 		return 1;
 	}
-	if (strcmp(ctx->name, spdk_fuse_mount_get_mountpoint(mount)) == 0) {
+
+	path = spdk_fuse_mount_get_mountpoint(mount);
+	if (path != NULL && strcmp(ctx->name, path) == 0) {
 		ctx->mount = mount;
 		return 1;
 	}
@@ -257,7 +260,9 @@ rpc_fuse_get_mounts_for_each_mount_cb(struct spdk_fuse_mount *mount, void *ctx)
 
 	spdk_json_write_object_begin(w);
 	spdk_json_write_named_string(w, "fsdev", spdk_fsdev_get_name(fsdev));
-	spdk_json_write_named_string(w, "mountpoint", spdk_fuse_mount_get_mountpoint(mount));
+	if (spdk_fuse_mount_get_mountpoint(mount) != NULL) {
+		spdk_json_write_named_string(w, "mountpoint", spdk_fuse_mount_get_mountpoint(mount));
+	}
 	spdk_json_write_object_end(w);
 
 	return 0;

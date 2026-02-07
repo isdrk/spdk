@@ -657,11 +657,13 @@ fsdev_fuse_mount_cleanup(struct spdk_fuse_mount *mount)
 	}
 	pthread_mutex_unlock(&g_fuse.mutex);
 
-	fsdev_fuse_notify_thread_cleanup(mount);
+	if (mount->mountpoint != NULL) {
+		fsdev_fuse_notify_thread_cleanup(mount);
+	}
 	if (mount->fd >= 0) {
 		close(mount->fd);
 	}
-	if (mount->mounted) {
+	if (mount->mounted && mount->mountpoint != NULL) {
 		rc = umount2(mount->mountpoint, MNT_DETACH);
 		if (rc != 0) {
 			SPDK_INFOLOG(fuse, "%s: failed to umount %s: %s\n", mount->name,
@@ -697,7 +699,8 @@ fsdev_fuse_fsdev_event_cb(enum spdk_fsdev_event_type type, struct spdk_fsdev *fs
 		rc = spdk_fuse_umount(mount, fsdev_fuse_remove_umount_cb, NULL);
 		if (rc != 0) {
 			SPDK_ERRLOG("%s: failed to umount %s: %s\n", mount->name,
-				    mount->mountpoint, spdk_strerror(-rc));
+				    mount->mountpoint ? mount->mountpoint : "(none)",
+				    spdk_strerror(-rc));
 		}
 		break;
 	default:
@@ -1054,6 +1057,9 @@ fsdev_fuse_validate_mountpoint(const char *mountpoint)
 
 	n1len = strlen(normalized1);
 	TAILQ_FOREACH(mnt, &g_fuse.mounts, tailq) {
+		if (mnt->mountpoint == NULL) {
+			continue;
+		}
 		rc = normalize_hard_path(normalized2, PATH_MAX, mnt->mountpoint);
 		if (rc != 0) {
 			SPDK_ERRLOG("Normalizing %s failed, rc=%d\n", mnt->mountpoint, rc);
@@ -1083,11 +1089,12 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	char mopts[128];
 	int rc;
 
-	if (spdk_env_get_core_count() == 1) {
+	if (mountpoint != NULL && spdk_env_get_core_count() == 1) {
 		/* Deadlock will occur if a file is mounted inside a FUSE file system
 		 * when number of CPU cores is 1. Detect this case and return error
 		 * to avoid deadlock. But, this operation works if number of CPU cores
 		 * is 2 or more. Hence, enable the check only with 1 CPU core case.
+		 * Skip when mountpoint is NULL (e.g. socket mode).
 		 */
 		rc = fsdev_fuse_validate_mountpoint(mountpoint);
 		if (rc != 0) {
@@ -1130,10 +1137,12 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		goto error;
 	}
 
-	mnt->mountpoint = strdup(mountpoint);
-	if (mnt->mountpoint == NULL) {
-		rc = -ENOMEM;
-		goto error;
+	if (mountpoint != NULL) {
+		mnt->mountpoint = strdup(mountpoint);
+		if (mnt->mountpoint == NULL) {
+			rc = -ENOMEM;
+			goto error;
+		}
 	}
 
 	open_opts.size = SPDK_SIZEOF(&open_opts, max_xfer_size);
@@ -1180,58 +1189,60 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		}
 	}
 
-	rc = stat(mnt->mountpoint, &st);
-	if (rc != 0) {
-		rc = -errno;
-		SPDK_ERRLOG("%s: failed to access %s: %s\n", mnt->name, mnt->mountpoint,
-			    spdk_strerror(-rc));
-		goto error;
-	}
+	if (mnt->mountpoint != NULL) {
+		rc = stat(mnt->mountpoint, &st);
+		if (rc != 0) {
+			rc = -errno;
+			SPDK_ERRLOG("%s: failed to access %s: %s\n", mnt->name, mnt->mountpoint,
+				    spdk_strerror(-rc));
+			goto error;
+		}
 
-	mnt->fd = open("/dev/fuse", O_RDWR | O_CLOEXEC | O_NONBLOCK);
-	if (mnt->fd < 0) {
-		rc = -errno;
-		SPDK_ERRLOG("%s: failed to open /dev/fuse: %s\n", mnt->name, spdk_strerror(-rc));
-		goto error;
-	}
+		mnt->fd = open("/dev/fuse", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+		if (mnt->fd < 0) {
+			rc = -errno;
+			SPDK_ERRLOG("%s: failed to open /dev/fuse: %s\n", mnt->name, spdk_strerror(-rc));
+			goto error;
+		}
 
-	mnt->notify_thread_shutdown = false;
-	TAILQ_INIT(&mnt->notify_queue);
-	rc = pthread_cond_init(&mnt->notify_cond, NULL);
-	if (rc != 0) {
-		SPDK_ERRLOG("%s: failed to initialize notify condition variable: %s\n", mnt->name,
-			    spdk_strerror(rc));
-		rc = -rc;
-		goto error;
-	}
+		mnt->notify_thread_shutdown = false;
+		TAILQ_INIT(&mnt->notify_queue);
+		rc = pthread_cond_init(&mnt->notify_cond, NULL);
+		if (rc != 0) {
+			SPDK_ERRLOG("%s: failed to initialize notify condition variable: %s\n", mnt->name,
+				    spdk_strerror(rc));
+			rc = -rc;
+			goto error;
+		}
 
-	rc = pthread_create(&mnt->notify_thread, NULL, fsdev_fuse_notify_thread_fn, mnt);
-	if (rc != 0) {
-		SPDK_ERRLOG("%s: failed to create notify thread: %s\n", mnt->name,
-			    spdk_strerror(rc));
-		pthread_cond_destroy(&mnt->notify_cond);
-		rc = -rc;
-		goto error;
-	}
+		rc = pthread_create(&mnt->notify_thread, NULL, fsdev_fuse_notify_thread_fn, mnt);
+		if (rc != 0) {
+			SPDK_ERRLOG("%s: failed to create notify thread: %s\n", mnt->name,
+				    spdk_strerror(rc));
+			pthread_cond_destroy(&mnt->notify_cond);
+			rc = -rc;
+			goto error;
+		}
 
-	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu,"
-		      "allow_other,default_permissions", mnt->fd, st.st_mode, getuid(), getgid(),
-		      mnt->max_xfer_size);
-	if (rc < 0 || rc >= (int)sizeof(mopts)) {
-		rc = -EINVAL;
-		goto error;
-	}
+		rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu,"
+			      "allow_other,default_permissions", mnt->fd, st.st_mode, getuid(), getgid(),
+			      mnt->max_xfer_size);
+		if (rc < 0 || rc >= (int)sizeof(mopts)) {
+			rc = -EINVAL;
+			goto error;
+		}
 
-	rc = mount(mnt->name, mnt->mountpoint,
-		   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
-		   SPDK_GET_FIELD(opts, flags, 0), mopts);
-	if (rc != 0) {
-		rc = -errno;
-		SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);
-		goto error;
-	}
+		rc = mount(mnt->name, mnt->mountpoint,
+			   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
+			   SPDK_GET_FIELD(opts, flags, 0), mopts);
+		if (rc != 0) {
+			rc = -errno;
+			SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);
+			goto error;
+		}
 
-	SPDK_INFOLOG(fuse, "%s: mounted fsdev at %s\n", mnt->name, mnt->mountpoint);
+		SPDK_INFOLOG(fuse, "%s: mounted fsdev at %s\n", mnt->name, mnt->mountpoint);
+	}
 	pthread_mutex_lock(&g_fuse.mutex);
 	TAILQ_INSERT_TAIL(&g_fuse.mounts, mnt, tailq);
 	pthread_mutex_unlock(&g_fuse.mutex);
@@ -1383,7 +1394,9 @@ spdk_fuse_mount(const char *name, const char *mountpoint, struct spdk_fuse_mount
 		pthread_mutex_lock(&g_fuse.mutex);
 		TAILQ_FOREACH(mount, &g_fuse.mounts, tailq) {
 			if (strcmp(mount->name, name) == 0 &&
-			    strcmp(mount->mountpoint, mountpoint) == 0) {
+			    ((mount->mountpoint == NULL && mountpoint == NULL) ||
+			     (mount->mountpoint != NULL && mountpoint != NULL &&
+			      strcmp(mount->mountpoint, mountpoint) == 0))) {
 				ctx->mount = mount;
 				break;
 			}
@@ -1738,7 +1751,8 @@ fsdev_fuse_cleanup(void *unused)
 			return;
 		}
 
-		SPDK_WARNLOG("%s: failed to umount %s: %s\n", mount->name, mount->mountpoint,
+		SPDK_WARNLOG("%s: failed to umount %s: %s\n", mount->name,
+			     mount->mountpoint ? mount->mountpoint : "(none)",
 			     spdk_strerror(-rc));
 	}
 	pthread_mutex_unlock(&g_fuse.mutex);
