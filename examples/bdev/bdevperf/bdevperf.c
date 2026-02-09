@@ -73,7 +73,6 @@ static bool g_error_to_exit = false;
 static int g_queue_depth = 0;
 static uint64_t g_time_in_usec;
 static uint64_t g_total_time_in_usec;
-static uint64_t g_job_time_in_usec;
 static bool g_summarize_performance = true;
 static uint64_t g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
 static uint64_t g_show_performance_period_num = 0;
@@ -229,6 +228,7 @@ struct bdevperf_job {
 	struct spdk_io_channel		*ch;
 	TAILQ_ENTRY(bdevperf_job)	link;
 	struct spdk_thread		*thread;
+	const struct job_config		*config;
 
 	enum job_config_rw		workload_type;
 	int				io_size;
@@ -301,6 +301,8 @@ struct job_config {
 	int64_t				offset;
 	uint64_t			length;
 	enum job_config_rw		rw;
+	uint64_t			job_time_in_usec;
+	uint64_t			total_time_in_usec;
 	TAILQ_ENTRY(job_config)	link;
 };
 
@@ -1866,7 +1868,8 @@ _bdevperf_job_run(void *ctx)
 	 * completes, another will be submitted. */
 
 	/* Start a timer to stop this I/O chain when the run is over */
-	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job, g_job_time_in_usec);
+	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job,
+					      job->config->job_time_in_usec);
 	if (job->reset) {
 		job->reset_timer = SPDK_POLLER_REGISTER(reset_job, job,
 							10 * SPDK_SEC_TO_USEC);
@@ -2342,6 +2345,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	}
 
 	job->thread = thread;
+	job->config = config;
 
 	job->name = strdup(spdk_bdev_get_name(bdev));
 	if (!job->name) {
@@ -2650,6 +2654,18 @@ bdevperf_construct_jobs(void)
 	const char *filenames;
 	uint32_t i;
 	int rc;
+
+	/* Update per-config timing based on current global parameters. */
+	g_total_time_in_usec = 0;
+	TAILQ_FOREACH(config, &job_config_list, link) {
+		config->job_time_in_usec = g_time_in_usec +
+					   (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+		config->total_time_in_usec = config->job_time_in_usec +
+					     (uint64_t)g_start_delay_time_in_sec * SPDK_SEC_TO_USEC;
+		if (config->total_time_in_usec > g_total_time_in_usec) {
+			g_total_time_in_usec = config->total_time_in_usec;
+		}
+	}
 
 	if (g_one_thread_per_lcore) {
 		SPDK_ENV_FOREACH_CORE(i) {
@@ -3410,10 +3426,7 @@ verify_test_params(void)
 		goto out;
 	}
 	g_time_in_usec = g_time_in_sec * SPDK_SEC_TO_USEC;
-	g_job_time_in_usec = g_time_in_usec +
-			     (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
-	g_total_time_in_usec = g_job_time_in_usec +
-			       (uint64_t)g_start_delay_time_in_sec * SPDK_SEC_TO_USEC;
+	g_total_time_in_usec = 0;
 
 	if (g_timeout_in_sec < 0) {
 		goto out;
