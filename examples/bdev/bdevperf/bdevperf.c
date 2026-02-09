@@ -73,6 +73,7 @@ static bool g_error_to_exit = false;
 static int g_queue_depth = 0;
 static uint64_t g_time_in_usec;
 static uint64_t g_total_time_in_usec;
+static uint64_t g_job_time_in_usec;
 static bool g_summarize_performance = true;
 static uint64_t g_show_performance_period_in_usec = SPDK_SEC_TO_USEC;
 static uint64_t g_show_performance_period_num = 0;
@@ -80,6 +81,8 @@ static uint64_t g_show_performance_ema_period = 0;
 static enum bdevperf_stat_mode g_periodic_dump_stat_mode = STAT_MODE_CMA;
 static int g_warmup_time_in_sec = 0;
 static bool g_warmup_finished = false;
+static int g_start_delay_time_in_sec = 0;
+static bool g_start_delay_finished = false;
 static int g_run_rc = 0;
 static bool g_shutdown = false;
 static uint64_t g_start_tsc;
@@ -157,6 +160,8 @@ static const struct option g_bdevperf_long_opts[] = {
 	{"back-pressure",		no_argument,		NULL, BACK_PRESSURE_OPT_IDX},
 #define WARMUP_TIME_OPT_IDX	'K'
 	{"warmup",			required_argument,	NULL, WARMUP_TIME_OPT_IDX},
+#define START_DELAY_TIME_OPT_IDX	SPDK_APP_LONG_OPT_BASE
+	{"start-delay",			required_argument,	NULL, START_DELAY_TIME_OPT_IDX},
 	{NULL, 0, NULL, 0},
 };
 
@@ -258,6 +263,7 @@ struct bdevperf_job {
 	bool				md_check;
 	struct spdk_poller		*run_timer;
 	struct spdk_poller		*reset_timer;
+	struct spdk_poller		*delay_timer;
 	struct spdk_bit_array		*outstanding;
 	struct spdk_zipf		*zipf;
 	TAILQ_HEAD(, bdevperf_task)	task_list;
@@ -503,7 +509,10 @@ parse_workload_type(enum job_config_rw ret)
  *
  * Note: If configuring warmup time, please use EMA or IA for periodic dump to avoid confusing results.
  *
- * Warmup and drain exclusion:
+ * Start delay, warmup, and drain exclusion:
+ * - Start delay (before g_start_delay_finished):
+ *   * Excluded from the final CMA result
+ *   * No periodic performance dump until start delay completes
  * - Warmup period (before g_warmup_finished) and drain period (after g_drain_started):
  *   * Excluded from the FINAL CMA result only
  *   * Included in PERIODIC dumps (to show real-time behavior)
@@ -513,9 +522,10 @@ static double
 get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec, bool is_final_result)
 {
 	uint64_t valid_io_completed, valid_io_time_in_usec, drain_start_time_in_usec;
+	uint64_t excluded_time_in_usec;
 
-	if (!g_warmup_finished) {
-		/* In warmup, use everything from start. */
+	if (!g_warmup_finished || !g_start_delay_finished) {
+		/* In warmup or initial delay, use everything from start. */
 		valid_io_completed = job->io_completed;
 		valid_io_time_in_usec = io_time_in_usec;
 	} else if (is_final_result && job->drain_start_tsc != 0) {
@@ -525,12 +535,16 @@ get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec, bool i
 		drain_start_time_in_usec = (job->drain_start_tsc - g_start_tsc) * SPDK_SEC_TO_USEC /
 					   spdk_get_ticks_hz();
 
+		excluded_time_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
+					SPDK_SEC_TO_USEC;
 		valid_io_completed = job->io_completed_at_drain_start - job->io_completed_at_warmup_end;
-		valid_io_time_in_usec = drain_start_time_in_usec - g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+		valid_io_time_in_usec = drain_start_time_in_usec - excluded_time_in_usec;
 	} else {
 		/* In steady state (or periodic dump during drain), subtract the warmup garbage from the total. */
+		excluded_time_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
+					SPDK_SEC_TO_USEC;
 		valid_io_completed = job->io_completed - job->io_completed_at_warmup_end;
-		valid_io_time_in_usec = io_time_in_usec - g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+		valid_io_time_in_usec = io_time_in_usec - excluded_time_in_usec;
 	}
 
 	if (valid_io_time_in_usec == 0) {
@@ -1110,6 +1124,7 @@ clean:
 	}
 
 	g_warmup_finished = false;
+	g_start_delay_finished = false;
 
 	rc = g_run_rc;
 	if (g_request && !g_shutdown) {
@@ -1203,6 +1218,7 @@ bdevperf_job_drain(void *ctx)
 	 * the final CMA result.
 	 */
 	if (job->drain_start_tsc == 0) {
+		spdk_poller_unregister(&job->delay_timer);
 		job->drain_start_tsc = spdk_get_ticks();
 		job->io_completed_at_drain_start = job->io_completed;
 	}
@@ -1837,18 +1853,20 @@ bdevperf_timeout_cb(void *cb_arg, struct spdk_bdev_io *bdev_io)
 	bdevperf_submit_task(task);
 }
 
-static void
-bdevperf_job_run(void *ctx)
+static int
+_bdevperf_job_run(void *ctx)
 {
 	struct bdevperf_job *job = ctx;
 	struct bdevperf_task *task;
 	int i;
 
+	spdk_poller_unregister(&job->delay_timer);
+
 	/* Submit initial I/O for this job. Each time one
 	 * completes, another will be submitted. */
 
 	/* Start a timer to stop this I/O chain when the run is over */
-	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job, g_total_time_in_usec);
+	job->run_timer = SPDK_POLLER_REGISTER(bdevperf_job_drain_timer, job, g_job_time_in_usec);
 	if (job->reset) {
 		job->reset_timer = SPDK_POLLER_REGISTER(reset_job, job,
 							10 * SPDK_SEC_TO_USEC);
@@ -1857,6 +1875,21 @@ bdevperf_job_run(void *ctx)
 	for (i = 0; i < job->queue_depth; i++) {
 		task = bdevperf_job_get_task(job);
 		bdevperf_submit_single(job, task);
+	}
+
+	return SPDK_POLLER_BUSY;
+}
+
+static void
+bdevperf_job_run(void *ctx)
+{
+	struct bdevperf_job *job = ctx;
+
+	if (g_start_delay_time_in_sec != 0) {
+		job->delay_timer = SPDK_POLLER_REGISTER(_bdevperf_job_run, job,
+							g_start_delay_time_in_sec * SPDK_SEC_TO_USEC);
+	} else {
+		_bdevperf_job_run(job);
 	}
 }
 
@@ -1880,7 +1913,9 @@ _performance_dump_done(void *ctx)
 	if (g_summarize_performance) {
 		const char *status_prefix = "";
 
-		if (!g_warmup_finished) {
+		if (!g_start_delay_finished) {
+			status_prefix = "[Delay] ";
+		} else if (!g_warmup_finished) {
 			status_prefix = "[Warmup] ";
 		} else if (any_job_draining) {
 			status_prefix = "[Draining] ";
@@ -1942,12 +1977,31 @@ _performance_dump(void *ctx)
 }
 
 static void
+check_and_process_start_delay(uint64_t io_time_in_usec)
+{
+	if (g_start_delay_finished ||
+	    io_time_in_usec < g_start_delay_time_in_sec * SPDK_SEC_TO_USEC) {
+		return;
+	}
+
+	g_start_delay_finished = true;
+
+	printf("--- Start Delay Completed. Run Jobs. ---\n");
+}
+
+static void
 check_and_process_warmup(uint64_t io_time_in_usec)
 {
 	struct bdevperf_job *job;
+	uint64_t warmup_end_in_usec;
 
-	if (g_warmup_finished ||
-	    io_time_in_usec < g_warmup_time_in_sec * SPDK_SEC_TO_USEC) {
+	if (!g_start_delay_finished || g_warmup_finished) {
+		return;
+	}
+
+	warmup_end_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
+			     SPDK_SEC_TO_USEC;
+	if (io_time_in_usec < warmup_end_in_usec) {
 		return;
 	}
 
@@ -1976,6 +2030,11 @@ performance_statistics_thread(void *arg)
 
 	g_show_performance_period_num++;
 	time_in_usec = g_show_performance_period_num * g_show_performance_period_in_usec;
+
+	check_and_process_start_delay(time_in_usec);
+	if (!g_start_delay_finished) {
+		return -1;
+	}
 
 	check_and_process_warmup(time_in_usec);
 
@@ -3268,6 +3327,9 @@ bdevperf_parse_arg(int ch, char *arg)
 		case WARMUP_TIME_OPT_IDX:
 			g_warmup_time_in_sec = tmp;
 			break;
+		case START_DELAY_TIME_OPT_IDX:
+			g_start_delay_time_in_sec = tmp;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -3310,6 +3372,7 @@ bdevperf_usage(void)
 	printf(" -O, --memory-domain              pass memory domain in all I/O requests\n");
 	printf(" -Q, --back-pressure              Enable back-pressure to avoid blocking in bdev layer\n");
 	printf(" -K, --warmup <warmup time>       Exclude the warmup interval from cumulative average\n");
+	printf("     --start-delay <time>         Delay the start of jobs\n");
 }
 
 static void
@@ -3347,11 +3410,18 @@ verify_test_params(void)
 		goto out;
 	}
 	g_time_in_usec = g_time_in_sec * SPDK_SEC_TO_USEC;
-	g_total_time_in_usec = g_time_in_usec +
-			       (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+	g_job_time_in_usec = g_time_in_usec +
+			     (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+	g_total_time_in_usec = g_job_time_in_usec +
+			       (uint64_t)g_start_delay_time_in_sec * SPDK_SEC_TO_USEC;
 
 	if (g_timeout_in_sec < 0) {
 		goto out;
+	}
+
+	if (g_start_delay_time_in_sec == 0) {
+		/* No delay needed. Mark finished immediately. */
+		g_start_delay_finished = true;
 	}
 
 	if (g_warmup_time_in_sec == 0) {
