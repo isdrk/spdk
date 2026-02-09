@@ -159,6 +159,8 @@ static const struct option g_bdevperf_long_opts[] = {
 	{"warmup",			required_argument,	NULL, WARMUP_TIME_OPT_IDX},
 #define START_DELAY_TIME_OPT_IDX	SPDK_APP_LONG_OPT_BASE
 	{"start-delay",			required_argument,	NULL, START_DELAY_TIME_OPT_IDX},
+#define DISABLE_STATS_SUMMARY_OPT_IDX	(SPDK_APP_LONG_OPT_BASE + 1)
+	{"disable-stats-summary",	no_argument,		NULL, DISABLE_STATS_SUMMARY_OPT_IDX},
 	{NULL, 0, NULL, 0},
 };
 
@@ -3373,6 +3375,8 @@ bdevperf_parse_arg(int ch, char *arg)
 		g_back_pressure = true;
 	} else if (ch == INTERVAL_AVG_OPT_IDX) {
 		g_periodic_dump_stat_mode = STAT_MODE_IA;
+	} else if (ch == DISABLE_STATS_SUMMARY_OPT_IDX) {
+		g_summarize_performance = false;
 	} else {
 		tmp = spdk_strtoll(arg, 10);
 		if (tmp < 0) {
@@ -3402,7 +3406,6 @@ bdevperf_parse_arg(int ch, char *arg)
 			g_periodic_dump_stat_mode = STAT_MODE_EMA;
 			break;
 		case STATS_PERIOD_OPT_IDX:
-			g_summarize_performance = false;
 			g_show_performance_period_in_usec = tmp * SPDK_SEC_TO_USEC;
 			break;
 		case WARMUP_TIME_OPT_IDX:
@@ -3432,7 +3435,6 @@ bdevperf_usage(void)
 	printf(" -P, --exp-moving-avg <num>       number of moving average period\n");
 	printf("\t\t(If set to n, show weighted mean of the previous n IO/s in real time)\n");
 	printf("\t\t(Formula: M = 2 / (n + 1), EMA[i+1] = IO/s * M + (1 - M) * EMA[i])\n");
-	printf("\t\t(only valid with -S/--stats-period)\n");
 	printf("\t\t(-P/--exp-moving-avg is mutually exclusive with -I/--interval-avg)\n");
 	printf(" -S, --stats-period <period>      show performance result in real time every <period> seconds\n");
 	printf(" -T, --bdev <bdev>                bdev to run against. Default: all available bdevs.\n");
@@ -3454,6 +3456,7 @@ bdevperf_usage(void)
 	printf(" -Q, --back-pressure              Enable back-pressure to avoid blocking in bdev layer\n");
 	printf(" -K, --warmup <warmup time>       Exclude the warmup interval from cumulative average\n");
 	printf("     --start-delay <time>         Delay the start of jobs\n");
+	printf("     --disable-stats-summary      show per-job stats each interval (disable summary output)\n");
 }
 
 static void
@@ -3499,11 +3502,6 @@ verify_test_params(void)
 
 	if (g_abort && !g_timeout_in_sec) {
 		printf("Timeout must be set for abort option, Ignoring g_abort\n");
-	}
-
-	if (g_show_performance_ema_period > 0 && g_summarize_performance) {
-		fprintf(stderr, "-P option must be specified with -S option\n");
-		return 1;
 	}
 
 	if (false && (g_io_size > SPDK_BDEV_LARGE_BUF_MAX_SIZE)) {
