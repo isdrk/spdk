@@ -100,6 +100,8 @@ static bool g_random_map = false;
 static bool g_unique_writes = false;
 static bool g_hide_metadata = false;
 static bool g_back_pressure = false;
+static uint64_t g_rate_iops = 0;
+static uint64_t g_rate_mbps = 0;
 
 static struct spdk_cpuset g_all_cpuset;
 static struct spdk_poller *g_perf_timer = NULL;
@@ -161,6 +163,10 @@ static const struct option g_bdevperf_long_opts[] = {
 	{"start-delay",			required_argument,	NULL, START_DELAY_TIME_OPT_IDX},
 #define DISABLE_STATS_SUMMARY_OPT_IDX	(SPDK_APP_LONG_OPT_BASE + 1)
 	{"disable-stats-summary",	no_argument,		NULL, DISABLE_STATS_SUMMARY_OPT_IDX},
+#define RATE_IOPS_OPT_IDX		(SPDK_APP_LONG_OPT_BASE + 2)
+	{"rate-iops",			required_argument,	NULL, RATE_IOPS_OPT_IDX},
+#define RATE_MBPS_OPT_IDX		(SPDK_APP_LONG_OPT_BASE + 3)
+	{"rate-mbps",			required_argument,	NULL, RATE_MBPS_OPT_IDX},
 	{NULL, 0, NULL, 0},
 };
 
@@ -246,6 +252,8 @@ struct bdevperf_job {
 	uint64_t			seed;
 
 	uint64_t			io_completed;
+	uint64_t			io_sent;
+	uint64_t			io_bytes_sent;
 	uint64_t			io_failed;
 	uint64_t			io_timeout;
 	uint64_t			io_completed_at_warmup_end;
@@ -261,14 +269,18 @@ struct bdevperf_job {
 	uint32_t			dif_check_flags;
 	bool				is_draining;
 	bool				md_check;
+	uint64_t			rate_iops;
+	uint64_t			rate_bytes;
 	struct spdk_poller		*run_timer;
 	struct spdk_poller		*reset_timer;
 	struct spdk_poller		*delay_timer;
+	struct spdk_poller		*rate_poller;
 	struct spdk_bit_array		*outstanding;
 	struct spdk_zipf		*zipf;
 	TAILQ_HEAD(, bdevperf_task)	task_list;
 	TAILQ_HEAD(, bdevperf_task)	throttled_task_list;
 	uint64_t			run_time_in_usec;
+	uint64_t			start_tsc;
 	uint64_t			drain_start_tsc;
 
 	/* keep channel's histogram data before being destroyed */
@@ -297,6 +309,8 @@ struct job_config {
 	int				bs;
 	int				iodepth;
 	int				rwmixread;
+	int				rate_iops;
+	int				rate_mbps;
 	uint32_t			lcore;
 	int64_t				offset;
 	uint64_t			length;
@@ -1180,6 +1194,7 @@ bdevperf_job_empty(struct bdevperf_job *job)
 	spdk_bdev_channel_get_histogram(job->ch, bdevperf_channel_get_histogram_cb,
 					job->histogram);
 	spdk_put_io_channel(job->ch);
+	spdk_poller_unregister(&job->rate_poller);
 	spdk_thread_send_msg(g_main_thread, bdevperf_job_end, job);
 }
 
@@ -1573,12 +1588,42 @@ _bdevperf_submit_task(struct bdevperf_job *job, struct bdevperf_task *task)
 	}
 
 	job->current_queue_depth++;
+	job->io_sent++;
+	job->io_bytes_sent += job->io_size;
+}
+
+static inline bool
+bdevperf_job_rate_is_throttled(struct bdevperf_job *job)
+{
+	uint64_t now, offset;
+
+	now = spdk_thread_get_last_tsc(NULL);
+
+	if (job->rate_iops != 0) {
+		offset = (uint64_t)(((__uint128_t)job->io_sent * spdk_get_ticks_hz()) /
+				    job->rate_iops);
+
+		if (now < job->start_tsc + offset) {
+			return true;
+		}
+	}
+
+	if (job->rate_bytes != 0) {
+		offset = (uint64_t)(((__uint128_t)job->io_bytes_sent * spdk_get_ticks_hz()) /
+				    job->rate_bytes);
+		if (now < job->start_tsc + offset) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 static inline bool
 bdevperf_job_is_throttled(struct bdevperf_job *job)
 {
-	return job->throttled || !TAILQ_EMPTY(&job->throttled_task_list);
+	return job->throttled || !TAILQ_EMPTY(&job->throttled_task_list) ||
+	       bdevperf_job_rate_is_throttled(job);
 }
 
 static void
@@ -1587,7 +1632,7 @@ bdevperf_submit_task(void *arg)
 	struct bdevperf_task	*task = arg;
 	struct bdevperf_job	*job = task->job;
 
-	if (spdk_unlikely(bdevperf_job_is_throttled(job))) {
+	if (bdevperf_job_is_throttled(job)) {
 		TAILQ_INSERT_TAIL(&job->throttled_task_list, task, link);
 		return;
 	}
@@ -1605,7 +1650,7 @@ bdevperf_job_retry_tasks(struct bdevperf_job *job)
 	TAILQ_SWAP(&tmp_head, &job->throttled_task_list, bdevperf_task, link);
 
 	TAILQ_FOREACH_SAFE(task, &tmp_head, link, ttmp) {
-		if (!job->throttled) {
+		if (!job->throttled && !bdevperf_job_rate_is_throttled(job)) {
 			TAILQ_REMOVE(&tmp_head, task, link);
 			_bdevperf_submit_task(job, task);
 		} else {
@@ -1633,6 +1678,20 @@ bdevperf_job_throttled(struct spdk_io_channel *ch, void *cb_arg)
 	struct bdevperf_job *job = cb_arg;
 
 	job->throttled = true;
+}
+
+static int
+bdevperf_job_rate_monitor(void *ctx)
+{
+	struct bdevperf_job *job = ctx;
+
+	if (TAILQ_EMPTY(&job->throttled_task_list)) {
+		return SPDK_POLLER_IDLE;
+	}
+
+	bdevperf_job_retry_tasks(job);
+
+	return SPDK_POLLER_BUSY;
 }
 
 static void
@@ -1890,6 +1949,8 @@ _bdevperf_job_run(void *ctx)
 		job->reset_timer = SPDK_POLLER_REGISTER(reset_job, job,
 							10 * SPDK_SEC_TO_USEC);
 	}
+
+	job->start_tsc = spdk_get_ticks();
 
 	for (i = 0; i < job->queue_depth; i++) {
 		task = bdevperf_job_get_task(job);
@@ -2330,6 +2391,9 @@ _bdevperf_construct_job(void *ctx)
 		spdk_bdev_io_channel_register_flow_control_callbacks(job->ch, &flow_control_cbs, job);
 	}
 
+	if (job->rate_iops != 0 || job->rate_bytes != 0) {
+		job->rate_poller = SPDK_POLLER_REGISTER(bdevperf_job_rate_monitor, job, 0);
+	}
 end:
 	spdk_thread_send_msg(g_main_thread, _bdevperf_construct_job_done, NULL);
 }
@@ -2394,6 +2458,7 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	int rc;
 	int task_num, n;
 	int32_t numa_id;
+	int num_cores;
 
 	job = calloc(1, sizeof(struct bdevperf_job));
 	if (!job) {
@@ -2437,6 +2502,21 @@ bdevperf_construct_job(struct spdk_bdev *bdev, struct job_config *config,
 	job_init_rw(job, config->rw);
 	job->md_check = spdk_bdev_get_dif_type(job->bdev) == SPDK_DIF_DISABLE;
 	job->drain_start_tsc = 0;
+
+	num_cores = spdk_cpuset_count(&g_all_cpuset);
+
+	if (config->rate_iops > 0) {
+		job->rate_iops = config->rate_iops;
+		if (g_multithread_mode) {
+			job->rate_iops /= num_cores;
+		}
+	}
+	if (config->rate_mbps > 0) {
+		job->rate_bytes = (uint64_t)config->rate_mbps * 1024 * 1024;
+		if (g_multithread_mode) {
+			job->rate_bytes /= num_cores;
+		}
+	}
 
 	if ((job->io_size % data_block_size) != 0) {
 		SPDK_ERRLOG("IO size (%d) is not multiples of data block size of bdev %s (%"PRIu32")\n",
@@ -2786,6 +2866,8 @@ make_cli_job_config(const char *filename, int64_t offset, uint64_t range)
 	config->length = range;
 	config->warmup_time_in_sec = g_warmup_time_in_sec;
 	config->start_delay_time_in_sec = g_start_delay_time_in_sec;
+	config->rate_iops = g_rate_iops;
+	config->rate_mbps = g_rate_mbps;
 	config->rw = parse_rw(g_workload_type, BDEVPERF_CONFIG_ERROR);
 	if ((int)config->rw == BDEVPERF_CONFIG_ERROR) {
 		free(config);
@@ -2965,6 +3047,12 @@ config_set_cli_args(struct job_config *config)
 	if (g_start_delay_time_in_sec > 0) {
 		config->start_delay_time_in_sec = g_start_delay_time_in_sec;
 	}
+	if (g_rate_iops > 0) {
+		config->rate_iops = g_rate_iops;
+	}
+	if (g_rate_mbps > 0) {
+		config->rate_mbps = g_rate_mbps;
+	}
 }
 
 static int
@@ -3012,6 +3100,8 @@ read_job_config(void)
 	global_default_config.rw = BDEVPERF_CONFIG_UNDEFINED;
 	global_default_config.warmup_time_in_sec = 0;
 	global_default_config.start_delay_time_in_sec = 0;
+	global_default_config.rate_iops = 0;
+	global_default_config.rate_mbps = 0;
 	config_set_cli_args(&global_default_config);
 
 	if ((int)global_default_config.rw == BDEVPERF_CONFIG_ERROR) {
@@ -3120,6 +3210,16 @@ read_job_config(void)
 		config->start_delay_time_in_sec = parse_uint_option(s, "start_delay",
 						  global_config.start_delay_time_in_sec);
 		if (config->start_delay_time_in_sec == BDEVPERF_CONFIG_ERROR) {
+			goto error;
+		}
+
+		config->rate_iops = parse_uint_option(s, "rate_iops", global_config.rate_iops);
+		if (config->rate_iops == BDEVPERF_CONFIG_ERROR) {
+			goto error;
+		}
+
+		config->rate_mbps = parse_uint_option(s, "rate_mbps", global_config.rate_mbps);
+		if (config->rate_mbps == BDEVPERF_CONFIG_ERROR) {
 			goto error;
 		}
 
@@ -3433,6 +3533,12 @@ bdevperf_parse_arg(int ch, char *arg)
 		case START_DELAY_TIME_OPT_IDX:
 			g_start_delay_time_in_sec = tmp;
 			break;
+		case RATE_IOPS_OPT_IDX:
+			g_rate_iops = tmp;
+			break;
+		case RATE_MBPS_OPT_IDX:
+			g_rate_mbps = tmp;
+			break;
 		default:
 			return -EINVAL;
 		}
@@ -3476,6 +3582,8 @@ bdevperf_usage(void)
 	printf(" -K, --warmup <warmup time>       Exclude the warmup interval from cumulative average\n");
 	printf("     --start-delay <time>         Delay the start of jobs\n");
 	printf("     --disable-stats-summary      show per-job stats each interval (disable summary output)\n");
+	printf("     --rate-iops <iops>           Cap the I/O rate to this IOPS used by each job\n");
+	printf("     --rate-mbps <mbps>           Cap the bandwidth used by each job in MiB/s\n");
 }
 
 static void
