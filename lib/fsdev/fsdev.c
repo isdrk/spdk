@@ -2446,14 +2446,19 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 			assert(false);
 			return -EINVAL;
 		}
-		if (in_iovcnt != 0) {
-			assert(false);
-			return -EINVAL;
-		}
 		if (in->hdr->opcode == FUSE_WRITE) {
+			if (in_iovcnt != 0) {
+				assert(false);
+				return -EINVAL;
+			}
 			in->iov = domain_iov;
 			in->iovcnt = domain_iovcnt;
 		} else {
+			if (in_iovcnt != 1 ||
+			    in_iov->iov_len != sizeof(struct fuse_read_in)) {
+				assert(false);
+				return -EINVAL;
+			}
 			in->iov = NULL;
 			in->iovcnt = 0;
 		}
@@ -2482,14 +2487,19 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 		}
 		out->op.raw = out_iov->iov_base;
 		if (domain != NULL) {
-			if (out_iovcnt != 0) {
-				assert(false);
-				return -EINVAL;
-			}
 			if (in->hdr->opcode == FUSE_READ) {
+				if (out_iovcnt != 0) {
+					assert(false);
+					return -EINVAL;
+				}
 				out->iov = domain_iov;
 				out->iovcnt = domain_iovcnt;
 			} else {
+				if (out_iovcnt != 1 ||
+				    out_iov->iov_len != sizeof(struct fuse_write_out)) {
+					assert(false);
+					return -EINVAL;
+				}
 				out->iov = NULL;
 				out->iovcnt = 0;
 			}
