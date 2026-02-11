@@ -946,22 +946,33 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 		return true;
 	}
 
-	/* Not enough tokens. Calculate the shortfall and start taking from
-	 * global bucket. */
-	shortfall = tokens_needed - local_bucket->tokens;
-
-	/* Move from 'guaranteed' mailbox to 'tokens' wallet. */
-	claimed = atomic_sub_floor(&local_bucket->refill_grant, shortfall);
-	if (claimed > 0) {
-		/* Transfer tokens. */
-		local_bucket->tokens += claimed;
-		/* Reduce shortfall. */
-		shortfall -= claimed;
-	}
-
 	additive_increase_step = global_bucket->additive_increase_step;
 	max_withdraw_batch_size = global_bucket->max_withdraw_batch_size;
 	min_withdraw_batch_size = global_bucket->min_withdraw_batch_size;
+
+	/* Move from 'guaranteed' mailbox to 'tokens' wallet. */
+	claimed = atomic_sub_floor(&local_bucket->refill_grant, local_bucket->withdraw_batch_size);
+	if (claimed > 0) {
+		/* Transfer tokens. */
+		local_bucket->tokens += claimed;
+
+		if (claimed == local_bucket->withdraw_batch_size) {
+			/* Full claim: Apply Additive Increase. */
+			local_bucket->withdraw_batch_size += additive_increase_step;
+			if (local_bucket->withdraw_batch_size > max_withdraw_batch_size) {
+				local_bucket->withdraw_batch_size = max_withdraw_batch_size;
+			}
+
+			if (local_bucket->tokens >= tokens_needed) {
+				local_bucket->tokens -= tokens_needed;
+				return true;
+			}
+		}
+	}
+
+	/* Not enough tokens. Calculate the shortfall and start taking from
+	 * global bucket. */
+	shortfall = tokens_needed - local_bucket->tokens;
 
 	/* We will accumulate the needed tokens locally before spending. */
 	while (shortfall > 0) {
