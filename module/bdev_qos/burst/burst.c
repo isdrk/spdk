@@ -124,6 +124,15 @@ struct global_token_bucket {
 
 	/* Max I/O allowed in a single burst */
 	uint64_t io_burst;
+
+	/* Minimum batch size to withdraw for this bucket. */
+	uint64_t min_withdraw_batch_size;
+
+	/* Maximum batch size to withdraw for this bucket. */
+	uint64_t max_withdraw_batch_size;
+
+	/* Step size to increase the withdraw batch on success. */
+	uint64_t additive_increase_step;
 };
 
 /*
@@ -596,6 +605,9 @@ global_token_bucket_reset(struct global_token_bucket *global_bucket)
 	global_bucket->refill_period_ticks = 0;
 	global_bucket->max_burst_time_in_sec = 0;
 	global_bucket->io_burst = 0;
+	/* min_withdraw_batch_size is fixed by metric. */
+	global_bucket->max_withdraw_batch_size = 0;
+	global_bucket->additive_increase_step = 0;
 }
 
 static void
@@ -603,6 +615,11 @@ global_token_bucket_init(struct global_token_bucket *global_bucket,
 			 enum bdev_qos_metric metric)
 {
 	global_bucket->metric = metric;
+	if (bdev_qos_metric_is_iops(metric)) {
+		global_bucket->min_withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
+	} else {
+		global_bucket->min_withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
+	}
 	TAILQ_INIT(&global_bucket->local_buckets);
 	global_bucket->num_local_buckets = 0;
 	spdk_spin_init(&global_bucket->spinlock);
@@ -656,7 +673,9 @@ static int
 global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_rate,
 			enum bdev_qos_mode qos_mode,
 			uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
-			uint64_t refill_period_us, uint64_t io_burst)
+			uint64_t refill_period_us, uint64_t io_burst,
+			uint64_t max_withdraw_batch_size,
+			uint64_t additive_increase_step)
 {
 	struct token_bucket *steady_bucket = &global_bucket->steady_bucket;
 	struct token_bucket *burst_bucket = &global_bucket->burst_bucket;
@@ -690,6 +709,19 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 		max_burst_rate *= 1024 * 1024;
 	}
 
+	if (max_withdraw_batch_size < global_bucket->min_withdraw_batch_size) {
+		SPDK_ERRLOG("max_withdraw_batch_size was %" PRIu64 " but must be not less than %" PRIu64 ".\n",
+			    max_withdraw_batch_size, global_bucket->min_withdraw_batch_size);
+		return -EINVAL;
+	}
+
+	if (additive_increase_step == 0 || additive_increase_step > max_withdraw_batch_size) {
+		SPDK_ERRLOG("additive_increase_step was %" PRIu64 " but must be non-zero and"
+			    " not larger than max_withdraw_batch_size %" PRIu64 ".\n",
+			    additive_increase_step, max_withdraw_batch_size);
+		return -EINVAL;
+	}
+
 	complement = avg_rate % min_rate;
 	if (complement != 0) {
 		SPDK_WARNLOG("Requested avg_rate %" PRIu64 " is not multiple of %" PRIu64 "\n",
@@ -705,6 +737,8 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	global_bucket->avg_rate = avg_rate;
 
 	global_bucket->io_burst = io_burst;
+	global_bucket->max_withdraw_batch_size = max_withdraw_batch_size;
+	global_bucket->additive_increase_step = additive_increase_step;
 
 	/* Sanitize user input. */
 	if (refill_period_us == 0) {
@@ -831,6 +865,10 @@ global_token_bucket_config_json(struct global_token_bucket *global_bucket, const
 	spdk_json_write_named_uint64(w, "refill_period_us",
 				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
 	spdk_json_write_named_uint64(w, "io_burst", global_bucket->io_burst);
+	spdk_json_write_named_uint64(w, "max_withdraw_batch_size",
+				     global_bucket->max_withdraw_batch_size);
+	spdk_json_write_named_uint64(w, "additive_increase_step",
+				     global_bucket->additive_increase_step);
 
 	spdk_json_write_object_end(w);
 
@@ -921,15 +959,9 @@ _local_token_bucket_consume(struct local_token_bucket *local_bucket, uint64_t to
 		shortfall -= claimed;
 	}
 
-	if (bdev_qos_metric_is_iops(global_bucket->metric)) {
-		additive_increase_step = g_qos_opts.io_additive_increase_step;
-		max_withdraw_batch_size = g_qos_opts.max_io_withdraw_batch_size;
-		min_withdraw_batch_size = BDEV_QOS_MIN_IO_WITHDRAW_BATCH_SIZE;
-	} else {
-		additive_increase_step = g_qos_opts.byte_additive_increase_step;
-		max_withdraw_batch_size = g_qos_opts.max_byte_withdraw_batch_size;
-		min_withdraw_batch_size = BDEV_QOS_MIN_BYTE_WITHDRAW_BATCH_SIZE;
-	}
+	additive_increase_step = global_bucket->additive_increase_step;
+	max_withdraw_batch_size = global_bucket->max_withdraw_batch_size;
+	min_withdraw_batch_size = global_bucket->min_withdraw_batch_size;
 
 	/* We will accumulate the needed tokens locally before spending. */
 	while (shortfall > 0) {
@@ -1546,6 +1578,7 @@ struct burst_qos_set_limit_ctx {
 	void *cb_arg;
 };
 
+
 static void
 bdev_burst_qos_set_limit_done(struct burst_qos_set_limit_ctx *ctx, int status)
 {
@@ -1587,6 +1620,8 @@ bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 			 enum bdev_qos_mode qos_mode,
 			 uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
 			 uint64_t refill_period_us, uint64_t io_burst,
+			 uint64_t max_withdraw_batch_size,
+			 uint64_t additive_increase_step,
 			 spdk_bdev_qos_op_cb cb_fn, void *cb_arg)
 {
 	struct burst_qos_set_limit_ctx *ctx;
@@ -1612,7 +1647,8 @@ bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 
 	rc = global_token_bucket_set(global_bucket, avg_rate, qos_mode,
 				     max_burst_rate, max_burst_time_in_sec,
-				     refill_period_us, io_burst);
+				     refill_period_us, io_burst,
+				     max_withdraw_batch_size, additive_increase_step);
 	if (rc != 0) {
 		bdev_burst_qos_set_limit_done(ctx, rc);
 		return;
@@ -1630,6 +1666,8 @@ struct burst_qos_json {
 	uint64_t max_burst_time_in_sec;
 	uint64_t refill_period_us;
 	uint64_t io_burst;
+	uint64_t max_withdraw_batch_size;
+	uint64_t additive_increase_step;
 };
 
 static int
@@ -1683,6 +1721,8 @@ static const struct spdk_json_object_decoder burst_qos_json_decoders[] = {
 static const struct spdk_json_object_decoder burst_qos_json_decoders2[] = {
 	{"refill_period_us", offsetof(struct burst_qos_json, refill_period_us), spdk_json_decode_uint64, true},
 	{"io_burst", offsetof(struct burst_qos_json, io_burst), spdk_json_decode_uint64, true},
+	{"max_withdraw_batch_size", offsetof(struct burst_qos_json, max_withdraw_batch_size), spdk_json_decode_uint64, true},
+	{"additive_increase_step", offsetof(struct burst_qos_json, additive_increase_step), spdk_json_decode_uint64, true},
 };
 
 void
@@ -1715,8 +1755,12 @@ bdev_burst_qos_set_limit_json(struct spdk_bdev_qos *qos,
 	req.refill_period_us = 0;
 	if (bdev_qos_metric_is_iops(req.qos_metric)) {
 		req.io_burst = BDEV_QOS_DEFAULT_IO_BURST_SIZE;
+		req.max_withdraw_batch_size = g_qos_opts.max_io_withdraw_batch_size;
+		req.additive_increase_step = g_qos_opts.io_additive_increase_step;
 	} else {
 		req.io_burst = BDEV_QOS_DEFAULT_IO_BURST_BYTES;
+		req.max_withdraw_batch_size = g_qos_opts.max_byte_withdraw_batch_size;
+		req.additive_increase_step = g_qos_opts.byte_additive_increase_step;
 	}
 
 	if (spdk_json_decode_object_relaxed(params, burst_qos_json_decoders2,
@@ -1728,6 +1772,8 @@ bdev_burst_qos_set_limit_json(struct spdk_bdev_qos *qos,
 	bdev_burst_qos_set_limit(qos_impl, req.qos_metric, req.avg_rate, req.qos_mode,
 				 req.max_burst_rate, req.max_burst_time_in_sec,
 				 req.refill_period_us, req.io_burst,
+				 req.max_withdraw_batch_size,
+				 req.additive_increase_step,
 				 cb_fn, cb_arg);
 }
 

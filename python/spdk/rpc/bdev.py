@@ -1786,7 +1786,9 @@ def bdev_burst_qos_set_limit(
         max_burst_rate,
         max_burst_time_in_sec,
         refill_period_us,
-        io_burst):
+        io_burst,
+        max_withdraw_batch_size,
+        additive_increase_step):
     """Set rate limit for a QoS metric on a QoS device.
     Args:
         name: name of a QoS device.
@@ -1797,6 +1799,8 @@ def bdev_burst_qos_set_limit(
         max_burst_time_in_sec: The maximum duration max_burst_rate can be sustained (Relevant only for earned_burst mode). (optional)
         refill_period_us: Refill period in microseconds. (optional)
         io_burst: Max I/O allowed in a single burst. (optional)
+        max_withdraw_batch_size: Max withdraw batch size for this bucket. (optional)
+        additive_increase_step: AIMD additive increase step for this bucket. (optional)
     """
     params = dict()
     params['name'] = name
@@ -1812,6 +1816,10 @@ def bdev_burst_qos_set_limit(
         params['refill_period_us'] = refill_period_us
     if io_burst is not None:
         params['io_burst'] = io_burst
+    if max_withdraw_batch_size is not None:
+        params['max_withdraw_batch_size'] = max_withdraw_batch_size
+    if additive_increase_step is not None:
+        params['additive_increase_step'] = additive_increase_step
     return client.call('bdev_burst_qos_set_limit', params)
 
 

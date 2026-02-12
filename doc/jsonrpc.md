@@ -3361,16 +3361,18 @@ If the naive income is smaller than io_burst, override the tick period because t
 
 #### Parameters
 
- Name                  | Optional   | Type   | Description
----------------------- | ---------- | ------ | ------------------------------------------------------------------
- name                  | Required   | string | QoS device name
- qos_metric            | Required   | string | Metric controlled by QoS rate limit.
- avg_rate              | Required   | number | Average rate for this metric. 0 means unlimited.
- qos_mode              | Optinal    | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
- max_burst_rate        | Optional   | number | Peak rate allowed during a burst (Relevant only if qos_mode is earned_burst).
- max_burst_time_in_sec | Optional   | number | The maximum duration max_burst_rate can be sustained (Relevant only if qos_mode is earned_burst).
- refill_period_us      | Optional   | number | Refill period in microseconds (default is 0)
- io_burst              | Optional   | number | Max I/O allowed in a single burst (default: 64 for IOPS limit, 64 x 64KiB for BW limit)
+ Name                    | Optional   | Type   | Description
+------------------------ | ---------- | ------ | ------------------------------------------------------------------
+ name                    | Required   | string | QoS device name
+ qos_metric              | Required   | string | Metric controlled by QoS rate limit.
+ avg_rate                | Required   | number | Average rate for this metric. 0 means unlimited.
+ qos_mode                | Optinal    | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
+ max_burst_rate          | Optional   | number | Peak rate allowed during a burst (Relevant only if qos_mode is earned_burst).
+ max_burst_time_in_sec   | Optional   | number | The maximum duration max_burst_rate can be sustained (Relevant only if qos_mode is earned_burst).
+ refill_period_us        | Optional   | number | Refill period in microseconds (default is 0)
+ io_burst                | Optional   | number | Max I/O allowed in a single burst (default: 64 for IOPS limit, 64 x 64KiB for BW limit)
+ max_withdraw_batch_size | Optional   | number | Max withdraw batch size for this bucket (default is per-metric global option)
+ additive_increase_step  | Optional   | number | AIMD additive increase step for this bucket (default is per-metric global option)
 
 #### Example
 

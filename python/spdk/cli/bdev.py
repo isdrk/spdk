@@ -1292,7 +1292,9 @@ def add_parser(subparsers):
                                           max_burst_rate=args.max_burst_rate,
                                           max_burst_time_in_sec=args.max_burst_time_in_sec,
                                           refill_period_us=args.refill_period_us,
-                                          io_burst=args.io_burst)
+                                          io_burst=args.io_burst,
+                                          max_withdraw_batch_size=args.max_withdraw_batch_size,
+                                          additive_increase_step=args.additive_increase_step)
 
     p = subparsers.add_parser('bdev_burst_qos_set_limit',
                               help='Set rate limit for a QoS metric on a QoS device')
@@ -1305,6 +1307,8 @@ def add_parser(subparsers):
     (Relevant only for earned_burst mode)""", type=int)
     p.add_argument('-p', '--refill-period-us', help='Refill period in microseconds', type=int)
     p.add_argument('-i', '--io-burst', help='Max I/O allowed in a single burst', type=int)
+    p.add_argument('-z', '--max-withdraw-batch-size', help='Max withdraw batch size for this bucket', type=int)
+    p.add_argument('-a', '--additive-increase-step', help='AIMD additive increase step for this bucket', type=int)
     p.set_defaults(func=bdev_burst_qos_set_limit)
 
     def bdev_error_inject_error(args):
