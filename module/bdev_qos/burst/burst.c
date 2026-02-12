@@ -646,8 +646,9 @@ global_token_bucket_remove_local_bucket(struct global_token_bucket *global_bucke
  * \param global_bucket Global token bucket.
  * \param avg_rate The long-term sustained throughput.
  * \param mode Operating mode.
- * \param max_burst_rate Peak rate allowed during a burst.
- * \param max_burst_time_in_sec The maximum duration max_burst_rate can be sustained.
+ * \param max_burst_rate Peak rate allowed during a burst (Relevant only for earned_burst mode).
+ * \param max_burst_time_in_sec The maximum duration max_burst_rate can be sustained (Relevant
+ *                              only for earned_burst mode).
  * \param refill_period_us Refill period in microseconds.
  * \param io_burst Max I/O allowed in a single burst.
  */
@@ -744,7 +745,7 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 		return 0;
 	}
 
-	if (max_burst_rate == 0) {
+	if (max_burst_rate == 0 || qos_mode != BDEV_QOS_MODE_EARNED_BURST) {
 		max_burst_rate = avg_rate;
 	} else if (max_burst_rate < avg_rate) {
 		return -EINVAL;
@@ -819,8 +820,10 @@ global_token_bucket_config_json(struct global_token_bucket *global_bucket, const
 	spdk_json_write_named_string(w, "qos_metric", bdev_qos_metric_str(global_bucket->metric));
 	spdk_json_write_named_uint64(w, "avg_rate", avg_rate);
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
-	spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
-	spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	if (global_bucket->mode == BDEV_QOS_MODE_EARNED_BURST) {
+		spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
+		spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	}
 	spdk_json_write_named_uint64(w, "refill_period_us",
 				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
 	spdk_json_write_named_uint64(w, "io_burst", global_bucket->io_burst);
@@ -843,8 +846,10 @@ global_token_bucket_info_json(struct global_token_bucket *global_bucket,
 	spdk_json_write_named_string(w, "qos_metric", bdev_qos_metric_str(global_bucket->metric));
 	spdk_json_write_named_uint64(w, "avg_rate", avg_rate);
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
-	spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
-	spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	if (global_bucket->mode == BDEV_QOS_MODE_EARNED_BURST) {
+		spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
+		spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+	}
 	spdk_json_write_named_uint64(w, "refill_period_us",
 				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
 	spdk_json_write_named_uint64(w, "io_burst", global_bucket->io_burst);

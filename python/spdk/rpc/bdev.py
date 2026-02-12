@@ -1793,8 +1793,8 @@ def bdev_burst_qos_set_limit(
         qos_metric: Metric controlled by QoS rate limit (rw_iops, rw_mbps, r_mbps, or w_mps).
         avg_rate: Average rate for this metric.
         qos_mode: Operating mode (strict, burst_ready, or earned_burst). (optional)
-        max_burt_rate: Peak rate allowed during a burst. (optional)
-        max_burst_time_in_sec: The maximum duration max_burst_rate can be sustained. (optional)
+        max_burst_rate: Peak rate allowed during a burst (Relevant only for earned_burst mode). (optional)
+        max_burst_time_in_sec: The maximum duration max_burst_rate can be sustained (Relevant only for earned_burst mode). (optional)
         refill_period_us: Refill period in microseconds. (optional)
         io_burst: Max I/O allowed in a single burst. (optional)
     """

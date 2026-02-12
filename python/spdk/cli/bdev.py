@@ -1300,8 +1300,9 @@ def add_parser(subparsers):
     p.add_argument('qos_metric', help='Metric controlled by QoS rate limit')
     p.add_argument('avg_rate', help='Average rate for this metric', type=int)
     p.add_argument('-m', '--qos-mode', help='Operating mode (strict, burst_ready, or earned_burst)')
-    p.add_argument('-r', '--max-burst-rate', help='Peak rate allowed during a burst', type=int)
-    p.add_argument('-t', '--max-burst-time-in-sec', help='The maximum duration max_burst_rate can be sustained', type=int)
+    p.add_argument('-r', '--max-burst-rate', help='Peak rate allowed during a burst (Relevant only for earned_burst mode)', type=int)
+    p.add_argument('-t', '--max-burst-time-in-sec', help="""The maximum duration max_burst_rate can be sustained
+    (Relevant only for earned_burst mode)""", type=int)
     p.add_argument('-p', '--refill-period-us', help='Refill period in microseconds', type=int)
     p.add_argument('-i', '--io-burst', help='Max I/O allowed in a single burst', type=int)
     p.set_defaults(func=bdev_burst_qos_set_limit)
