@@ -79,9 +79,7 @@ static uint64_t g_show_performance_period_num = 0;
 static uint64_t g_show_performance_ema_period = 0;
 static enum bdevperf_stat_mode g_periodic_dump_stat_mode = STAT_MODE_CMA;
 static int g_warmup_time_in_sec = 0;
-static bool g_warmup_finished = false;
 static int g_start_delay_time_in_sec = 0;
-static bool g_start_delay_finished = false;
 static int g_run_rc = 0;
 static bool g_shutdown = false;
 static uint64_t g_start_tsc;
@@ -301,6 +299,10 @@ struct job_config {
 	int64_t				offset;
 	uint64_t			length;
 	enum job_config_rw		rw;
+	int				warmup_time_in_sec;
+	int				start_delay_time_in_sec;
+	bool				warmup_finished;
+	bool				start_delay_finished;
 	uint64_t			job_time_in_usec;
 	uint64_t			total_time_in_usec;
 	TAILQ_ENTRY(job_config)	link;
@@ -512,10 +514,10 @@ parse_workload_type(enum job_config_rw ret)
  * Note: If configuring warmup time, please use EMA or IA for periodic dump to avoid confusing results.
  *
  * Start delay, warmup, and drain exclusion:
- * - Start delay (before g_start_delay_finished):
+ * - Start delay (before per-config start delay completes):
  *   * Excluded from the final CMA result
  *   * No periodic performance dump until start delay completes
- * - Warmup period (before g_warmup_finished) and drain period (after g_drain_started):
+ * - Warmup period (before per-config warmup completes) and drain period (after g_drain_started):
  *   * Excluded from the FINAL CMA result only
  *   * Included in PERIODIC dumps (to show real-time behavior)
  * - Final CMA result = I/Os completed during steady state only
@@ -526,7 +528,7 @@ get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec, bool i
 	uint64_t valid_io_completed, valid_io_time_in_usec, drain_start_time_in_usec;
 	uint64_t excluded_time_in_usec;
 
-	if (!g_warmup_finished || !g_start_delay_finished) {
+	if (!job->config->warmup_finished || !job->config->start_delay_finished) {
 		/* In warmup or initial delay, use everything from start. */
 		valid_io_completed = job->io_completed;
 		valid_io_time_in_usec = io_time_in_usec;
@@ -537,13 +539,15 @@ get_cma_io_per_second(struct bdevperf_job *job, uint64_t io_time_in_usec, bool i
 		drain_start_time_in_usec = (job->drain_start_tsc - g_start_tsc) * SPDK_SEC_TO_USEC /
 					   spdk_get_ticks_hz();
 
-		excluded_time_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
+		excluded_time_in_usec = (job->config->warmup_time_in_sec +
+					 job->config->start_delay_time_in_sec) *
 					SPDK_SEC_TO_USEC;
 		valid_io_completed = job->io_completed_at_drain_start - job->io_completed_at_warmup_end;
 		valid_io_time_in_usec = drain_start_time_in_usec - excluded_time_in_usec;
 	} else {
 		/* In steady state (or periodic dump during drain), subtract the warmup garbage from the total. */
-		excluded_time_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
+		excluded_time_in_usec = (job->config->warmup_time_in_sec +
+					 job->config->start_delay_time_in_sec) *
 					SPDK_SEC_TO_USEC;
 		valid_io_completed = job->io_completed - job->io_completed_at_warmup_end;
 		valid_io_time_in_usec = io_time_in_usec - excluded_time_in_usec;
@@ -1124,9 +1128,6 @@ clean:
 	if (g_bdevperf_conf == NULL) {
 		free_job_config();
 	}
-
-	g_warmup_finished = false;
-	g_start_delay_finished = false;
 
 	rc = g_run_rc;
 	if (g_request && !g_shutdown) {
@@ -1888,9 +1889,9 @@ bdevperf_job_run(void *ctx)
 {
 	struct bdevperf_job *job = ctx;
 
-	if (g_start_delay_time_in_sec != 0) {
+	if (job->config->start_delay_time_in_sec != 0) {
 		job->delay_timer = SPDK_POLLER_REGISTER(_bdevperf_job_run, job,
-							g_start_delay_time_in_sec * SPDK_SEC_TO_USEC);
+							job->config->start_delay_time_in_sec * SPDK_SEC_TO_USEC);
 	} else {
 		_bdevperf_job_run(job);
 	}
@@ -1902,8 +1903,11 @@ _performance_dump_done(void *ctx)
 	struct bdevperf_aggregate_stats *aggregate = ctx;
 	struct bdevperf_stats *stats = &aggregate->total;
 	struct bdevperf_job *job;
+	struct job_config *config;
 	double average_latency;
 	bool any_job_draining = false;
+	bool any_start_delay_pending = false;
+	bool any_warmup_pending = false;
 
 	/* Check if any job is draining */
 	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
@@ -1916,9 +1920,19 @@ _performance_dump_done(void *ctx)
 	if (g_summarize_performance) {
 		const char *status_prefix = "";
 
-		if (!g_start_delay_finished) {
+		TAILQ_FOREACH(config, &job_config_list, link) {
+			if (!config->start_delay_finished) {
+				any_start_delay_pending = true;
+				break;
+			}
+			if (!config->warmup_finished) {
+				any_warmup_pending = true;
+			}
+		}
+
+		if (any_start_delay_pending) {
 			status_prefix = "[Delay] ";
-		} else if (!g_warmup_finished) {
+		} else if (any_warmup_pending) {
 			status_prefix = "[Warmup] ";
 		} else if (any_job_draining) {
 			status_prefix = "[Draining] ";
@@ -1979,44 +1993,72 @@ _performance_dump(void *ctx)
 	}
 }
 
-static void
+static bool
 check_and_process_start_delay(uint64_t io_time_in_usec)
 {
-	if (g_start_delay_finished ||
-	    io_time_in_usec < g_start_delay_time_in_sec * SPDK_SEC_TO_USEC) {
-		return;
+	struct job_config *config;
+	bool all_finished = true;
+	bool any_changed = false;
+
+	TAILQ_FOREACH(config, &job_config_list, link) {
+		if (config->start_delay_finished) {
+			continue;
+		}
+		if (io_time_in_usec < (uint64_t)config->start_delay_time_in_sec * SPDK_SEC_TO_USEC) {
+			all_finished = false;
+			continue;
+		}
+		config->start_delay_finished = true;
+		any_changed = true;
 	}
 
-	g_start_delay_finished = true;
+	if (any_changed && all_finished) {
+		printf("--- Start Delay Completed. Run Jobs. ---\n");
+	}
 
-	printf("--- Start Delay Completed. Run Jobs. ---\n");
+	return all_finished;
 }
 
 static void
 check_and_process_warmup(uint64_t io_time_in_usec)
 {
 	struct bdevperf_job *job;
+	struct job_config *config;
 	uint64_t warmup_end_in_usec;
+	bool all_finished = true;
+	bool any_changed = false;
 
-	if (!g_start_delay_finished || g_warmup_finished) {
-		return;
+	TAILQ_FOREACH(config, &job_config_list, link) {
+		if (!config->start_delay_finished || config->warmup_finished) {
+			if (!config->warmup_finished) {
+				all_finished = false;
+			}
+			continue;
+		}
+		warmup_end_in_usec = ((uint64_t)config->warmup_time_in_sec +
+				      (uint64_t)config->start_delay_time_in_sec) *
+				     SPDK_SEC_TO_USEC;
+		if (io_time_in_usec < warmup_end_in_usec) {
+			all_finished = false;
+			continue;
+		}
+
+		config->warmup_finished = true;
+		any_changed = true;
+
+		TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
+			if (job->config != config) {
+				continue;
+			}
+			job->io_completed_at_warmup_end = job->io_completed;
+			job->prev_io_completed = job->io_completed;
+			job->ema_io_per_second = 0;
+		}
 	}
 
-	warmup_end_in_usec = (g_warmup_time_in_sec + g_start_delay_time_in_sec) *
-			     SPDK_SEC_TO_USEC;
-	if (io_time_in_usec < warmup_end_in_usec) {
-		return;
+	if (any_changed && all_finished) {
+		printf("--- Warmup Completed. Stats Reset. ---\n");
 	}
-
-	g_warmup_finished = true;
-
-	TAILQ_FOREACH(job, &g_bdevperf.jobs, link) {
-		job->io_completed_at_warmup_end = job->io_completed;
-		job->prev_io_completed = job->io_completed;
-		job->ema_io_per_second = 0;
-	}
-
-	printf("--- Warmup Completed. Stats Reset. ---\n");
 }
 
 static int
@@ -2024,8 +2066,8 @@ performance_statistics_thread(void *arg)
 {
 	struct bdevperf_aggregate_stats *aggregate;
 	struct bdevperf_stats *stats;
+	bool all_start_delay_finished;
 	uint64_t time_in_usec;
-
 
 	if (g_performance_dump_active) {
 		return -1;
@@ -2034,8 +2076,8 @@ performance_statistics_thread(void *arg)
 	g_show_performance_period_num++;
 	time_in_usec = g_show_performance_period_num * g_show_performance_period_in_usec;
 
-	check_and_process_start_delay(time_in_usec);
-	if (!g_start_delay_finished) {
+	all_start_delay_finished = check_and_process_start_delay(time_in_usec);
+	if (!all_start_delay_finished) {
 		return -1;
 	}
 
@@ -2655,13 +2697,15 @@ bdevperf_construct_jobs(void)
 	uint32_t i;
 	int rc;
 
-	/* Update per-config timing based on current global parameters. */
+	/* Update per-config timing based on config parameters. */
 	g_total_time_in_usec = 0;
 	TAILQ_FOREACH(config, &job_config_list, link) {
 		config->job_time_in_usec = g_time_in_usec +
-					   (uint64_t)g_warmup_time_in_sec * SPDK_SEC_TO_USEC;
+					   (uint64_t)config->warmup_time_in_sec * SPDK_SEC_TO_USEC;
 		config->total_time_in_usec = config->job_time_in_usec +
-					     (uint64_t)g_start_delay_time_in_sec * SPDK_SEC_TO_USEC;
+					     (uint64_t)config->start_delay_time_in_sec * SPDK_SEC_TO_USEC;
+		config->start_delay_finished = (config->start_delay_time_in_sec == 0);
+		config->warmup_finished = (config->warmup_time_in_sec == 0);
 		if (config->total_time_in_usec > g_total_time_in_usec) {
 			g_total_time_in_usec = config->total_time_in_usec;
 		}
@@ -2725,6 +2769,8 @@ make_cli_job_config(const char *filename, int64_t offset, uint64_t range)
 	config->rwmixread = g_rw_percentage;
 	config->offset = offset;
 	config->length = range;
+	config->warmup_time_in_sec = g_warmup_time_in_sec;
+	config->start_delay_time_in_sec = g_start_delay_time_in_sec;
 	config->rw = parse_rw(g_workload_type, BDEVPERF_CONFIG_ERROR);
 	if ((int)config->rw == BDEVPERF_CONFIG_ERROR) {
 		free(config);
@@ -2903,6 +2949,12 @@ config_set_cli_args(struct job_config *config)
 	if (g_workload_type) {
 		config->rw = parse_rw(g_workload_type, config->rw);
 	}
+	if (g_warmup_time_in_sec > 0) {
+		config->warmup_time_in_sec = g_warmup_time_in_sec;
+	}
+	if (g_start_delay_time_in_sec > 0) {
+		config->start_delay_time_in_sec = g_start_delay_time_in_sec;
+	}
 }
 
 static int
@@ -2948,6 +3000,8 @@ read_job_config(void)
 	/* length 0 means 100% */
 	global_default_config.length = 0;
 	global_default_config.rw = BDEVPERF_CONFIG_UNDEFINED;
+	global_default_config.warmup_time_in_sec = 0;
+	global_default_config.start_delay_time_in_sec = 0;
 	config_set_cli_args(&global_default_config);
 
 	if ((int)global_default_config.rw == BDEVPERF_CONFIG_ERROR) {
@@ -3045,6 +3099,17 @@ read_job_config(void)
 			goto error;
 		} else if (!is_global && (int)config->rw == BDEVPERF_CONFIG_UNDEFINED) {
 			fprintf(stderr, "Job '%s' has no 'rw' assigned\n", config->name);
+			goto error;
+		}
+
+		config->warmup_time_in_sec = parse_uint_option(s, "warmup", global_config.warmup_time_in_sec);
+		if (config->warmup_time_in_sec == BDEVPERF_CONFIG_ERROR) {
+			goto error;
+		}
+
+		config->start_delay_time_in_sec = parse_uint_option(s, "start_delay",
+						  global_config.start_delay_time_in_sec);
+		if (config->start_delay_time_in_sec == BDEVPERF_CONFIG_ERROR) {
 			goto error;
 		}
 
@@ -3430,16 +3495,6 @@ verify_test_params(void)
 
 	if (g_timeout_in_sec < 0) {
 		goto out;
-	}
-
-	if (g_start_delay_time_in_sec == 0) {
-		/* No delay needed. Mark finished immediately. */
-		g_start_delay_finished = true;
-	}
-
-	if (g_warmup_time_in_sec == 0) {
-		/* No warmup needed. Mark finished immediately. */
-		g_warmup_finished = true;
 	}
 
 	if (g_abort && !g_timeout_in_sec) {
