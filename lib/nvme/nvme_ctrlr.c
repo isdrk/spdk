@@ -3492,6 +3492,7 @@ nvme_ctrlr_process_async_event(struct spdk_nvme_ctrlr_aer_completion *async_even
 		rc = nvme_ctrlr_identify_active_ns(ctrlr);
 		if (rc) {
 			free(async_event->log_page.changed_ns_list);
+			spdk_free(async_event);
 			return;
 		}
 
@@ -3504,8 +3505,10 @@ nvme_ctrlr_process_async_event(struct spdk_nvme_ctrlr_aer_completion *async_even
 		if (!ctrlr->opts.disable_read_ana_log_page) {
 			rc = nvme_ctrlr_update_ana_log_page(ctrlr);
 			if (rc) {
+				spdk_free(async_event);
 				return;
 			}
+
 			nvme_ctrlr_parse_ana_log_page(ctrlr, nvme_ctrlr_update_ns_ana_states,
 						      ctrlr);
 		}
