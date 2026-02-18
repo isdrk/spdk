@@ -1783,6 +1783,7 @@ def bdev_burst_qos_set_limit(
         qos_metric,
         avg_rate,
         qos_mode,
+        burst_size,
         max_burst_rate,
         max_burst_time_in_sec,
         refill_period_us,
@@ -1795,6 +1796,7 @@ def bdev_burst_qos_set_limit(
         qos_metric: Metric controlled by QoS rate limit (rw_iops, rw_mbps, r_mbps, or w_mps).
         avg_rate: Average rate for this metric.
         qos_mode: Operating mode (strict, burst_ready, or earned_burst). (optional)
+        burst_size: The burst limit (Relevant only for burst_ready mode). (optional)
         max_burst_rate: Peak rate allowed during a burst (Relevant only for earned_burst mode). (optional)
         max_burst_time_in_sec: The maximum duration max_burst_rate can be sustained (Relevant only for earned_burst mode). (optional)
         refill_period_us: Refill period in microseconds. (optional)
@@ -1808,6 +1810,8 @@ def bdev_burst_qos_set_limit(
     params['avg_rate'] = avg_rate
     if qos_mode is not None:
         params['qos_mode'] = qos_mode
+    if burst_size is not None:
+        params['burst_size'] = burst_size
     if max_burst_rate is not None:
         params['max_burst_rate'] = max_burst_rate
     if max_burst_time_in_sec is not None:

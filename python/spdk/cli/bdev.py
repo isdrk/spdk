@@ -1289,6 +1289,7 @@ def add_parser(subparsers):
                                           qos_metric=args.qos_metric,
                                           avg_rate=args.avg_rate,
                                           qos_mode=args.qos_mode,
+                                          burst_size=args.burst_size,
                                           max_burst_rate=args.max_burst_rate,
                                           max_burst_time_in_sec=args.max_burst_time_in_sec,
                                           refill_period_us=args.refill_period_us,
@@ -1302,6 +1303,7 @@ def add_parser(subparsers):
     p.add_argument('qos_metric', help='Metric controlled by QoS rate limit')
     p.add_argument('avg_rate', help='Average rate for this metric', type=int)
     p.add_argument('-m', '--qos-mode', help='Operating mode (strict, burst_ready, or earned_burst)')
+    p.add_argument('-b', '--burst-size', help='The burst limit (Relevant only for burst_ready mode)', type=int)
     p.add_argument('-r', '--max-burst-rate', help='Peak rate allowed during a burst (Relevant only for earned_burst mode)', type=int)
     p.add_argument('-t', '--max-burst-time-in-sec', help="""The maximum duration max_burst_rate can be sustained
     (Relevant only for earned_burst mode)""", type=int)

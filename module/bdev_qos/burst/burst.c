@@ -663,6 +663,7 @@ global_token_bucket_remove_local_bucket(struct global_token_bucket *global_bucke
  * \param global_bucket Global token bucket.
  * \param avg_rate The long-term sustained throughput.
  * \param mode Operating mode.
+ * \param burst_size The burst limit (Relevant only for burst_ready mode).
  * \param max_burst_rate Peak rate allowed during a burst (Relevant only for earned_burst mode).
  * \param max_burst_time_in_sec The maximum duration max_burst_rate can be sustained (Relevant
  *                              only for earned_burst mode).
@@ -671,7 +672,7 @@ global_token_bucket_remove_local_bucket(struct global_token_bucket *global_bucke
  */
 static int
 global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_rate,
-			enum bdev_qos_mode qos_mode,
+			enum bdev_qos_mode qos_mode, uint64_t burst_size,
 			uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
 			uint64_t refill_period_us, uint64_t io_burst,
 			uint64_t max_withdraw_batch_size,
@@ -780,7 +781,10 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 		return 0;
 
 	} else if (qos_mode == BDEV_QOS_MODE_BURST_READY) {
-		steady_bucket->capacity = avg_rate;
+		if (burst_size == 0) {
+			burst_size = avg_rate;
+		}
+		steady_bucket->capacity = burst_size;
 	} else {
 		assert(qos_mode == BDEV_QOS_MODE_EARNED_BURST);
 		if (max_burst_rate == 0) {
@@ -814,16 +818,26 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 
 static void
 global_token_bucket_get_limit(struct global_token_bucket *global_bucket, uint64_t *avg_rate,
-			      uint64_t *max_burst_rate)
+			      uint64_t *burst_size, uint64_t *max_burst_rate)
 {
 	if (global_bucket->avg_rate == UINT64_MAX) {
 		*avg_rate = 0;
+		*burst_size = 0;
 		*max_burst_rate = 0;
 	} else {
 		*avg_rate = global_bucket->avg_rate;
 		if (!bdev_qos_metric_is_iops(global_bucket->metric)) {
 			/* Change from byte to mebibyte which is user visible. */
 			*avg_rate = *avg_rate / 1024 / 1024;
+		}
+
+		if (global_bucket->mode == BDEV_QOS_MODE_BURST_READY) {
+			*burst_size = global_bucket->steady_bucket.capacity;
+			if (!bdev_qos_metric_is_iops(global_bucket->metric)) {
+				*burst_size = *burst_size / 1024 / 1024;
+			}
+		} else {
+			*burst_size = 0;
 		}
 
 		if (global_bucket->mode == BDEV_QOS_MODE_EARNED_BURST) {
@@ -842,9 +856,9 @@ static void
 global_token_bucket_config_json(struct global_token_bucket *global_bucket, const char *name,
 				struct spdk_json_write_ctx *w)
 {
-	uint64_t avg_rate = 0, max_burst_rate = 0;
+	uint64_t avg_rate = 0, burst_size = 0, max_burst_rate = 0;
 
-	global_token_bucket_get_limit(global_bucket, &avg_rate, &max_burst_rate);
+	global_token_bucket_get_limit(global_bucket, &avg_rate, &burst_size, &max_burst_rate);
 
 	spdk_json_write_object_begin(w);
 
@@ -856,9 +870,16 @@ global_token_bucket_config_json(struct global_token_bucket *global_bucket, const
 	spdk_json_write_named_string(w, "qos_metric", bdev_qos_metric_str(global_bucket->metric));
 	spdk_json_write_named_uint64(w, "avg_rate", avg_rate);
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
-	if (global_bucket->mode == BDEV_QOS_MODE_EARNED_BURST) {
+	switch (global_bucket->mode) {
+	case BDEV_QOS_MODE_BURST_READY:
+		spdk_json_write_named_uint64(w, "burst_size", burst_size);
+		break;
+	case BDEV_QOS_MODE_EARNED_BURST:
 		spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
 		spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+		break;
+	default:
+		break;
 	}
 	spdk_json_write_named_uint64(w, "refill_period_us",
 				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
@@ -877,18 +898,25 @@ static void
 global_token_bucket_info_json(struct global_token_bucket *global_bucket,
 			      struct spdk_json_write_ctx *w)
 {
-	uint64_t avg_rate = 0, max_burst_rate = 0;
+	uint64_t avg_rate = 0, burst_size = 0, max_burst_rate = 0;
 
-	global_token_bucket_get_limit(global_bucket, &avg_rate, &max_burst_rate);
+	global_token_bucket_get_limit(global_bucket, &avg_rate, &burst_size, &max_burst_rate);
 
 	spdk_json_write_object_begin(w);
 
 	spdk_json_write_named_string(w, "qos_metric", bdev_qos_metric_str(global_bucket->metric));
 	spdk_json_write_named_uint64(w, "avg_rate", avg_rate);
 	spdk_json_write_named_string(w, "qos_mode", bdev_qos_mode_str(global_bucket->mode));
-	if (global_bucket->mode == BDEV_QOS_MODE_EARNED_BURST) {
+	switch (global_bucket->mode) {
+	case BDEV_QOS_MODE_BURST_READY:
+		spdk_json_write_named_uint64(w, "burst_size", burst_size);
+		break;
+	case BDEV_QOS_MODE_EARNED_BURST:
 		spdk_json_write_named_uint64(w, "max_burst_rate", max_burst_rate);
 		spdk_json_write_named_uint64(w, "max_burst_time_in_sec", global_bucket->max_burst_time_in_sec);
+		break;
+	default:
+		break;
 	}
 	spdk_json_write_named_uint64(w, "refill_period_us",
 				     g_qos_opts.tick_period_us * global_bucket->refill_period_ticks);
@@ -1626,7 +1654,7 @@ bdev_burst_qos_channel_reset_done(struct spdk_io_channel_iter *i, int status)
 static void
 bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 			 enum bdev_qos_metric qos_metric, uint64_t avg_rate,
-			 enum bdev_qos_mode qos_mode,
+			 enum bdev_qos_mode qos_mode, uint64_t burst_size,
 			 uint64_t max_burst_rate, uint64_t max_burst_time_in_sec,
 			 uint64_t refill_period_us, uint64_t io_burst,
 			 uint64_t max_withdraw_batch_size,
@@ -1654,7 +1682,7 @@ bdev_burst_qos_set_limit(struct spdk_bdev_qos_impl *qos_impl,
 		return;
 	}
 
-	rc = global_token_bucket_set(global_bucket, avg_rate, qos_mode,
+	rc = global_token_bucket_set(global_bucket, avg_rate, qos_mode, burst_size,
 				     max_burst_rate, max_burst_time_in_sec,
 				     refill_period_us, io_burst,
 				     max_withdraw_batch_size, additive_increase_step);
@@ -1671,6 +1699,7 @@ struct burst_qos_json {
 	enum bdev_qos_metric qos_metric;
 	uint64_t avg_rate;
 	enum bdev_qos_mode qos_mode;
+	uint64_t burst_size;
 	uint64_t max_burst_rate;
 	uint64_t max_burst_time_in_sec;
 	uint64_t refill_period_us;
@@ -1723,6 +1752,7 @@ static const struct spdk_json_object_decoder burst_qos_json_decoders[] = {
 	{"qos_metric", offsetof(struct burst_qos_json, qos_metric), rpc_decode_qos_metric},
 	{"avg_rate", offsetof(struct burst_qos_json, avg_rate), spdk_json_decode_uint64},
 	{"qos_mode", offsetof(struct burst_qos_json, qos_mode), rpc_decode_qos_mode, true},
+	{"burst_size", offsetof(struct burst_qos_json, burst_size), spdk_json_decode_uint64, true},
 	{"max_burst_rate", offsetof(struct burst_qos_json, max_burst_rate), spdk_json_decode_uint64, true},
 	{"max_burst_time_in_sec", offsetof(struct burst_qos_json, max_burst_time_in_sec), spdk_json_decode_uint64, true},
 };
@@ -1779,6 +1809,7 @@ bdev_burst_qos_set_limit_json(struct spdk_bdev_qos *qos,
 	}
 
 	bdev_burst_qos_set_limit(qos_impl, req.qos_metric, req.avg_rate, req.qos_mode,
+				 req.burst_size,
 				 req.max_burst_rate, req.max_burst_time_in_sec,
 				 req.refill_period_us, req.io_burst,
 				 req.max_withdraw_batch_size,

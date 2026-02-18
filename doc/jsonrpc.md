@@ -3351,6 +3351,7 @@ Example response:
 
 Set rate limit for a QoS metric on a QoS device.
 
+burst_size is used only if qos_mode is burst_ready.
 max_burst_rate and max_burst_time_in_sec are used only if qos_mode is earned_burst.
 If qos_mode is burst_ready, rate limiter starts ready to burst immediately.
 If qos_mode is earned_burst, rate limiter starts like strict leaky bucket, but can burst later if credits are earned.
@@ -3366,7 +3367,8 @@ If the naive income is smaller than io_burst, override the tick period because t
  name                    | Required   | string | QoS device name
  qos_metric              | Required   | string | Metric controlled by QoS rate limit.
  avg_rate                | Required   | number | Average rate for this metric. 0 means unlimited.
- qos_mode                | Optinal    | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
+ qos_mode                | Optional   | string | Operating mode (strict, burst_ready, or earned_burst). (Default is strict.)
+ burst_size              | Optional   | number | The burst limit (Relevant only if qos_mode is burst_ready).
  max_burst_rate          | Optional   | number | Peak rate allowed during a burst (Relevant only if qos_mode is earned_burst).
  max_burst_time_in_sec   | Optional   | number | The maximum duration max_burst_rate can be sustained (Relevant only if qos_mode is earned_burst).
  refill_period_us        | Optional   | number | Refill period in microseconds (default is 0)
