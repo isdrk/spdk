@@ -3351,7 +3351,7 @@ Example response:
 
 Set rate limit for a QoS metric on a QoS device.
 
-max_burst_rate and max_burst_time_in_sec are used only if qos_mode is burst_ready or earned_burst.
+max_burst_rate and max_burst_time_in_sec are used only if qos_mode is earned_burst.
 If qos_mode is burst_ready, rate limiter starts ready to burst immediately.
 If qos_mode is earned_burst, rate limiter starts like strict leaky bucket, but can burst later if credits are earned.
 

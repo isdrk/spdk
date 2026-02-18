@@ -771,40 +771,38 @@ global_token_bucket_set(struct global_token_bucket *global_bucket, uint64_t avg_
 	/* Recalculate ticks from the finalized frequency. */
 	global_bucket->refill_period_ticks = ticks_per_sec / refills_per_sec;
 
+	burst_bucket->capacity = 0;
+	global_bucket->max_burst_time_in_sec = 0;
+	global_bucket->transfer_per_refill = 0;
+
 	if (qos_mode == BDEV_QOS_MODE_STRICT) {
 		steady_bucket->capacity = global_bucket->income_per_refill;
-		burst_bucket->capacity = 0;
-		global_bucket->max_burst_time_in_sec = 0;
-		global_bucket->transfer_per_refill = 0;
 		return 0;
-	}
 
-	if (max_burst_rate == 0 || qos_mode != BDEV_QOS_MODE_EARNED_BURST) {
-		max_burst_rate = avg_rate;
-	} else if (max_burst_rate < avg_rate) {
-		return -EINVAL;
-	}
+	} else if (qos_mode == BDEV_QOS_MODE_BURST_READY) {
+		steady_bucket->capacity = avg_rate;
+	} else {
+		assert(qos_mode == BDEV_QOS_MODE_EARNED_BURST);
+		if (max_burst_rate == 0) {
+			max_burst_rate = avg_rate;
+		} else if (max_burst_rate < avg_rate) {
+			return -EINVAL;
+		}
 
-	if (max_burst_time_in_sec == 0) {
-		max_burst_time_in_sec = 1;
-	}
+		if (max_burst_time_in_sec == 0) {
+			max_burst_time_in_sec = 1;
+		}
 
-	global_bucket->max_burst_time_in_sec = max_burst_time_in_sec;
-	global_bucket->transfer_per_refill = (max_burst_rate - avg_rate) / refills_per_sec;
+		global_bucket->max_burst_time_in_sec = max_burst_time_in_sec;
+		global_bucket->transfer_per_refill = (max_burst_rate - avg_rate) / refills_per_sec;
 
-	if (qos_mode == BDEV_QOS_MODE_BURST_READY) {
 		/* Steady bucket must be large enough to handle the peak rate. */
-		steady_bucket->capacity = max_burst_rate;
+		steady_bucket->capacity = global_bucket->income_per_refill +
+					  global_bucket->transfer_per_refill;
 
 		/* Burst bucket holds the savings for the burst duration beyond
 		 * the first second.
 		 */
-		burst_bucket->capacity = (max_burst_rate - avg_rate) * (max_burst_time_in_sec - 1);
-	} else {
-		assert(qos_mode == BDEV_QOS_MODE_EARNED_BURST);
-		steady_bucket->capacity = global_bucket->income_per_refill +
-					  global_bucket->transfer_per_refill;
-
 		burst_bucket->capacity = (max_burst_rate - avg_rate) * max_burst_time_in_sec;
 	}
 
