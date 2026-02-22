@@ -156,6 +156,8 @@ fsdev_init_supported_uring_ops(void)
 		g_io_uring_supported_ops[i] = io_uring_opcode_supported(probe, i);
 	}
 
+	io_uring_free_probe(probe);
+
 	assert(g_io_uring_supported_ops[IORING_OP_WRITEV] == g_io_uring_supported_ops[IORING_OP_READV]);
 }
 
