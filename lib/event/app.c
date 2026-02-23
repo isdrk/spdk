@@ -64,6 +64,7 @@ static bool g_shutdown_sig_received = false;
 static char *g_executable_name;
 static struct spdk_app_opts g_default_opts;
 static int g_core_locks[SPDK_CONFIG_MAX_LCORES];
+static char g_app_name[256] = "";
 
 static struct {
 	uint64_t irq;
@@ -875,6 +876,22 @@ error:
 	return -1;
 }
 
+static void
+app_set_name(const char *name)
+{
+	size_t app_name_len;
+
+	assert(name != NULL);
+
+	app_name_len = strlen(name);
+	if (app_name_len > sizeof(g_app_name) - 1) {
+		app_name_len = sizeof(g_app_name) - 1;
+	}
+
+	memcpy(g_app_name, name, app_name_len);
+	g_app_name[app_name_len] = '\0';
+}
+
 int
 spdk_app_start(struct spdk_app_opts *opts_user, spdk_msg_fn start_fn,
 	       void *arg1)
@@ -932,6 +949,8 @@ spdk_app_start(struct spdk_app_opts *opts_user, spdk_msg_fn start_fn,
 	}
 
 	spdk_log_set_print_level(opts->print_level);
+	app_set_name(opts->name);
+
 
 #ifndef SPDK_NO_RLIMIT
 	if (opts->enable_coredump) {
@@ -1567,6 +1586,12 @@ spdk_app_usage(void)
 	}
 
 	usage(NULL);
+}
+
+const char *
+spdk_app_get_name(void)
+{
+	return g_app_name;
 }
 
 static void

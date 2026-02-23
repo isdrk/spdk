@@ -336,6 +336,13 @@ spdk_app_parse_args_rvals_t spdk_app_parse_args(int argc, char **argv,
 void spdk_app_usage(void);
 
 /**
+ * Return the name of the application.
+ *
+ * \return the name of the application.
+ */
+const char *spdk_app_get_name(void);
+
+/**
  * Allocate an event to be passed to spdk_event_call().
  *
  * \param lcore Lcore to run this event.
