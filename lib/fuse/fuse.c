@@ -1079,14 +1079,71 @@ fsdev_fuse_validate_mountpoint(const char *mountpoint)
 }
 
 static int
+fsdev_fuse_do_mount(struct spdk_fuse_mount *mnt, const char *fstype, uint64_t flags)
+{
+	struct stat st;
+	char mopts[128];
+	int rc;
+
+	rc = stat(mnt->mountpoint, &st);
+	if (rc != 0) {
+		rc = -errno;
+		SPDK_ERRLOG("%s: failed to access %s: %s\n", mnt->name, mnt->mountpoint,
+			    spdk_strerror(-rc));
+		goto error;
+	}
+
+	mnt->fd = open("/dev/fuse", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+	if (mnt->fd < 0) {
+		rc = -errno;
+		SPDK_ERRLOG("%s: failed to open /dev/fuse: %s\n", mnt->name, spdk_strerror(-rc));
+		goto error;
+	}
+
+	mnt->notify_thread_shutdown = false;
+	TAILQ_INIT(&mnt->notify_queue);
+	rc = pthread_cond_init(&mnt->notify_cond, NULL);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to initialize notify condition variable: %s\n", mnt->name,
+			    spdk_strerror(rc));
+		rc = -rc;
+		goto error;
+	}
+
+	rc = pthread_create(&mnt->notify_thread, NULL, fsdev_fuse_notify_thread_fn, mnt);
+	if (rc != 0) {
+		SPDK_ERRLOG("%s: failed to create notify thread: %s\n", mnt->name,
+			    spdk_strerror(rc));
+		pthread_cond_destroy(&mnt->notify_cond);
+		rc = -rc;
+		goto error;
+	}
+
+	rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu,"
+		      "allow_other,default_permissions", mnt->fd, st.st_mode, getuid(), getgid(),
+		      mnt->max_xfer_size);
+	if (rc < 0 || rc >= (int)sizeof(mopts)) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	rc = mount(mnt->name, mnt->mountpoint, fstype, flags, mopts);
+	if (rc != 0) {
+		rc = -errno;
+		SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);
+		goto error;
+	}
+error:
+	return rc;
+}
+
+static int
 fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const char *mountpoint,
 		      struct spdk_fuse_mount_opts *opts)
 {
 	struct spdk_fuse_mount *mnt;
 	struct spdk_fsdev *fsdev;
 	struct spdk_fsdev_open_opts open_opts = {};
-	struct stat st;
-	char mopts[128];
 	int rc;
 
 	if (mountpoint != NULL && spdk_env_get_core_count() == 1) {
@@ -1190,54 +1247,10 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	}
 
 	if (mnt->mountpoint != NULL) {
-		rc = stat(mnt->mountpoint, &st);
+		rc = fsdev_fuse_do_mount(mnt,
+					 SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
+					 SPDK_GET_FIELD(opts, flags, 0));
 		if (rc != 0) {
-			rc = -errno;
-			SPDK_ERRLOG("%s: failed to access %s: %s\n", mnt->name, mnt->mountpoint,
-				    spdk_strerror(-rc));
-			goto error;
-		}
-
-		mnt->fd = open("/dev/fuse", O_RDWR | O_CLOEXEC | O_NONBLOCK);
-		if (mnt->fd < 0) {
-			rc = -errno;
-			SPDK_ERRLOG("%s: failed to open /dev/fuse: %s\n", mnt->name, spdk_strerror(-rc));
-			goto error;
-		}
-
-		mnt->notify_thread_shutdown = false;
-		TAILQ_INIT(&mnt->notify_queue);
-		rc = pthread_cond_init(&mnt->notify_cond, NULL);
-		if (rc != 0) {
-			SPDK_ERRLOG("%s: failed to initialize notify condition variable: %s\n", mnt->name,
-				    spdk_strerror(rc));
-			rc = -rc;
-			goto error;
-		}
-
-		rc = pthread_create(&mnt->notify_thread, NULL, fsdev_fuse_notify_thread_fn, mnt);
-		if (rc != 0) {
-			SPDK_ERRLOG("%s: failed to create notify thread: %s\n", mnt->name,
-				    spdk_strerror(rc));
-			pthread_cond_destroy(&mnt->notify_cond);
-			rc = -rc;
-			goto error;
-		}
-
-		rc = snprintf(mopts, sizeof(mopts), "fd=%d,rootmode=%o,user_id=%u,group_id=%u,max_read=%zu,"
-			      "allow_other,default_permissions", mnt->fd, st.st_mode, getuid(), getgid(),
-			      mnt->max_xfer_size);
-		if (rc < 0 || rc >= (int)sizeof(mopts)) {
-			rc = -EINVAL;
-			goto error;
-		}
-
-		rc = mount(mnt->name, mnt->mountpoint,
-			   SPDK_GET_FIELD(opts, fstype, g_fuse.opts.fstype),
-			   SPDK_GET_FIELD(opts, flags, 0), mopts);
-		if (rc != 0) {
-			rc = -errno;
-			SPDK_ERRLOG("%s: failed to mount fsdev at %s\n", mnt->name, mnt->mountpoint);
 			goto error;
 		}
 
