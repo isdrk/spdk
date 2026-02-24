@@ -12,6 +12,9 @@
 	spdk_rdma_cm_id_get_numa_id;
 	spdk_rdma_utils_init;
 	spdk_rdma_utils_finish;
+	spdk_rdma_utils_check_wc_error;
+	spdk_rdma_utils_inject_wc_error;
+	spdk_rdma_utils_cancel_wc_error;
 
 	local: *;
 };
