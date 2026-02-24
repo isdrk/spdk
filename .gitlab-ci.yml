@@ -77,21 +77,10 @@ test-crypto-job:
     - ./test/accel/mlx5/accel_mlx5_crypto.sh
 
 coverity-job:
-  tags: [k8s, linux, x86_64]
+  tags: [vm_host, x86_64]
   stage: test
-  image: "$COV_IMAGE"
   script:
-    - apt-get -q update
-    - ./scripts/pkgdep.sh
-    - ./configure --with-rdma=mlx5_dv --disable-unit-tests
-    - cov-build --dir cov_build make -j 4
-    - cov-analyze --jobs auto --security --concurrency --dir cov_build
-    - cov-format-errors --dir cov_build --html-output cov_build/html
-    - nr=$(cov-format-errors --dir cov_build |& awk '/Processing [0-9]+ errors?/ { print $2 }')
-    - exit $nr
-  variables:
-    PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/cov/bin
-    CC: gcc-9
+    - .ci/run_coverity.sh
   allow_failure: true
   artifacts:
     name: coverity
