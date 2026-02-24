@@ -58,7 +58,7 @@ autotest-vm_host-matrix:
     - ./autorun.sh .ci/autotest-${TEST_TYPE}.conf
     - |
       if [ "$TEST_TYPE" = "autobuild-check-so" ]; then
-        git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/Mellanox/spdk_team/spdk-abi.git test/make/abi
+        git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab-master.nvidia.com/spdk_team/spdk-abi.git test/make/abi
         test/make/check_so_deps.sh -c .ci/autotest-autobuild-check-so.conf -a test/make/abi
       fi
 
