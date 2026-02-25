@@ -2915,21 +2915,18 @@ nvme_rdma_log_wc_status(struct nvme_rdma_qpair *rqpair, struct ibv_wc *wc)
 }
 
 static inline int
-nvme_rdma_process_recv_completion(struct nvme_rdma_poller *poller, struct ibv_wc *wc,
-				  struct nvme_rdma_wr *rdma_wr)
+nvme_rdma_process_recv_completion(struct nvme_rdma_poller *poller, struct nvme_rdma_qpair *rqpair,
+				  struct ibv_wc *wc, struct nvme_rdma_wr *rdma_wr)
 {
-	struct nvme_rdma_qpair		*rqpair;
 	struct spdk_nvme_rdma_req	*rdma_req;
 	struct spdk_nvme_rdma_rsp	*rdma_rsp;
 	struct ibv_recv_wr		*recv_wr;
 
 	rdma_rsp = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_rsp, rdma_wr);
 
-	if (poller && poller->srq) {
-		assert(wc->qp_num <= INT_MAX);
 
-		rqpair = nvme_rdma_poller_srq_find_qpair(poller, wc->qp_num);
-		if (spdk_unlikely(!rqpair)) {
+	if (spdk_unlikely(!rqpair)) {
+		if (poller && poller->srq) {
 			/* Since we do not handle the LAST_WQE_REACHED event, we do not know when
 			 * a Receive Queue in a QP, that is associated with an SRQ, is flushed.
 			 * We may get a WC for a already destroyed QP.
@@ -2939,19 +2936,9 @@ nvme_rdma_process_recv_completion(struct nvme_rdma_poller *poller, struct ibv_wc
 			 */
 			rdma_rsp->recv_wr->next = NULL;
 			spdk_rdma_provider_srq_queue_recv_wrs(poller->srq, rdma_rsp->recv_wr);
-			return 0;
 		}
-	} else {
-		rqpair = rdma_rsp->rqpair;
-		if (spdk_unlikely(!rqpair)) {
-			/* TODO: Fix forceful QP destroy when it is not async mode.
-			 * CQ itself did not cause any error. Hence, return 0 for now.
-			 */
-			SPDK_WARNLOG("QP might be already destroyed.\n");
-			return 0;
-		}
+		return 0;
 	}
-
 
 	assert(rqpair->rsps->current_num_recvs > 0);
 	rqpair->rsps->current_num_recvs--;
@@ -3020,18 +3007,12 @@ err_wc:
 
 static inline int
 nvme_rdma_process_send_completion(struct nvme_rdma_poller *poller,
-				  struct nvme_rdma_qpair *rdma_qpair,
+				  struct nvme_rdma_qpair *rqpair,
 				  struct ibv_wc *wc, struct nvme_rdma_wr *rdma_wr)
 {
-	struct nvme_rdma_qpair		*rqpair;
 	struct spdk_nvme_rdma_req	*rdma_req;
 
 	rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_req, rdma_wr);
-	rqpair = rdma_req->req ? nvme_rdma_qpair(rdma_req->req->qpair) : NULL;
-	if (spdk_unlikely(!rqpair)) {
-		rqpair = rdma_qpair != NULL ? rdma_qpair : nvme_rdma_poll_group_find_qpair(poller->group,
-				wc->qp_num);
-	}
 
 	/* If we are flushing I/O */
 	if (spdk_unlikely(wc->status)) {
@@ -3091,18 +3072,16 @@ nvme_rdma_process_send_completion(struct nvme_rdma_poller *poller,
 }
 
 static inline int
-nvme_rdma_cq_process_completions(struct spdk_rdma_provider_cq *cq, uint32_t batch_size,
-				 struct nvme_rdma_poller *poller,
-				 struct nvme_rdma_qpair *rdma_qpair,
-				 uint64_t *rdma_completions)
+nvme_rdma_qpair_process_cq_completions(struct nvme_rdma_qpair *rdma_qpair, uint32_t batch_size,
+				       uint64_t *rdma_completions)
 {
 	struct ibv_wc			wc[MAX_COMPLETIONS_PER_POLL];
 	struct nvme_rdma_wr		*rdma_wr;
-	uint32_t			reaped = 0;
+	int				reaped = 0;
 	int				completion_rc = 0;
 	int				rc, _rc, i;
 
-	rc = spdk_rdma_utils_poll_cq(cq, batch_size, wc);
+	rc = spdk_rdma_utils_poll_cq(rdma_qpair->cq, batch_size, wc);
 	if (spdk_unlikely(rc < 0)) {
 		NVME_RQPAIR_ERRLOG(rdma_qpair, "Error polling CQ! (%d): %s\n", errno, spdk_strerror(errno));
 		return -ECANCELED;
@@ -3119,11 +3098,11 @@ nvme_rdma_cq_process_completions(struct spdk_rdma_provider_cq *cq, uint32_t batc
 
 		switch (rdma_wr->type) {
 		case RDMA_WR_TYPE_RECV:
-			_rc = nvme_rdma_process_recv_completion(poller, &wc[i], rdma_wr);
+			_rc = nvme_rdma_process_recv_completion(NULL, rdma_qpair, &wc[i], rdma_wr);
 			break;
 
 		case RDMA_WR_TYPE_SEND:
-			_rc = nvme_rdma_process_send_completion(poller, rdma_qpair, &wc[i], rdma_wr);
+			_rc = nvme_rdma_process_send_completion(NULL, rdma_qpair, &wc[i], rdma_wr);
 			break;
 
 		default:
@@ -3158,7 +3137,6 @@ nvme_rdma_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 {
 	struct nvme_rdma_qpair		*rqpair = nvme_rdma_qpair(qpair);
 	int				rc = 0, batch_size;
-	struct spdk_rdma_provider_cq	*cq;
 	uint64_t			rdma_completions = 0;
 
 	/*
@@ -3204,12 +3182,10 @@ nvme_rdma_qpair_process_completions(struct spdk_nvme_qpair *qpair,
 		goto failed;
 	}
 
-	cq = rqpair->cq;
-
 	rqpair->num_completions = 0;
 	do {
 		batch_size = spdk_min((max_completions - rqpair->num_completions), MAX_COMPLETIONS_PER_POLL);
-		rc = nvme_rdma_cq_process_completions(cq, batch_size, NULL, rqpair, &rdma_completions);
+		rc = nvme_rdma_qpair_process_cq_completions(rqpair, batch_size, &rdma_completions);
 
 		if (rc == 0) {
 			break;
@@ -3568,6 +3544,94 @@ nvme_rdma_poll_group_process_events(struct spdk_nvme_transport_poll_group *tgrou
 	}
 }
 
+static inline int
+nvme_rdma_poller_process_cq_completions(struct nvme_rdma_poller *poller, uint32_t batch_size,
+					uint64_t *rdma_completions)
+{
+	struct ibv_wc			wc[MAX_COMPLETIONS_PER_POLL];
+	struct nvme_rdma_wr		*rdma_wr;
+	struct nvme_rdma_qpair		*rqpair;
+	struct spdk_nvme_rdma_rsp	*rdma_rsp;
+	struct spdk_nvme_rdma_req	*rdma_req;
+	int				reaped = 0;
+	int				completion_rc = 0;
+	int				rc, _rc, i;
+
+	rc = spdk_rdma_utils_poll_cq(poller->cq, batch_size, wc);
+	if (spdk_unlikely(rc < 0)) {
+		SPDK_ERRLOG("Error polling CQ of poller(%p)! (%d): %s\n", poller, errno, spdk_strerror(errno));
+		return -ECANCELED;
+	} else if (rc == 0) {
+		return 0;
+	}
+
+	for (i = 0; i < rc; i++) {
+		rdma_wr = (struct nvme_rdma_wr *)wc[i].wr_id;
+		switch (rdma_wr->type) {
+		case RDMA_WR_TYPE_RECV:
+			rdma_rsp = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_rsp, rdma_wr);
+			if (poller->srq) {
+				assert(wc->qp_num <= INT_MAX);
+				rqpair = nvme_rdma_poller_srq_find_qpair(poller, wc->qp_num);
+			} else {
+				rqpair = rdma_rsp->rqpair;
+			}
+			if (spdk_unlikely(!rqpair || rqpair->state == NVME_RDMA_QPAIR_STATE_EXITED)) {
+				/**
+				* Since we do not handle the LAST_WQE_REACHED event, we do not know when
+				* a QP is flushed. We may get a WC for a already destroyed QP.
+				*
+				* If the QP has been destroyed, rdma_wr might be a dangling pointer
+				* because the corresponding rdma_req/rdma_rsp might have been freed. The
+				* only case in which rdma_wr is still valid is that srq is used and the
+				* WR is RECV. In this case, we can safely dereference the pointer and
+				* re-post the receive request to the SRQ to reuse for other QPs. */
+				if (poller->srq) {
+					rdma_rsp->recv_wr->next = NULL;
+					spdk_rdma_provider_srq_queue_recv_wrs(poller->srq, rdma_rsp->recv_wr);
+				}
+				continue;
+			}
+			_rc = nvme_rdma_process_recv_completion(poller, rqpair, &wc[i], rdma_wr);
+			break;
+
+		case RDMA_WR_TYPE_SEND:
+			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_req, rdma_wr);
+			rqpair = rdma_req->req ? nvme_rdma_qpair(rdma_req->req->qpair) : NULL;
+			if (spdk_unlikely(!rqpair)) {
+				rqpair = nvme_rdma_poll_group_find_qpair(poller->group, wc->qp_num);
+				if (!rqpair) {
+					/* When poll_group is used, several qpairs share the same CQ and it is possible to
+					 * receive a completion with error (e.g. IBV_WC_WR_FLUSH_ERR) for already disconnected qpair
+					 * That happens due to qpair is destroyed while there are submitted but not completed send/receive
+					 * Work Requests */
+					assert(wc[i].status != IBV_WC_SUCCESS);
+					continue;
+				}
+			}
+			_rc = nvme_rdma_process_send_completion(poller, rqpair, &wc[i], rdma_wr);
+			break;
+
+		default:
+			SPDK_ERRLOG("Received an unexpected opcode on the CQ of poller(%p): %d\n", poller, rdma_wr->type);
+			return -ECANCELED;
+		}
+		if (spdk_likely(_rc >= 0)) {
+			reaped += _rc;
+		} else {
+			completion_rc = _rc;
+		}
+	}
+
+	*rdma_completions += rc;
+
+	if (spdk_unlikely(completion_rc)) {
+		return completion_rc;
+	}
+
+	return reaped;
+}
+
 static inline void
 nvme_rdma_qpair_process_submits(struct nvme_rdma_poll_group *group,
 				struct nvme_rdma_qpair *rqpair)
@@ -3662,7 +3726,7 @@ nvme_rdma_poll_group_process_completions(struct spdk_nvme_transport_poll_group *
 		do {
 			poller->stats.polls++;
 			batch_size = spdk_min((completions_per_poller - poller_completions), MAX_COMPLETIONS_PER_POLL);
-			rc = nvme_rdma_cq_process_completions(poller->cq, batch_size, poller, NULL, &rdma_completions);
+			rc = nvme_rdma_poller_process_cq_completions(poller, batch_size, &rdma_completions);
 			if (rc <= 0) {
 				if (rc == -ECANCELED) {
 					return -EIO;
