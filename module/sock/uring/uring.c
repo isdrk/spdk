@@ -1385,7 +1385,8 @@ uring_sock_group_impl_buf_pool_alloc(struct spdk_uring_sock_group_impl *group_im
 	struct io_uring_buf_ring *buf_ring;
 	int i, rc;
 
-	rc = posix_memalign((void **)&buf_ring, 0x1000, URING_BUF_POOL_SIZE * sizeof(struct io_uring_buf));
+	rc = posix_memalign((void **)&buf_ring, PAGE_SIZE,
+			    URING_BUF_POOL_SIZE * sizeof(struct io_uring_buf));
 	if (rc != 0) {
 		/* posix_memalign returns positive errno values */
 		return -rc;
