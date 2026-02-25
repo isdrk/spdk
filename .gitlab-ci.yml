@@ -18,6 +18,20 @@ stages:
   - test
   - post-test
 
+.autotest-template:
+  tags: [vm_host, x86_64]
+  stage: test
+  before_script:
+    - .ci/prepare_vm.sh
+  after_script:
+    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz -C $CI_PROJECT_DIR/../output .
+  artifacts:
+    name: ${TEST_TYPE}_artifacts
+    paths:
+      - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz
+    expire_in: 3 days
+    when: always
+
 unittests-build-job:
   tags: [vm_host, x86_64]
   stage: pre-test
@@ -34,20 +48,6 @@ unittests-build-job:
     - ./configure ${FLAGS} --with-crypto --with-vfio-user --with-xlio --with-shared
     - make -j4
     - ./test/unit/unittest.sh
-
-.autotest-template:
-  tags: [vm_host, x86_64]
-  stage: test
-  before_script:
-    - .ci/prepare_vm.sh
-  after_script:
-    - tar czf $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz -C $CI_PROJECT_DIR/../output .
-  artifacts:
-    name: ${TEST_TYPE}_artifacts
-    paths:
-      - $CI_PROJECT_DIR/${TEST_TYPE}_artifacts.tar.gz
-    expire_in: 3 days
-    when: always
 
 autotest-vm_host-matrix:
   extends: .autotest-template
