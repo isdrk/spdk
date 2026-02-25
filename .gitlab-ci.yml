@@ -33,9 +33,8 @@ stages:
     when: always
 
 unittests-build-job:
-  tags: [vm_host, x86_64]
+  extends: .autotest-template
   stage: pre-test
-  variables:
   parallel:
     matrix:
       - BUILD_TYPE: verbs-debug
@@ -45,9 +44,8 @@ unittests-build-job:
       - BUILD_TYPE: mlx5_dv-release
         FLAGS: --with-rdma=mlx5_dv --enable-werror
   script:
-    - ./configure ${FLAGS} --with-crypto --with-vfio-user --with-xlio --with-shared
-    - make -j4
-    - ./test/unit/unittest.sh
+    - ./configure ${FLAGS} --with-crypto --with-vfio-user --with-xlio --with-shared && make -j8
+    - ./autotest.sh .ci/autotest-unittests.conf
 
 autotest-vm_host-matrix:
   extends: .autotest-template
@@ -113,7 +111,7 @@ autotest-summary-job:
   stage: post-test
   tags: [vm_host, x86_64]
   variables:
-      GIT_SUBMODULE_STRATEGY: none
+    GIT_SUBMODULE_STRATEGY: none
   needs:
     - job: autotest-vm_host-matrix
       artifacts: true
