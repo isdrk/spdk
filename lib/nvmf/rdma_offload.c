@@ -4207,6 +4207,10 @@ nvmf_rdma_transport_update_log_entry(struct spdk_nvmf_rdma_transport *rtransport
 		return -1;
 	}
 	oqpair = qp_user_data.ptr;
+	if (!oqpair) {
+		SPDK_WARNLOG("oqpair is NULL: qp_handle %p\n", log->qp_handle);
+		return -1;
+	}
 
 	err_cqe = nvmf_rdma_subsystem_update_log_entry(oqpair->rsubsystem, log);
 	if (!err_cqe) {
@@ -7602,6 +7606,7 @@ nvmf_rdma_offload_qpair_close_process(struct spdk_nvmf_offload_qpair *oqpair)
 			}
 			break;
 		case SPDK_NVMF_OFFLOAD_QPAIR_STATE_CLOSE:
+			SPDK_DEBUGLOG(rdma_offload, "Destroy offload qpair: handle %p\n", oqpair->handle);
 			nvmf_rdma_offload_qpair_destroy(oqpair);
 			free(oqpair);
 			return;
