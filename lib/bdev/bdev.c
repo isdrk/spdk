@@ -7543,7 +7543,9 @@ bdev_channel_print_io_info(struct spdk_bdev_channel *channel)
 	}
 
 	TAILQ_FOREACH(bio, &channel->shared_resource->nomem_io, internal.link) {
-		nomem_ios++;
+		if (bio->internal.ch == channel) {
+			nomem_ios++;
+		}
 	}
 
 	SPDK_NOTICELOG("Bdev %s, ch %p, tid %lu, submitted_ios %u, resets %u, aborts %u, "
