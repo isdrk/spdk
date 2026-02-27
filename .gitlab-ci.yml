@@ -111,7 +111,7 @@ autotest-summary-job:
   stage: post-test
   tags: [vm_host, x86_64]
   variables:
-    GIT_SUBMODULE_STRATEGY: none
+      GIT_SUBMODULE_STRATEGY: none
   needs:
     - job: autotest-vm_host-matrix
       artifacts: true

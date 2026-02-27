@@ -6,15 +6,14 @@
 ci_dir=$(readlink -f "$(dirname "${0}")")
 rootdir=$(readlink -f "${ci_dir}/..")
 
+[[ -z "$COVERITY_PATH" ]] && echo "COVERITY_PATH is not set" && exit 1
+
 export PATH=$COVERITY_PATH:$PATH
 export CC=gcc-9
 ret=0
 
 systemctl start ypbind
 systemctl start autofs
-
-apt-get update
-apt install -y gcc-9
 
 cd "$rootdir" || exit 1
 ./configure --with-rdma=mlx5_dv --disable-unit-tests
