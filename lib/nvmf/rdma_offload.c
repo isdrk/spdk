@@ -6551,6 +6551,10 @@ nvmf_sta_io_non_offload_cb(struct doca_sta_qp_handle *qp_handle,
 		return;
 	}
 	oqpair = qp_user_data.ptr;
+	if (spdk_unlikely(!oqpair)) {
+		SPDK_WARNLOG("oqpair is NULL: qp_handle %p\n", qp_handle);
+		return;
+	}
 
 	if (STAILQ_EMPTY(&opoller->resources->free_queue)) {
 		SPDK_ERRLOG("No free entries for non-offload IO\n");
