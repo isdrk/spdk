@@ -2863,41 +2863,6 @@ nvme_rdma_fail_qpair(struct spdk_nvme_qpair *qpair, int failure_reason)
 	nvme_ctrlr_disconnect_qpair(qpair);
 }
 
-static struct nvme_rdma_qpair *
-nvme_rdma_poll_group_find_qpair(struct nvme_rdma_poll_group *group, uint32_t qp_num)
-{
-	struct spdk_nvme_qpair *qpair;
-	struct nvme_rdma_qpair *rqpair;
-
-	STAILQ_FOREACH(qpair, &group->group.connected_qpairs, poll_group_stailq) {
-		rqpair = nvme_rdma_qpair(qpair);
-		if (NVME_RDMA_POLL_GROUP_CHECK_QPN(rqpair, qp_num)) {
-			return rqpair;
-		}
-	}
-
-	STAILQ_FOREACH(qpair, &group->group.disconnected_qpairs, poll_group_stailq) {
-		rqpair = nvme_rdma_qpair(qpair);
-		if (NVME_RDMA_POLL_GROUP_CHECK_QPN(rqpair, qp_num)) {
-			return rqpair;
-		}
-	}
-
-	return NULL;
-}
-
-static struct nvme_rdma_qpair *
-nvme_rdma_poller_srq_find_qpair(struct nvme_rdma_poller *poller, int qp_num)
-{
-	struct nvme_rdma_qpair find;
-
-	assert(poller->srq);
-
-	find.qp_num = qp_num;
-
-	return RB_FIND(nvme_rdma_qpairs_tree, &poller->qpairs, &find);
-}
-
 static inline void
 nvme_rdma_log_wc_status(struct nvme_rdma_qpair *rqpair, struct ibv_wc *wc)
 {
@@ -3542,6 +3507,41 @@ nvme_rdma_poll_group_process_events(struct spdk_nvme_transport_poll_group *tgrou
 			nvme_rdma_fail_qpair(qpair, 0);
 		}
 	}
+}
+
+static struct nvme_rdma_qpair *
+nvme_rdma_poll_group_find_qpair(struct nvme_rdma_poll_group *group, uint32_t qp_num)
+{
+	struct spdk_nvme_qpair *qpair;
+	struct nvme_rdma_qpair *rqpair;
+
+	STAILQ_FOREACH(qpair, &group->group.connected_qpairs, poll_group_stailq) {
+		rqpair = nvme_rdma_qpair(qpair);
+		if (NVME_RDMA_POLL_GROUP_CHECK_QPN(rqpair, qp_num)) {
+			return rqpair;
+		}
+	}
+
+	STAILQ_FOREACH(qpair, &group->group.disconnected_qpairs, poll_group_stailq) {
+		rqpair = nvme_rdma_qpair(qpair);
+		if (NVME_RDMA_POLL_GROUP_CHECK_QPN(rqpair, qp_num)) {
+			return rqpair;
+		}
+	}
+
+	return NULL;
+}
+
+static struct nvme_rdma_qpair *
+nvme_rdma_poller_srq_find_qpair(struct nvme_rdma_poller *poller, int qp_num)
+{
+	struct nvme_rdma_qpair find;
+
+	assert(poller->srq);
+
+	find.qp_num = qp_num;
+
+	return RB_FIND(nvme_rdma_qpairs_tree, &poller->qpairs, &find);
 }
 
 static inline int
