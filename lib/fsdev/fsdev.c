@@ -2285,16 +2285,23 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 		return -ENOMEM;
 	}
 
-	req_out = req->iovs[0].iov_base;
+	if (req) {
+		req_out = req->iovs[0].iov_base;
 
-	if (req_out->len > buf_size) {
-		SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
-			    buf_size, req_out->len);
-		rc = -ENOMEM;
+		if (req_out->len > buf_size) {
+			SPDK_ERRLOG("Buffer is too small for notification, buf_size %lu, notify_size %d\n",
+				    buf_size, req_out->len);
+			rc = -ENOMEM;
+		} else {
+			spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
+			out_hdr->unique = unique_id;
+			rc = 0;
+		}
 	} else {
-		spdk_copy_iovs_to_buf(out_hdr, buf_size, req->iovs, req->iovcnt);
-		out_hdr->unique = unique_id;
-		rc = 0;
+		/* error and unique set to zero indicate device reset to driver */
+		out_hdr->len = sizeof(*out_hdr);
+		out_hdr->error = 0;
+		out_hdr->unique = 0;
 	}
 
 	if (rc == 0) {
