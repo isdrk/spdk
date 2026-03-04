@@ -970,6 +970,16 @@ rpc_bdev_qos_create(struct spdk_jsonrpc_request *request,
 		goto cleanup;
 	}
 
+	/* Default to use "burst" module if user omitted modules */
+	if (req.modules.num_modules == 0) {
+		req.modules.modules[0] = strdup("burst");
+		if (req.modules.modules[0] == NULL) {
+			spdk_jsonrpc_send_error_response(request, -ENOMEM, spdk_strerror(ENOMEM));
+			goto cleanup;
+		}
+		req.modules.num_modules = 1;
+	}
+
 	if (req.parent_name != NULL) {
 		rc = spdk_bdev_qos_open(req.parent_name, &desc);
 		if (rc != 0) {
