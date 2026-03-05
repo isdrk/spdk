@@ -13,6 +13,12 @@ CONFIG_PREFIX="/usr/local"
 # Target architecture
 CONFIG_ARCH=native
 
+# Build command configure uses to compile-test features
+CONFIG_CONFIGURE_BUILD_CMD=
+
+# Architecture triplet of the target machine
+CONFIG_ARCH_TRIPLET=
+
 # Destination directory for the libraries
 CONFIG_LIBDIR=
 

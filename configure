@@ -1469,6 +1469,12 @@ if (($(grep -cE "^\s*CONFIG_[[:alnum:]_]+=" "$rootdir/CONFIG") != ${#CONFIG[@]})
 	exit 1
 fi
 
+# Store BUILD_CMD that configure uses to compile-test features
+CONFIG[CONFIGURE_BUILD_CMD]="${BUILD_CMD[*]}"
+
+# Store ARCH_TRIPLET
+CONFIG[ARCH_TRIPLET]="$arch"
+
 echo -n "Creating mk/config.mk..."
 cp -f $rootdir/CONFIG $rootdir/mk/config.mk
 ARGS=$(echo "$@" | sed 's/ /\\ /g')
