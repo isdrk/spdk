@@ -1434,20 +1434,15 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	struct spdk_nvme_sgl_descriptor *sgl;
 	uint32_t nseg = 0;
 	struct nvme_pcie_qpair *pqpair = nvme_pcie_qpair(qpair);
-	uint32_t iov_idx = 0;
-	bool use_iovs = req->payload.opts && req->payload.opts->iov;
-
 
 	/*
 	 * Build scattered payloads.
 	 */
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	if (!use_iovs) {
-		assert(req->payload.reset_sgl_fn != NULL);
-		assert(req->payload.next_sge_fn != NULL);
-		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
-	}
+	assert(req->payload.reset_sgl_fn != NULL);
+	assert(req->payload.next_sge_fn != NULL);
+	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
 
 	sgl = tr->u.sgl;
 	req->cmd.psdt = SPDK_NVME_PSDT_SGL_MPTR_CONTIG;
@@ -1456,17 +1451,11 @@ nvme_pcie_qpair_build_hw_sgl_request(struct spdk_nvme_qpair *qpair, struct nvme_
 	remaining_transfer_len = req->payload_size;
 
 	while (remaining_transfer_len > 0) {
-		if (!use_iovs) {
-			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg,
-						      &virt_addr, &remaining_user_sge_len);
-			if (rc) {
-				nvme_pcie_fail_request_bad_vtophys(qpair, tr);
-				return -EFAULT;
-			}
-		} else {
-			assert(iov_idx < req->payload.opts->iovcnt);
-			virt_addr = req->payload.opts->iov[iov_idx].iov_base;
-			remaining_user_sge_len = req->payload.opts->iov[iov_idx++].iov_len;
+		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg,
+					      &virt_addr, &remaining_user_sge_len);
+		if (rc) {
+			nvme_pcie_fail_request_bad_vtophys(qpair, tr);
+			return -EFAULT;
 		}
 
 		/* Bit Bucket SGL descriptor */
@@ -1578,33 +1567,22 @@ nvme_pcie_qpair_build_prps_sgl_request(struct spdk_nvme_qpair *qpair, struct nvm
 	void *virt_addr;
 	uint32_t remaining_transfer_len, length;
 	uint32_t prp_index = 0;
-	uint32_t iov_idx = 0;
 	uint32_t page_size = qpair->ctrlr->page_size;
-	bool use_iovs = req->payload.opts && req->payload.opts->iov;
 
 	/*
 	 * Build scattered payloads.
 	 */
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-
-	if (!use_iovs) {
-		assert(req->payload.reset_sgl_fn != NULL);
-		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
-	}
+	assert(req->payload.reset_sgl_fn != NULL);
+	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
 
 	remaining_transfer_len = req->payload_size;
 	while (remaining_transfer_len > 0) {
-		if (!use_iovs) {
-			assert(req->payload.next_sge_fn != NULL);
-			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &virt_addr, &length);
-			if (rc) {
-				nvme_pcie_fail_request_bad_vtophys(qpair, tr);
-				return -EFAULT;
-			}
-		} else {
-			assert(iov_idx < req->payload.opts->iovcnt);
-			virt_addr = req->payload.opts->iov[iov_idx].iov_base;
-			length = req->payload.opts->iov[iov_idx++].iov_len;
+		assert(req->payload.next_sge_fn != NULL);
+		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &virt_addr, &length);
+		if (rc) {
+			nvme_pcie_fail_request_bad_vtophys(qpair, tr);
+			return -EFAULT;
 		}
 
 		length = spdk_min(remaining_transfer_len, length);

@@ -698,8 +698,6 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	void *memory_domain_ctx;
 	/** Flags for this IO, defined in nvme_spec.h */
 	uint32_t io_flags;
-	/** The number of elements in iov. */
-	uint32_t iovcnt;
 	/** Virtual address pointer to the metadata payload, the length of metadata is specified by \ref spdk_nvme_ns_get_md_size */
 	void *metadata;
 	/** Application tag mask to use end-to-end protection information. */
@@ -712,10 +710,8 @@ struct spdk_nvme_ns_cmd_ext_io_opts {
 	 *  qpair is part of a poll group).
 	 */
 	void *accel_sequence;
-	/** A scatter gather list of buffers. */
-	struct iovec *iov;
 };
-SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 64, "Incorrect size");
+SPDK_STATIC_ASSERT(sizeof(struct spdk_nvme_ns_cmd_ext_io_opts) == 56, "Incorrect size");
 
 /**
  * Parse the string representation of a transport ID.

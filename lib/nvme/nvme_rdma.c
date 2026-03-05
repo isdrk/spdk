@@ -1661,43 +1661,33 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 {
 	struct nvme_request *req = rdma_req->req;
 	struct spdk_nvmf_cmd *cmd = &rqpair->cmds[rdma_req->id];
-	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
+	struct spdk_rdma_provider_memory_translation_ctx ctx;
 	uint32_t remaining_size;
 	uint32_t sge_length;
-	uint32_t max_num_sgl, num_sgl_desc;
-	int rc;
-	bool use_iovs = req->payload.opts && req->payload.opts->iov;
+	uint32_t descriptors_size;
+	int rc, max_num_sgl, num_sgl_desc;
 
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-
-	if (!use_iovs) {
-		assert(req->payload.reset_sgl_fn != NULL);
-		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
-	}
+	assert(req->payload.reset_sgl_fn != NULL);
+	assert(req->payload.next_sge_fn != NULL);
+	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
 
 	max_num_sgl = req->qpair->ctrlr->max_sges;
 
 	remaining_size = req->payload_size;
 	num_sgl_desc = 0;
 	do {
-		if (!use_iovs) {
-			assert(req->payload.next_sge_fn != NULL);
-			rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &sge_length);
-			if (spdk_unlikely(rc)) {
-				return -1;
-			}
-		} else {
-			assert(num_sgl_desc < req->payload.opts->iovcnt);
-			ctx.addr = req->payload.opts->iov[num_sgl_desc].iov_base;
-			sge_length = req->payload.opts->iov[num_sgl_desc].iov_len;
+		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &sge_length);
+		if (spdk_unlikely(rc)) {
+			return -1;
 		}
 
 		sge_length = spdk_min(remaining_size, sge_length);
 
 		if (spdk_unlikely(sge_length > NVME_RDMA_MAX_KEYED_SGL_LENGTH)) {
-			SPDK_ERRLOG("SGL length %u exceeds max keyed SGL block size %u\n",
-				    sge_length, NVME_RDMA_MAX_KEYED_SGL_LENGTH);
+			SPDK_ERRLOG("SGL length %u exceeds max keyed SGL block size %u\n", sge_length,
+				    NVME_RDMA_MAX_KEYED_SGL_LENGTH);
 			return -1;
 		}
 		ctx.length = sge_length;
@@ -1716,9 +1706,15 @@ nvme_rdma_build_sgl_request(struct nvme_rdma_qpair *rqpair,
 		num_sgl_desc++;
 	} while (remaining_size > 0 && num_sgl_desc < max_num_sgl);
 
-
 	/* Should be impossible if we did our sgl checks properly up the stack, but do a sanity check here. */
 	if (spdk_unlikely(remaining_size > 0)) {
+		return -1;
+	}
+
+	descriptors_size = sizeof(struct spdk_nvme_sgl_descriptor) * num_sgl_desc;
+	if (spdk_unlikely(num_sgl_desc > 0 && descriptors_size > rqpair->qpair.ctrlr->ioccsz_bytes)) {
+		SPDK_ERRLOG("Size of SGL descriptors (%u) exceeds ICD (%u)\n", descriptors_size,
+			    rqpair->qpair.ctrlr->ioccsz_bytes);
 		return -1;
 	}
 
@@ -1775,23 +1771,19 @@ nvme_rdma_build_sgl_inline_request(struct nvme_rdma_qpair *rqpair,
 				   struct spdk_nvme_rdma_req *rdma_req)
 {
 	struct nvme_request *req = rdma_req->req;
-	struct spdk_rdma_provider_memory_translation_ctx ctx = {};
+	struct spdk_rdma_provider_memory_translation_ctx ctx;
 	uint32_t length;
 	int rc;
 
 	assert(req->payload_size != 0);
 	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	if (req->payload.opts && req->payload.opts->iov) {
-		ctx.addr = req->payload.opts->iov->iov_base;
-		length = req->payload.opts->iov->iov_len;
-	} else {
-		assert(req->payload.reset_sgl_fn != NULL);
-		assert(req->payload.next_sge_fn != NULL);
-		req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
-		rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &length);
-		if (spdk_unlikely(rc)) {
-			return -1;
-		}
+	assert(req->payload.reset_sgl_fn != NULL);
+	assert(req->payload.next_sge_fn != NULL);
+	req->payload.reset_sgl_fn(req->payload.contig_or_cb_arg, req->payload_offset);
+
+	rc = req->payload.next_sge_fn(req->payload.contig_or_cb_arg, &ctx.addr, &length);
+	if (spdk_unlikely(rc)) {
+		return -1;
 	}
 
 	if (length < req->payload_size) {
@@ -1915,10 +1907,7 @@ nvme_rdma_apply_accel_sequence(struct nvme_rdma_qpair *rqpair, struct nvme_reque
 
 	SPDK_DEBUGLOG(nvme, "req %p, start accel seq %p\n", rdma_req, accel_seq);
 
-	if (req->payload.opts && req->payload.opts->iov) {
-		rdma_req->iov = req->payload.opts->iov;
-		iovcnt = req->payload.opts->iovcnt;
-	} else if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL) {
+	if (nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL) {
 		void *addr;
 		uint32_t sge_length, payload_size;
 

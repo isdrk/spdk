@@ -1959,23 +1959,6 @@ nvme_tcp_build_sgl_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *t
 }
 
 static int
-nvme_tcp_build_sgl_passthru_request(struct nvme_tcp_req *tcp_req)
-{
-	struct nvme_request *req = &tcp_req->req;
-	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
-
-	assert(nvme_payload_type(&req->payload) == NVME_PAYLOAD_TYPE_SGL);
-	assert(req->payload.opts != NULL);
-	assert(req->payload.opts->iov != NULL);
-	assert(req->payload.opts->iovcnt != 0);
-
-	pdu->iovs = req->payload.opts->iov;
-	pdu->data_iovcnt = req->payload.opts->iovcnt;
-
-	return 0;
-}
-
-static int
 nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 {
 	struct nvme_request *req = &tcp_req->req;
@@ -1990,21 +1973,16 @@ nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 	req->cmd.dptr.sgl1.unkeyed.subtype = SPDK_NVME_SGL_SUBTYPE_TRANSPORT;
 	req->cmd.dptr.sgl1.unkeyed.length = req->payload_size;
 
-	SPDK_DEBUGLOG(nvme, "tqpair %p %u, xlio_sock 0x%lx, tcp_req %p pdu %p, p_type %d, passthru %d\n",
+	SPDK_DEBUGLOG(nvme, "tqpair %p %u, xlio_sock 0x%lx, tcp_req %p pdu %p, p_type %d\n",
 		      tqpair,
-		      tqpair->qpair.id, tqpair->xlio_sock, tcp_req, &tcp_req->pdu, payload_type,
-		      req->payload.opts != NULL && req->payload.opts->iov != NULL);
+		      tqpair->qpair.id, tqpair->xlio_sock, tcp_req, &tcp_req->pdu, payload_type);
 
 	switch (payload_type) {
 	case NVME_PAYLOAD_TYPE_CONTIG:
 		rc = nvme_tcp_build_contig_request(tqpair, tcp_req);
 		break;
 	case NVME_PAYLOAD_TYPE_SGL:
-		if (req->payload.opts != NULL && req->payload.opts->iov != NULL) {
-			rc = nvme_tcp_build_sgl_passthru_request(tcp_req);
-		} else {
-			rc = nvme_tcp_build_sgl_request(tqpair, tcp_req);
-		}
+		rc = nvme_tcp_build_sgl_request(tqpair, tcp_req);
 		break;
 	default:
 		rc = -1;
