@@ -105,7 +105,6 @@ struct nvme_tcp_qpair {
 			uint16_t host_hdgst_enable: 1;
 			uint16_t host_ddgst_enable: 1;
 			uint16_t icreq_send_ack: 1;
-			uint16_t in_connect_poll: 1;
 			uint16_t use_poll_group_req_pool: 1;
 			uint16_t needs_resubmit: 1;
 			uint16_t shared_stats: 1;
@@ -116,7 +115,7 @@ struct nvme_tcp_qpair {
 			uint16_t closed: 1;
 			uint16_t stop_receiving: 1;
 			uint16_t connect_notified: 1;
-			uint16_t reserved : 2;
+			uint16_t reserved : 3;
 		} flags;
 		uint16_t flags_raw;
 	};
@@ -4653,11 +4652,11 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 	 * nvme_fabric_qpair_connect_poll() if the connect response is received in the recursive
 	 * call.
 	 */
-	if (tqpair->flags.in_connect_poll) {
+	if (qpair->in_connect_poll) {
 		return -EAGAIN;
 	}
 
-	tqpair->flags.in_connect_poll = 1;
+	qpair->in_connect_poll = 1;
 
 	switch (tqpair->state) {
 	case NVME_TCP_QPAIR_STATE_INVALID:
@@ -4735,7 +4734,7 @@ nvme_tcp_ctrlr_connect_qpair_poll(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvm
 		break;
 	}
 
-	tqpair->flags.in_connect_poll = 0;
+	qpair->in_connect_poll = 0;
 	return rc;
 }
 
