@@ -2356,7 +2356,6 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 			pthread_mutex_lock(&g_admin_poll_group_mutex);
 			if (g_admin_poll_group == NULL) {
 				assert(g_admin_poll_group_refcnt == 0);
-				g_admin_poll_group_refcnt++;
 				struct spdk_sock_group_opts opts = {
 					.size = sizeof(opts),
 					.ctx = NULL,
@@ -2364,6 +2363,10 @@ nvme_tcp_qpair_connect_sock(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_qpai
 					.rx_cb = nvme_tcp_qpair_no_group_sock_cb,
 				};
 				g_admin_poll_group = spdk_sock_group_create(&opts);
+			}
+
+			if (g_admin_poll_group != NULL) {
+				g_admin_poll_group_refcnt++;
 			}
 			sock_group = g_admin_poll_group;
 			pthread_mutex_unlock(&g_admin_poll_group_mutex);
