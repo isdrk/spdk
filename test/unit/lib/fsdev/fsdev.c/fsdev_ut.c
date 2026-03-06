@@ -1010,6 +1010,402 @@ ut_fsdev_test_umount(void)
 	/* Nothing to check here */
 }
 
+static void
+ut_fuse_iovs_cpl_cb(void *cb_arg, int status, struct spdk_fsdev_io *fsdev_io)
+{
+}
+
+static void
+ut_fsdev_test_fuse_iovs(void)
+{
+	struct ut_fsdev *utfsdev;
+	struct spdk_fsdev_desc *fsdev_desc;
+	struct spdk_io_channel *ch;
+	struct spdk_fsdev_io *fsdev_io;
+	struct iovec in_iov[3];
+	struct iovec out_iov[3];
+	struct {
+		struct fuse_in_header hdr;
+		union {
+			struct fuse_flush_in flush;
+			struct fuse_write_in write;
+			struct fuse_open_in open;
+			struct fuse_ioctl_in ioctl;
+			struct fuse_read_in read;
+			struct fuse_forget_in forget;
+		} op;
+	} in;
+	struct {
+		struct fuse_out_header hdr;
+		union {
+			struct fuse_statfs_out statfs;
+			struct fuse_write_out write;
+			struct fuse_entry_out entry;
+			struct fuse_open_out open;
+			struct fuse_ioctl_out ioctl;
+		} op;
+	} out;
+	struct spdk_memory_domain *dummy_domain = (struct spdk_memory_domain *)0xF00D;
+	void *dummy_domain_ctx = (void *)0xBEEF;
+	struct iovec domain_iov;
+	char payload[64];
+	int rc;
+
+	utfsdev = ut_fsdev_create("utfsdev0");
+	SPDK_CU_ASSERT_FATAL(utfsdev != NULL);
+
+	rc = spdk_fsdev_open("utfsdev0", fsdev_event_cb, NULL, &fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(rc == 0);
+
+	ch = spdk_fsdev_get_io_channel(fsdev_desc);
+	SPDK_CU_ASSERT_FATAL(ch != NULL);
+
+	fsdev_io = calloc(1, sizeof(*fsdev_io) + spdk_fsdev_get_io_ctx_size());
+	SPDK_CU_ASSERT_FATAL(fsdev_io != NULL);
+
+	utfsdev->desired_io_status = 0;
+
+	/* In-iov case 1: no operation-specific in header, no in payload (FUSE_STATFS) */
+	memset(&in.hdr, 0, sizeof(in.hdr));
+	in.hdr.opcode = FUSE_STATFS;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr);
+	in.hdr.nodeid = UT_FOBJECT;
+
+	in_iov[0].iov_base = &in.hdr;
+	in_iov[0].iov_len = sizeof(in.hdr);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.statfs);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == NULL);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 0);
+	poll_thread(0);
+
+	/* In-iov case 2: operation-specific in header, no in payload (FUSE_FLUSH) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_FLUSH;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.flush);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.flush.fh = UT_FHANDLE;
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.flush);
+
+	memset(&out.hdr, 0, sizeof(out.hdr));
+	out_iov[0].iov_base = &out.hdr;
+	out_iov[0].iov_len = sizeof(out.hdr);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == (void *)&in.op.flush);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 0);
+	poll_thread(0);
+
+	/* In-iov case 3: operation-specific in header and in payload (FUSE_WRITE) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_WRITE;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.write) + sizeof(payload);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.write.fh = UT_FHANDLE;
+	in.op.write.size = sizeof(payload);
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.write);
+	in_iov[1].iov_base = payload;
+	in_iov[1].iov_len = sizeof(payload);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.write);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 2, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == (void *)&in.op.write);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_base == payload);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_len == sizeof(payload));
+	poll_thread(0);
+
+	/* In-iov case 4: no operation-specific in header, in payload (FUSE_LOOKUP) */
+	memset(&in.hdr, 0, sizeof(in.hdr));
+	in.hdr.opcode = FUSE_LOOKUP;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(UT_FNAME);
+	in.hdr.nodeid = UT_FOBJECT;
+
+	in_iov[0].iov_base = &in.hdr;
+	in_iov[0].iov_len = sizeof(in.hdr);
+	in_iov[1].iov_base = UT_FNAME;
+	in_iov[1].iov_len = sizeof(UT_FNAME);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.entry);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 2, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == NULL);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_base == (void *)UT_FNAME);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_len == sizeof(UT_FNAME));
+	poll_thread(0);
+
+	/* Out-iov case 1: no operation-specific out header, no out payload (FUSE_FLUSH) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_FLUSH;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.flush);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.flush.fh = UT_FHANDLE;
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.flush);
+
+	memset(&out.hdr, 0, sizeof(out.hdr));
+	out_iov[0].iov_base = &out.hdr;
+	out_iov[0].iov_len = sizeof(out.hdr);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == NULL);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 0);
+	poll_thread(0);
+
+	/* Out-iov case 2: operation-specific out header, no out payload (FUSE_OPEN) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_OPEN;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.open);
+	in.hdr.nodeid = UT_FOBJECT;
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.open);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.open);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == (void *)&out.op.open);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov == NULL);
+	poll_thread(0);
+
+	/* Out-iov case 3: operation-specific out header and out payload (FUSE_IOCTL) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_IOCTL;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.ioctl);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.ioctl.fh = UT_FHANDLE;
+	in.op.ioctl.cmd = UT_IOCTL_CMD;
+	in.op.ioctl.arg = UT_IOCTL_ARG;
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.ioctl);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.ioctl);
+	out_iov[1].iov_base = payload;
+	out_iov[1].iov_len = sizeof(payload);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 2,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == (void *)&out.op.ioctl);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_base == payload);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_len == sizeof(payload));
+	poll_thread(0);
+
+	/* Out-iov case 4: no operation-specific out header, out payload (FUSE_READ) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_READ;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.read);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.read.fh = UT_FHANDLE;
+	in.op.read.size = sizeof(payload);
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.read);
+
+	memset(&out.hdr, 0, sizeof(out.hdr));
+	out.hdr.len = sizeof(out.hdr);
+	out_iov[0].iov_base = &out.hdr;
+	out_iov[0].iov_len = sizeof(out.hdr);
+	out_iov[1].iov_base = payload;
+	out_iov[1].iov_len = sizeof(payload);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 2,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == NULL);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_base == payload);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_len == sizeof(payload));
+	poll_thread(0);
+
+	/* Out-iov case 5: no response at all (FUSE_FORGET) */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_FORGET;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.forget);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.forget.nlookup = 1;
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.forget);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, NULL, 0,
+			0, 0, NULL, NULL, NULL, 0,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == NULL);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == NULL);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov == NULL);
+	poll_thread(0);
+
+	/* Memory domain case 1: FUSE_WRITE with memory domain */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_WRITE;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.write) + sizeof(payload);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.write.fh = UT_FHANDLE;
+	in.op.write.size = sizeof(payload);
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.write);
+
+	memset(&out, 0, sizeof(out));
+	out_iov[0].iov_base = &out;
+	out_iov[0].iov_len = sizeof(out.hdr) + sizeof(out.op.write);
+
+	domain_iov.iov_base = payload;
+	domain_iov.iov_len = sizeof(payload);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, dummy_domain, dummy_domain_ctx, &domain_iov, 1,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == (void *)&in.op.write);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_base == payload);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov[0].iov_len == sizeof(payload));
+	CU_ASSERT(fsdev_io->u_in.fuse.memory_domain == dummy_domain);
+	CU_ASSERT(fsdev_io->u_in.fuse.memory_domain_ctx == dummy_domain_ctx);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.op.raw == (void *)&out.op.write);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 0);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov == NULL);
+	CU_ASSERT(fsdev_io->u_out.fuse.memory_domain == dummy_domain);
+	CU_ASSERT(fsdev_io->u_out.fuse.memory_domain_ctx == dummy_domain_ctx);
+	poll_thread(0);
+
+	/* Memory domain case 2: FUSE_READ with memory domain */
+	memset(&in, 0, sizeof(in));
+	in.hdr.opcode = FUSE_READ;
+	in.hdr.unique = UT_UNIQUE;
+	in.hdr.len = sizeof(in.hdr) + sizeof(in.op.read);
+	in.hdr.nodeid = UT_FOBJECT;
+	in.op.read.fh = UT_FHANDLE;
+	in.op.read.size = sizeof(payload);
+
+	in_iov[0].iov_base = &in;
+	in_iov[0].iov_len = sizeof(in.hdr) + sizeof(in.op.read);
+
+	memset(&out.hdr, 0, sizeof(out.hdr));
+	out.hdr.len = sizeof(out.hdr);
+	out_iov[0].iov_base = &out.hdr;
+	out_iov[0].iov_len = sizeof(out.hdr);
+
+	domain_iov.iov_base = payload;
+	domain_iov.iov_len = sizeof(payload);
+
+	rc = spdk_fsdev_io_submit_from_fuse_iovs(fsdev_io, fsdev_desc, ch,
+			in_iov, 1, out_iov, 1,
+			0, 0, dummy_domain, dummy_domain_ctx, &domain_iov, 1,
+			ut_fuse_iovs_cpl_cb, NULL);
+
+	CU_ASSERT(rc == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.hdr == &in.hdr);
+	CU_ASSERT(fsdev_io->u_in.fuse.op.raw == (void *)&in.op.read);
+	CU_ASSERT(fsdev_io->u_in.fuse.iovcnt == 0);
+	CU_ASSERT(fsdev_io->u_in.fuse.iov == NULL);
+	CU_ASSERT(fsdev_io->u_in.fuse.memory_domain == dummy_domain);
+	CU_ASSERT(fsdev_io->u_in.fuse.memory_domain_ctx == dummy_domain_ctx);
+	CU_ASSERT(fsdev_io->u_out.fuse.hdr == &out.hdr);
+	CU_ASSERT(fsdev_io->u_out.fuse.iovcnt == 1);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_base == payload);
+	CU_ASSERT(fsdev_io->u_out.fuse.iov[0].iov_len == sizeof(payload));
+	CU_ASSERT(fsdev_io->u_out.fuse.memory_domain == dummy_domain);
+	CU_ASSERT(fsdev_io->u_out.fuse.memory_domain_ctx == dummy_domain_ctx);
+	poll_thread(0);
+
+	free(fsdev_io);
+
+	ut_calls_reset();
+	spdk_put_io_channel(ch);
+	poll_thread(0);
+
+	spdk_fsdev_close(fsdev_desc);
+
+	ut_fsdev_destroy(utfsdev);
+}
+
 static int
 fsdev_ut(int argc, char **argv)
 {
@@ -1028,6 +1424,7 @@ fsdev_ut(int argc, char **argv)
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_ok);
 	CU_ADD_TEST(suite, ut_fsdev_test_mount_err);
 	CU_ADD_TEST(suite, ut_fsdev_test_umount);
+	CU_ADD_TEST(suite, ut_fsdev_test_fuse_iovs);
 
 	allocate_cores(1);
 	allocate_threads(1);
