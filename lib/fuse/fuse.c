@@ -1830,7 +1830,7 @@ fsdev_fuse_umount_exec_user_cb(void *_ctx)
 		ctx->cb_fn(ctx->cb_ctx);
 	}
 	free(ctx->destroy.ctx);
-	free(ctx);
+	spdk_free(ctx);
 }
 
 static void
@@ -1947,7 +1947,7 @@ spdk_fuse_umount(struct spdk_fuse_mount *mount, spdk_fuse_umount_cb cb_fn, void 
 {
 	struct fsdev_fuse_umount_ctx *ctx;
 
-	ctx = calloc(1, sizeof(*ctx));
+	ctx = spdk_zmalloc(sizeof(*ctx), 0, NULL, SPDK_ENV_NUMA_ID_ANY, SPDK_MALLOC_DMA);
 	if (ctx == NULL) {
 		return -ENOMEM;
 	}
@@ -1955,7 +1955,7 @@ spdk_fuse_umount(struct spdk_fuse_mount *mount, spdk_fuse_umount_cb cb_fn, void 
 	pthread_mutex_lock(&mount->mutex);
 	if (mount->removing) {
 		pthread_mutex_unlock(&mount->mutex);
-		free(ctx);
+		spdk_free(ctx);
 		return -EINPROGRESS;
 	}
 	mount->removing = true;
