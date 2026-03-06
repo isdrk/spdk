@@ -283,31 +283,16 @@ struct nvme_error_cmd {
 
 struct nvme_request {
 	struct spdk_nvme_cmd		cmd;
-	/**
-	 * Data payload for this request's command.
-	 */
-	struct nvme_payload		payload;
-
-	struct spdk_nvme_cpl		cpl;
-
-	/** Sequence of accel operations associated with this request */
-	void				*accel_sequence;
-
-	spdk_nvme_cmd_cb		cb_fn;
-	void				*cb_arg;
-	STAILQ_ENTRY(nvme_request)	stailq;
-
-	struct spdk_nvme_qpair		*qpair;
 
 	uint8_t				retries;
+
 	uint8_t				timed_out : 1;
 
 	/**
 	 * True if the request is in the queued_req list.
 	 */
 	uint8_t				queued : 1;
-	uint8_t				is_parent : 1;
-	uint8_t				reserved : 5;
+	uint8_t				reserved : 6;
 
 	/**
 	 * Number of children requests still outstanding for this
@@ -323,19 +308,29 @@ struct nvme_request {
 	uint32_t			md_offset;
 
 	uint32_t			payload_size;
-	uint32_t			md_size;
-
-	/*
-	 * The value of spdk_get_ticks() when the request was submitted to the hardware.
-	 * Only set if ctrlr->timeout_enabled is true.
-	 */
-	uint64_t			submit_tick;
 
 	/**
 	 * Timeout ticks for error injection requests, can be extended in future
 	 * to support per-request timeout feature.
 	 */
 	uint64_t			timeout_tsc;
+
+	/**
+	 * Data payload for this request's command.
+	 */
+	struct nvme_payload		payload;
+
+	spdk_nvme_cmd_cb		cb_fn;
+	void				*cb_arg;
+	STAILQ_ENTRY(nvme_request)	stailq;
+
+	struct spdk_nvme_qpair		*qpair;
+
+	/*
+	 * The value of spdk_get_ticks() when the request was submitted to the hardware.
+	 * Only set if ctrlr->timeout_enabled is true.
+	 */
+	uint64_t			submit_tick;
 
 	/**
 	 * The active admin request can be moved to a per process pending
@@ -345,6 +340,9 @@ struct nvme_request {
 	 * NOTE: these below two fields are only used for admin request.
 	 */
 	pid_t				pid;
+	struct spdk_nvme_cpl		cpl;
+
+	uint32_t			md_size;
 
 	/**
 	 * The following members should not be reordered with members
@@ -388,6 +386,9 @@ struct nvme_request {
 	spdk_nvme_cmd_cb		user_cb_fn;
 	void				*user_cb_arg;
 	void				*user_buffer;
+
+	/** Sequence of accel operations associated with this request */
+	void				*accel_sequence;
 };
 
 typedef STAILQ_HEAD(, nvme_request)	nvme_request_stailq_t;
@@ -1493,8 +1494,26 @@ typedef int (*spdk_nvme_parse_ana_log_page_cb)(
 int	nvme_ctrlr_parse_ana_log_page(struct spdk_nvme_ctrlr *ctrlr,
 				      spdk_nvme_parse_ana_log_page_cb cb_fn, void *cb_arg);
 
+static inline void
+nvme_request_clear(struct nvme_request *req)
+{
+	/*
+	 * Only memset/zero fields that need it.  All other fields
+	 *  will be initialized appropriately either later in this
+	 *  function, or before they are needed later in the
+	 *  submission patch.  For example, the children
+	 *  TAILQ_ENTRY and following members are
+	 *  only used as part of I/O splitting so we avoid
+	 *  memsetting them until it is actually needed.
+	 *  They will be initialized in nvme_request_add_child()
+	 *  if the request is split.
+	 */
+	memset(req, 0, offsetof(struct nvme_request, payload_size));
+}
+
 #define NVME_INIT_REQUEST(req, _cb_fn, _cb_arg, _payload, _payload_size, _md_size)	\
 	do {						\
+		nvme_request_clear(req);		\
 		req->cb_fn = _cb_fn;			\
 		req->cb_arg = _cb_arg;			\
 		req->payload = _payload;		\
@@ -1514,8 +1533,6 @@ nvme_allocate_request(struct spdk_nvme_qpair *qpair,
 {
 	struct nvme_request *req;
 
-	assert(qpair->active_free_req != NULL);
-
 	req = STAILQ_FIRST(qpair->active_free_req);
 	if (req == NULL) {
 		return req;
@@ -1524,24 +1541,9 @@ nvme_allocate_request(struct spdk_nvme_qpair *qpair,
 	STAILQ_REMOVE_HEAD(qpair->active_free_req, stailq);
 	qpair->num_outstanding_reqs++;
 
-	/*
-	 * Only memset/zero fields that need it.  All other fields
-	 *  will be initialized appropriately either later in this
-	 *  function, or before they are needed later in the
-	 *  submission patch.  For example, the children
-	 *  TAILQ_ENTRY and following members are
-	 *  only used as part of I/O splitting so we avoid
-	 *  memsetting them until it is actually needed.
-	 *  They will be initialized in nvme_request_add_child()
-	 *  if the request is split.
-	 */
-	memset(&req->cmd, 0, sizeof(req->cmd));
-	memset(&req->cpl, 0, sizeof(req->cpl));
-	memset(&req->retries, 0, offsetof(struct nvme_request, payload_size) - offsetof(struct nvme_request,
-			retries));
-	req->qpair = qpair;
-
 	NVME_INIT_REQUEST(req, cb_fn, cb_arg, *payload, payload_size, md_size);
+
+	req->qpair = qpair;
 
 	return req;
 }
@@ -1793,7 +1795,6 @@ nvme_request_add_child(struct nvme_request *parent, struct nvme_request *child)
 	}
 
 	parent->num_children++;
-	parent->is_parent = true;
 	TAILQ_INSERT_TAIL(&parent->children, child, child_tailq);
 	child->parent = parent;
 	child->cb_fn = nvme_cb_complete_child;
