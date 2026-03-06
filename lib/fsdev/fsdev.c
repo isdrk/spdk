@@ -2312,35 +2312,64 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 	return rc;
 }
 
-/* FUSE opcodes that define both a command-specific IN header and have IN
- * payload must return the size of their IN header here. This is used to
- * adjust the data iov appropriately.
- */
+static const size_t g_fsdev_fuse_args[] = {
+	[FUSE_LOOKUP]		= 0,
+	[FUSE_FORGET]		= sizeof(struct fuse_forget_in),
+	[FUSE_GETATTR]		= sizeof(struct fuse_getattr_in),
+	[FUSE_SETATTR]		= sizeof(struct fuse_setattr_in),
+	[FUSE_READLINK]		= 0,
+	[FUSE_SYMLINK]		= 0,
+	[FUSE_MKNOD]		= sizeof(struct fuse_mknod_in),
+	[FUSE_MKDIR]		= sizeof(struct fuse_mkdir_in),
+	[FUSE_UNLINK]		= 0,
+	[FUSE_RMDIR]		= 0,
+	[FUSE_RENAME]		= sizeof(struct fuse_rename_in),
+	[FUSE_LINK]		= sizeof(struct fuse_link_in),
+	[FUSE_OPEN]		= sizeof(struct fuse_open_in),
+	[FUSE_READ]		= sizeof(struct fuse_read_in),
+	[FUSE_WRITE]		= sizeof(struct fuse_write_in),
+	[FUSE_STATFS]		= 0,
+	[FUSE_RELEASE]		= sizeof(struct fuse_release_in),
+	[FUSE_FSYNC]		= sizeof(struct fuse_fsync_in),
+	[FUSE_SETXATTR]		= sizeof(struct fuse_setxattr_in),
+	[FUSE_GETXATTR]		= sizeof(struct fuse_getxattr_in),
+	[FUSE_LISTXATTR]	= sizeof(struct fuse_getxattr_in),
+	[FUSE_REMOVEXATTR]	= 0,
+	[FUSE_FLUSH]		= sizeof(struct fuse_flush_in),
+	[FUSE_INIT]		= sizeof(struct fuse_init_in),
+	[FUSE_OPENDIR]		= sizeof(struct fuse_open_in),
+	[FUSE_READDIR]		= sizeof(struct fuse_read_in),
+	[FUSE_RELEASEDIR]	= sizeof(struct fuse_release_in),
+	[FUSE_FSYNCDIR]		= sizeof(struct fuse_fsync_in),
+	[FUSE_GETLK]		= sizeof(struct fuse_lk_in),
+	[FUSE_SETLK]		= sizeof(struct fuse_lk_in),
+	[FUSE_SETLKW]		= sizeof(struct fuse_lk_in),
+	[FUSE_ACCESS]		= sizeof(struct fuse_access_in),
+	[FUSE_CREATE]		= sizeof(struct fuse_create_in),
+	[FUSE_INTERRUPT]	= sizeof(struct fuse_interrupt_in),
+	[FUSE_BMAP]		= sizeof(struct fuse_bmap_in),
+	[FUSE_DESTROY]		= 0,
+	[FUSE_IOCTL]		= sizeof(struct fuse_ioctl_in),
+	[FUSE_POLL]		= sizeof(struct fuse_poll_in),
+	[FUSE_BATCH_FORGET]	= sizeof(struct fuse_batch_forget_in),
+	[FUSE_FALLOCATE]	= sizeof(struct fuse_fallocate_in),
+	[FUSE_READDIRPLUS]	= sizeof(struct fuse_read_in),
+	[FUSE_RENAME2]		= sizeof(struct fuse_rename2_in),
+	[FUSE_LSEEK]		= sizeof(struct fuse_lseek_in),
+	[FUSE_COPY_FILE_RANGE]	= sizeof(struct fuse_copy_file_range_in),
+	[FUSE_SETUPMAPPING]	= sizeof(struct fuse_setupmapping_in),
+	[FUSE_REMOVEMAPPING]	= sizeof(struct fuse_removemapping_in),
+	[FUSE_SYNCFS]		= sizeof(struct fuse_syncfs_in),
+};
+
 static size_t
 fuse_get_in_size(struct fuse_in_header *in_hdr)
 {
-	switch (in_hdr->opcode) {
-	case FUSE_CREATE:
-		return sizeof(struct fuse_create_in);
-	case FUSE_BATCH_FORGET:
-		return sizeof(struct fuse_batch_forget_in);
-	case FUSE_LINK:
-		return sizeof(struct fuse_link_in);
-	case FUSE_MKNOD:
-		return sizeof(struct fuse_mknod_in);
-	case FUSE_MKDIR:
-		return sizeof(struct fuse_mkdir_in);
-	case FUSE_RENAME:
-		return sizeof(struct fuse_rename_in);
-	case FUSE_RENAME2:
-		return sizeof(struct fuse_rename2_in);
-	case FUSE_WRITE:
-		return sizeof(struct fuse_write_in);
-	case FUSE_IOCTL:
-		return sizeof(struct fuse_ioctl_in);
-	default:
+	if (in_hdr->opcode >= SPDK_COUNTOF(g_fsdev_fuse_args)) {
 		return 0;
 	}
+
+	return g_fsdev_fuse_args[in_hdr->opcode];
 }
 
 static bool
