@@ -1957,6 +1957,74 @@ nvme_tcp_build_sgl_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *t
 	return 0;
 }
 
+static inline int
+nvme_tcp_build_iov_request_fill_with_offset(struct nvme_tcp_qpair *tqpair,
+		struct nvme_tcp_req *tcp_req, uint32_t max_num_sgl)
+{
+	struct spdk_iov_sgl sgl;
+	uint32_t remaining_size = tcp_req->req.payload.payload_size;
+	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
+
+	pdu->iovs = tcp_req->iovs;
+	spdk_iov_sgl_init(&sgl, tcp_req->req.payload.iov, tcp_req->req.payload.iov_count, 0);
+	spdk_iov_sgl_advance(&sgl, tcp_req->req.payload.payload_offset);
+
+	for (pdu->data_iovcnt = 0; pdu->data_iovcnt < max_num_sgl &&
+	     remaining_size > 0; pdu->data_iovcnt++) {
+		void *addr;
+		uint32_t length;
+
+		length = spdk_min(sgl.iov->iov_len - sgl.iov_offset, remaining_size);
+		addr = (uint8_t *)sgl.iov->iov_base + sgl.iov_offset;
+
+		pdu->iovs[pdu->data_iovcnt].iov_base = addr;
+		pdu->iovs[pdu->data_iovcnt].iov_len = length;
+		remaining_size -= length;
+		spdk_iov_sgl_advance(&sgl, length);
+	}
+
+	if (spdk_unlikely(remaining_size > 0)) {
+		return -E2BIG;
+	}
+
+	return 0;
+}
+
+static inline int
+nvme_tcp_build_iov_request_fill(struct nvme_tcp_qpair *tqpair,
+				struct nvme_tcp_req *tcp_req, uint32_t max_num_sgl)
+{
+	struct nvme_tcp_pdu *pdu = &tcp_req->pdu;
+
+	if (spdk_unlikely(max_num_sgl > NVME_TCP_MAX_SGL_DESCRIPTORS)) {
+		return -E2BIG;
+	}
+
+	pdu->iovs = tcp_req->req.payload.iov;
+	pdu->data_iovcnt = tcp_req->req.payload.iov_count;
+
+	return 0;
+}
+
+static inline int
+nvme_tcp_build_iov_request(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
+{
+	uint32_t max_num_sgl;
+	struct nvme_request *req = &tcp_req->req;
+
+	assert(req->payload.payload_size != 0);
+	assert(nvme_req_payload_type(req) == NVME_PAYLOAD_TYPE_IOV);
+
+	max_num_sgl = spdk_min(req->qpair->ctrlr->max_sges, NVME_TCP_MAX_SGL_DESCRIPTORS);
+	max_num_sgl = spdk_min(req->payload.iov_count, max_num_sgl);
+
+	if (req->payload.payload_offset != 0 || req->parent != NULL) {
+		return nvme_tcp_build_iov_request_fill_with_offset(tqpair, tcp_req, max_num_sgl);
+	} else {
+		return nvme_tcp_build_iov_request_fill(tqpair, tcp_req, max_num_sgl);
+	}
+}
+
 static int
 nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 {
@@ -1982,6 +2050,9 @@ nvme_tcp_req_build(struct nvme_tcp_req *tcp_req)
 		break;
 	case NVME_PAYLOAD_TYPE_SGL:
 		rc = nvme_tcp_build_sgl_request(tqpair, tcp_req);
+		break;
+	case NVME_PAYLOAD_TYPE_IOV:
+		rc = nvme_tcp_build_iov_request(tqpair, tcp_req);
 		break;
 	default:
 		rc = -1;
