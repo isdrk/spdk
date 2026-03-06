@@ -145,7 +145,7 @@ static struct spdk_bdev_opts	g_bdev_opts = {
 	.bdev_io_pool_size = SPDK_BDEV_IO_POOL_SIZE,
 	.bdev_io_cache_size = SPDK_BDEV_IO_CACHE_SIZE,
 	.bdev_auto_examine = SPDK_BDEV_AUTO_EXAMINE,
-	.bdev_rw_bypass = false,
+	.bdev_rw_bypass = true,
 	.iobuf_small_cache_size = BUF_SMALL_CACHE_SIZE,
 	.iobuf_large_cache_size = BUF_LARGE_CACHE_SIZE,
 };
