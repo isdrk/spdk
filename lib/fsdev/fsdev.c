@@ -2312,64 +2312,73 @@ spdk_fsdev_encode_notify(struct iovec *iov, int iovcnt,
 	return rc;
 }
 
-static const size_t g_fsdev_fuse_args[] = {
-	[FUSE_LOOKUP]		= 0,
-	[FUSE_FORGET]		= sizeof(struct fuse_forget_in),
-	[FUSE_GETATTR]		= sizeof(struct fuse_getattr_in),
-	[FUSE_SETATTR]		= sizeof(struct fuse_setattr_in),
-	[FUSE_READLINK]		= 0,
-	[FUSE_SYMLINK]		= 0,
-	[FUSE_MKNOD]		= sizeof(struct fuse_mknod_in),
-	[FUSE_MKDIR]		= sizeof(struct fuse_mkdir_in),
-	[FUSE_UNLINK]		= 0,
-	[FUSE_RMDIR]		= 0,
-	[FUSE_RENAME]		= sizeof(struct fuse_rename_in),
-	[FUSE_LINK]		= sizeof(struct fuse_link_in),
-	[FUSE_OPEN]		= sizeof(struct fuse_open_in),
-	[FUSE_READ]		= sizeof(struct fuse_read_in),
-	[FUSE_WRITE]		= sizeof(struct fuse_write_in),
-	[FUSE_STATFS]		= 0,
-	[FUSE_RELEASE]		= sizeof(struct fuse_release_in),
-	[FUSE_FSYNC]		= sizeof(struct fuse_fsync_in),
-	[FUSE_SETXATTR]		= sizeof(struct fuse_setxattr_in),
-	[FUSE_GETXATTR]		= sizeof(struct fuse_getxattr_in),
-	[FUSE_LISTXATTR]	= sizeof(struct fuse_getxattr_in),
-	[FUSE_REMOVEXATTR]	= 0,
-	[FUSE_FLUSH]		= sizeof(struct fuse_flush_in),
-	[FUSE_INIT]		= sizeof(struct fuse_init_in),
-	[FUSE_OPENDIR]		= sizeof(struct fuse_open_in),
-	[FUSE_READDIR]		= sizeof(struct fuse_read_in),
-	[FUSE_RELEASEDIR]	= sizeof(struct fuse_release_in),
-	[FUSE_FSYNCDIR]		= sizeof(struct fuse_fsync_in),
-	[FUSE_GETLK]		= sizeof(struct fuse_lk_in),
-	[FUSE_SETLK]		= sizeof(struct fuse_lk_in),
-	[FUSE_SETLKW]		= sizeof(struct fuse_lk_in),
-	[FUSE_ACCESS]		= sizeof(struct fuse_access_in),
-	[FUSE_CREATE]		= sizeof(struct fuse_create_in),
-	[FUSE_INTERRUPT]	= sizeof(struct fuse_interrupt_in),
-	[FUSE_BMAP]		= sizeof(struct fuse_bmap_in),
-	[FUSE_DESTROY]		= 0,
-	[FUSE_IOCTL]		= sizeof(struct fuse_ioctl_in),
-	[FUSE_POLL]		= sizeof(struct fuse_poll_in),
-	[FUSE_BATCH_FORGET]	= sizeof(struct fuse_batch_forget_in),
-	[FUSE_FALLOCATE]	= sizeof(struct fuse_fallocate_in),
-	[FUSE_READDIRPLUS]	= sizeof(struct fuse_read_in),
-	[FUSE_RENAME2]		= sizeof(struct fuse_rename2_in),
-	[FUSE_LSEEK]		= sizeof(struct fuse_lseek_in),
-	[FUSE_COPY_FILE_RANGE]	= sizeof(struct fuse_copy_file_range_in),
-	[FUSE_SETUPMAPPING]	= sizeof(struct fuse_setupmapping_in),
-	[FUSE_REMOVEMAPPING]	= sizeof(struct fuse_removemapping_in),
-	[FUSE_SYNCFS]		= sizeof(struct fuse_syncfs_in),
+struct fsdev_fuse_args {
+	uint32_t in_size;
+	bool supported;
 };
 
-static size_t
-fuse_get_in_size(struct fuse_in_header *in_hdr)
+#define ARGS(in_size) { in_size, true }
+
+static const struct fsdev_fuse_args g_fsdev_fuse_args[] = {
+	[FUSE_LOOKUP]		= ARGS(0),
+	[FUSE_FORGET]		= ARGS(sizeof(struct fuse_forget_in)),
+	[FUSE_GETATTR]		= ARGS(sizeof(struct fuse_getattr_in)),
+	[FUSE_SETATTR]		= ARGS(sizeof(struct fuse_setattr_in)),
+	[FUSE_READLINK]		= ARGS(0),
+	[FUSE_SYMLINK]		= ARGS(0),
+	[FUSE_MKNOD]		= ARGS(sizeof(struct fuse_mknod_in)),
+	[FUSE_MKDIR]		= ARGS(sizeof(struct fuse_mkdir_in)),
+	[FUSE_UNLINK]		= ARGS(0),
+	[FUSE_RMDIR]		= ARGS(0),
+	[FUSE_RENAME]		= ARGS(sizeof(struct fuse_rename_in)),
+	[FUSE_LINK]		= ARGS(sizeof(struct fuse_link_in)),
+	[FUSE_OPEN]		= ARGS(sizeof(struct fuse_open_in)),
+	[FUSE_READ]		= ARGS(sizeof(struct fuse_read_in)),
+	[FUSE_WRITE]		= ARGS(sizeof(struct fuse_write_in)),
+	[FUSE_STATFS]		= ARGS(0),
+	[FUSE_RELEASE]		= ARGS(sizeof(struct fuse_release_in)),
+	[FUSE_FSYNC]		= ARGS(sizeof(struct fuse_fsync_in)),
+	[FUSE_SETXATTR]		= ARGS(sizeof(struct fuse_setxattr_in)),
+	[FUSE_GETXATTR]		= ARGS(sizeof(struct fuse_getxattr_in)),
+	[FUSE_LISTXATTR]	= ARGS(sizeof(struct fuse_getxattr_in)),
+	[FUSE_REMOVEXATTR]	= ARGS(0),
+	[FUSE_FLUSH]		= ARGS(sizeof(struct fuse_flush_in)),
+	[FUSE_INIT]		= ARGS(sizeof(struct fuse_init_in)),
+	[FUSE_OPENDIR]		= ARGS(sizeof(struct fuse_open_in)),
+	[FUSE_READDIR]		= ARGS(sizeof(struct fuse_read_in)),
+	[FUSE_RELEASEDIR]	= ARGS(sizeof(struct fuse_release_in)),
+	[FUSE_FSYNCDIR]		= ARGS(sizeof(struct fuse_fsync_in)),
+	[FUSE_GETLK]		= ARGS(sizeof(struct fuse_lk_in)),
+	[FUSE_SETLK]		= ARGS(sizeof(struct fuse_lk_in)),
+	[FUSE_SETLKW]		= ARGS(sizeof(struct fuse_lk_in)),
+	[FUSE_ACCESS]		= ARGS(sizeof(struct fuse_access_in)),
+	[FUSE_CREATE]		= ARGS(sizeof(struct fuse_create_in)),
+	[FUSE_INTERRUPT]	= ARGS(sizeof(struct fuse_interrupt_in)),
+	[FUSE_BMAP]		= ARGS(sizeof(struct fuse_bmap_in)),
+	[FUSE_DESTROY]		= ARGS(0),
+	[FUSE_IOCTL]		= ARGS(sizeof(struct fuse_ioctl_in)),
+	[FUSE_POLL]		= ARGS(sizeof(struct fuse_poll_in)),
+	[FUSE_BATCH_FORGET]	= ARGS(sizeof(struct fuse_batch_forget_in)),
+	[FUSE_FALLOCATE]	= ARGS(sizeof(struct fuse_fallocate_in)),
+	[FUSE_READDIRPLUS]	= ARGS(sizeof(struct fuse_read_in)),
+	[FUSE_RENAME2]		= ARGS(sizeof(struct fuse_rename2_in)),
+	[FUSE_LSEEK]		= ARGS(sizeof(struct fuse_lseek_in)),
+	[FUSE_COPY_FILE_RANGE]	= ARGS(sizeof(struct fuse_copy_file_range_in)),
+	[FUSE_SETUPMAPPING]	= ARGS(sizeof(struct fuse_setupmapping_in)),
+	[FUSE_REMOVEMAPPING]	= ARGS(sizeof(struct fuse_removemapping_in)),
+	[FUSE_SYNCFS]		= ARGS(sizeof(struct fuse_syncfs_in)),
+};
+
+static int
+fsdev_get_fuse_args(struct fuse_in_header *in_hdr, struct fsdev_fuse_args *args)
 {
-	if (in_hdr->opcode >= SPDK_COUNTOF(g_fsdev_fuse_args)) {
-		return 0;
+	if (in_hdr->opcode >= SPDK_COUNTOF(g_fsdev_fuse_args) ||
+	    !g_fsdev_fuse_args[in_hdr->opcode].supported) {
+		return -ENOSYS;
 	}
 
-	return g_fsdev_fuse_args[in_hdr->opcode];
+	*args = g_fsdev_fuse_args[in_hdr->opcode];
+	return 0;
 }
 
 static bool
@@ -2399,7 +2408,8 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 {
 	struct spdk_fuse_in *in = &fsdev_io->u_in.fuse;
 	struct spdk_fuse_out *out = &fsdev_io->u_out.fuse;
-	size_t in_size;
+	struct fsdev_fuse_args args;
+	int rc;
 
 	if (!fsdev_io) {
 		SPDK_ERRLOG("Invalid argument, fsdev_io is NULL\n");
@@ -2434,16 +2444,21 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 		in_iov->iov_base += sizeof(*in->hdr);
 		in_iov->iov_len -= sizeof(*in->hdr);
 	}
+
+	rc = fsdev_get_fuse_args(in->hdr, &args);
+	if (spdk_unlikely(rc != 0)) {
+		return rc;
+	}
+
 	in->op.raw = in_iov->iov_base;
-	in_size = fuse_get_in_size(in->hdr);
-	if (in_size > 0) {
-		assert(in_iov->iov_len >= in_size);
-		if (in_iov->iov_len == in_size) {
+	if (args.in_size > 0) {
+		assert(in_iov->iov_len >= args.in_size);
+		if (in_iov->iov_len == args.in_size) {
 			in_iov++;
 			in_iovcnt--;
 		} else {
-			in_iov->iov_base += in_size;
-			in_iov->iov_len -= in_size;
+			in_iov->iov_base += args.in_size;
+			in_iov->iov_len -= args.in_size;
 		}
 	}
 
