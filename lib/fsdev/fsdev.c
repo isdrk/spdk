@@ -2403,6 +2403,9 @@ fsdev_advance_iovs(struct iovec **iovs, int *iovcnt, size_t count)
 	if ((*iovs)->iov_len == count) {
 		(*iovs)++;
 		(*iovcnt)--;
+		if (*iovcnt == 0) {
+			*iovs = NULL;
+		}
 	} else {
 		(*iovs)->iov_base += count;
 		(*iovs)->iov_len -= count;
@@ -2459,10 +2462,14 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 		return rc;
 	}
 
-	in->op.raw = in_iov->iov_base;
 	if (args.in_size > 0) {
-		assert(in_iov->iov_len >= args.in_size);
-		fsdev_advance_iovs(&in_iov, &in_iovcnt, args.in_size);
+		if (in_iov == NULL || in_iov->iov_len < args.in_size) {
+			return -EINVAL;
+		}
+
+		in->op.raw = fsdev_advance_iovs(&in_iov, &in_iovcnt, args.in_size);
+	} else {
+		in->op.raw = NULL;
 	}
 
 	if (domain != NULL) {
@@ -2505,6 +2512,13 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 		}
 
 		out->hdr = fsdev_advance_iovs(&out_iov, &out_iovcnt, sizeof(*out->hdr));
+	} else {
+		if (out_iov != NULL) {
+			SPDK_ERRLOG("Invalid out_iov, must be NULL for %u\n", in->hdr->opcode);
+			return -EINVAL;
+		}
+
+		out->hdr = NULL;
 	}
 
 	if (out_iov != NULL) {
@@ -2531,7 +2545,6 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 			out->iovcnt = out_iovcnt;
 		}
 	} else {
-		out->hdr = NULL;
 		out->op.raw = NULL;
 		out->iov = NULL;
 		out->iovcnt = 0;
