@@ -2395,6 +2395,22 @@ fuse_op_requires_reply(uint32_t opc)
 	}
 }
 
+static void *
+fsdev_advance_iovs(struct iovec **iovs, int *iovcnt, size_t count)
+{
+	void *buf = (*iovs)->iov_base;
+
+	if ((*iovs)->iov_len == count) {
+		(*iovs)++;
+		(*iovcnt)--;
+	} else {
+		(*iovs)->iov_base += count;
+		(*iovs)->iov_len -= count;
+	}
+
+	return buf;
+}
+
 int
 spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 				    struct spdk_fsdev_desc *desc,
@@ -2436,14 +2452,7 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 		return -EINVAL;
 	}
 
-	in->hdr = in_iov->iov_base;
-	if (in_iov->iov_len == sizeof(*in->hdr)) {
-		in_iov++;
-		in_iovcnt--;
-	} else {
-		in_iov->iov_base += sizeof(*in->hdr);
-		in_iov->iov_len -= sizeof(*in->hdr);
-	}
+	in->hdr = fsdev_advance_iovs(&in_iov, &in_iovcnt, sizeof(*in->hdr));
 
 	rc = fsdev_get_fuse_args(in->hdr, &args);
 	if (spdk_unlikely(rc != 0)) {
@@ -2453,13 +2462,7 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	in->op.raw = in_iov->iov_base;
 	if (args.in_size > 0) {
 		assert(in_iov->iov_len >= args.in_size);
-		if (in_iov->iov_len == args.in_size) {
-			in_iov++;
-			in_iovcnt--;
-		} else {
-			in_iov->iov_base += args.in_size;
-			in_iov->iov_len -= args.in_size;
-		}
+		fsdev_advance_iovs(&in_iov, &in_iovcnt, args.in_size);
 	}
 
 	if (domain != NULL) {
@@ -2495,21 +2498,16 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	in->memory_domain_ctx = domain_ctx;
 
 	/* Done preparing in headers, now move to out headers if they exist. */
-	if (fuse_op_requires_reply(in->hdr->opcode) &&
-	    (out_iov == NULL || out_iov[0].iov_len < sizeof(*out->hdr))) {
-		SPDK_ERRLOG("Invalid out_iov, must have fuse_out_header\n");
-		return -EINVAL;
+	if (fuse_op_requires_reply(in->hdr->opcode)) {
+		if (out_iov == NULL || out_iov[0].iov_len < sizeof(*out->hdr)) {
+			SPDK_ERRLOG("Invalid out_iov, must have fuse_out_header\n");
+			return -EINVAL;
+		}
+
+		out->hdr = fsdev_advance_iovs(&out_iov, &out_iovcnt, sizeof(*out->hdr));
 	}
 
 	if (out_iov != NULL) {
-		out->hdr = out_iov->iov_base;
-		if (out_iov->iov_len == sizeof(*out->hdr)) {
-			out_iov++;
-			out_iovcnt--;
-		} else {
-			out_iov->iov_base += sizeof(*out->hdr);
-			out_iov->iov_len -= sizeof(*out->hdr);
-		}
 		out->op.raw = out_iov->iov_base;
 		if (domain != NULL) {
 			if (in->hdr->opcode == FUSE_READ) {
