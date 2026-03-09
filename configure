@@ -1491,7 +1491,9 @@ echo "done."
 
 # Create .sh with build config for easy sourcing|lookup during the tests.
 for conf in "${!CONFIG[@]}"; do
-	echo "CONFIG_$conf=${CONFIG[$conf]}"
+	val=${CONFIG[$conf]}
+	[[ "$val" =~ [[:space:]] ]] && val="\"$val\""
+	echo "CONFIG_$conf=$val"
 done > "$rootdir/test/common/build_config.sh"
 
 if [[ $sys_name == "FreeBSD" ]]; then
