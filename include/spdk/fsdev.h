@@ -875,11 +875,11 @@ struct spdk_fsdev_io {
 		 */
 		struct iovec orig_in_iov[2];
 
-		/** Copy of first iovec in out_iov (if one exists). This is
+		/** Copy of up to first 2 iovecs in out_iov (if one exists). This is
 		 *  needed if fsdev needs to modify the original iovs when
 		 *  a combination of headers and payload appear in the same iov.
 		 */
-		struct iovec orig_out_iov[1];
+		struct iovec orig_out_iov[2];
 
 		/**
 		 * Set to true while the fsdev module submit_request function is in progress.
