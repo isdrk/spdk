@@ -409,6 +409,7 @@ fsdev_fuse_request_prep(struct fsdev_fuse_request *req, size_t inlen)
 		break;
 	case FUSE_FORGET:
 	case FUSE_BATCH_FORGET:
+	case FUSE_INTERRUPT:
 		rc = fsdev_fuse_request_prep_noreply(req, inlen);
 		break;
 	default:
