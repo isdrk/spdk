@@ -2435,11 +2435,6 @@ spdk_fsdev_io_submit_from_fuse_iovs(struct spdk_fsdev_io *fsdev_io,
 	struct fsdev_fuse_args args;
 	int rc;
 
-	if (!fsdev_io) {
-		SPDK_ERRLOG("Invalid argument, fsdev_io is NULL\n");
-		return -ENOBUFS;
-	}
-
 	spdk_fsdev_io_init(fsdev_io, desc, ch,
 			   source_id, source_unique, clb, cb_arg);
 	fsdev_io->internal.in_iov = in_iov;
