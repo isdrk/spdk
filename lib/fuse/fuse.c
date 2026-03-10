@@ -944,7 +944,11 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 				    fsdev_fuse_request_get_name(req), spdk_strerror(-rc));
 			ch->num_outstanding--;
 			fsdev_fuse_request_complete_manual(req, rc);
-			break;
+			if (rc == -ENOSYS) {
+				rc = 0;
+			} else {
+				break;
+			}
 		}
 
 		count++;
