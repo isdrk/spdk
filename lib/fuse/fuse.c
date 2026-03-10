@@ -81,7 +81,6 @@ struct fsdev_fuse_channel {
 	int					fd;
 	uint32_t				num_outstanding;
 	TAILQ_HEAD(, fsdev_fuse_request)	free_requests;
-	TAILQ_HEAD(, fsdev_fuse_request)	pending_requests;
 	TAILQ_ENTRY(fsdev_fuse_channel)		tailq;
 	struct {
 		fsdev_fuse_channel_drained_cb	cb_fn;
@@ -687,7 +686,6 @@ fsdev_fuse_channel_create(struct spdk_fuse_mount *mount)
 	}
 
 	TAILQ_INIT(&ch->free_requests);
-	TAILQ_INIT(&ch->pending_requests);
 	STAILQ_INIT(&ch->domains);
 
 	/* Bump poll group's refcount to make sure it doesn't disappear */
@@ -901,7 +899,7 @@ static int
 fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 {
 	struct spdk_fuse_mount *mount = ch->mount;
-	struct fsdev_fuse_request *req;
+	struct fsdev_fuse_request *req = NULL;
 	int rc = 0, count = 0;
 
 	/* Socket mode: try to accept connection if not connected */
@@ -914,31 +912,26 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 	}
 
 	while (1) {
-		req = TAILQ_FIRST(&ch->pending_requests);
-		if (req != NULL) {
-			TAILQ_REMOVE(&ch->pending_requests, req, tailq);
+		if (fsdev_fuse_mount_is_socket_mode(mount)) {
+			rc = fsdev_fuse_channel_read_socket(ch, &req);
 		} else {
-			if (fsdev_fuse_mount_is_socket_mode(mount)) {
-				rc = fsdev_fuse_channel_read_socket(ch, &req);
-			} else {
-				rc = fsdev_fuse_channel_read_fuse(ch, &req);
+			rc = fsdev_fuse_channel_read_fuse(ch, &req);
+		}
+
+		if (rc < 0) {
+			if (rc == -EAGAIN || rc == -EWOULDBLOCK) {
+				rc = 0;
+			} else if (rc != -ENODEV) {
+				SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(-rc));
 			}
 
-			if (rc < 0) {
-				if (rc == -EAGAIN || rc == -EWOULDBLOCK) {
-					rc = 0;
-				} else if (rc != -ENODEV) {
-					SPDK_ERRLOG("%s: %s\n", mount->name, spdk_strerror(-rc));
-				}
+			break;
+		}
 
-				break;
-			}
-
-			rc = fsdev_fuse_request_prep(req, (size_t)rc);
-			if (rc != 0) {
-				fsdev_fuse_request_complete_manual(req, rc);
-				break;
-			}
+		rc = fsdev_fuse_request_prep(req, (size_t)rc);
+		if (rc != 0) {
+			fsdev_fuse_request_complete_manual(req, rc);
+			break;
 		}
 
 		ch->num_outstanding++;
@@ -947,13 +940,9 @@ fsdev_fuse_channel_poll(struct fsdev_fuse_channel *ch)
 
 		rc = fsdev_fuse_channel_submit_request(ch, req);
 		if (rc != 0) {
-			ch->num_outstanding--;
-			if (rc == -ENOBUFS) {
-				TAILQ_INSERT_HEAD(&ch->pending_requests, req, tailq);
-				break;
-			}
 			SPDK_ERRLOG("%s: failed to submit %s: %s\n", mount->name,
 				    fsdev_fuse_request_get_name(req), spdk_strerror(-rc));
+			ch->num_outstanding--;
 			fsdev_fuse_request_complete_manual(req, rc);
 			break;
 		}
