@@ -871,11 +871,11 @@ int
 spdk_sock_recv_next(struct spdk_sock *sock, void **buf, struct spdk_sock_buf_token **token)
 {
 	if (sock == NULL || sock->flags.closed) {
-		return EBADF;
+		return -EBADF;
 	}
 
 	if (!sock->net_impl->recv_next) {
-		return ENOTSUP;
+		return -ENOTSUP;
 	}
 
 	return sock->net_impl->recv_next(sock, buf, token);
