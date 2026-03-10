@@ -951,12 +951,12 @@ xlio_sock_recv_next(struct spdk_sock *_sock, void **buf, struct spdk_sock_buf_to
 	}
 
 	if (!sock->events.rx) {
-		return EAGAIN;
+		return -EAGAIN;
 	}
 
 	segment = STAILQ_FIRST(&sock->pending_stream);
 	if (segment == NULL) {
-		return EAGAIN;
+		return -EAGAIN;
 	}
 
 	group = sock->group;
