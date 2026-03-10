@@ -351,7 +351,7 @@ xlio_sock_set_recvbuf(struct spdk_sock *_sock, int sz)
 
 	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_RCVBUF, &sz, sizeof(sz));
 	if (rc < 0) {
-		return rc;
+		return -errno;
 	}
 
 	_sock->impl_opts.recv_buf_size = sz;
@@ -378,7 +378,7 @@ xlio_sock_set_sendbuf(struct spdk_sock *_sock, int sz)
 
 	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_SNDBUF, &sz, sizeof(sz));
 	if (rc < 0) {
-		return rc;
+		return -errno;
 	}
 
 	_sock->impl_opts.send_buf_size = sz;
@@ -437,7 +437,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	val = 1;
 	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 	if (rc != 0) {
-		SPDK_ERRLOG("Failed to set SO_REUSEADDR: %s\n", spdk_strerror(-rc));
+		SPDK_ERRLOG("Failed to set SO_REUSEADDR: %s\n", spdk_strerror(errno));
 		xlio_socket_destroy(sock->xlio_sock);
 		return NULL;
 	}
@@ -445,7 +445,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	val = 1;
 	rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
 	if (rc != 0) {
-		SPDK_ERRLOG("Failed to set TCP_NODELAY: %s\n", spdk_strerror(-rc));
+		SPDK_ERRLOG("Failed to set TCP_NODELAY: %s\n", spdk_strerror(errno));
 		xlio_socket_destroy(sock->xlio_sock);
 		return NULL;
 	}
@@ -453,7 +453,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	val = 1;
 	rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_QUICKACK, &val, sizeof val);
 	if (rc != 0) {
-		SPDK_ERRLOG("Failed to set TCP_QUICKACK: %s\n", spdk_strerror(-rc));
+		SPDK_ERRLOG("Failed to set TCP_QUICKACK: %s\n", spdk_strerror(errno));
 		xlio_socket_destroy(sock->xlio_sock);
 		return NULL;
 	}
@@ -826,8 +826,7 @@ xlio_sock_flush(struct spdk_sock *_sock)
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 
 	if (sock->rc != 0) {
-		errno = sock->rc;
-		return -1;
+		return -sock->rc;
 	}
 
 	xlio_socket_flush(sock->xlio_sock);
@@ -846,19 +845,16 @@ xlio_sock_readv(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 	ssize_t total;
 
 	if (sock->rc != 0) {
-		errno = sock->rc;
-		return -1;
+		return -sock->rc;
 	}
 
 	if (!sock->events.rx) {
-		errno = EAGAIN;
-		return -1;
+		return -EAGAIN;
 	}
 
 	segment = STAILQ_FIRST(&sock->pending_stream);
 	if (segment == NULL) {
-		errno = EAGAIN;
-		return -1;
+		return -EAGAIN;
 	}
 
 	group = sock->group;
@@ -918,14 +914,12 @@ xlio_sock_writev(struct spdk_sock *_sock, struct iovec *iov, int iovcnt)
 	};
 
 	if (sock->rc != 0) {
-		errno = sock->rc;
-		return -1;
+		return -sock->rc;
 	}
 
 	rc = xlio_socket_sendv(sock->xlio_sock, iov, iovcnt, &attr);
 	if (rc < 0) {
-		errno = -rc;
-		return -1;
+		return -errno;
 	}
 
 	/* Unfortunately, the API expects to return the total amount of data being sent because
@@ -947,7 +941,7 @@ xlio_sock_recv_next(struct spdk_sock *_sock, void **buf, struct spdk_sock_buf_to
 	struct spdk_xlio_stream_segment *segment;
 
 	if (sock->rc != 0) {
-		return sock->rc;
+		return -sock->rc;
 	}
 
 	if (!sock->events.rx) {
@@ -1124,14 +1118,13 @@ xlio_sock_set_recvlowat(struct spdk_sock *_sock, int nbytes)
 	int rc;
 
 	if (sock->rc != 0) {
-		errno = sock->rc;
-		return -1;
+		return -sock->rc;
 	}
 
 	val = nbytes;
 	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_RCVLOWAT, &val, sizeof val);
 	if (rc != 0) {
-		return -1;
+		return -errno;
 	}
 
 	return 0;
