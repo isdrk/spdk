@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from elftools.elf.elffile import ELFFile
 import math
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -110,7 +111,22 @@ def crash(pid, library, symbol, location, skip, verbose):
     tmp.file.flush()
     # gdb crashes when exiting from within the breakpoint in the non-interactive mode, so we cannot
     # capture its exit code
-    subprocess.run(['gdb', '-batch', '-p', str(pid), '-x', tmp.name])
+    proc = subprocess.Popen(['gdb', '-q',
+                             '-ex', 'set confirm off',
+                             '-p', str(pid), '-x', tmp.name],
+                            stdin=subprocess.PIPE)
+
+    def _sigterm(_signum, _frame):
+        # Send commands to the existing session.
+        # We need to first delete the breakpoint and then detach from the process.
+        # If not, the leftover breakpoint might cause the next execution to fail.
+        proc.send_signal(signal.SIGINT)
+        proc.stdin.write(b'delete\ndetach\nquit\n')
+        proc.stdin.flush()
+        proc.stdin.close()
+
+    signal.signal(signal.SIGTERM, _sigterm)
+    proc.wait()
     return 0
 
 
