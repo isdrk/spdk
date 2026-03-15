@@ -3725,8 +3725,8 @@ nvme_rdma_poller_process_cq_completions(struct nvme_rdma_poller *poller, uint32_
 		case RDMA_WR_TYPE_RECV:
 			rdma_rsp = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_rsp, rdma_wr);
 			if (poller->srq) {
-				assert(wc->qp_num <= INT_MAX);
-				rqpair = nvme_rdma_poller_srq_find_qpair(poller, wc->qp_num);
+				assert(wc[i].qp_num <= INT_MAX);
+				rqpair = nvme_rdma_poller_srq_find_qpair(poller, wc[i].qp_num);
 			} else {
 				rqpair = rdma_rsp->rqpair;
 			}
@@ -3753,7 +3753,7 @@ nvme_rdma_poller_process_cq_completions(struct nvme_rdma_poller *poller, uint32_
 			rdma_req = SPDK_CONTAINEROF(rdma_wr, struct spdk_nvme_rdma_req, rdma_wr);
 			rqpair = rdma_req->req ? nvme_rdma_qpair(rdma_req->req->qpair) : NULL;
 			if (spdk_unlikely(!rqpair)) {
-				rqpair = nvme_rdma_poll_group_find_qpair(poller->group, wc->qp_num);
+				rqpair = nvme_rdma_poll_group_find_qpair(poller->group, wc[i].qp_num);
 				if (!rqpair) {
 					/* When poll_group is used, several qpairs share the same CQ and it is possible to
 					 * receive a completion with error (e.g. IBV_WC_WR_FLUSH_ERR) for already disconnected qpair
