@@ -2695,6 +2695,46 @@ complete:
 	_nvme_tcp_req_complete(tcp_req, tqpair, &tcp_req->req.cpl);
 }
 
+static inline int
+nvme_tcp_calc_and_set_recv_iovs(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qpair *tqpair,
+				struct spdk_nvme_cpl *rsp)
+{
+	struct xlio_sock_buf *sock_buf = tcp_req->sock_buf;
+	uint32_t iovcnt = 0;
+
+	while (sock_buf) {
+		iovcnt++;
+		sock_buf = sock_buf->next;
+	}
+
+	if (iovcnt > NVME_TCP_MAX_SGL_DESCRIPTORS) {
+		if (iovcnt > MAX_RX_IOVS) {
+			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+			SPDK_ERRLOG("HIGHLY SCATTERED RX RECEIVE. CANNOT HANDLE\n");
+			return -E2BIG;
+		}
+
+		tcp_req->recv_iovs = spdk_mempool_get(g_iovec_pool);
+		if (tcp_req->recv_iovs == NULL) {
+			/* TODO: Need to queue up and wait */
+			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+			SPDK_ERRLOG("Ran out of iovec arrays in pool!\n");
+			return -ENOMEM;
+		}
+	}
+
+	tcp_req->recv_iovcnt = 0;
+	sock_buf = tcp_req->sock_buf;
+	while (sock_buf) {
+		tcp_req->recv_iovs[tcp_req->recv_iovcnt++] = sock_buf->iov;
+		sock_buf = sock_buf->next;
+	}
+
+	return 0;
+}
+
 static void
 nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 				    struct nvme_tcp_qpair *tqpair,
@@ -2707,7 +2747,6 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 	struct spdk_accel_task	*task;
 	struct spdk_accel_sequence *accel_seq;
 	bool skip_copy = false;
-	uint32_t iovcnt;
 
 	req = &tcp_req->req;
 
@@ -2717,7 +2756,6 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 
 	if (xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
 		struct spdk_nvme_poll_group *group = tqpair->qpair.poll_group->group;
-		struct xlio_sock_buf *sock_buf;
 
 		assert(group != 0);
 
@@ -2730,36 +2768,9 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 			goto out;
 		}
 
-		iovcnt = 0;
-		sock_buf = tcp_req->sock_buf;
-		while (sock_buf) {
-			iovcnt++;
-			sock_buf = sock_buf->next;
-		}
-
-		if (iovcnt > NVME_TCP_MAX_SGL_DESCRIPTORS) {
-			if (iovcnt > MAX_RX_IOVS) {
-				rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-				rsp->status.sct = SPDK_NVME_SCT_GENERIC;
-				SPDK_ERRLOG("HIGHLY SCATTERED RX RECEIVE. CANNOT HANDLE\n");
-				goto out;
-			}
-
-			tcp_req->recv_iovs = spdk_mempool_get(g_iovec_pool);
-			if (tcp_req->recv_iovs == NULL) {
-				/* TODO: Need to queue up and wait */
-				rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-				rsp->status.sct = SPDK_NVME_SCT_GENERIC;
-				SPDK_ERRLOG("Ran out of iovec arrays in pool!\n");
-				goto out;
-			}
-		}
-
-		tcp_req->recv_iovcnt = 0;
-		sock_buf = tcp_req->sock_buf;
-		while (sock_buf) {
-			tcp_req->recv_iovs[tcp_req->recv_iovcnt++] = sock_buf->iov;
-			sock_buf = sock_buf->next;
+		rc = nvme_tcp_calc_and_set_recv_iovs(tcp_req, tqpair, rsp);
+		if (spdk_unlikely(rc)) {
+			goto out;
 		}
 
 		tqpair->stats->received_data_pdus++;
@@ -3229,14 +3240,11 @@ static inline int
 nvme_tcp_prepare_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct nvme_tcp_req *tcp_req = pdu->req;
-	struct xlio_sock_buf *sock_buf;
 	int rc;
 
-	tcp_req->recv_iovcnt = 0;
-	sock_buf = tcp_req->sock_buf;
-	while (sock_buf) {
-		tcp_req->recv_iovs[tcp_req->recv_iovcnt++] = sock_buf->iov;
-		sock_buf = sock_buf->next;
+	rc = nvme_tcp_calc_and_set_recv_iovs(tcp_req, tqpair, &tcp_req->req.cpl);
+	if (spdk_unlikely(rc)) {
+		return rc;
 	}
 
 	tqpair->stats->received_data_pdus++;
