@@ -14,6 +14,7 @@
 #include "spdk/queue.h"
 #include "spdk/util.h"
 #include "spdk/json.h"
+#include "spdk/telemetry_source.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -150,8 +151,8 @@ struct spdk_telemetry_exporter_fn_table {
 	int (*destruct)(void *ctx);
 
 	/** Register a telemetry type */
-	struct spdk_telemetry_type_handle *(*register_type)(void *ctx, const char *name,
-			const char **stat_names, uint64_t num_stats);
+	struct spdk_telemetry_type_handle *(*register_type)(void *ctx,
+			const struct spdk_telemetry_type_info *type_info);
 
 	/** Unregister a telemetry type */
 	void (*unregister_type)(void *ctx, struct spdk_telemetry_type_handle *handle);

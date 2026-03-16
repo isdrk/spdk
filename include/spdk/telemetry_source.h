@@ -34,16 +34,47 @@ struct spdk_telemetry_source;
 typedef void (*spdk_telemetry_pull_cb)(void *pull_cb_arg, struct spdk_telemetry_source *src);
 
 /**
+ * Information about a telemetry stat.
+ */
+struct spdk_telemetry_stat_info {
+	/**
+	 * Name of the telemetry field.
+	 */
+	const char *name;
+};
+
+/**
+ * Information about a telemetry type.
+ */
+struct spdk_telemetry_type_info {
+	/**
+	 * Name of the telemetry type.
+	 */
+	const char *name;
+
+	/**
+	 * Number of stats in the telemetry type.
+	 */
+	uint64_t num_stats;
+
+	/**
+	 * Array of stats info.
+	 */
+	const struct spdk_telemetry_stat_info *stats;
+};
+
+/**
  * Register a telemetry type.
  *
- * \param name Name of the telemetry type.
- * \param stat_names Array of stat names to be pulled from the telemetry source.
- * \param num_stats Number of stats associated with the telemetry source.
+ * \param type_info Information about the telemetry type.
  * \param type Pointer to the telemetry type.
  * \return 0 on success, negative errno on failure.
+ *
+ * \note The \p type_info must remain valid until the telemetry type is unregistered.
+ *
  */
-int spdk_telemetry_register_type(const char *name, const char **stat_names,
-				 uint64_t num_stats, struct spdk_telemetry_type **type);
+int spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
+				 struct spdk_telemetry_type **type);
 
 /**
  * Unregister a telemetry type.

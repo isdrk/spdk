@@ -2438,44 +2438,49 @@ bdev_qos_modules_init(void)
 	return 0;
 }
 
-static const char *bdev_io_stat_fields[] = {
-	"bytes_read",
-	"num_read_ops",
-	"bytes_written",
-	"num_write_ops",
-	"bytes_unmapped",
-	"num_unmap_ops",
-	"bytes_copied",
-	"num_copy_ops",
-	"read_latency_ticks",
-	"max_read_latency_ticks",
-	"min_read_latency_ticks",
-	"write_latency_ticks",
-	"max_write_latency_ticks",
-	"min_write_latency_ticks",
-	"unmap_latency_ticks",
-	"max_unmap_latency_ticks",
-	"min_unmap_latency_ticks",
-	"copy_latency_ticks",
-	"max_copy_latency_ticks",
-	"min_copy_latency_ticks",
-	"ticks_rate",
-	"num_read_split",
-	"num_write_split",
+static const struct spdk_telemetry_stat_info bdev_io_stats[] = {
+	{ .name = "bytes_read" },
+	{ .name = "num_read_ops" },
+	{ .name = "bytes_written" },
+	{ .name = "num_write_ops" },
+	{ .name = "bytes_unmapped" },
+	{ .name = "num_unmap_ops" },
+	{ .name = "bytes_copied" },
+	{ .name = "num_copy_ops" },
+	{ .name = "read_latency_ticks" },
+	{ .name = "max_read_latency_ticks" },
+	{ .name = "min_read_latency_ticks" },
+	{ .name = "write_latency_ticks" },
+	{ .name = "max_write_latency_ticks" },
+	{ .name = "min_write_latency_ticks" },
+	{ .name = "unmap_latency_ticks" },
+	{ .name = "max_unmap_latency_ticks" },
+	{ .name = "min_unmap_latency_ticks" },
+	{ .name = "copy_latency_ticks" },
+	{ .name = "max_copy_latency_ticks" },
+	{ .name = "min_copy_latency_ticks" },
+	{ .name = "ticks_rate" },
+	{ .name = "num_read_split" },
+	{ .name = "num_write_split" },
 };
 
 SPDK_STATIC_ASSERT(
-	SPDK_COUNTOF(bdev_io_stat_fields) * sizeof(uint64_t) == offsetof(struct spdk_bdev_io_stat,
+	SPDK_COUNTOF(bdev_io_stats) * sizeof(uint64_t) == offsetof(struct spdk_bdev_io_stat,
 			io_error),
-	"bdev_io_stat_fields array size mismatch the io_stat structure size");
+	"bdev_io_stats array size mismatch the io_stat structure size");
+
+static const struct spdk_telemetry_type_info bdev_io_stat_type_info = {
+	.name = "bdev_io_stat",
+	.num_stats = SPDK_COUNTOF(bdev_io_stats),
+	.stats = bdev_io_stats,
+};
 
 static int
 bdev_telemetry_init(void)
 {
 	int rc;
 
-	rc = spdk_telemetry_register_type("bdev_io_stat", bdev_io_stat_fields,
-					  SPDK_COUNTOF(bdev_io_stat_fields), &g_bdev_mgr.telemetry_type_iostat);
+	rc = spdk_telemetry_register_type(&bdev_io_stat_type_info, &g_bdev_mgr.telemetry_type_iostat);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to register bdev io stat telemetry type: %d\n", rc);
 		return rc;
@@ -9165,7 +9170,7 @@ bdev_io_stat_pull_io_stat_done_cb(struct spdk_bdev *bdev, struct spdk_bdev_io_st
 	num_stats = spdk_telemetry_source_get_num_stats(src);
 
 	assert(stats != NULL);
-	assert(num_stats == SPDK_COUNTOF(bdev_io_stat_fields));
+	assert(num_stats == SPDK_COUNTOF(bdev_io_stats));
 	assert(num_stats == 23);
 
 	SPDK_UNUSED(num_stats);
@@ -9210,7 +9215,7 @@ bdev_io_stat_pull_cb(void *pull_cb_arg, struct spdk_telemetry_source *src)
 	num_stats = spdk_telemetry_source_get_num_stats(src);
 
 	assert(stats != NULL);
-	assert(num_stats == SPDK_COUNTOF(bdev_io_stat_fields));
+	assert(num_stats == SPDK_COUNTOF(bdev_io_stats));
 
 	SPDK_UNUSED(stats);
 	SPDK_UNUSED(num_stats);

@@ -42,12 +42,10 @@ struct spdk_telemetry_type {
 	uint64_t to_delete : 1;
 	uint64_t enabled : 1;
 	uint64_t reserved : 62;
-	char *name;
-	char **stat_names;
-	uint64_t num_stats;
 	struct spdk_telemetry_type_handle *handle;
 	TAILQ_ENTRY(spdk_telemetry_type) link;
 	TAILQ_HEAD(, spdk_telemetry_source) sources;
+	const struct spdk_telemetry_type_info *info;
 };
 
 struct telemetry_mgr {
@@ -107,8 +105,6 @@ telemetry_delete_source(struct spdk_telemetry_source *src)
 static void
 telemetry_delete_type(struct spdk_telemetry_type *type)
 {
-	uint64_t i;
-
 	assert(telemetry_mgr_is_initialized());
 	assert(type != NULL);
 	assert(spdk_thread_get_app_thread() == spdk_get_thread());
@@ -117,11 +113,6 @@ telemetry_delete_type(struct spdk_telemetry_type *type)
 		g_telemetry_mgr.exporter->fn_table->unregister_type(g_telemetry_mgr.exporter->ctxt, type->handle);
 	}
 
-	for (i = 0; i < type->num_stats; i++) {
-		free(type->stat_names[i]);
-	}
-	free(type->stat_names);
-	free(type->name);
 	free(type);
 }
 
@@ -518,7 +509,7 @@ spdk_telemetry_write_config_json(struct spdk_json_write_ctx *w)
 		spdk_json_write_object_begin(w); /* method */
 		spdk_json_write_named_string(w, "method", "telemetry_enable_type");
 		spdk_json_write_named_object_begin(w, "params"); /* params */
-		spdk_json_write_named_string(w, "name", type->name);
+		spdk_json_write_named_string(w, "name", type->info->name);
 		spdk_json_write_object_end(w); /* params */
 		spdk_json_write_object_end(w); /* method */
 	}
@@ -540,9 +531,9 @@ telemetry_exporter_register_type(struct spdk_telemetry_type *type)
 	assert(type != NULL);
 
 	type->handle = g_telemetry_mgr.exporter->fn_table->register_type(g_telemetry_mgr.exporter->ctxt,
-			type->name, (const char **)type->stat_names, type->num_stats);
+			type->info);
 	if (type->handle == NULL) {
-		SPDK_ERRLOG("Failed to register telemetry type %s\n", type->name);
+		SPDK_ERRLOG("Failed to register telemetry type %s\n", type->info->name);
 		return -EFAULT;
 	}
 
@@ -669,15 +660,14 @@ spdk_telemetry_exporter_release_stats(struct spdk_telemetry_source_handle *handl
 }
 
 int
-spdk_telemetry_register_type(const char *name, const char **stat_names, uint64_t num_stats,
+spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 			     struct spdk_telemetry_type **_type)
 {
 	struct spdk_telemetry_type *type;
 
 	assert(telemetry_mgr_is_initialized());
-	assert(name != NULL);
-	assert(stat_names != NULL);
-	assert(num_stats > 0);
+	assert(type_info != NULL);
+	assert(type_info->num_stats > 0);
 	assert(_type != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
 
@@ -687,28 +677,7 @@ spdk_telemetry_register_type(const char *name, const char **stat_names, uint64_t
 		return -ENOMEM;
 	}
 
-	type->name = strdup(name);
-	if (type->name == NULL) {
-		SPDK_ERRLOG("Failed to allocate memory for telemetry source name\n");
-		telemetry_delete_type(type);
-		return -ENOMEM;
-	}
-
-	type->stat_names = calloc(num_stats, sizeof(const char *));
-	if (type->stat_names == NULL) {
-		SPDK_ERRLOG("Failed to allocate memory for telemetry source stat names\n");
-		telemetry_delete_type(type);
-		return -ENOMEM;
-	}
-
-	for (type->num_stats = 0; type->num_stats < num_stats; type->num_stats++) {
-		type->stat_names[type->num_stats] = strdup(stat_names[type->num_stats]);
-		if (type->stat_names[type->num_stats] == NULL) {
-			SPDK_ERRLOG("Failed to allocate memory for telemetry source stat name\n");
-			telemetry_delete_type(type);
-			return -ENOMEM;
-		}
-	}
+	type->info = type_info;
 
 	if (g_telemetry_mgr.exporter) {
 		int res = telemetry_exporter_register_type(type);
@@ -718,7 +687,6 @@ spdk_telemetry_register_type(const char *name, const char **stat_names, uint64_t
 		}
 	}
 
-	type->num_stats = num_stats;
 	TAILQ_INIT(&type->sources);
 
 	TAILQ_INSERT_TAIL(&g_telemetry_mgr.types, type, link);
@@ -757,7 +725,7 @@ spdk_telemetry_register_source(struct spdk_telemetry_type *type, const char *nam
 	assert(_src != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
 
-	src = calloc(1, sizeof(*src) + type->num_stats * sizeof(uint64_t));
+	src = calloc(1, sizeof(*src) + type->info->num_stats * sizeof(uint64_t));
 	if (src == NULL) {
 		SPDK_ERRLOG("Failed to allocate memory for telemetry source\n");
 		return -ENOMEM;
@@ -818,7 +786,7 @@ spdk_telemetry_source_get_num_stats(struct spdk_telemetry_source *src)
 	assert(spdk_thread_is_app_thread(NULL));
 
 	assert(src->state == TELEMETRY_SOURCE_PULLING);
-	return src->type->num_stats;
+	return src->type->info->num_stats;
 }
 
 void
@@ -840,7 +808,7 @@ spdk_telemetry_source_pull_complete(struct spdk_telemetry_source *src, int statu
 	}
 
 	res = g_telemetry_mgr.exporter->fn_table->report_stats(g_telemetry_mgr.exporter->ctxt, src->handle,
-			src->stats, src->type->num_stats);
+			src->stats, src->type->info->num_stats);
 	if (res) {
 		src->state = TELEMETRY_SOURCE_IDLE;
 		return;
@@ -878,11 +846,11 @@ telemetry_dump_type_json(const struct spdk_telemetry_type *type, struct spdk_jso
 	assert(spdk_thread_is_app_thread(NULL));
 
 	spdk_json_write_object_begin(w);
-	spdk_json_write_named_string(w, "name", type->name);
+	spdk_json_write_named_string(w, "name", type->info->name);
 	spdk_json_write_named_bool(w, "enabled", type->enabled);
 	spdk_json_write_named_array_begin(w, "stat_names");
-	for (i = 0; i < type->num_stats; i++) {
-		spdk_json_write_string(w, type->stat_names[i]);
+	for (i = 0; i < type->info->num_stats; i++) {
+		spdk_json_write_string(w, type->info->stats[i].name);
 	}
 	spdk_json_write_array_end(w);
 	spdk_json_write_object_end(w);
@@ -905,7 +873,7 @@ telemetry_dump_types_json(struct spdk_json_write_ctx *w, const char *name)
 		}
 
 		/* If the type name matches the name parameter, dump it */
-		if (name != NULL && strcmp(type->name, name) != 0) {
+		if (name != NULL && strcmp(type->info->name, name) != 0) {
 			continue;
 		}
 
@@ -920,7 +888,7 @@ telemetry_find_type(const char *name)
 	struct spdk_telemetry_type *type;
 
 	TAILQ_FOREACH(type, &g_telemetry_mgr.types, link) {
-		if (strcmp(type->name, name) == 0) {
+		if (strcmp(type->info->name, name) == 0) {
 			return type;
 		}
 	}

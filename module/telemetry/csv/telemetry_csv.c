@@ -111,8 +111,7 @@ telemetry_csv_destruct(void *ctx)
 }
 
 static struct spdk_telemetry_type_handle *
-telemetry_csv_register_type(void *ctx, const char *name, const char **stat_names,
-			    uint64_t num_stats)
+telemetry_csv_register_type(void *ctx, const struct spdk_telemetry_type_info *type_info)
 {
 	struct spdk_telemetry_type_handle *type;
 	char *file_path;
@@ -123,9 +122,9 @@ telemetry_csv_register_type(void *ctx, const char *name, const char **stat_names
 		return NULL;
 	}
 
-	file_path = spdk_sprintf_alloc("%s/%s.csv", g_telemetry_csv.dst_dir, name);
+	file_path = spdk_sprintf_alloc("%s/%s.csv", g_telemetry_csv.dst_dir, type_info->name);
 	if (file_path == NULL) {
-		SPDK_ERRLOG("Failed to allocate memory for %s file path\n", name);
+		SPDK_ERRLOG("Failed to allocate memory for %s file path\n", type_info->name);
 		free(type);
 		return NULL;
 	}
@@ -133,7 +132,7 @@ telemetry_csv_register_type(void *ctx, const char *name, const char **stat_names
 	type->file = fopen(file_path, "w");
 	free(file_path);
 	if (type->file == NULL) {
-		SPDK_ERRLOG("Failed to open file %s/%s.csv: %d\n", g_telemetry_csv.dst_dir, name, errno);
+		SPDK_ERRLOG("Failed to open file %s/%s.csv: %d\n", g_telemetry_csv.dst_dir, type_info->name, errno);
 		free(type);
 		return NULL;
 	}
@@ -142,8 +141,8 @@ telemetry_csv_register_type(void *ctx, const char *name, const char **stat_names
 
 	/* Write the header */
 	fprintf(type->file, "name");
-	for (i = 0; i < num_stats; i++) {
-		fprintf(type->file, ",%s", stat_names[i]);
+	for (i = 0; i < type_info->num_stats; i++) {
+		fprintf(type->file, ",%s", type_info->stats[i].name);
 	}
 	fprintf(type->file, "\n");
 
