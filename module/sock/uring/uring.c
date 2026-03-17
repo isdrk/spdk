@@ -1395,9 +1395,10 @@ uring_sock_group_impl_buf_pool_alloc(struct spdk_uring_sock_group_impl *group_im
 {
 	struct io_uring_buf_reg buf_reg = {};
 	struct io_uring_buf_ring *buf_ring;
+	size_t page_size = sysconf(_SC_PAGESIZE);
 	int i, rc;
 
-	rc = posix_memalign((void **)&buf_ring, PAGE_SIZE,
+	rc = posix_memalign((void **)&buf_ring, page_size,
 			    URING_BUF_POOL_SIZE * sizeof(struct io_uring_buf));
 	if (rc != 0) {
 		/* posix_memalign returns positive errno values */
@@ -1429,7 +1430,7 @@ uring_sock_group_impl_buf_pool_alloc(struct spdk_uring_sock_group_impl *group_im
 	for (i = 0; i < URING_BUF_POOL_SIZE; i++) {
 		struct spdk_uring_buf_tracker *tracker = &group_impl->trackers[i];
 
-		tracker->buf = spdk_malloc(URING_MAX_RECV_SIZE, PAGE_SIZE, NULL, SPDK_ENV_NUMA_ID_ANY,
+		tracker->buf = spdk_malloc(URING_MAX_RECV_SIZE, page_size, NULL, SPDK_ENV_NUMA_ID_ANY,
 					   SPDK_MALLOC_DMA);
 		if (tracker->buf == NULL) {
 			/* If allocation fails, skip this tracker but continue with others */
