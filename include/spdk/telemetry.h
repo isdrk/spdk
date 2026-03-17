@@ -168,8 +168,8 @@ struct spdk_telemetry_exporter_fn_table {
 	 *
 	 * \param ctx The context for the telemetry exporter.
 	 * \param handle The handle for the telemetry source.
-	 * \param stats The stats to report.
-	 * \param num_stats The number of stats to report.
+	 * \param stats_buffer Pointer to the stats buffer to report.
+	 * \param stats_buffer_size Size of the stats buffer to report in bytes.
 	 *
 	 * \return \p true if the stats can be released immediately, \p false otherwise.
 	 * If \p false, the exporter will call \p spdk_telemetry_exporter_release_stats() later to release the stats.
@@ -178,8 +178,8 @@ struct spdk_telemetry_exporter_fn_table {
 	 * returns \p false, the telemetry core will not call this function again until the stats are released by the exporter
 	 * using \p spdk_telemetry_exporter_release_stats() API.
 	 */
-	bool (*report_stats)(void *ctx, struct spdk_telemetry_source_handle *handle, const uint64_t *stats,
-			     uint64_t num_stats);
+	bool (*report_stats)(void *ctx, struct spdk_telemetry_source_handle *handle,
+			     const void *stats_buffer, uint64_t stats_buffer_size);
 
 	/**
 	 * Output telemetry exporter-specific RPC configuration to a JSON stream. Optional - may be \p NULL.
@@ -240,11 +240,11 @@ int spdk_telemetry_exporter_unregister(struct spdk_telemetry_exporter *telemetry
  * Release stats received via the report_stat API
  *
  * \param handle The handle for the telemetry source.
- * \param stats The stats to release.
- * \param num_stats The number of stats to release.
+ * \param stats_buffer Pointer to the stats buffer to release.
+ * \param stats_buffer_size Size of the stats buffer to release in bytes.
  */
 void spdk_telemetry_exporter_release_stats(struct spdk_telemetry_source_handle *handle,
-		const uint64_t *stats, uint64_t num_stats);
+		const void *stats_buffer, uint64_t stats_buffer_size);
 
 /**
  * Notify the telemetry exporter layer that an asynchronous destruct operation is complete.

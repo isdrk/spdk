@@ -172,10 +172,12 @@ telemetry_csv_register_type(void *ctx, const struct spdk_telemetry_type_info *ty
 
 static bool
 telemetry_csv_report_stats(void *ctx, struct spdk_telemetry_source_handle *source,
-			   const uint64_t *stats, uint64_t num_stats)
+			   const void *stats_buffer, uint64_t stats_buffer_size)
 {
 	uint64_t i;
 	struct spdk_telemetry_type_handle *type;
+	const uint64_t *stats = stats_buffer;
+	uint64_t num_stats = stats_buffer_size / sizeof(uint64_t);
 
 	assert(source != NULL);
 	assert(stats != NULL);

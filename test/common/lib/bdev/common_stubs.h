@@ -17,6 +17,8 @@ DEFINE_STUB(spdk_telemetry_register_source, int, (struct spdk_telemetry_type *ty
 		const char *name, spdk_telemetry_pull_cb pull_cb, void *pull_cb_arg,
 		struct spdk_telemetry_source **src), 0);
 DEFINE_STUB_V(spdk_telemetry_unregister_source, (struct spdk_telemetry_source *src));
-DEFINE_STUB(spdk_telemetry_source_get_stats, uint64_t *, (struct spdk_telemetry_source *src), NULL);
-DEFINE_STUB(spdk_telemetry_source_get_num_stats, uint64_t, (struct spdk_telemetry_source *src), 0);
+DEFINE_STUB(spdk_telemetry_source_get_stats_buffer, void *, (struct spdk_telemetry_source *src),
+	    NULL);
+DEFINE_STUB(spdk_telemetry_source_get_stats_buffer_size, uint64_t,
+	    (struct spdk_telemetry_source *src), 0);
 DEFINE_STUB_V(spdk_telemetry_source_pull_complete, (struct spdk_telemetry_source *src, int status));

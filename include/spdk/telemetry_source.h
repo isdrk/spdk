@@ -106,20 +106,20 @@ void spdk_telemetry_unregister_source(struct spdk_telemetry_source *src);
 
 
 /**
- * Get the stats array for the telemetry source.
+ * Get the stats buffer assigned to the telemetry source.
  *
  * \param src Pointer to the telemetry source.
- * \return Pointer to the stats array.
+ * \return Pointer to the stats buffer.
  */
-uint64_t *spdk_telemetry_source_get_stats(struct spdk_telemetry_source *src);
+void *spdk_telemetry_source_get_stats_buffer(struct spdk_telemetry_source *src);
 
 /**
- * Get the number of stats for the telemetry source.
+ * Get buffer size for the stats buffer assigned to the telemetry source.
  *
  * \param src Pointer to the telemetry source.
- * \return Number of stats.
+ * \return Buffer size of the stats buffer in bytes.
  */
-uint64_t spdk_telemetry_source_get_num_stats(struct spdk_telemetry_source *src);
+uint64_t spdk_telemetry_source_get_stats_buffer_size(struct spdk_telemetry_source *src);
 
 /**
  * Complete the telemetry source pull operation.

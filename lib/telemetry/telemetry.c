@@ -35,7 +35,7 @@ struct spdk_telemetry_source {
 	void *pull_cb_arg;
 	TAILQ_ENTRY(spdk_telemetry_source) link;
 	char *name;
-	uint64_t stats[]; /* Variable-length array of stats */
+	uint64_t stats_buffer[]; /* Variable-length buffer for stats */
 };
 
 struct spdk_telemetry_type {
@@ -642,19 +642,20 @@ spdk_telemetry_exporter_unregister(struct spdk_telemetry_exporter *telemetry_exp
 
 void
 spdk_telemetry_exporter_release_stats(struct spdk_telemetry_source_handle *handle,
-				      const uint64_t *stats, uint64_t num_stats)
+				      const void *stats_buffer, uint64_t stats_buffer_size)
 {
 	struct spdk_telemetry_source *src;
 
 	assert(telemetry_mgr_is_initialized());
 	assert(handle != NULL);
-	assert(stats != NULL);
+	assert(stats_buffer != NULL);
+	assert(stats_buffer_size > 0);
 	assert(spdk_thread_is_app_thread(NULL));
 
-	src = SPDK_CONTAINEROF(stats, struct spdk_telemetry_source, stats);
+	src = SPDK_CONTAINEROF(stats_buffer, struct spdk_telemetry_source, stats_buffer);
 	assert(src->handle == handle);
 	assert(src->state == TELEMETRY_SOURCE_REPORTING);
-	assert(num_stats == src->type->num_stats);
+	assert(stats_buffer_size == src->type->info->num_stats * sizeof(uint64_t));
 
 	src->state = TELEMETRY_SOURCE_IDLE;
 }
@@ -767,26 +768,26 @@ spdk_telemetry_unregister_source(struct spdk_telemetry_source *src)
 	src->to_delete = true;
 }
 
-uint64_t *
-spdk_telemetry_source_get_stats(struct spdk_telemetry_source *src)
+void *
+spdk_telemetry_source_get_stats_buffer(struct spdk_telemetry_source *src)
 {
 	assert(telemetry_mgr_is_initialized());
 	assert(src != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
 
 	assert(src->state == TELEMETRY_SOURCE_PULLING);
-	return src->stats;
+	return src->stats_buffer;
 }
 
 uint64_t
-spdk_telemetry_source_get_num_stats(struct spdk_telemetry_source *src)
+spdk_telemetry_source_get_stats_buffer_size(struct spdk_telemetry_source *src)
 {
 	assert(telemetry_mgr_is_initialized());
 	assert(src != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
 
 	assert(src->state == TELEMETRY_SOURCE_PULLING);
-	return src->type->info->num_stats;
+	return src->type->info->num_stats * sizeof(uint64_t);
 }
 
 void
@@ -808,7 +809,7 @@ spdk_telemetry_source_pull_complete(struct spdk_telemetry_source *src, int statu
 	}
 
 	res = g_telemetry_mgr.exporter->fn_table->report_stats(g_telemetry_mgr.exporter->ctxt, src->handle,
-			src->stats, src->type->info->num_stats);
+			src->stats_buffer, src->type->info->num_stats * sizeof(uint64_t));
 	if (res) {
 		src->state = TELEMETRY_SOURCE_IDLE;
 		return;

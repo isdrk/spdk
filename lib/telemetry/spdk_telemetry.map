@@ -19,8 +19,8 @@
 	spdk_telemetry_unregister_type;
 	spdk_telemetry_register_source;
 	spdk_telemetry_unregister_source;
-	spdk_telemetry_source_get_stats;
-	spdk_telemetry_source_get_num_stats;
+	spdk_telemetry_source_get_stats_buffer;
+	spdk_telemetry_source_get_stats_buffer_size;
 	spdk_telemetry_source_pull_complete;
 
 	# Everything else

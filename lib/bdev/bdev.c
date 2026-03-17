@@ -9166,8 +9166,8 @@ bdev_io_stat_pull_io_stat_done_cb(struct spdk_bdev *bdev, struct spdk_bdev_io_st
 		return;
 	}
 
-	stats = spdk_telemetry_source_get_stats(src);
-	num_stats = spdk_telemetry_source_get_num_stats(src);
+	stats = spdk_telemetry_source_get_stats_buffer(src);
+	num_stats = spdk_telemetry_source_get_stats_buffer_size(src) / sizeof(uint64_t);
 
 	assert(stats != NULL);
 	assert(num_stats == SPDK_COUNTOF(bdev_io_stats));
@@ -9211,8 +9211,8 @@ bdev_io_stat_pull_cb(void *pull_cb_arg, struct spdk_telemetry_source *src)
 
 	assert(bdev->internal.telemetry.source_iostat == src);
 
-	stats = spdk_telemetry_source_get_stats(src);
-	num_stats = spdk_telemetry_source_get_num_stats(src);
+	stats = spdk_telemetry_source_get_stats_buffer(src);
+	num_stats = spdk_telemetry_source_get_stats_buffer_size(src) / sizeof(uint64_t);
 
 	assert(stats != NULL);
 	assert(num_stats == SPDK_COUNTOF(bdev_io_stats));

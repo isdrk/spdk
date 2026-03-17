@@ -472,17 +472,20 @@ dte_unregister_source(void *ctx, struct spdk_telemetry_source_handle *_source)
 }
 
 static bool
-dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const uint64_t *stats,
-		 uint64_t num_stats)
+dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const void *stats_buffer,
+		 uint64_t stats_buffer_size)
 {
 	doca_error_t ret;
 	struct dte_source *source = (struct dte_source *)_source;
 	struct dte_type *type = source->type;
 
-	assert(num_stats == type->info->num_stats);
+	assert(stats_buffer_size == type->info->num_stats * sizeof(uint64_t));
 
-	ret = doca_telemetry_exporter_source_report(source->doca_source, type->type_index, (void *)stats,
-			1);
+	/* NOTE: We cast the stats_buffer to void * to avoid a warning about the const qualifier.
+	 * We'll remove the casting once the doca_telemetry_exporter_schema_set_buf_size() prototype is fixed.
+	 */
+	ret = doca_telemetry_exporter_source_report(source->doca_source, type->type_index,
+			(void *)stats_buffer, 1);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_NOTICELOG("Failed to report stats for %s:%s: %s\n",
 			       type->info->name, source->name, doca_error_get_name(ret));
