@@ -20,6 +20,7 @@ struct spdk_telemetry_source_handle {
 
 struct spdk_telemetry_type_handle {
 	FILE *file;
+	const struct spdk_telemetry_type_info *info;
 	TAILQ_ENTRY(spdk_telemetry_type_handle) link;
 	TAILQ_HEAD(, spdk_telemetry_source_handle) sources;
 };
@@ -29,7 +30,6 @@ struct telemetry_csv {
 	TAILQ_HEAD(, spdk_telemetry_type_handle) types;
 	char *dst_dir;
 };
-
 
 static struct telemetry_csv g_telemetry_csv = {0};
 
@@ -57,7 +57,9 @@ telemetry_csv_destroy_type(struct spdk_telemetry_type_handle *type)
 		source = TAILQ_FIRST(&type->sources);
 		telemetry_csv_destroy_source(source);
 	}
-	fclose(type->file);
+	if (type->file != NULL) {
+		fclose(type->file);
+	}
 	free(type);
 }
 
@@ -110,42 +112,59 @@ telemetry_csv_destruct(void *ctx)
 	return 0; /* synchronous destruct */
 }
 
+static void
+telemetry_csv_write_header(struct spdk_telemetry_type_handle *type)
+{
+	const struct spdk_telemetry_type_info *type_info = type->info;
+	uint64_t i;
+
+	fprintf(type->file, "name");
+	for (i = 0; i < type_info->num_stats; i++) {
+		fprintf(type->file, ",%s", type_info->stats[i].name);
+	}
+
+	fprintf(type->file, "\n");
+}
+
+static int
+telemetry_csv_prepare_file(struct spdk_telemetry_type_handle *type)
+{
+	const struct spdk_telemetry_type_info *type_info = type->info;
+	int res;
+	char *file_path;
+
+	file_path = spdk_sprintf_alloc("%s/%s.csv", g_telemetry_csv.dst_dir, type_info->name);
+	if (file_path == NULL) {
+		SPDK_ERRLOG("Failed to allocate memory for %s file path\n", type_info->name);
+		return -ENOMEM;
+	}
+
+	type->file = fopen(file_path, "w");
+	free(file_path);
+	if (type->file == NULL) {
+		res = -errno;
+		SPDK_ERRLOG("Failed to open file %s/%s.csv: %s\n", g_telemetry_csv.dst_dir, type_info->name,
+			    spdk_strerror(-res));
+		return res;
+	}
+
+	telemetry_csv_write_header(type);
+
+	return 0;
+}
+
 static struct spdk_telemetry_type_handle *
 telemetry_csv_register_type(void *ctx, const struct spdk_telemetry_type_info *type_info)
 {
 	struct spdk_telemetry_type_handle *type;
-	char *file_path;
-	uint64_t i;
 
 	type = calloc(1, sizeof(*type));
 	if (type == NULL) {
 		return NULL;
 	}
 
-	file_path = spdk_sprintf_alloc("%s/%s.csv", g_telemetry_csv.dst_dir, type_info->name);
-	if (file_path == NULL) {
-		SPDK_ERRLOG("Failed to allocate memory for %s file path\n", type_info->name);
-		free(type);
-		return NULL;
-	}
-
-	type->file = fopen(file_path, "w");
-	free(file_path);
-	if (type->file == NULL) {
-		SPDK_ERRLOG("Failed to open file %s/%s.csv: %d\n", g_telemetry_csv.dst_dir, type_info->name, errno);
-		free(type);
-		return NULL;
-	}
-
+	type->info = type_info;
 	TAILQ_INIT(&type->sources);
-
-	/* Write the header */
-	fprintf(type->file, "name");
-	for (i = 0; i < type_info->num_stats; i++) {
-		fprintf(type->file, ",%s", type_info->stats[i].name);
-	}
-	fprintf(type->file, "\n");
-
 	TAILQ_INSERT_TAIL(&g_telemetry_csv.types, type, link);
 
 	return type;
@@ -188,6 +207,15 @@ telemetry_csv_register_source(void *ctx, struct spdk_telemetry_type_handle *type
 	source = calloc(1, sizeof(*source) + len + 1);
 	if (source == NULL) {
 		return NULL;
+	}
+
+	if (type->file == NULL) {
+		int rc = telemetry_csv_prepare_file(type);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to prepare file for type %s: %s\n", type->info->name, spdk_strerror(-rc));
+			free(source);
+			return NULL;
+		}
 	}
 
 	source->type = type;
