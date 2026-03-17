@@ -176,6 +176,9 @@ struct spdk_bdev_channel;
 struct spdk_bdev_shared_resource {
 	/* The bdev management channel */
 	struct spdk_bdev_mgmt_channel *mgmt_ch;
+
+	/* bdev module that this shared resource is associated with */
+	struct spdk_bdev_module *module;
 	/*
 	 * Count of I/O submitted to bdev module and waiting for completion.
 	 * Incremented before submit_request() is called on an spdk_bdev_io.
@@ -194,6 +197,10 @@ struct spdk_bdev_shared_resource {
 	uint64_t		nomem_threshold;
 
 	struct spdk_poller	*nomem_poller;
+
+	TAILQ_ENTRY(spdk_bdev_shared_resource) link;
+
+	uint32_t ref;
 
 	/*
 	 * Indicate whether aborting nomem I/Os is in progress.
@@ -216,8 +223,8 @@ struct spdk_bdev_mgmt_channel {
 
 	struct spdk_iobuf_channel iobuf;
 
-	/** Per thread shared resource */
-	struct spdk_bdev_shared_resource *shared_resource;
+	/* Per thread shared resources */
+	TAILQ_HEAD(, spdk_bdev_shared_resource) shared_resources;
 
 	TAILQ_HEAD(, spdk_bdev_io_wait_entry)	io_wait_queue;
 };
@@ -2187,6 +2194,7 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 static void
 bdev_mgmt_channel_free_shared_resource(struct spdk_bdev_shared_resource *shared_resource)
 {
+	assert(shared_resource->ref == 0);
 	spdk_poller_unregister(&shared_resource->nomem_poller);
 	free(shared_resource);
 }
@@ -2205,6 +2213,9 @@ bdev_mgmt_channel_alloc_shared_resource(struct spdk_bdev_mgmt_channel *ch)
 	shared_resource->io_outstanding = 0;
 	shared_resource->nomem_threshold = 0;
 	shared_resource->mgmt_ch = ch;
+	shared_resource->ref = 1;
+
+	TAILQ_INSERT_TAIL(&ch->shared_resources, shared_resource, link);
 
 	return shared_resource;
 }
@@ -2233,8 +2244,7 @@ bdev_mgmt_channel_destroy(void *io_device, void *ctx_buf)
 	}
 
 	assert(ch->per_thread_cache_count == 0);
-
-	bdev_mgmt_channel_free_shared_resource(ch->shared_resource);
+	assert(TAILQ_EMPTY(&ch->shared_resources));
 }
 
 static int
@@ -2271,7 +2281,7 @@ bdev_mgmt_channel_create(void *io_device, void *ctx_buf)
 	}
 
 	TAILQ_INIT(&ch->io_wait_queue);
-
+	TAILQ_INIT(&ch->shared_resources);
 
 	return 0;
 }
@@ -4516,6 +4526,8 @@ bdev_get_channel_shared_resource(struct spdk_bdev_channel *ch)
 {
 	struct spdk_io_channel *mgmt_io_ch;
 	struct spdk_bdev_mgmt_channel *mgmt_ch;
+	struct spdk_bdev_shared_resource *res;
+	struct spdk_bdev_module *module = ch->bdev->module;
 
 	mgmt_io_ch = spdk_get_io_channel(&g_bdev_mgr);
 	if (!mgmt_io_ch) {
@@ -4524,28 +4536,42 @@ bdev_get_channel_shared_resource(struct spdk_bdev_channel *ch)
 
 	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
 
-	if (mgmt_ch->shared_resource == NULL) {
-		mgmt_ch->shared_resource = bdev_mgmt_channel_alloc_shared_resource(mgmt_ch);
-		if (mgmt_ch->shared_resource == NULL) {
-			SPDK_ERRLOG("Failed to allocate shared resource\n");
-			spdk_put_io_channel(mgmt_io_ch);
-			return NULL;
+	TAILQ_FOREACH(res, &mgmt_ch->shared_resources, link) {
+		if (res->module == module) {
+			res->ref++;
+			return res;
 		}
 	}
 
-	return mgmt_ch->shared_resource;
+	res = bdev_mgmt_channel_alloc_shared_resource(mgmt_ch);
+	if (res == NULL) {
+		SPDK_ERRLOG("Failed to allocate shared resource\n");
+		spdk_put_io_channel(mgmt_io_ch);
+		return NULL;
+	}
+	res->module = module;
+
+	return res;
 }
 
 static void
 bdev_put_channel_shared_resource(struct spdk_bdev_channel *ch)
 {
 	struct spdk_bdev_mgmt_channel *mgmt_ch;
+	struct spdk_bdev_shared_resource *res = ch->shared_resource;
 
-	if (!ch->shared_resource) {
+	if (!res) {
 		return;
 	}
+	mgmt_ch = shared_resource_to_mgmt_channel(res);
 
-	mgmt_ch = shared_resource_to_mgmt_channel(ch->shared_resource);
+	assert(res->ref > 0);
+	res->ref--;
+	if (res->ref == 0) {
+		TAILQ_REMOVE(&mgmt_ch->shared_resources, res, link);
+		bdev_mgmt_channel_free_shared_resource(res);
+	}
+
 	spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
 }
 
