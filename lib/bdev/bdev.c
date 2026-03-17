@@ -4489,11 +4489,39 @@ err:
 	return -1;
 }
 
+static struct spdk_bdev_shared_resource *
+bdev_get_channel_shared_resource(struct spdk_bdev_channel *ch)
+{
+	struct spdk_io_channel *mgmt_io_ch;
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
+
+	mgmt_io_ch = spdk_get_io_channel(&g_bdev_mgr);
+	if (!mgmt_io_ch) {
+		return NULL;
+	}
+
+	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
+
+	return &mgmt_ch->shared_resource;
+}
+
+static void
+bdev_put_channel_shared_resource(struct spdk_bdev_channel *ch)
+{
+	struct spdk_bdev_mgmt_channel *mgmt_ch;
+
+	if (!ch->shared_resource) {
+		return;
+	}
+
+	mgmt_ch = shared_resource_to_mgmt_channel(ch->shared_resource);
+	spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
+}
+
 static void
 bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 {
 	struct lba_range *range;
-	struct spdk_bdev_mgmt_channel *mgmt_ch;
 
 	bdev_free_io_stat(ch->stat);
 #ifdef SPDK_CONFIG_VTUNE
@@ -4520,8 +4548,7 @@ bdev_channel_destroy_resource(struct spdk_bdev_channel *ch)
 	assert(TAILQ_EMPTY(&ch->io_memory_domain));
 	assert(ch->io_outstanding == 0);
 
-	mgmt_ch = shared_resource_to_mgmt_channel(ch->shared_resource);
-	spdk_put_io_channel(spdk_io_channel_from_ctx(mgmt_ch));
+	bdev_put_channel_shared_resource(ch);
 }
 
 struct poll_timeout_ctx {
@@ -4670,8 +4697,6 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 {
 	struct spdk_bdev		*bdev = __bdev_from_io_dev(io_device);
 	struct spdk_bdev_channel	*ch = ctx_buf;
-	struct spdk_io_channel		*mgmt_io_ch;
-	struct spdk_bdev_mgmt_channel	*mgmt_ch;
 	struct lba_range		*range;
 	int				rc;
 
@@ -4698,19 +4723,17 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 		}
 	}
 
-	mgmt_io_ch = spdk_get_io_channel(&g_bdev_mgr);
-	if (!mgmt_io_ch) {
+	ch->shared_resource = bdev_get_channel_shared_resource(ch);
+	if (ch->shared_resource == NULL) {
 		spdk_put_io_channel(ch->channel);
 		spdk_put_io_channel(ch->accel_channel);
 		return -1;
 	}
 
-	mgmt_ch = __io_ch_to_bdev_mgmt_ch(mgmt_io_ch);
 	ch->io_outstanding = 0;
 	TAILQ_INIT(&ch->locked_ranges);
 	ch->flags = 0;
 	ch->trace_id = bdev->internal.trace_id;
-	ch->shared_resource = &mgmt_ch->shared_resource;
 
 	TAILQ_INIT(&ch->io_submitted);
 	TAILQ_INIT(&ch->io_locked);
