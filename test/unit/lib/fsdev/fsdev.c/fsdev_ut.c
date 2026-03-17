@@ -14,6 +14,7 @@
 #include "spdk/log.h"
 #include "spdk/fsdev.h"
 #include "spdk/fsdev_module.h"
+#include "spdk/telemetry.h"
 
 #define UT_UNIQUE 0xBEADBEAD
 #define UT_FOBJECT ((uint64_t)0xDEADDEAD)
@@ -308,6 +309,13 @@ static int
 ut_fsdev_setup(void)
 {
 	bool completed = false;
+	int rc;
+
+	rc = spdk_telemetry_init();
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to initialize telemetry: %d\n", rc);
+		return rc;
+	}
 
 	spdk_fsdev_initialize(ut_fsdev_initialize_complete, &completed);
 
@@ -322,23 +330,35 @@ ut_fsdev_setup(void)
 }
 
 static void
+ut_telemetry_fini_complete(void *cb_arg, int _rc)
+{
+	int *rc  = cb_arg;
+
+	*rc = _rc;
+}
+
+static void
 ut_fsdev_teardown_complete(void *cb_arg)
 {
-	bool *completed  = cb_arg;
-
-	*completed = true;
+	spdk_telemetry_fini(ut_telemetry_fini_complete, cb_arg);
 }
 
 static int
 ut_fsdev_teardown(void)
 {
-	bool completed = false;
-	spdk_fsdev_finish(ut_fsdev_teardown_complete, &completed);
+	int rc = -1;
+
+	spdk_fsdev_finish(ut_fsdev_teardown_complete, &rc);
 
 	poll_thread(0);
 
-	if (!completed) {
+	if (rc == -1) {
 		SPDK_ERRLOG("No spdk_fsdev_finish callback arrived\n");
+		return EINVAL;
+	}
+
+	if (rc) {
+		SPDK_ERRLOG("Finished with error: %d\n", rc);
 		return EINVAL;
 	}
 

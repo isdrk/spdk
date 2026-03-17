@@ -94,7 +94,7 @@ DEPDIRS-scsi := log util thread $(JSON_LIBS) trace bdev
 DEPDIRS-iscsi := log sock util conf thread $(JSON_LIBS) trace scsi
 DEPDIRS-vhost = log util thread $(JSON_LIBS) bdev scsi
 
-DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma
+DEPDIRS-fsdev := log thread trace util $(JSON_LIBS) notify dma telemetry
 DEPDIRS-rmem := log $(JSON_LIBS)
 DEPDIRS-fuse := dma fsdev log thread util
 ifeq ($(CONFIG_RDMA),y)
@@ -219,7 +219,7 @@ endif
 DEPDIRS-event_vfu_tgt := init vfu_tgt
 DEPDIRS-event_iobuf := init log thread util $(JSON_LIBS)
 DEPDIRS-event_keyring := init json keyring
-DEPDIRS-event_fsdev := event_accel event_rmem init fsdev
+DEPDIRS-event_fsdev := event_accel event_rmem init fsdev event_telemetry
 DEPDIRS-event_rmem := init rmem
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-event_rdma_provider := init rdma_provider rdma_utils

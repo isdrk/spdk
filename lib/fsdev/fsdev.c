@@ -17,6 +17,7 @@
 #include "spdk/trace.h"
 #include "spdk_internal/trace_defs.h"
 #include "fsdev_internal.h"
+#include "spdk/telemetry_source.h"
 
 #define SPDK_FSDEV_MAX_SOURCE_ID 4096
 
@@ -49,6 +50,10 @@ struct spdk_fsdev_mgr {
 	bool module_init_complete;
 
 	struct spdk_spinlock spinlock;
+
+	struct spdk_telemetry_type *telemetry_type_fuse_opc;
+	struct spdk_telemetry_type *telemetry_type_notify_opc;
+	struct spdk_telemetry_type *telemetry_type_iostat;
 };
 
 static struct spdk_fsdev_mgr g_fsdev_mgr = {
@@ -346,6 +351,106 @@ fsdev_modules_init(void)
 	return 0;
 }
 
+#define TELEMETRY_OPC_TYPE_NAME "fuse_opc"
+#define TELEMETRY_NOTIFY_TYPE_NAME "notify_opc"
+
+static const struct spdk_telemetry_stat_info fsdev_fuse_opc_stats[] = {
+	SPDK_TELEMETRY_STAT_INFO_UINT64("count", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("max_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("min_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("total_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("io_outstanding", 1),
+};
+
+static const struct spdk_telemetry_type_info fsdev_fuse_opc_type_info = {
+	.name = TELEMETRY_OPC_TYPE_NAME,
+	.num_stats = SPDK_COUNTOF(fsdev_fuse_opc_stats),
+	.stats = fsdev_fuse_opc_stats,
+};
+
+static const struct spdk_telemetry_stat_info fsdev_notify_opc_stats[] = {
+	SPDK_TELEMETRY_STAT_INFO_UINT64("count", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("replies", 1),
+};
+
+static const struct spdk_telemetry_type_info fsdev_notify_opc_type_info = {
+	.name = TELEMETRY_NOTIFY_TYPE_NAME,
+	.num_stats = SPDK_COUNTOF(fsdev_notify_opc_stats),
+	.stats = fsdev_notify_opc_stats,
+};
+
+static const struct spdk_telemetry_stat_info fsdev_io_stats[] = {
+	SPDK_TELEMETRY_STAT_INFO_SUBTYPE("io", SPDK_FSDEV_MAX_FUSE_OPC, TELEMETRY_OPC_TYPE_NAME),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_read", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_written", 1),
+	SPDK_TELEMETRY_STAT_INFO_SUBTYPE("notify", SPDK_FSDEV_MAX_NOTIFY_OPC, TELEMETRY_NOTIFY_TYPE_NAME),
+};
+
+#define NEXT_FIELD_OFFSET(type, member) (offsetof(type, member) + SPDK_SIZEOF_MEMBER(type, member))
+#define CHECK_FIELD_OFFSET(type, member, previous_member) (offsetof(type, member) == NEXT_FIELD_OFFSET(type, previous_member))
+
+SPDK_STATIC_ASSERT(
+	offsetof(struct spdk_fsdev_io_stat, io) == 0,
+	"fsdev_io_stat structure layout mismatch - io");
+SPDK_STATIC_ASSERT(
+	CHECK_FIELD_OFFSET(struct spdk_fsdev_io_stat, bytes_read, io),
+	"fsdev_io_stat structure layout mismatch - bytes_read");
+SPDK_STATIC_ASSERT(
+	CHECK_FIELD_OFFSET(struct spdk_fsdev_io_stat, bytes_written, bytes_read),
+	"fsdev_io_stat structure layout mismatch - bytes_written");
+SPDK_STATIC_ASSERT(
+	CHECK_FIELD_OFFSET(struct spdk_fsdev_io_stat, notify, bytes_written),
+	"fsdev_io_stat structure layout mismatch - notify");
+SPDK_STATIC_ASSERT(
+	sizeof(struct spdk_fsdev_io_stat) ==
+	SPDK_SIZEOF_MEMBER(struct spdk_fsdev_io_stat, io) +
+	SPDK_SIZEOF_MEMBER(struct spdk_fsdev_io_stat, bytes_read) +
+	SPDK_SIZEOF_MEMBER(struct spdk_fsdev_io_stat, bytes_written) +
+	SPDK_SIZEOF_MEMBER(struct spdk_fsdev_io_stat, notify),
+	"fsdev_io_stat overall size mismatch with telemetry schema");
+
+static const struct spdk_telemetry_type_info fsdev_io_stat_type_info = {
+	.name = "fsdev_io_stat",
+	.num_stats = SPDK_COUNTOF(fsdev_io_stats),
+	.stats = fsdev_io_stats,
+};
+
+static int
+fsdev_telemetry_init(void)
+{
+	int rc;
+
+	rc = spdk_telemetry_register_type(&fsdev_fuse_opc_type_info, &g_fsdev_mgr.telemetry_type_fuse_opc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to register fsdev fuse opc telemetry type: %d\n", rc);
+		return rc;
+	}
+
+	rc = spdk_telemetry_register_type(&fsdev_notify_opc_type_info,
+					  &g_fsdev_mgr.telemetry_type_notify_opc);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to register fsdev notify opc telemetry type: %d\n", rc);
+		goto notify_opc_error;
+	}
+
+	rc = spdk_telemetry_register_type(&fsdev_io_stat_type_info, &g_fsdev_mgr.telemetry_type_iostat);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to register fsdev_io_stat telemetry type: %d\n", rc);
+		goto io_stat_error;
+	}
+
+	SPDK_DEBUGLOG(fsdev, "fsdev fuse_io_stat telemetry type registered\n");
+	return 0;
+
+io_stat_error:
+	spdk_telemetry_unregister_type(g_fsdev_mgr.telemetry_type_notify_opc);
+	g_fsdev_mgr.telemetry_type_notify_opc = NULL;
+notify_opc_error:
+	spdk_telemetry_unregister_type(g_fsdev_mgr.telemetry_type_fuse_opc);
+	g_fsdev_mgr.telemetry_type_fuse_opc = NULL;
+	return rc;
+}
+
 void
 spdk_fsdev_initialize(spdk_fsdev_init_cb cb_fn, void *cb_arg)
 {
@@ -361,6 +466,13 @@ spdk_fsdev_initialize(spdk_fsdev_init_cb cb_fn, void *cb_arg)
 	spdk_notify_type_register("fsdev_unregister");
 
 	snprintf(mempool_name, sizeof(mempool_name), "fsdev_io_%d", getpid());
+
+	rc = fsdev_telemetry_init();
+	if (rc != 0) {
+		SPDK_ERRLOG("fsdev telemetry init failed\n");
+		fsdev_init_complete(-1);
+		return;
+	}
 
 	spdk_io_device_register(&g_fsdev_mgr, fsdev_mgmt_channel_create,
 				fsdev_mgmt_channel_destroy,
@@ -381,6 +493,24 @@ static void
 fsdev_mgr_unregister_cb(void *io_device)
 {
 	spdk_fsdev_fini_cb cb_fn = g_fini_cb_fn;
+
+	if (g_fsdev_mgr.telemetry_type_iostat) {
+		spdk_telemetry_unregister_type(g_fsdev_mgr.telemetry_type_iostat);
+		SPDK_DEBUGLOG(fsdev, "fsdev_io_stat telemetry type unregistered\n");
+		g_fsdev_mgr.telemetry_type_iostat = NULL;
+	}
+
+	if (g_fsdev_mgr.telemetry_type_notify_opc) {
+		spdk_telemetry_unregister_type(g_fsdev_mgr.telemetry_type_notify_opc);
+		SPDK_DEBUGLOG(fsdev, "fsdev notify_opc telemetry type unregistered\n");
+		g_fsdev_mgr.telemetry_type_notify_opc = NULL;
+	}
+
+	if (g_fsdev_mgr.telemetry_type_fuse_opc) {
+		spdk_telemetry_unregister_type(g_fsdev_mgr.telemetry_type_fuse_opc);
+		SPDK_DEBUGLOG(fsdev, "fsdev fuse_opc telemetry type unregistered\n");
+		g_fsdev_mgr.telemetry_type_fuse_opc = NULL;
+	}
 
 	cb_fn(g_fini_cb_arg);
 	g_fini_cb_fn = NULL;
@@ -1717,6 +1847,52 @@ spdk_fsdev_io_get_max_xfer_size(struct spdk_fsdev_io *fsdev_io)
 	return fsdev_io->internal.desc->max_xfer_size;
 }
 
+static void
+fsdev_io_stat_pull_io_stat_done_cb(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat,
+				   void *cb_arg, int rc)
+{
+	struct spdk_telemetry_source *src = fsdev->internal.telemetry.source_iostat;
+
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to get device stat for fsdev %s\n", fsdev->name);
+		spdk_telemetry_source_pull_complete(src, rc);
+		return;
+	}
+
+	spdk_telemetry_source_pull_complete(src, 0);
+}
+
+static void
+fsdev_io_stat_pull_cb(void *pull_cb_arg, struct spdk_telemetry_source *src)
+{
+	struct spdk_fsdev *fsdev = pull_cb_arg;
+
+	assert(fsdev->internal.telemetry.source_iostat == src);
+	assert(spdk_telemetry_source_get_stats_buffer_size(src) == sizeof(struct spdk_fsdev_io_stat));
+
+	spdk_fsdev_get_device_stat(fsdev,
+				   (struct spdk_fsdev_io_stat *)spdk_telemetry_source_get_stats_buffer(src),
+				   fsdev_io_stat_pull_io_stat_done_cb, fsdev);
+}
+
+static int
+fsdev_register_telemetry(struct spdk_fsdev *fsdev)
+{
+	int ret;
+
+	ret = spdk_telemetry_register_source(g_fsdev_mgr.telemetry_type_iostat, fsdev->name,
+					     fsdev_io_stat_pull_cb, fsdev,
+					     &fsdev->internal.telemetry.source_iostat);
+	if (ret) {
+		SPDK_ERRLOG("Failed to register telemetry source for fsdev %s: %d\n", fsdev->name, ret);
+		return ret;
+	}
+
+	SPDK_DEBUGLOG(fsdev, "Telemetry source for fsdev %s registered\n", fsdev->name);
+
+	return 0;
+}
+
 static int
 fsdev_register(struct spdk_fsdev *fsdev)
 {
@@ -1746,8 +1922,8 @@ fsdev_register(struct spdk_fsdev *fsdev)
 	fsdev->internal.hist_stat = calloc(1, sizeof(*fsdev->internal.hist_stat));
 	if (!fsdev->internal.hist_stat) {
 		SPDK_ERRLOG("Unable to allocate memory for the stats history.\n");
-		free(fsdev_name);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto hist_stat_alloc_failed;
 	}
 
 	fsdev->internal.status = SPDK_FSDEV_STATUS_READY;
@@ -1758,9 +1934,13 @@ fsdev_register(struct spdk_fsdev *fsdev)
 
 	ret = fsdev_name_add(&fsdev->internal.fsdev_name, fsdev, fsdev->name);
 	if (ret != 0) {
-		free(fsdev_name);
-		free(fsdev->internal.hist_stat);
-		return ret;
+		goto fsdev_name_add_failed;
+	}
+
+	ret = fsdev_register_telemetry(fsdev);
+	if (ret != 0) {
+		SPDK_ERRLOG("Failed to register telemetry for fsdev %s: %d\n", fsdev->name, ret);
+		goto telemetry_register_failed;
 	}
 
 	spdk_io_device_register(__fsdev_to_io_dev(fsdev),
@@ -1775,6 +1955,19 @@ fsdev_register(struct spdk_fsdev *fsdev)
 	SPDK_DEBUGLOG(fsdev, "Inserting fsdev %s into list\n", fsdev->name);
 	TAILQ_INSERT_TAIL(&g_fsdev_mgr.fsdevs, fsdev, internal.link);
 	return 0;
+
+telemetry_register_failed:
+	spdk_spin_lock(&g_fsdev_mgr.spinlock);
+	fsdev_name_del_unsafe(&fsdev->internal.fsdev_name);
+	spdk_spin_unlock(&g_fsdev_mgr.spinlock);
+fsdev_name_add_failed:
+	spdk_trace_unregister_owner(fsdev->internal.trace_id);
+	fsdev->internal.trace_id = 0;
+	free(fsdev->internal.hist_stat);
+	fsdev->internal.hist_stat = NULL;
+hist_stat_alloc_failed:
+	free(fsdev_name);
+	return ret;
 }
 
 static void
@@ -1788,6 +1981,12 @@ fsdev_destroy_cb(void *io_device)
 	fsdev = __fsdev_from_io_dev(io_device);
 	cb_fn = fsdev->internal.unregister_cb;
 	cb_arg = fsdev->internal.unregister_ctx;
+
+	if (fsdev->internal.telemetry.source_iostat) {
+		spdk_telemetry_unregister_source(fsdev->internal.telemetry.source_iostat);
+		SPDK_DEBUGLOG(fsdev, "Telemetry source for fsdev %s unregistered\n", fsdev->name);
+		fsdev->internal.telemetry.source_iostat = NULL;
+	}
 
 	spdk_trace_unregister_owner(fsdev->internal.trace_id);
 	free(fsdev->internal.hist_stat);

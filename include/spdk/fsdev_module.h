@@ -244,6 +244,11 @@ struct spdk_fsdev {
 
 		/** tsc for delaying 99% completion (1-out-of-100) */
 		uint64_t delayed_99_complete_tsc;
+
+		struct __fsdev_internal_telemetry {
+			/** Telemetry source for this fsdev. */
+			struct spdk_telemetry_source *source_iostat;
+		} telemetry;
 	} internal;
 };
 
