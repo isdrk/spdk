@@ -1506,6 +1506,7 @@ static int
 interrupt_poller_process(void *arg)
 {
 	struct spdk_poller *poller = arg;
+	struct spdk_thread *thread = poller->thread;
 	uint64_t exp;
 	int rc;
 
@@ -1519,13 +1520,18 @@ interrupt_poller_process(void *arg)
 
 			return rc;
 		}
-		poller_remove_timer(poller->thread, poller);
+		poller_remove_timer(thread, poller);
 		SPDK_DTRACE_PROBE2(timerfd_exec, poller->fn, poller->arg);
 
-		return thread_execute_timed_poller(poller->thread, poller, spdk_get_ticks());
+		return thread_execute_timed_poller(thread, poller, spdk_get_ticks());
 	}
 
-	return thread_execute_poller(poller->thread, poller);
+	rc = thread_execute_poller(thread, poller);
+
+	if (thread->num_pp_handlers) {
+		thread_run_pp_handlers(thread);
+	}
+	return rc;
 }
 
 static inline bool
@@ -3521,7 +3527,7 @@ spdk_thread_register_post_poller_handler(spdk_post_poller_fn fn, void *fn_arg)
 	thr = _get_thread();
 	assert(thr);
 	if (spdk_unlikely(thr->num_pp_handlers == SPDK_THREAD_MAX_POST_POLLER_HANDLERS)) {
-		SPDK_ERRLOG("Too many handlers registered");
+		SPDK_ERRLOG("Too many handlers registered\n");
 		return;
 	}
 
