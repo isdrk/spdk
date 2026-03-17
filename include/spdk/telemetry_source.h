@@ -34,6 +34,21 @@ struct spdk_telemetry_source;
 typedef void (*spdk_telemetry_pull_cb)(void *pull_cb_arg, struct spdk_telemetry_source *src);
 
 /**
+ * Type of a telemetry stat.
+ */
+enum spdk_telemetry_stat_type {
+	/**
+	 * 64-bit unsigned integer.
+	 */
+	SPDK_TELEMETRY_STAT_TYPE_UINT64,
+	/**
+	 * Nested telemetry type.
+	 */
+	SPDK_TELEMETRY_STAT_TYPE_SUBTYPE,
+	__SPDK_TELEMETRY_STAT_TYPE_LAST,
+};
+
+/**
  * Information about a telemetry stat.
  */
 struct spdk_telemetry_stat_info {
@@ -41,7 +56,38 @@ struct spdk_telemetry_stat_info {
 	 * Name of the telemetry field.
 	 */
 	const char *name;
+
+	/**
+	 * Count of this stat in the array.
+	 */
+	uint64_t count;
+
+	/**
+	 * Stat type. See \ref spdk_telemetry_stat_type.
+	 *
+	 * \note as sizeof(enum) is not defined, we use uint8_t to ensure the alignment of the struct.
+	 */
+	uint8_t type;
+
+	/**
+	 * Reserved for future use.
+	 */
+	uint8_t reserved[3];
+
+	/**
+	 * Extra information for the stat.
+	 */
+	union {
+		const char *type_name; /* For SPDK_TELEMETRY_STAT_TYPE_SUBTYPE */
+		uint64_t unused;
+	} extra;
 };
+
+#define SPDK_TELEMETRY_STAT_INFO_UINT64(stat_name, stat_count) \
+	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_UINT64, .count = stat_count, .extra.unused = 0 }
+
+#define SPDK_TELEMETRY_STAT_INFO_SUBTYPE(stat_name, stat_count, subtype_name) \
+	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_SUBTYPE, .count = stat_count, .extra.type_name = subtype_name }
 
 /**
  * Information about a telemetry type.
@@ -80,6 +126,9 @@ int spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_inf
  * Unregister a telemetry type.
  *
  * \param type Pointer to the telemetry type.
+ *
+ * \note Subtypes must outlive any type that references them. Unregistering a referenced subtype is undefined behavior.
+ * \note All sources of this type must be unregistered first; otherwise behavior is undefined.
  */
 void spdk_telemetry_unregister_type(struct spdk_telemetry_type *type);
 
@@ -128,6 +177,14 @@ uint64_t spdk_telemetry_source_get_stats_buffer_size(struct spdk_telemetry_sourc
  * \param status Status of the telemetry source pull operation.
  */
 void spdk_telemetry_source_pull_complete(struct spdk_telemetry_source *src, int status);
+
+/**
+ * Get a name for a telemetry stat type.
+ *
+ * \param type Telemetry stat type. See \ref spdk_telemetry_stat_type.
+ * \return Name of the telemetry stat type.
+ */
+const char *spdk_telemetry_stat_type_name(enum spdk_telemetry_stat_type type);
 
 #ifdef __cplusplus
 }

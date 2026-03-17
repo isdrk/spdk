@@ -8,6 +8,8 @@
 #include "spdk/telemetry.h"
 #include "telemetry_csv_internal.h"
 
+#define SOURCE_NAME_HEADER "source"
+
 struct telemetry_csv_exporter {
 	struct spdk_telemetry_exporter exporter;
 };
@@ -112,18 +114,108 @@ telemetry_csv_destruct(void *ctx)
 	return 0; /* synchronous destruct */
 }
 
-static void
-telemetry_csv_write_header(struct spdk_telemetry_type_handle *type)
+static struct spdk_telemetry_type_handle *
+telemetry_csv_find_type(const char *name)
+{
+	struct spdk_telemetry_type_handle *type;
+	TAILQ_FOREACH(type, &g_telemetry_csv.types, link) {
+		if (strcmp(type->info->name, name) == 0) {
+			return type;
+		}
+	}
+
+	return NULL;
+}
+
+static int
+telemetry_csv_write_type_header(FILE *file, struct spdk_telemetry_type_handle *type,
+				char *prefix_buf, size_t prefix_buf_size, size_t offset)
 {
 	const struct spdk_telemetry_type_info *type_info = type->info;
+	int res;
+	struct spdk_telemetry_type_handle *nested_type;
 	uint64_t i;
 
-	fprintf(type->file, "name");
 	for (i = 0; i < type_info->num_stats; i++) {
-		fprintf(type->file, ",%s", type_info->stats[i].name);
+		const struct spdk_telemetry_stat_info *stat_info = &type_info->stats[i];
+
+		switch (stat_info->type) {
+		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+			if (stat_info->count == 1) {
+				fprintf(file, ",%.*s%s", (int)offset, prefix_buf, stat_info->name);
+			} else {
+				uint64_t j;
+				for (j = 0; j < stat_info->count; j++) {
+					fprintf(file, ",%.*s%s[%" PRIu64 "]", (int)offset, prefix_buf, stat_info->name, j);
+				}
+			}
+			break;
+		case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
+			assert(stat_info->extra.type_name != NULL);
+			nested_type = telemetry_csv_find_type(stat_info->extra.type_name);
+			if (nested_type == NULL) {
+				SPDK_WARNLOG("Nested telemetry type %s not found\n", stat_info->extra.type_name);
+				assert(false);
+				return -ENOENT;
+			}
+
+			if (stat_info->count == 1) {
+				int rc = snprintf(prefix_buf + offset, prefix_buf_size - offset, "%s.", stat_info->name);
+				if ((size_t)rc >= prefix_buf_size - offset) {
+					SPDK_ERRLOG("Failed to write prefix for type %s\n", stat_info->name);
+					assert(false);
+					return -ENOMEM;
+				}
+
+				res = telemetry_csv_write_type_header(file, nested_type, prefix_buf, prefix_buf_size, offset + rc);
+				if (res != 0) {
+					SPDK_ERRLOG("Failed to write header for type %s: %s\n", stat_info->name, spdk_strerror(-res));
+					return res;
+				}
+			} else {
+				uint64_t j;
+				for (j = 0; j < stat_info->count; j++) {
+					int rc = snprintf(prefix_buf + offset, prefix_buf_size - offset, "%s[%" PRIu64 "].",
+							  stat_info->name, j);
+					if ((size_t)rc >= prefix_buf_size - offset) {
+						SPDK_ERRLOG("Failed to write prefix for type %s\n", stat_info->name);
+						assert(false);
+						return -ENOMEM;
+					}
+					res = telemetry_csv_write_type_header(file, nested_type, prefix_buf, prefix_buf_size, offset + rc);
+					if (res != 0) {
+						SPDK_ERRLOG("Failed to write header for type %s: %s\n", stat_info->name, spdk_strerror(-res));
+						return res;
+					}
+				}
+			}
+			break;
+		default:
+			SPDK_WARNLOG("Unknown stat type: %d\n", type_info->stats[i].type);
+			assert(false);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+static int
+telemetry_csv_write_header(struct spdk_telemetry_type_handle *type)
+{
+	int res;
+	char full_prefix[4096] = {0};
+
+	fprintf(type->file, "%s", SOURCE_NAME_HEADER);
+
+	res = telemetry_csv_write_type_header(type->file, type, full_prefix, sizeof(full_prefix), 0);
+	if (res != 0) {
+		SPDK_ERRLOG("Failed to write header for type %s: %s\n", type->info->name, spdk_strerror(-res));
+		return res;
 	}
 
 	fprintf(type->file, "\n");
+	return 0;
 }
 
 static int
@@ -148,7 +240,13 @@ telemetry_csv_prepare_file(struct spdk_telemetry_type_handle *type)
 		return res;
 	}
 
-	telemetry_csv_write_header(type);
+	res = telemetry_csv_write_header(type);
+	if (res != 0) {
+		fclose(type->file);
+		type->file = NULL;
+		SPDK_ERRLOG("Failed to write header for type %s: %s\n", type_info->name, spdk_strerror(-res));
+		return res;
+	}
 
 	return 0;
 }

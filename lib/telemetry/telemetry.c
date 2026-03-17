@@ -42,6 +42,7 @@ struct spdk_telemetry_type {
 	uint64_t to_delete : 1;
 	uint64_t enabled : 1;
 	uint64_t reserved : 62;
+	uint64_t stats_buffer_size;
 	struct spdk_telemetry_type_handle *handle;
 	TAILQ_ENTRY(spdk_telemetry_type) link;
 	TAILQ_HEAD(, spdk_telemetry_source) sources;
@@ -669,7 +670,7 @@ spdk_telemetry_exporter_release_stats(struct spdk_telemetry_source_handle *handl
 	src = SPDK_CONTAINEROF(stats_buffer, struct spdk_telemetry_source, stats_buffer);
 	assert(src->handle == handle);
 	assert(src->state == TELEMETRY_SOURCE_REPORTING);
-	assert(stats_buffer_size == src->type->info->num_stats * sizeof(uint64_t));
+	assert(stats_buffer_size == src->type->stats_buffer_size);
 
 	src->state = TELEMETRY_SOURCE_IDLE;
 }
@@ -688,11 +689,52 @@ telemetry_find_type(const char *name)
 	return NULL;
 }
 
+static int
+telemetry_type_set_stats_buffer_size(struct spdk_telemetry_type *type)
+{
+	uint64_t i;
+	uint64_t size = 0;
+	struct spdk_telemetry_type *nested_type;
+
+	for (i = 0; i < type->info->num_stats; i++) {
+		const struct spdk_telemetry_stat_info *stat_info = &type->info->stats[i];
+
+		assert(stat_info->type < __SPDK_TELEMETRY_STAT_TYPE_LAST);
+
+		if (stat_info->count == 0) {
+			SPDK_ERRLOG("Telemetry stat %s has count == 0\n", stat_info->name);
+			return -EINVAL;
+		}
+
+		switch (stat_info->type) {
+		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+			size += sizeof(uint64_t) * stat_info->count;
+			break;
+		case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
+			assert(stat_info->extra.type_name != NULL);
+			nested_type = telemetry_find_type(stat_info->extra.type_name);
+			if (nested_type == NULL) {
+				SPDK_ERRLOG("Nested telemetry type %s not found\n", stat_info->extra.type_name);
+				return -EINVAL;
+			}
+			size += nested_type->stats_buffer_size * stat_info->count;
+			break;
+		default:
+			SPDK_WARNLOG("Unknown stat type: %d\n", stat_info->type);
+			return -EINVAL;
+		}
+	}
+
+	type->stats_buffer_size = size;
+	return 0;
+}
+
 int
 spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 			     struct spdk_telemetry_type **_type)
 {
 	struct spdk_telemetry_type *type;
+	int res;
 
 	assert(telemetry_mgr_is_initialized());
 	assert(type_info != NULL);
@@ -712,9 +754,14 @@ spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 	}
 
 	type->info = type_info;
+	res = telemetry_type_set_stats_buffer_size(type);
+	if (res != 0) {
+		telemetry_delete_type(type);
+		return res;
+	}
 
 	if (g_telemetry_mgr.exporter) {
-		int res = telemetry_exporter_register_type(type);
+		res = telemetry_exporter_register_type(type);
 		if (res != 0) {
 			telemetry_delete_type(type);
 			return res;
@@ -759,7 +806,7 @@ spdk_telemetry_register_source(struct spdk_telemetry_type *type, const char *nam
 	assert(_src != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
 
-	src = calloc(1, sizeof(*src) + type->info->num_stats * sizeof(uint64_t));
+	src = calloc(1, sizeof(*src) + type->stats_buffer_size);
 	if (src == NULL) {
 		SPDK_ERRLOG("Failed to allocate memory for telemetry source\n");
 		return -ENOMEM;
@@ -820,7 +867,7 @@ spdk_telemetry_source_get_stats_buffer_size(struct spdk_telemetry_source *src)
 	assert(spdk_thread_is_app_thread(NULL));
 
 	assert(src->state == TELEMETRY_SOURCE_PULLING);
-	return src->type->info->num_stats * sizeof(uint64_t);
+	return src->type->stats_buffer_size;
 }
 
 void
@@ -842,10 +889,23 @@ spdk_telemetry_source_pull_complete(struct spdk_telemetry_source *src, int statu
 	}
 
 	res = g_telemetry_mgr.exporter->fn_table->report_stats(g_telemetry_mgr.exporter->ctxt, src->handle,
-			src->stats_buffer, src->type->info->num_stats * sizeof(uint64_t));
+			src->stats_buffer, src->type->stats_buffer_size);
 	if (res) {
 		src->state = TELEMETRY_SOURCE_IDLE;
 		return;
+	}
+}
+
+const char *
+spdk_telemetry_stat_type_name(enum spdk_telemetry_stat_type type)
+{
+	switch (type) {
+	case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+		return "uint64_t";
+	case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
+		return "subtype";
+	default:
+		return "unknown";
 	}
 }
 
@@ -884,7 +944,14 @@ telemetry_dump_type_json(const struct spdk_telemetry_type *type, struct spdk_jso
 	spdk_json_write_named_bool(w, "enabled", type->enabled);
 	spdk_json_write_named_array_begin(w, "stat_names");
 	for (i = 0; i < type->info->num_stats; i++) {
-		spdk_json_write_string(w, type->info->stats[i].name);
+		spdk_json_write_object_begin(w);
+		spdk_json_write_named_string(w, "name", type->info->stats[i].name);
+		spdk_json_write_named_uint64(w, "count", type->info->stats[i].count);
+		spdk_json_write_named_string(w, "type", spdk_telemetry_stat_type_name(type->info->stats[i].type));
+		if (type->info->stats[i].type == SPDK_TELEMETRY_STAT_TYPE_SUBTYPE) {
+			spdk_json_write_named_string(w, "type_name", type->info->stats[i].extra.type_name);
+		}
+		spdk_json_write_object_end(w);
 	}
 	spdk_json_write_array_end(w);
 	spdk_json_write_object_end(w);

@@ -22,6 +22,7 @@
 	spdk_telemetry_source_get_stats_buffer;
 	spdk_telemetry_source_get_stats_buffer_size;
 	spdk_telemetry_source_pull_complete;
+	spdk_telemetry_stat_type_name;
 
 	# Everything else
 	local: *;

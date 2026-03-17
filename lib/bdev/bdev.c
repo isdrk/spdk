@@ -2439,34 +2439,33 @@ bdev_qos_modules_init(void)
 }
 
 static const struct spdk_telemetry_stat_info bdev_io_stats[] = {
-	{ .name = "bytes_read" },
-	{ .name = "num_read_ops" },
-	{ .name = "bytes_written" },
-	{ .name = "num_write_ops" },
-	{ .name = "bytes_unmapped" },
-	{ .name = "num_unmap_ops" },
-	{ .name = "bytes_copied" },
-	{ .name = "num_copy_ops" },
-	{ .name = "read_latency_ticks" },
-	{ .name = "max_read_latency_ticks" },
-	{ .name = "min_read_latency_ticks" },
-	{ .name = "write_latency_ticks" },
-	{ .name = "max_write_latency_ticks" },
-	{ .name = "min_write_latency_ticks" },
-	{ .name = "unmap_latency_ticks" },
-	{ .name = "max_unmap_latency_ticks" },
-	{ .name = "min_unmap_latency_ticks" },
-	{ .name = "copy_latency_ticks" },
-	{ .name = "max_copy_latency_ticks" },
-	{ .name = "min_copy_latency_ticks" },
-	{ .name = "ticks_rate" },
-	{ .name = "num_read_split" },
-	{ .name = "num_write_split" },
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_read", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_read_ops", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_written", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_write_ops", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_unmapped", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_unmap_ops", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("bytes_copied", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_copy_ops", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("read_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("max_read_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("min_read_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("write_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("max_write_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("min_write_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("unmap_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("max_unmap_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("min_unmap_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("copy_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("max_copy_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("min_copy_latency_ticks", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("ticks_rate", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_read_split", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_write_split", 1),
 };
 
 SPDK_STATIC_ASSERT(
-	SPDK_COUNTOF(bdev_io_stats) * sizeof(uint64_t) == offsetof(struct spdk_bdev_io_stat,
-			io_error),
+	SPDK_COUNTOF(bdev_io_stats) * sizeof(uint64_t) == offsetof(struct spdk_bdev_io_stat, io_error),
 	"bdev_io_stats array size mismatch the io_stat structure size");
 
 static const struct spdk_telemetry_type_info bdev_io_stat_type_info = {
@@ -2489,6 +2488,7 @@ bdev_telemetry_init(void)
 	SPDK_DEBUGLOG(bdev, "bdev_io_stat telemetry type registered\n");
 	return 0;
 }
+
 void
 spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 {
