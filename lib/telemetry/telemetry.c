@@ -674,6 +674,20 @@ spdk_telemetry_exporter_release_stats(struct spdk_telemetry_source_handle *handl
 	src->state = TELEMETRY_SOURCE_IDLE;
 }
 
+static struct spdk_telemetry_type *
+telemetry_find_type(const char *name)
+{
+	struct spdk_telemetry_type *type;
+
+	TAILQ_FOREACH(type, &g_telemetry_mgr.types, link) {
+		if (strcmp(type->info->name, name) == 0) {
+			return type;
+		}
+	}
+
+	return NULL;
+}
+
 int
 spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 			     struct spdk_telemetry_type **_type)
@@ -900,20 +914,6 @@ telemetry_dump_types_json(struct spdk_json_write_ctx *w, const char *name)
 		telemetry_dump_type_json(type, w);
 	}
 	spdk_json_write_array_end(w);
-}
-
-static struct spdk_telemetry_type *
-telemetry_find_type(const char *name)
-{
-	struct spdk_telemetry_type *type;
-
-	TAILQ_FOREACH(type, &g_telemetry_mgr.types, link) {
-		if (strcmp(type->info->name, name) == 0) {
-			return type;
-		}
-	}
-
-	return NULL;
 }
 
 int
