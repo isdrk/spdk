@@ -8872,6 +8872,10 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 	bdev_io->internal.status = status;
 
 	if (bdev_io->internal.f.bypass) {
+		if (spdk_unlikely(!TAILQ_EMPTY(&shared_resource->nomem_io))) {
+			bdev_shared_ch_retry_io(shared_resource);
+		}
+
 		bdev_io->internal.cb(bdev_io, bdev_io->internal.status == SPDK_BDEV_IO_STATUS_SUCCESS,
 				     bdev_io->internal.caller_ctx);
 		return;
@@ -9261,6 +9265,8 @@ bdev_register(struct spdk_bdev *bdev)
 			SPDK_ERRLOG("Bdev %s supports rw bypass, but submit_bypass_request is not implemented\n",
 				    bdev->name);
 			return -EINVAL;
+		} else {
+			SPDK_NOTICELOG("bdev %s supports rw bypass\n", bdev->name);
 		}
 	}
 
