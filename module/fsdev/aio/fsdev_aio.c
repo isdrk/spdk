@@ -2148,11 +2148,6 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 		return -EINVAL;
 	}
 
-	if (fsdev_io->u_out.fuse.iov[0].iov_len < sizeof(struct fuse_ioctl_out)) {
-		SPDK_ERRLOG("Invalid ioctl out buffer size: %" PRIu64 "\n", fsdev_io->u_out.fuse.iov[0].iov_len);
-		return -EINVAL;
-	}
-
 	fobject = fsdev_io_get_aio_fobject(fsdev_io);
 	if (!fobject) {
 		SPDK_ERRLOG("Invalid fobject: %p\n", fobject);
@@ -2174,13 +2169,9 @@ fsdev_aio_op_ioctl(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	if (ioctl_in->out_size) {
 		struct iovec *out_iovs = fsdev_io->u_out.fuse.iov;
 
-		if (out_iovs[0].iov_len >= sizeof(*ioctl_out) + ioctl_in->out_size) {
-			out_buf = out_iovs[0].iov_base + sizeof(*ioctl_out);
-			out_bufsz = out_iovs[0].iov_len - sizeof(*ioctl_out);
-		} else if (fsdev_io->u_out.fuse.iovcnt > 1 && out_iovs[1].iov_base &&
-			   out_iovs[1].iov_len >= ioctl_in->out_size) {
-			out_buf = out_iovs[1].iov_base;
-			out_bufsz = out_iovs[1].iov_len;
+		if (out_iovs[0].iov_len >= ioctl_in->out_size) {
+			out_buf = out_iovs[0].iov_base;
+			out_bufsz = out_iovs[0].iov_len;
 		} else {
 			SPDK_ERRLOG("Out iovecs are too small for out size %" PRIu32 "\n", ioctl_in->out_size);
 			return -EINVAL;
