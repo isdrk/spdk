@@ -34,7 +34,7 @@ def add_parser(subparsers):
     p.set_defaults(func=log_get_flags)
 
     def log_set_level(args):
-        args.client.log_set_level(level=args.level)
+        args.client.log_set_level(lvl=args.level)
 
     p = subparsers.add_parser('log_set_level', help='set log level')
     p.add_argument('level', help='log level we want to set. (for example "DEBUG").')
