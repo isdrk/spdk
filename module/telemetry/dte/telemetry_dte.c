@@ -127,21 +127,21 @@ dte_set_env(bool set)
 }
 
 static struct doca_telemetry_exporter_field *
-dte_create_telemetry_field(const char *name)
+dte_create_telemetry_field(const struct spdk_telemetry_stat_info *stat_info)
 {
 	struct doca_telemetry_exporter_field *field;
 	doca_error_t ret;
 
 	ret = doca_telemetry_exporter_field_create(&field);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to create field %s: %s\n", name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to create field %s: %s\n", stat_info->name, doca_error_get_name(ret));
 		return NULL;
 	}
 
-	doca_telemetry_exporter_field_set_name(field, name);
-	doca_telemetry_exporter_field_set_description(field, name);
+	doca_telemetry_exporter_field_set_name(field, stat_info->name);
+	doca_telemetry_exporter_field_set_description(field, stat_info->name);
 	doca_telemetry_exporter_field_set_type_name(field, "uint64_t");
-	doca_telemetry_exporter_field_set_array_len(field, 1);
+	doca_telemetry_exporter_field_set_array_len(field, stat_info->count);
 
 	return field;
 }
@@ -154,17 +154,18 @@ dte_type_add_stats(struct doca_telemetry_exporter_type *type,
 	uint64_t i;
 
 	for (i = 0; i < type_info->num_stats; i++) {
+		const struct spdk_telemetry_stat_info *stat_info = &type_info->stats[i];
 		struct doca_telemetry_exporter_field *field;
 
-		field = dte_create_telemetry_field(type_info->stats[i].name);
+		field = dte_create_telemetry_field(stat_info);
 		if (field == NULL) {
-			SPDK_ERRLOG("Failed to create field %s\n", type_info->stats[i].name);
+			SPDK_ERRLOG("Failed to create field %s\n", stat_info->name);
 			return DOCA_ERROR_NO_MEMORY;
 		}
 
 		ret = doca_telemetry_exporter_type_add_field(type, field);
 		if (ret != DOCA_SUCCESS) {
-			SPDK_ERRLOG("Failed to add field %s to type: %s\n", type_info->stats[i].name,
+			SPDK_ERRLOG("Failed to add field %s to type: %s\n", stat_info->name,
 				    doca_error_get_name(ret));
 			doca_telemetry_exporter_field_destroy(field);
 			return ret;
