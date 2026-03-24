@@ -71,7 +71,7 @@ struct spdk_telemetry_type_info {
  * \return 0 on success, negative errno on failure.
  *
  * \note The \p type_info must remain valid until the telemetry type is unregistered.
- *
+ * \note The telemetry type cannot be registered if telemetry is running, i.e. \p spdk_telemetry_start() has been called.
  */
 int spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 				 struct spdk_telemetry_type **type);

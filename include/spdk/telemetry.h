@@ -150,12 +150,18 @@ struct spdk_telemetry_exporter_fn_table {
 	 */
 	int (*destruct)(void *ctx);
 
-	/** Register a telemetry type */
+	/** Register a telemetry type. */
 	struct spdk_telemetry_type_handle *(*register_type)(void *ctx,
 			const struct spdk_telemetry_type_info *type_info);
 
-	/** Unregister a telemetry type */
+	/** Unregister a telemetry type. */
 	void (*unregister_type)(void *ctx, struct spdk_telemetry_type_handle *handle);
+
+	/** Start telemetry. Optional - may be NULL. */
+	int (*start)(void *ctx);
+
+	/** Stop telemetry. Optional - may be NULL. */
+	void (*stop)(void *ctx);
 
 	/** Register a telemetry source */
 	struct spdk_telemetry_source_handle *(*register_source)(void *ctx,

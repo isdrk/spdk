@@ -328,6 +328,16 @@ spdk_telemetry_start(const struct spdk_telemetry_opts *_opts, spdk_telemetry_don
 		goto do_return;
 	}
 
+	if (g_telemetry_mgr.exporter->fn_table->start) {
+		rc = g_telemetry_mgr.exporter->fn_table->start(g_telemetry_mgr.exporter->ctxt);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to start telemetry exporter: %d\n", rc);
+			spdk_poller_unregister(&g_telemetry_mgr.poller);
+			g_telemetry_mgr.poller = NULL;
+			goto do_return;
+		}
+	}
+
 	g_telemetry_mgr.opts = opts;
 
 	SPDK_DEBUGLOG(telemetry, "Telemetry started\n");
@@ -393,6 +403,10 @@ telemetry_do_stop(void *arg)
 		SPDK_DEBUGLOG(telemetry, "Some sources are still reporting, will retry later\n");
 		spdk_thread_send_msg(spdk_thread_get_app_thread(), telemetry_do_stop, NULL);
 		return;
+	}
+
+	if (g_telemetry_mgr.exporter->fn_table->stop) {
+		g_telemetry_mgr.exporter->fn_table->stop(g_telemetry_mgr.exporter->ctxt);
 	}
 
 	g_telemetry_mgr.started = false;
@@ -671,6 +685,11 @@ spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 	assert(type_info->num_stats > 0);
 	assert(_type != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
+
+	if (g_telemetry_mgr.started) {
+		SPDK_ERRLOG("Telemetry is running, cannot register type\n");
+		return -EBUSY;
+	}
 
 	type = calloc(1, sizeof(*type));
 	if (type == NULL) {
