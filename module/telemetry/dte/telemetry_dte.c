@@ -279,24 +279,18 @@ dte_type_destroy(struct dte_type *type)
 	free(type);
 }
 
-static struct dte_type *
-dte_type_create(const struct spdk_telemetry_type_info *type_info)
+static struct doca_telemetry_exporter_schema *
+dte_schema_create(const char *name)
 {
 	doca_error_t ret;
-	struct dte_type *type;
 	struct dte_config *config = &g_dte_mgr.config;
-
-	type = calloc(1, sizeof(*type));
-	if (type == NULL) {
-		SPDK_ERRLOG("Failed to allocate memory for type\n");
-		return NULL;
-	}
+	struct doca_telemetry_exporter_schema *schema;
 
 	/* Init DOCA schema */
-	ret = doca_telemetry_exporter_schema_init(type_info->name, &type->schema);
+	ret = doca_telemetry_exporter_schema_init(name, &schema);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to init DOCA schema for %s: %s\n", type_info->name, doca_error_get_name(ret));
-		goto create_schema_error;
+		SPDK_ERRLOG("Failed to init DOCA schema for %s: %s\n", name, doca_error_get_name(ret));
+		return NULL;
 	}
 
 	/* NOTE: doca_telemetry_exporter_schema_set_buf_size() has a bug. It treats the size it gets as the final internal
@@ -305,55 +299,76 @@ dte_type_create(const struct spdk_telemetry_type_info *type_info)
 	 *
 	 * Thus, for now, as a workaround, we just use a fixed size of PAGE_SIZE and flush manually after each report.
 	 */
-	doca_telemetry_exporter_schema_set_buf_size(type->schema, PAGE_SIZE);
-
-	/* Register type */
-	ret = dte_telemetry_register_type(type->schema, type_info, &type->type_index);
-	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to register %s type: %s\n", type_info->name, doca_error_get_name(ret));
-		goto schema_error;
-	}
+	doca_telemetry_exporter_schema_set_buf_size(schema, PAGE_SIZE);
 
 	/* Configure DOCA Telemetry Exporter Schema */
 
 	/* Configure IPC destination */
 	if (config->ipc.enabled) {
-		doca_telemetry_exporter_schema_set_ipc_enabled(type->schema);
+		doca_telemetry_exporter_schema_set_ipc_enabled(schema);
 		if (config->ipc.sockets_dir[0] != '\0') {
-			doca_telemetry_exporter_schema_set_ipc_sockets_dir(type->schema,
+			doca_telemetry_exporter_schema_set_ipc_sockets_dir(schema,
 					config->ipc.sockets_dir);
 		}
 		if (config->ipc.reconnect_time) {
-			doca_telemetry_exporter_schema_set_ipc_reconnect_time(type->schema,
+			doca_telemetry_exporter_schema_set_ipc_reconnect_time(schema,
 					config->ipc.reconnect_time);
 		}
 		if (config->ipc.reconnect_tries) {
-			doca_telemetry_exporter_schema_set_ipc_reconnect_tries(type->schema,
+			doca_telemetry_exporter_schema_set_ipc_reconnect_tries(schema,
 					config->ipc.reconnect_tries);
 		}
 		if (config->ipc.socket_timeout) {
-			doca_telemetry_exporter_schema_set_ipc_socket_timeout(type->schema,
+			doca_telemetry_exporter_schema_set_ipc_socket_timeout(schema,
 					config->ipc.socket_timeout);
 		}
 	}
 
 	/* Configure file destination */
 	if (config->file.enabled) {
-		doca_telemetry_exporter_schema_set_file_write_enabled(type->schema);
+		doca_telemetry_exporter_schema_set_file_write_enabled(schema);
 		if (config->file.max_size) {
-			doca_telemetry_exporter_schema_set_file_write_max_size(type->schema,
+			doca_telemetry_exporter_schema_set_file_write_max_size(schema,
 					config->file.max_size);
 		}
 		if (config->file.max_age) {
-			doca_telemetry_exporter_schema_set_file_write_max_age(type->schema,
+			doca_telemetry_exporter_schema_set_file_write_max_age(schema,
 					config->file.max_age);
 		}
 	}
 
 	/* Configure DOCA Telemetry Exporter buffer data root */
 	if (config->telemetry_data_root[0] != '\0') {
-		doca_telemetry_exporter_schema_set_buf_data_root(type->schema,
+		doca_telemetry_exporter_schema_set_buf_data_root(schema,
 				config->telemetry_data_root);
+	}
+
+	return schema;
+}
+
+static struct dte_type *
+dte_type_create(const struct spdk_telemetry_type_info *type_info)
+{
+	doca_error_t ret;
+	struct dte_type *type;
+
+	type = calloc(1, sizeof(*type));
+	if (type == NULL) {
+		SPDK_ERRLOG("Failed to allocate memory for type\n");
+		return NULL;
+	}
+
+	type->schema = dte_schema_create(type_info->name);
+	if (type->schema == NULL) {
+		SPDK_ERRLOG("Failed to create schema for %s\n", type_info->name);
+		goto create_schema_error;
+	}
+
+	/* Register type */
+	ret = dte_telemetry_register_type(type->schema, type_info, &type->type_index);
+	if (ret != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to register %s type\n", type_info->name);
+		goto schema_error;
 	}
 
 	/* Activate the schema */
