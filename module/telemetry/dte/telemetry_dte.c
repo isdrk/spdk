@@ -132,6 +132,20 @@ dte_create_telemetry_field(const struct spdk_telemetry_stat_info *stat_info)
 {
 	struct doca_telemetry_exporter_field *field;
 	doca_error_t ret;
+	const char *type_name;
+
+	switch (stat_info->type) {
+	case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+		type_name = "uint64_t";
+		break;
+	case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
+		assert(stat_info->extra.type_name != NULL);
+		type_name = stat_info->extra.type_name;
+		break;
+	default:
+		SPDK_ERRLOG("Unsupported stat type %d for %s\n", stat_info->type, stat_info->name);
+		return NULL;
+	}
 
 	ret = doca_telemetry_exporter_field_create(&field);
 	if (ret != DOCA_SUCCESS) {
@@ -141,7 +155,7 @@ dte_create_telemetry_field(const struct spdk_telemetry_stat_info *stat_info)
 
 	doca_telemetry_exporter_field_set_name(field, stat_info->name);
 	doca_telemetry_exporter_field_set_description(field, stat_info->name);
-	doca_telemetry_exporter_field_set_type_name(field, "uint64_t");
+	doca_telemetry_exporter_field_set_type_name(field, type_name);
 	doca_telemetry_exporter_field_set_array_len(field, stat_info->count);
 
 	return field;
@@ -553,8 +567,6 @@ dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const 
 	doca_error_t ret;
 	struct dte_source *source = (struct dte_source *)_source;
 	struct dte_type *type = source->type;
-
-	assert(stats_buffer_size == type->info->num_stats * sizeof(uint64_t));
 
 	/* NOTE: We cast the stats_buffer to void * to avoid a warning about the const qualifier.
 	 * We'll remove the casting once the doca_telemetry_exporter_schema_set_buf_size() prototype is fixed.
