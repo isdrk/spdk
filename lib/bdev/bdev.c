@@ -2150,6 +2150,7 @@ spdk_bdev_subsystem_config_json(struct spdk_json_write_ctx *w)
 	spdk_json_write_named_bool(w, "bdev_auto_examine", g_bdev_opts.bdev_auto_examine);
 	spdk_json_write_named_uint32(w, "iobuf_small_cache_size", g_bdev_opts.iobuf_small_cache_size);
 	spdk_json_write_named_uint32(w, "iobuf_large_cache_size", g_bdev_opts.iobuf_large_cache_size);
+	spdk_json_write_named_bool(w, "bdev_rw_bypass", g_bdev_opts.bdev_rw_bypass);
 	spdk_json_write_object_end(w);
 	spdk_json_write_object_end(w);
 
