@@ -4066,9 +4066,9 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	struct fuse_getxattr_in *getxattr_in = fsdev_io->u_in.fuse.op.getxattr;
 	const char *name;
 	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
-	void *buffer = out_iov->iov_base;
 	size_t size = getxattr_in->size;
 	ssize_t value_size;
+	void *buffer = size ? out_iov->iov_base : NULL;
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
@@ -4108,11 +4108,23 @@ fsdev_aio_op_getxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io
 	}
 
 	assert(fsdev_io->u_out.fuse.hdr != NULL);
-	fsdev_io->u_out.fuse.hdr->len += value_size;
+
+	if (!size) {
+		/* This is a query to get the buffer size needed for real GETXATTR. */
+		struct fuse_getxattr_out *getxattr_out = out_iov->iov_base;
+		getxattr_out->size = (uint32_t)value_size;
+		fsdev_io->u_out.fuse.hdr->len += sizeof(*getxattr_out);
+		SPDK_DEBUGLOG(fsdev_aio,
+			      "GETXATTR succeeded for " FOBJECT_FMT " name=%s required value_size=%zd\n",
+			      FOBJECT_ARGS(fobject), name, value_size);
+	} else {
+		/* This is a real GETXATTR. */
+		fsdev_io->u_out.fuse.hdr->len += value_size;
+		SPDK_DEBUGLOG(fsdev_aio,
+			      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
+			      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
+	}
 	res = 0;
-	SPDK_DEBUGLOG(fsdev_aio,
-		      "GETXATTR succeeded for " FOBJECT_FMT " name=%s value=%s value_size=%zd\n",
-		      FOBJECT_ARGS(fobject), name, (char *)buffer, value_size);
 
 fop_failed:
 	if (fd >= 0) {
@@ -4131,8 +4143,8 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 	struct aio_fsdev_file_object *fobject;
 	struct fuse_getxattr_in *getxattr_in = fsdev_io->u_in.fuse.op.getxattr;
 	struct iovec *out_iov = &fsdev_io->u_out.fuse.iov[0];
-	void *buffer = out_iov->iov_base;
 	size_t size = getxattr_in->size;
+	void *buffer = size ? out_iov->iov_base : NULL;
 
 	if (!vfsdev->opts.xattr_enabled) {
 		SPDK_INFOLOG(fsdev_aio, "xattr is disabled by config\n");
@@ -4163,10 +4175,21 @@ fsdev_aio_op_listxattr(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_i
 	}
 
 	assert(fsdev_io->u_out.fuse.hdr != NULL);
-	fsdev_io->u_out.fuse.hdr->len += data_size;
+	if (!size) {
+		/* This is a query to get the buffer size needed for real LISTXATTR. */
+		struct fuse_getxattr_out *getxattr_out = out_iov->iov_base;
+		getxattr_out->size = (uint32_t)data_size;
+		fsdev_io->u_out.fuse.hdr->len += sizeof(*getxattr_out);
+		SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " required data_size=%zu\n",
+			      FOBJECT_ARGS(fobject), data_size);
+	} else {
+		/* This is a real LISTXATTR. */
+		fsdev_io->u_out.fuse.hdr->len += data_size;
+		SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " data_size=%zu\n",
+			      FOBJECT_ARGS(fobject), data_size);
+	}
+
 	res = 0;
-	SPDK_DEBUGLOG(fsdev_aio, "LISTXATTR succeeded for " FOBJECT_FMT " data_size=%zu\n",
-		      FOBJECT_ARGS(fobject), data_size);
 
 fop_failed:
 	if (fd >= 0) {
