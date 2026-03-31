@@ -57,6 +57,7 @@ struct xlio_packets_pool {
 	STAILQ_HEAD(, xlio_sock_packet)	free_packets;
 	struct xlio_sock_packet	*packets;
 	uint32_t		core_id;
+	uint32_t		refcnt;
 	STAILQ_ENTRY(xlio_packets_pool)	link;
 };
 
@@ -247,6 +248,7 @@ static pthread_mutex_t g_xlio_admin_group_mutex = PTHREAD_MUTEX_INITIALIZER;
 static struct spdk_spinlock g_xlio_admin_group_lock;
 static bool g_xlio_admin_group_lock_initialized = false;
 static struct xlio_shared_group g_xlio_admin_group;
+static uint32_t g_xlio_buffers_pool_refs;
 
 static int xlio_sock_close(struct nvme_tcp_qpair *qpair);
 static void _pdu_write_done(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu, int err);
@@ -255,29 +257,17 @@ static inline int nvme_tcp_fill_data_mkeys(struct nvme_tcp_qpair *tqpair,
 static void nvme_tcp_qpair_process_pending_events(struct nvme_tcp_qpair *tqpair);
 static void nvme_tcp_qpair_connect_sock_done(struct nvme_tcp_qpair *qpair, int err);
 static int xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags);
+static void xlio_sock_put_buffers_pool_unsafe(void);
+static void xlio_sock_put_packets_pool_unsafe(struct xlio_packets_pool *pool);
 
 static void
-xlio_sock_free_pools(void)
+xlio_sock_put_xlio_pools(struct nvme_tcp_qpair *tqpair)
 {
-	struct xlio_packets_pool *pool, *tmp;
-	STAILQ_FOREACH_SAFE(pool, &g_xlio_packets_pools, link, tmp) {
-		STAILQ_REMOVE_HEAD(&g_xlio_packets_pools, link);
-		free(pool->packets);
-		if (pool->core_id == NVDA_TCP_PACKET_POOL_SHARED) {
-			spdk_spin_destroy(&g_xlio_admin_group_lock);
-		}
-		free(pool);
-	}
-
-	if (g_xlio_nvme_buffers_pool) {
-		spdk_mempool_free(g_xlio_nvme_buffers_pool);
-		g_xlio_nvme_buffers_pool = NULL;
-	}
-
-	if (g_iovec_pool) {
-		spdk_mempool_free(g_iovec_pool);
-		g_iovec_pool = NULL;
-	}
+	pthread_mutex_lock(&g_xlio_pool_mutex);
+	xlio_sock_put_packets_pool_unsafe(tqpair->xlio_packets_pool);
+	tqpair->xlio_packets_pool = NULL;
+	xlio_sock_put_buffers_pool_unsafe();
+	pthread_mutex_unlock(&g_xlio_pool_mutex);
 }
 
 static int
@@ -310,12 +300,12 @@ xlio_sock_set_recvbuf(struct nvme_tcp_qpair *tqpair, int sz)
 	return 0;
 }
 
+/* g_xlio_pool_mutex must be held. */
 static int
-xlio_sock_alloc_buffers_pool(uint32_t buffers_pool_size)
+xlio_sock_get_buffers_pool_unsafe(uint32_t buffers_pool_size)
 {
-	pthread_mutex_lock(&g_xlio_pool_mutex);
 	if (g_xlio_nvme_buffers_pool) {
-		pthread_mutex_unlock(&g_xlio_pool_mutex);
+		g_xlio_buffers_pool_refs++;
 		return 0;
 	}
 
@@ -326,7 +316,6 @@ xlio_sock_alloc_buffers_pool(uint32_t buffers_pool_size)
 				   SPDK_ENV_SOCKET_ID_ANY);
 	if (!g_xlio_nvme_buffers_pool) {
 		SPDK_ERRLOG("Failed to create xlio buffers pool\n");
-		pthread_mutex_unlock(&g_xlio_pool_mutex);
 		return -ENOMEM;
 	}
 
@@ -338,29 +327,63 @@ xlio_sock_alloc_buffers_pool(uint32_t buffers_pool_size)
 	if (!g_iovec_pool) {
 		SPDK_ERRLOG("Failed to create iovec pool\n");
 		spdk_mempool_free(g_xlio_nvme_buffers_pool);
-		pthread_mutex_unlock(&g_xlio_pool_mutex);
+		g_xlio_nvme_buffers_pool = NULL;
 		return -ENOMEM;
 	}
 
-	pthread_mutex_unlock(&g_xlio_pool_mutex);
 	SPDK_NOTICELOG("Create xlio buffers pool, buffers_pool_size %u\n", buffers_pool_size);
 
+	g_xlio_buffers_pool_refs = 1;
 	return 0;
 }
 
+/* g_xlio_pool_mutex must be held. */
+static void
+xlio_sock_put_buffers_pool_unsafe(void)
+{
+	assert(g_xlio_buffers_pool_refs > 0);
+
+	g_xlio_buffers_pool_refs--;
+	if (g_xlio_buffers_pool_refs == 0) {
+		if (g_xlio_nvme_buffers_pool != NULL) {
+			spdk_mempool_free(g_xlio_nvme_buffers_pool);
+			g_xlio_nvme_buffers_pool = NULL;
+		}
+		if (g_iovec_pool != NULL) {
+			spdk_mempool_free(g_iovec_pool);
+			g_iovec_pool = NULL;
+		}
+	}
+}
+
+/* g_xlio_pool_mutex must be held. */
+static void
+xlio_sock_put_packets_pool_unsafe(struct xlio_packets_pool *pool)
+{
+	assert(pool != NULL);
+	assert(pool->refcnt > 0);
+
+	pool->refcnt--;
+	if (pool->refcnt == 0) {
+		STAILQ_REMOVE(&g_xlio_packets_pools, pool, xlio_packets_pool, link);
+		free(pool->packets);
+		free(pool);
+	}
+}
+
+/* g_xlio_pool_mutex must be held. */
 static struct xlio_packets_pool *
-xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
+xlio_sock_get_packets_pool_unsafe(uint32_t packets_pool_size, bool shared)
 {
 	struct xlio_packets_pool *pool;
 	uint32_t i, current_core = spdk_env_get_current_core();
 
 	assert(current_core != NVDA_TCP_PACKET_POOL_SHARED);
 
-	pthread_mutex_lock(&g_xlio_pool_mutex);
 	STAILQ_FOREACH(pool, &g_xlio_packets_pools, link) {
 		if ((!shared && pool->core_id == current_core) || (shared &&
 				pool->core_id == NVDA_TCP_PACKET_POOL_SHARED)) {
-			pthread_mutex_unlock(&g_xlio_pool_mutex);
+			pool->refcnt++;
 			return pool;
 		}
 	}
@@ -368,7 +391,7 @@ xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
 	pool = calloc(1, sizeof(*pool));
 	if (!pool) {
 		SPDK_ERRLOG("Failed to allocate pool\n");
-		goto fail;
+		return NULL;
 	}
 
 	pool->packets = calloc(packets_pool_size,
@@ -376,7 +399,7 @@ xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
 	if (!pool->packets) {
 		SPDK_ERRLOG("Failed to allocate packets\n");
 		free(pool);
-		goto fail;
+		return NULL;
 	}
 
 	STAILQ_INIT(&pool->free_packets);
@@ -386,15 +409,11 @@ xlio_sock_get_packets_pool(uint32_t packets_pool_size, bool shared)
 
 	STAILQ_INSERT_HEAD(&g_xlio_packets_pools, pool, link);
 	pool->core_id = shared ? NVDA_TCP_PACKET_POOL_SHARED : current_core;
-	pthread_mutex_unlock(&g_xlio_pool_mutex);
+	pool->refcnt = 1;
 	SPDK_NOTICELOG("Create xlio pool, packets_pool_size %u on core %u\n",
 		       packets_pool_size, current_core);
 
 	return pool;
-
-fail:
-	pthread_mutex_unlock(&g_xlio_pool_mutex);
-	return NULL;
 }
 
 static int
@@ -402,6 +421,7 @@ xlio_sock_alloc(struct nvme_tcp_qpair *tqpair, struct spdk_sock_impl_opts *xlio_
 {
 	int flag = 1;
 	int rc;
+	struct xlio_packets_pool *pool;
 
 	tqpair->pd = xlio_socket_get_pd(tqpair->xlio_sock);
 	if (!tqpair->pd) {
@@ -409,18 +429,25 @@ xlio_sock_alloc(struct nvme_tcp_qpair *tqpair, struct spdk_sock_impl_opts *xlio_
 		return -ENODEV;
 	}
 
-	tqpair->xlio_packets_pool = xlio_sock_get_packets_pool(xlio_opts->packets_pool_size,
-				    tqpair->qpair.id == 0);
-	if (!tqpair->xlio_packets_pool) {
+	pthread_mutex_lock(&g_xlio_pool_mutex);
+	pool = xlio_sock_get_packets_pool_unsafe(xlio_opts->packets_pool_size,
+			nvme_qpair_is_admin_queue(&tqpair->qpair));
+	if (!pool) {
+		pthread_mutex_unlock(&g_xlio_pool_mutex);
 		SPDK_ERRLOG("Failed to allocated packets pool for tqpair %p\n", tqpair);
 		return -ENOMEM;
 	}
 
-	STAILQ_INIT(&tqpair->received_packets);
-
-	if (xlio_sock_alloc_buffers_pool(xlio_opts->buffers_pool_size)) {
+	if (xlio_sock_get_buffers_pool_unsafe(xlio_opts->buffers_pool_size)) {
+		xlio_sock_put_packets_pool_unsafe(pool);
+		pthread_mutex_unlock(&g_xlio_pool_mutex);
 		return -ENOMEM;
 	}
+
+	tqpair->xlio_packets_pool = pool;
+	pthread_mutex_unlock(&g_xlio_pool_mutex);
+
+	STAILQ_INIT(&tqpair->received_packets);
 
 #if defined(__linux__)
 	flag = 1;
@@ -766,6 +793,8 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	tqpair->flags.shared_stats = shared_stats;
 	tqpair->flags.closed = 1;
 	tqpair->xlio_sock = 0;
+
+	xlio_sock_put_xlio_pools(tqpair);
 
 	return 0;
 }
@@ -1236,14 +1265,19 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 	if (rc) {
 		goto err_close_group;
 	}
+
 	num_buffers = group->impl_opts.buffers_pool_size;
 
 	TAILQ_INIT(&group->pending_events);
 
-	if (num_buffers && xlio_sock_alloc_buffers_pool(num_buffers)) {
-		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
-		rc = -ENOMEM;
-		goto err_close_group;
+	if (num_buffers != 0) {
+		pthread_mutex_lock(&g_xlio_pool_mutex);
+		rc = xlio_sock_get_buffers_pool_unsafe(num_buffers);
+		pthread_mutex_unlock(&g_xlio_pool_mutex);
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
+			goto err_close_group;
+		}
 	}
 
 	return 0;
@@ -1391,13 +1425,6 @@ xlio_sock_free_bufs(struct nvme_tcp_qpair *tqpair, struct xlio_sock_buf *sock_bu
 	}
 
 	return 0;
-}
-
-static void
-__attribute__((destructor))
-nvme_tcp_cleanup(void)
-{
-	xlio_sock_free_pools();
 }
 
 SPDK_LOG_REGISTER_COMPONENT(nvme_xlio)
@@ -5219,6 +5246,12 @@ nvme_tcp_poll_group_destroy(struct spdk_nvme_transport_poll_group *tgroup)
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to close the sock group for a tcp poll group.\n");
 		assert(false);
+	}
+
+	if (group->impl_opts.buffers_pool_size != 0) {
+		pthread_mutex_lock(&g_xlio_pool_mutex);
+		xlio_sock_put_buffers_pool_unsafe();
+		pthread_mutex_unlock(&g_xlio_pool_mutex);
 	}
 
 	nvme_transport_poll_group_deinit(&group->group);
