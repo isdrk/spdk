@@ -83,6 +83,9 @@ $(SHARED_LINKED_LIB): $(SHARED_REALNAME_LIB)
 $(SHARED_REALNAME_LIB): $(LIB)
 	$(Q)echo "  SO $(notdir $@)"; \
 	$(call spdk_build_realname_shared_lib,$(COMPILER),$^,$(SPDK_MAP_FILE),$(LOCAL_SYS_LIBS),$(SPDK_DEP_LIBS))
+ifeq ($(CHECK_DOCA_SYMBOLS),y)
+	$(call spdk_check_doca_symbols_in_shared_lib,$(SHARED_REALNAME_LIB))
+endif
 
 define pkgconfig_create
 	$(Q)$(SPDK_ROOT_DIR)/scripts/pc.sh $(1) $(2) $(LIBNAME) $(SO_SUFFIX) \

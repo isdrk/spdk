@@ -615,3 +615,15 @@ version_suffix := $(shell IFS='-.' read -r _ _ _ v < $(SPDK_ROOT_DIR)/VERSION; e
 define _uniq
 $(if $1,$(call _uniq,$(filter-out $(lastword $1),$1)) $(lastword $1))
 endef
+
+# Provide function to check for unresolved DOCA symbols in a shared library
+ifeq ($(CONFIG_DOCA_ENABLED),y)
+define spdk_check_doca_symbols_in_shared_lib
+	$(Q)echo "  Checking for unresolved DOCA symbols in $(notdir $1)"; \
+	DOCA_SYMBOLS=$$(nm -uj $1 | grep "^doca_" | wc -l); \
+	if [ $$DOCA_SYMBOLS -gt 0 ]; then \
+		echo "  ERROR: $(notdir $1) has $$DOCA_SYMBOLS unresolved DOCA symbols"; \
+		false; \
+	fi
+endef
+endif

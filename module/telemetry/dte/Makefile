@@ -14,6 +14,8 @@ LIBNAME = telemetry_dte
 
 LOCAL_SYS_LIBS += -ldl
 
+CHECK_DOCA_SYMBOLS = y
+
 SPDK_MAP_FILE = $(SPDK_ROOT_DIR)/mk/spdk_blank.map
 
 include $(SPDK_ROOT_DIR)/mk/spdk.lib.mk
