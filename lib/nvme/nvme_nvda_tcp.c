@@ -1204,6 +1204,20 @@ xlio_sock_group_create(xlio_poll_group_t *group, unsigned int flags)
 	return rc;
 }
 
+static inline int
+xlio_sock_group_impl_close(struct nvme_tcp_poll_group *group)
+{
+	int rc = xlio_poll_group_destroy(group->xgroup);
+	if (rc) {
+		SPDK_ERRLOG("Failed to destroy group: rc %d errno %d (%s)\n",
+			    rc, errno, spdk_strerror(errno));
+		assert(false);
+		return -1;
+	}
+
+	return 0;
+}
+
 static int
 xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 {
@@ -1220,7 +1234,7 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 
 	rc = spdk_sock_impl_get_opts("xlio", &group->impl_opts, &impl_opts_size);
 	if (rc) {
-		return rc;
+		goto err_close_group;
 	}
 	num_buffers = group->impl_opts.buffers_pool_size;
 
@@ -1228,10 +1242,15 @@ xlio_sock_poll_group_create(struct nvme_tcp_poll_group *group)
 
 	if (num_buffers && xlio_sock_alloc_buffers_pool(num_buffers)) {
 		SPDK_ERRLOG("Failed to allocated buffers pool for group %p\n", group);
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto err_close_group;
 	}
 
 	return 0;
+
+err_close_group:
+	xlio_sock_group_impl_close(group);
+	return rc;
 }
 
 static int
@@ -1260,20 +1279,6 @@ xlio_sock_group_impl_poll(struct nvme_tcp_poll_group *group, int max_events)
 	}
 
 	return num_events;
-}
-
-static inline int
-xlio_sock_group_impl_close(struct nvme_tcp_poll_group *group)
-{
-	int rc = xlio_poll_group_destroy(group->xgroup);
-	if (rc) {
-		SPDK_ERRLOG("Failed to destroy group: rc %d errno %d (%s)\n",
-			    rc, errno, spdk_strerror(errno));
-		assert(false);
-		return -1;
-	}
-
-	return 0;
 }
 
 static ssize_t
