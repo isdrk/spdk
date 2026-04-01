@@ -280,3 +280,9 @@ CONFIG_HAVE_FANOTIFY=n
 
 # Kernel supports unique mount IDs (STATX_MNT_ID_UNIQUE, statmount(), etc.)
 CONFIG_HAVE_MNT_ID_UNIQUE=n
+
+# DOCA support
+CONFIG_DOCA_ENABLED=y
+
+# Path to DOCA include directory
+CONFIG_DOCA_INCLUDE_DIR=/opt/mellanox/doca/include

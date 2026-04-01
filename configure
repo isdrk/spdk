@@ -142,6 +142,8 @@ function usage() {
 	echo "                           If path is given, it should contain 'include/mellanox/xlio_extra.h' file."
 	echo " --with-static-xlio        Link with static libxlio. Requires --with-xlio."
 	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
+	echo " --with-doca[=DIR]         Path to DOCA include directory"
+	echo " --without-doca            DOCA is not enabled"
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -736,6 +738,18 @@ for i in "$@"; do
 		--with-dpcp=*)
 			check_dir "$i"
 			CONFIG[DPCP_DIR]=$(readlink -f ${i#*=})
+			;;
+		--with-doca)
+			# Use default DOCA include directory
+			CONFIG[DOCA_ENABLED]=y
+			;;
+		--without-doca)
+			CONFIG[DOCA_ENABLED]=n
+			;;
+		--with-doca=*)
+			check_dir "$i"
+			CONFIG[DOCA_ENABLED]=y
+			CONFIG[DOCA_INCLUDE_DIR]=$(readlink -f ${i#*=})
 			;;
 		--)
 			break
@@ -1437,6 +1451,18 @@ fi
 if echo -e '#include <fcntl.h>\n#include <sys/fanotify.h>\nint main(void) { return FAN_EVENT_INFO_TYPE_DFID_NAME; }\n' \
 	| "${BUILD_CMD[@]}" - 2> /dev/null; then
 	CONFIG[HAVE_FANOTIFY]="y"
+fi
+
+if [[ "${CONFIG[DOCA_ENABLED]}" = "y" ]]; then
+	echo -n "Looking for DOCA in ${CONFIG[DOCA_INCLUDE_DIR]}..."
+
+	if echo -e "#include <doca_telemetry_exporter.h>\nint main(void) { return doca_telemetry_exporter_schema_init(\"test\", NULL); }\n" \
+		| "${BUILD_CMD[@]}" -DDOCA_ALLOW_EXPERIMENTAL_API "-I${CONFIG[DOCA_INCLUDE_DIR]}" -c - 2> /dev/null; then
+		echo "done."
+	else
+		echo "not found. Disabling DOCA support."
+		CONFIG[DOCA_ENABLED]=n
+	fi
 fi
 
 # For ARM Neoverse-N1 platform, debug build needs gcc version newer than 8.4
