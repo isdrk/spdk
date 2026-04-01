@@ -398,6 +398,14 @@ ifeq ($(CONFIG_HAVE_KEYUTILS),y)
 SYS_LIBS += -lkeyutils
 endif
 
+# DOCA support
+# Due to legal restrictions, we are allowed to use the header files but not to link against the DOCA libraries.
+# Instead, we use a shim layer to load the DOCA libraries at runtime and provide local wrapper implementations
+# for every symbol used by this module. This avoids a hard link-time dependency on the DOCA shared libraries.
+ifeq ($(CONFIG_DOCA_ENABLED),y)
+CFLAGS += -I$(CONFIG_DOCA_INCLUDE_DIR) -DDOCA_ALLOW_EXPERIMENTAL_API
+endif
+
 MAKEFLAGS += --no-print-directory
 
 C_SRCS += $(C_SRCS-y)
