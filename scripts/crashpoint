@@ -101,6 +101,7 @@ def crash(pid, library, symbol, location, skip, verbose):
     script = '\n'.join([f'break *{symbol} + {hex(offset)}',
                         f'commands',
                         f'kill',
+                        f'quit',
                         f'end',
                         f'ignore 1 {skip}',
                         f'info break',
@@ -109,17 +110,18 @@ def crash(pid, library, symbol, location, skip, verbose):
         print(script)
     tmp.file.write(bytes(script, 'ascii'))
     tmp.file.flush()
-    # gdb crashes when exiting from within the breakpoint in the non-interactive mode, so we cannot
-    # capture its exit code
+    # When the breakpoint fires: kill + quit ends GDB; no detach/breakpoint cleanup needed.
+    # When it does not fire, GDB stays attached in continue — see _sigterm.
+    # After kill, GDB used to exit often by crashing (e.g. SIGSEGV); explicit quit is a clean exit.
     proc = subprocess.Popen(['gdb', '-q',
                              '-ex', 'set confirm off',
                              '-p', str(pid), '-x', tmp.name],
                             stdin=subprocess.PIPE)
 
     def _sigterm(_signum, _frame):
-        # Send commands to the existing session.
-        # We need to first delete the breakpoint and then detach from the process.
-        # If not, the leftover breakpoint might cause the next execution to fail.
+        # No crashpoint hit: inferior still alive, GDB waiting in continue. We must delete the
+        # breakpoint, detach, and quit — otherwise the next run can see a stale breakpoint or
+        # a lingering ptrace attach.
         proc.send_signal(signal.SIGINT)
         proc.stdin.write(b'delete\ndetach\nquit\n')
         proc.stdin.flush()
