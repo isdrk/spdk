@@ -15347,3 +15347,86 @@ Example response:
   "result": true
 }
 ~~~
+
+### telemetry_dte_create {#telemetry_dte_create}
+
+Create DOCA Telemetry Exporter (DTE).
+
+#### Parameters
+
+Name                    | Optional | Type    | Description
+----------------------- | -------- | ------- | -----------
+data_root               | Optional | string  | Path to where data is stored
+ipc                     | Optional | boolean | Enable IPC transport
+ipc_sockets_dir         | Optional | string  | A directory that contains UDS for IPC messages
+ipc_reconnect_time      | Optional | number  | Maximum reconnection time in msec after which the client is considered disconnected
+ipc_reconnect_tries     | Optional | number  | Maximum reconnection attempts
+ipc_socket_timeout      | Optional | number  | Timeout for the IPC socket
+file                    | Optional | boolean | Enable File transport
+file_max_size           | Optional | number  | Maximum file size (in bytes) before a new file is created
+file_max_age            | Optional | number  | Maximum file age (in microseconds) before a new file is created
+otlp                    | Optional | boolean | Enable Open Telemetry transport (over http)
+otlp_address            | Optional | string  | Open Telemetry receiver: address
+otlp_port               | Optional | number  | Open Telemetry receiver: port
+prometheus              | Optional | boolean | Enable Prometheus endpoint (over http)
+prometheus_address      | Optional | string  | Prometheus endpoint: address to expose the metrics on
+prometheus_port         | Optional | number  | Prometheus endpoint: port to expose the metrics on
+
+NOTE: For more info, see [DOCA Telemetry Exporter API](https://docs.nvidia.com/doca/sdk/doca-telemetry-exporter/index.html)
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_dte_create",
+  "id": 1,
+  "params": {
+    "ipc": false,
+    "file": false,
+    "otlp": true,
+    "otlp_address": "192.168.1.100",
+    "otlp_port": 4318
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### telemetry_dte_delete {#telemetry_dte_delete}
+
+Destroy DOCA Telemetry Exporter (DTE).
+
+#### Parameters
+
+None.
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "telemetry_dte_delete",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~

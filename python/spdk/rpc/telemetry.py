@@ -96,3 +96,50 @@ def telemetry_csv_delete(client):
     """
 
     return client.call('telemetry_csv_delete')
+
+
+def telemetry_dte_create(client, data_root,
+                         ipc, ipc_sockets_dir, ipc_reconnect_time, ipc_reconnect_tries,
+                         ipc_socket_timeout, file, file_max_size, file_max_age,
+                         otlp, otlp_address, otlp_port, prometheus, prometheus_address, prometheus_port):
+    """Create telemetry DOCA exporter.
+    """
+    params = {}
+    if data_root is not None:
+        params['data_root'] = data_root
+    if ipc is not None:
+        params['ipc'] = ipc
+    if ipc_sockets_dir is not None:
+        params['ipc_sockets_dir'] = ipc_sockets_dir
+    if ipc_reconnect_time is not None:
+        params['ipc_reconnect_time'] = ipc_reconnect_time
+    if ipc_reconnect_tries is not None:
+        params['ipc_reconnect_tries'] = ipc_reconnect_tries
+    if ipc_socket_timeout is not None:
+        params['ipc_socket_timeout'] = ipc_socket_timeout
+    if file is not None:
+        params['file'] = file
+    if file_max_size is not None:
+        params['file_max_size'] = file_max_size
+    if file_max_age is not None:
+        params['file_max_age'] = file_max_age
+    if otlp is not None:
+        params['otlp'] = otlp
+    if otlp_address is not None:
+        params['otlp_address'] = otlp_address
+    if otlp_port is not None:
+        params['otlp_port'] = otlp_port
+    if prometheus is not None:
+        params['prometheus'] = prometheus
+    if prometheus_address is not None:
+        params['prometheus_address'] = prometheus_address
+    if prometheus_port is not None:
+        params['prometheus_port'] = prometheus_port
+    return client.call('telemetry_dte_create', params)
+
+
+def telemetry_dte_delete(client):
+    """Delete telemetry DOCA exporter.
+    """
+
+    return client.call('telemetry_dte_delete')

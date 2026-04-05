@@ -62,3 +62,53 @@ def add_parser(subparsers):
 
     p = subparsers.add_parser('telemetry_csv_delete', help='Delete telemetry CSV exporter')
     p.set_defaults(func=telemetry_csv_delete)
+
+    def telemetry_dte_create_command(args):
+        print_json(
+            rpc.telemetry.telemetry_dte_create(args.client, data_root=args.data_root, ipc=args.ipc, ipc_sockets_dir=args.ipc_sockets_dir,
+                                               ipc_reconnect_time=args.ipc_reconnect_time, ipc_reconnect_tries=args.ipc_reconnect_tries,
+                                               ipc_socket_timeout=args.ipc_socket_timeout, file=args.file, file_max_size=args.file_max_size,
+                                               file_max_age=args.file_max_age, otlp=args.otlp, otlp_address=args.otlp_address,
+                                               otlp_port=args.otlp_port, prometheus=args.prometheus,
+                                               prometheus_address=args.prometheus_address, prometheus_port=args.prometheus_port))
+
+    p = subparsers.add_parser('telemetry_dte_create',
+                              help='Create DOCA Telemetry Exporter')
+    p.add_argument(
+        '--data-root', help='Data root directory', type=str, required=False)
+    p.add_argument('--ipc', help='Enable IPC Transport',
+                   action='store_true', required=False)
+    p.add_argument('--ipc-sockets-dir',
+                   help='IPC sockets directory', type=str, required=False)
+    p.add_argument('--ipc-reconnect-time',
+                   help='IPC reconnect time in ms', type=int, required=False)
+    p.add_argument('--ipc-reconnect-tries',
+                   help='IPC max retries', type=int, required=False, choices=range(1, 255))
+    p.add_argument('--ipc-socket-timeout',
+                   help='IPC socket timeout in ms', type=int, required=False)
+    p.add_argument('--file', help='Enable File Transport',
+                   action='store_true', required=False)
+    p.add_argument('--file-max-size',
+                   help='File max size in bytes', type=int, required=False)
+    p.add_argument(
+        '--file-max-age', help='File max age in microseconds', type=int, required=False)
+    p.add_argument('--otlp', help='Enable OTLP Transport',
+                   action='store_true', required=False)
+    p.add_argument(
+        '--otlp-address', help='OTLP address (required when OTLP is enabled)', type=str, required=False)
+    p.add_argument(
+        '--otlp-port', help='OTLP port (default: 9502)', type=int, required=False)
+    p.add_argument('--prometheus', help='Enable Prometheus Endpoint',
+                   action='store_true', required=False)
+    p.add_argument(
+        '--prometheus-address', help='Prometheus address (default: 0.0.0.0)', type=str, required=False)
+    p.add_argument(
+        '--prometheus-port', help='Prometheus port (default: 9101)', type=int, required=False)
+    p.set_defaults(func=telemetry_dte_create_command)
+
+    def telemetry_dte_delete_command(args):
+        print_json(rpc.telemetry.telemetry_dte_delete(args.client))
+
+    p = subparsers.add_parser('telemetry_dte_delete',
+                              help='Delete DOCA Telemetry Exporter')
+    p.set_defaults(func=telemetry_dte_delete_command)
