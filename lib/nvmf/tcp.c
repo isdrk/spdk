@@ -3104,6 +3104,52 @@ nvme_tcp_read_data(struct spdk_nvmf_tcp_qpair *tqpair, int bytes,
 }
 
 static int
+nvme_tcp_read_payload_digest(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu,
+			     uint32_t rw_offset)
+{
+	uint32_t digest_consumed, digest_remaining;
+
+	assert(pdu->ddgst_enable == true);
+	assert(rw_offset >= pdu->data_len);
+	digest_consumed = rw_offset - pdu->data_len;
+	assert(SPDK_NVME_TCP_DIGEST_LEN > digest_consumed);
+	digest_remaining = SPDK_NVME_TCP_DIGEST_LEN - digest_consumed;
+
+	return nvme_tcp_read_data(tqpair, digest_remaining, pdu->data_digest + digest_consumed);
+}
+
+static int
+nvme_tcp_read_payload_data_and_digest_zcopy(struct spdk_nvmf_tcp_qpair *tqpair,
+		struct spdk_nvmf_tcp_req *tcp_req,
+		struct nvme_tcp_pdu *pdu)
+{
+	uint32_t rw_offset;
+	int rc, ret = 0;
+
+	rw_offset = pdu->rw_offset;
+	if (rw_offset < pdu->data_len) {
+		rc = nvme_tcp_read_data_zcopy(tqpair, tcp_req, pdu);
+		if (rc < 0) {
+			return rc;
+		}
+
+		ret += rc;
+		rw_offset += rc;
+	}
+
+	if (pdu->ddgst_enable && rw_offset >= pdu->data_len) {
+		rc = nvme_tcp_read_payload_digest(tqpair, pdu, rw_offset);
+		if (rc < 0) {
+			return rc;
+		}
+
+		ret += rc;
+	}
+
+	return ret;
+}
+
+static int
 nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_pdu *pdu)
 {
 	struct iovec iov[NVMF_REQ_MAX_BUFFERS + 1];
@@ -3118,8 +3164,8 @@ nvme_tcp_read_payload_data(struct spdk_nvmf_tcp_qpair *tqpair, struct nvme_tcp_p
 
 	tcp_req = pdu->req;
 	if (tqpair->use_zero_copy_rx && tcp_req != NULL) {
-		/* We'll do a zero copy recv into the PDU. */
-		return nvme_tcp_read_data_zcopy(tqpair, tcp_req, pdu);
+		/* We'll do a zero copy recv data and digest into the PDU. */
+		return nvme_tcp_read_payload_data_and_digest_zcopy(tqpair, tcp_req, pdu);
 	}
 
 	spdk_iov_sgl_init(&sgl, iov, NVMF_REQ_MAX_BUFFERS + 1, pdu->rw_offset);
