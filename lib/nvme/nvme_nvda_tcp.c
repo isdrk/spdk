@@ -263,6 +263,10 @@ static void xlio_sock_put_packets_pool_unsafe(struct xlio_packets_pool *pool);
 static void
 xlio_sock_put_xlio_pools(struct nvme_tcp_qpair *tqpair)
 {
+	if (!tqpair->xlio_packets_pool) {
+		return;
+	}
+
 	pthread_mutex_lock(&g_xlio_pool_mutex);
 	xlio_sock_put_packets_pool_unsafe(tqpair->xlio_packets_pool);
 	tqpair->xlio_packets_pool = NULL;
@@ -679,6 +683,7 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 	xlio_freeaddrinfo(res0);
 
 	if (rc) {
+		tqpair->xlio_sock = 0;
 		return -EINVAL;
 	}
 
@@ -688,6 +693,7 @@ xlio_sock_init(struct nvme_tcp_qpair *tqpair, const char *ip, int port, struct s
 		if (!xlio_socket_destroy(tqpair->xlio_sock)) {
 			assert(false);
 		}
+		tqpair->xlio_sock = 0;
 		return rc;
 	}
 
@@ -766,22 +772,25 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 	 * We don't want to start another disconnect procedure in xlio_sock_event_cb().
 	 */
 	tqpair->flags.closed = 1;
-	rc = xlio_socket_destroy(tqpair->xlio_sock);
-	if (rc) {
-		SPDK_WARNLOG("Fail to destroy socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
-		tqpair->flags.closed = 0;
-		return rc;
-	}
-	SPDK_INFOLOG(nvme_xlio, "tqpair %p socket 0x%lx is destroyed\n",
-		     tqpair, tqpair->xlio_sock);
 
-	/* XLIO may call event callback on a destroyed socket, whose tqpair
-	 * has already been freed, so update userdata (i.e., tqpair) to NULL and checked
-	 * it when event is comming.
-	 */
-	rc = xlio_socket_update(tqpair->xlio_sock, 0, (uintptr_t)NULL);
-	if (rc) {
-		SPDK_WARNLOG("Fail to update socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+	if (tqpair->xlio_sock != 0) {
+		rc = xlio_socket_destroy(tqpair->xlio_sock);
+		if (rc) {
+			SPDK_WARNLOG("Fail to destroy socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+			tqpair->flags.closed = 0;
+			return rc;
+		}
+		SPDK_INFOLOG(nvme_xlio, "tqpair %p socket 0x%lx is destroyed\n",
+			     tqpair, tqpair->xlio_sock);
+
+		/* XLIO may call event callback on a destroyed socket, whose tqpair
+		 * has already been freed, so update userdata (i.e., tqpair) to NULL and checked
+		 * it when event is comming.
+		 */
+		rc = xlio_socket_update(tqpair->xlio_sock, 0, (uintptr_t)NULL);
+		if (rc) {
+			SPDK_WARNLOG("Fail to update socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+		}
 	}
 
 	if (nvme_qpair_is_admin_queue(&tqpair->qpair)) {
