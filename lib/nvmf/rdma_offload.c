@@ -8688,6 +8688,11 @@ nvmf_rdma_bdev_nvme_queue_init(struct spdk_nvmf_rdma_sta *sta,
 
 	spdk_nvme_ctrlr_get_default_io_qpair_opts(rbdev->nvme.ctrlr, &opts, sizeof(opts));
 	opts.create_only = true;
+	/* The DPA polls these qpairs directly from HW — there is no SPDK-side
+	 * consumer for completion interrupts, and asking the drive to post MSI-X
+	 * adds per-completion overhead on the NVMe controller side.
+	 */
+	opts.disable_interrupts = true;
 	nvme_ctrlr_cap = spdk_nvme_ctrlr_get_regs_cap(rbdev->nvme.ctrlr);
 	/* mqes is a 0's based value, but max_io_queue_size isn't */
 	max_io_queue_size = nvme_ctrlr_cap.bits.mqes + 1;
