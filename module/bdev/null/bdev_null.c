@@ -51,6 +51,7 @@ static void *g_null_read_buf;
 
 static int bdev_null_initialize(void);
 static void bdev_null_finish(void);
+static int null_io_poll(void *arg);
 
 static int
 bdev_null_get_ctx_size(void)
@@ -283,6 +284,21 @@ bdev_null_abort_io(struct null_io_channel *ch, struct spdk_bdev_io *bio_to_abort
 }
 
 static void
+null_process_msg(void *arg)
+{
+	null_io_poll(arg);
+}
+
+static inline void
+null_io_enqueue(struct null_io_channel *ch, struct null_bdev_io *null_io)
+{
+	if (spdk_unlikely(spdk_interrupt_mode_is_enabled()) && TAILQ_EMPTY(&ch->io)) {
+		spdk_thread_send_msg(spdk_get_thread(), null_process_msg, ch);
+	}
+	TAILQ_INSERT_TAIL(&ch->io, null_io, link);
+}
+
+static void
 bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_io)
 {
 	struct null_bdev_io *null_io = (struct null_bdev_io *)bdev_io->driver_ctx;
@@ -352,7 +368,7 @@ bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_
 				}
 			}
 		}
-		TAILQ_INSERT_TAIL(&ch->io, null_io, link);
+		null_io_enqueue(ch, null_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_WRITE:
 		if (SPDK_DIF_DISABLE != bdev->dif_type) {
@@ -381,11 +397,11 @@ bdev_null_submit_request(struct spdk_io_channel *_ch, struct spdk_bdev_io *bdev_
 				}
 			}
 		}
-		TAILQ_INSERT_TAIL(&ch->io, null_io, link);
+		null_io_enqueue(ch, null_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_WRITE_ZEROES:
 	case SPDK_BDEV_IO_TYPE_RESET:
-		TAILQ_INSERT_TAIL(&ch->io, null_io, link);
+		null_io_enqueue(ch, null_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_ABORT:
 		if (bdev_null_abort_io(ch, bdev_io->u.abort.bio_to_abort)) {
@@ -652,6 +668,12 @@ null_bdev_create_cb(void *io_device, void *ctx_buf)
 
 	TAILQ_INIT(&ch->io);
 	ch->poller = SPDK_POLLER_REGISTER(null_io_poll, ch, 0);
+
+	/* Mark the poller interrupt-mode capable so the reactor does not spin on
+	 * it when the thread sleeps. In interrupt mode, IO processing is driven by
+	 * null_process_msg (scheduled from null_io_enqueue) rather than by this poller.
+	 */
+	spdk_poller_register_interrupt(ch->poller, NULL, NULL);
 
 	return 0;
 }
