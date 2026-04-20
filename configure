@@ -191,6 +191,7 @@ CC=$DEFAULT_CC
 
 arch=$($CC -dumpmachine)
 sys_name=$(uname -s)
+wsl=$(wslinfo --networking-mode > /dev/null 2>&1 && echo "y" || echo "n")
 
 if [[ $arch == *mingw* ]] || [[ $arch == *windows* ]]; then
 	sys_name=Windows
@@ -1190,9 +1191,12 @@ if echo -e '#include <lz4.h>\nint main(void) { return 0; }\n' \
 	CONFIG[HAVE_LZ4]="y"
 fi
 
-if echo -e '#include <linux/stat.h>\nint main(void) { return STATX_MNT_ID_UNIQUE; }' \
-	| "${BUILD_CMD[@]}" - 2> /dev/null; then
-	CONFIG[HAVE_MNT_ID_UNIQUE]=y
+if [[ "$wsl" != "y" ]]; then
+	# WSL kernel does not support unique mount IDs
+	if echo -e '#include <linux/stat.h>\nint main(void) { return STATX_MNT_ID_UNIQUE; }' \
+		| "${BUILD_CMD[@]}" - 2> /dev/null; then
+		CONFIG[HAVE_MNT_ID_UNIQUE]=y
+	fi
 fi
 
 if [[ $sys_name == "Linux" ]]; then
