@@ -783,13 +783,19 @@ xlio_sock_close(struct nvme_tcp_qpair *tqpair)
 		SPDK_INFOLOG(nvme_xlio, "tqpair %p socket 0x%lx is destroyed\n",
 			     tqpair, tqpair->xlio_sock);
 
-		/* XLIO may call event callback on a destroyed socket, whose tqpair
-		 * has already been freed, so update userdata (i.e., tqpair) to NULL and checked
-		 * it when event is comming.
+		/* Destroy may be asynchronous — events may still fire until
+		 * XLIO_SOCKET_EVENT_TERMINATED.  If TERMINATED was already
+		 * delivered synchronously from destroy, the callback cleared
+		 * xlio_sock and the socket object may be gone.  Otherwise
+		 * clear userdata so late callbacks see tqpair==NULL and
+		 * return early.
 		 */
-		rc = xlio_socket_update(tqpair->xlio_sock, 0, (uintptr_t)NULL);
-		if (rc) {
-			SPDK_WARNLOG("Fail to update socket 0x%lx, rc %d\n", tqpair->xlio_sock, rc);
+		if (tqpair->xlio_sock != 0) {
+			rc = xlio_socket_update(tqpair->xlio_sock, 0, (uintptr_t)NULL);
+			if (rc) {
+				SPDK_WARNLOG("Fail to update socket 0x%lx, rc %d\n",
+					     tqpair->xlio_sock, rc);
+			}
 		}
 	}
 
@@ -1010,8 +1016,10 @@ xlio_socket_event_cb(xlio_socket_t sock, uintptr_t userdata_sq, int event, int v
 			tqpair->flags.connect_notified = 1;
 		}
 		break;
-	case XLIO_SOCKET_EVENT_CLOSED:
 	case XLIO_SOCKET_EVENT_TERMINATED:
+		tqpair->xlio_sock = 0;
+	/* fallthrough */
+	case XLIO_SOCKET_EVENT_CLOSED:
 	case XLIO_SOCKET_EVENT_ERROR:
 		SPDK_INFOLOG(nvme_xlio,
 			     "Connection closed passively: sock=0x%lx tqpair=%p qid=%u event=%d value=%d\n",
