@@ -310,6 +310,7 @@ spdk_nvme_ctrlr_get_default_io_qpair_opts(struct spdk_nvme_ctrlr *ctrlr,
 	SET_FIELD(create_only, false);
 	SET_FIELD(async_mode, false);
 	SET_FIELD(disable_pcie_sgl_merge, false);
+	SET_FIELD(disable_interrupts, false);
 
 #undef FIELD_OK
 #undef SET_FIELD
@@ -345,6 +346,7 @@ nvme_ctrlr_io_qpair_opts_copy(struct spdk_nvme_io_qpair_opts *dst,
 	SET_FIELD(create_only);
 	SET_FIELD(async_mode);
 	SET_FIELD(disable_pcie_sgl_merge);
+	SET_FIELD(disable_interrupts);
 
 	dst->opts_size = opts_size_src;
 

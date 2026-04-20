@@ -1946,8 +1946,16 @@ struct spdk_nvme_io_qpair_opts {
 	 */
 	bool disable_pcie_sgl_merge;
 
-	/* Hole at bytes 67-71. */
-	uint8_t reserved67[5];
+	/**
+	 * Disable interrupts for this I/O qpair regardless of the controller-wide
+	 * enable_interrupts setting. Intended for qpairs that are polled outside
+	 * of SPDK so the drive should not post MSI-X on completions. Has no effect
+	 * when the controller has interrupts globally disabled.
+	 */
+	bool disable_interrupts;
+
+	/* Hole at bytes 68-71. */
+	uint8_t reserved68[4];
 
 	/**
 	 * The size of spdk_nvme_io_qpair_opts according to the caller of this library is used for

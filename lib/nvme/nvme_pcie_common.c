@@ -140,6 +140,7 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 		pqpair->sq_vaddr = opts->sq.vaddr;
 		pqpair->cq_vaddr = opts->cq.vaddr;
 		pqpair->flags.disable_pcie_sgl_merge = opts->disable_pcie_sgl_merge;
+		pqpair->flags.disable_interrupts = opts->disable_interrupts;
 		sq_paddr = opts->sq.paddr;
 		cq_paddr = opts->cq.paddr;
 	}
@@ -366,7 +367,7 @@ nvme_pcie_ctrlr_cmd_create_io_cq(struct spdk_nvme_ctrlr *ctrlr,
 	struct nvme_pcie_qpair *pqpair = nvme_pcie_qpair(io_que);
 	struct nvme_request *req;
 	struct spdk_nvme_cmd *cmd;
-	bool ien = ctrlr->opts.enable_interrupts;
+	bool ien = ctrlr->opts.enable_interrupts && !pqpair->flags.disable_interrupts;
 
 	req = nvme_allocate_request_null(ctrlr->adminq, cb_fn, cb_arg);
 	if (req == NULL) {

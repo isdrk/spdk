@@ -165,6 +165,9 @@ struct nvme_pcie_qpair {
 
 		/* Disable merging of physically contiguous SGL entries */
 		uint8_t disable_pcie_sgl_merge	: 1;
+
+		/* Do not request MSI-X on completions for this qpair (polled externally) */
+		uint8_t disable_interrupts	: 1;
 	} flags;
 
 	/*
