@@ -3931,7 +3931,7 @@ nvmf_tcp_qpair_process(struct spdk_nvmf_tcp_qpair *tqpair)
 			/* Now try to grab the next portion of the TCP stream */
 			rc = spdk_sock_recv_next(tqpair->sock, &segment->buf, &segment->token);
 			if (rc < 0) {
-				if (rc == ENOBUFS || rc == EAGAIN) {
+				if (rc == -ENOBUFS || rc == -EAGAIN) {
 					break;
 				}
 
