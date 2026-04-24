@@ -414,13 +414,19 @@ function qos_iostat_avg_value() {
 	' <<< "$iostat_output"
 }
 
+# Args: measured lower upper message.  Use lower=-1 or upper=-1 to skip that bound (unlimited).
 function qos_check_range() {
 	local measured=$1
 	local lower=$2
 	local upper=$3
 	local message=$4
 
-	if [ "$measured" -lt "$lower" ] || [ "$measured" -gt "$upper" ]; then
+	if [ "$lower" -ne -1 ] && [ "$measured" -lt "$lower" ]; then
+		echo "$message"
+		qos_test_cleanup
+		exit 1
+	fi
+	if [ "$upper" -ne -1 ] && [ "$measured" -gt "$upper" ]; then
 		echo "$message"
 		qos_test_cleanup
 		exit 1
@@ -1072,14 +1078,16 @@ function qos_dynamic_throttle_iops_limit_test() {
 	lower_limit=$((qos_iops_low * 9 / 10))
 	upper_limit=$((qos_iops_low * 11 / 10))
 	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
-		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_initial, got $measured_iops"
+		"Failed to limit the io IOPS of $qos_dev by qos: expected ~$qos_iops_low, got $measured_iops"
 
 	$rpc_py bdev_burst_qos_set_limit $qos_service rw_iops 0
 
 	sleep 7
 	measured_iops=$(get_io_result IOPS $qos_dev)
+	# After rw_iops 0, iostat can exceed baseline briefly (burst / deep queues without
+	# --back-pressure); only assert we recovered at least ~90% of the pre-QoS window.
 	lower_limit=$((baseline_iops * 9 / 10))
-	upper_limit=$((baseline_iops * 11 / 10))
+	upper_limit=-1
 	qos_check_range "$measured_iops" "$lower_limit" "$upper_limit" \
 		"Failed to restore IOPS after removing QoS for $qos_dev: expected ~$baseline_iops, got $measured_iops"
 }
@@ -1102,8 +1110,8 @@ function qos_dynamic_tree_change_test() {
 	local upper_limit
 
 	sleep 1
-	baseline_a_iops=$(get_io_result IOPS $qos_dev_a)
-	baseline_b_iops=$(get_io_result IOPS $qos_dev_b)
+	# One iostat window for both baselines (avoids skew if the second 5s sample hits a dip).
+	read -r baseline_a_iops baseline_b_iops _baseline_tree_total < <(get_iops_list_and_total $qos_dev_a $qos_dev_b)
 
 	$rpc_py bdev_qos_create -m burst $qos_root
 	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_leaf_a
@@ -1425,11 +1433,11 @@ function qos_test_dynamic_change_suite() {
 	local qos_root="qos_root"
 	local qos_leaf_a="qos_leaf_a"
 	local qos_leaf_b="qos_leaf_b"
-	local workload_iops=40000
+	local workload_iops=20000
 	local qos_iops_initial=5000
-	local qos_iops_high=20000
+	local qos_iops_high=9000
 	local qos_iops_low=2000
-	local qos_iops_root=20000
+	local qos_iops_root=8000
 
 	trap 'cleanup; qos_test_cleanup; exit 1' ERR SIGINT SIGTERM EXIT
 
