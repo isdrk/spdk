@@ -101,7 +101,7 @@ struct spdk_bdev_mgr {
 
 	TAILQ_HEAD(, spdk_bdev_qos_module) qos_modules;
 
-	TAILQ_HEAD(, spdk_bdev_qos) qos_list;
+	TAILQ_HEAD(bdev_qos_list_head, spdk_bdev_qos) qos_list;
 
 	struct spdk_telemetry_type *telemetry_type_iostat;
 
@@ -2707,10 +2707,19 @@ static void
 bdev_qos_fini(void *arg)
 {
 	struct spdk_bdev_qos *qos, *tmp_qos;
+	int rc;
 
-	TAILQ_FOREACH_SAFE(qos, &g_bdev_mgr.qos_list, tailq, tmp_qos) {
-		TAILQ_REMOVE(&g_bdev_mgr.qos_list, qos, tailq);
-		spdk_bdev_qos_destroy(qos);
+	/*
+	 * Destroy bottom-up: qos_list is global creation order (tail insertion; parent
+	 * before child). Reverse iteration destroys descendants before ancestors so
+	 * spdk_bdev_qos_destroy() does not fail with -EBUSY from non-empty children.
+	 */
+	TAILQ_FOREACH_REVERSE_SAFE(qos, &g_bdev_mgr.qos_list, bdev_qos_list_head, tailq, tmp_qos) {
+		rc = spdk_bdev_qos_destroy(qos);
+		if (rc != 0) {
+			SPDK_WARNLOG("Failed to destroy QoS %s during shutdown, rc=%d\n",
+				     qos->name, rc);
+		}
 	}
 
 	bdev_qos_module_fini_iter();

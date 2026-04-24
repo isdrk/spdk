@@ -1111,7 +1111,7 @@ function qos_dynamic_tree_change_test() {
 
 	sleep 1
 	# One iostat window for both baselines (avoids skew if the second 5s sample hits a dip).
-	read -r baseline_a_iops baseline_b_iops _baseline_tree_total < <(get_iops_list_and_total $qos_dev_a $qos_dev_b)
+	read -r baseline_a_iops baseline_b_iops _baseline_tree_total < <(get_iops_list_and_total "$qos_dev_a" "$qos_dev_b")
 
 	$rpc_py bdev_qos_create -m burst $qos_root
 	$rpc_py bdev_qos_create -m burst -p $qos_root $qos_leaf_a
