@@ -211,6 +211,7 @@ struct nvme_tcp_req {
 			uint16_t			has_memory_domain : 1;
 			uint16_t			needs_accel_seq : 1;
 			uint16_t			in_capsule_data : 1;
+			uint16_t			recv_iovs_malloced : 1;
 			uint16_t			state : 3;
 		} bits;
 	} ordering;
@@ -1562,8 +1563,14 @@ nvme_tcp_req_put(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 		tcp_req->iobuf_iov.iov_base = NULL;
 	}
 
-	if (tcp_req->recv_iovs != tcp_req->_recv_iovs) {
-		spdk_mempool_put(g_iovec_pool, tcp_req->recv_iovs);
+	if (tcp_req->recv_iovs != tcp_req->_recv_iovs &&
+	    tcp_req->recv_iovs != NULL) {
+		if (tcp_req->ordering.bits.recv_iovs_malloced) {
+			free(tcp_req->recv_iovs);
+			tcp_req->ordering.bits.recv_iovs_malloced = 0;
+		} else {
+			spdk_mempool_put(g_iovec_pool, tcp_req->recv_iovs);
+		}
 		tcp_req->recv_iovs = NULL;
 	}
 
@@ -2757,20 +2764,20 @@ nvme_tcp_calc_and_set_recv_iovs(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qp
 	}
 
 	if (iovcnt > NVME_TCP_MAX_SGL_DESCRIPTORS) {
-		if (iovcnt > MAX_RX_IOVS) {
-			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
-			SPDK_ERRLOG("HIGHLY SCATTERED RX RECEIVE. CANNOT HANDLE\n");
-			return -E2BIG;
+		assert(tcp_req->recv_iovs != NULL);
+		if (iovcnt <= MAX_RX_IOVS) {
+			tcp_req->recv_iovs = spdk_mempool_get(g_iovec_pool);
 		}
 
-		tcp_req->recv_iovs = spdk_mempool_get(g_iovec_pool);
-		if (tcp_req->recv_iovs == NULL) {
-			/* TODO: Need to queue up and wait */
-			rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-			rsp->status.sct = SPDK_NVME_SCT_GENERIC;
-			SPDK_ERRLOG("Ran out of iovec arrays in pool!\n");
-			return -ENOMEM;
+		if (iovcnt > MAX_RX_IOVS || tcp_req->recv_iovs == NULL) {
+			tcp_req->recv_iovs = malloc(sizeof(*tcp_req->recv_iovs) * iovcnt);
+			if (spdk_unlikely(tcp_req->recv_iovs == NULL)) {
+				rsp->status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+				rsp->status.sct = SPDK_NVME_SCT_GENERIC;
+				SPDK_ERRLOG("Failed to allocate RX iovec array, iovcnt %u\n", iovcnt);
+				return -ENOMEM;
+			}
+			tcp_req->ordering.bits.recv_iovs_malloced = 1;
 		}
 	}
 
