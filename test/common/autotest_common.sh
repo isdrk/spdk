@@ -104,6 +104,8 @@ export SPDK_TEST_FUZZER
 export SPDK_TEST_FUZZER_SHORT
 : ${SPDK_TEST_NVMF_TRANSPORT="rdma"}
 export SPDK_TEST_NVMF_TRANSPORT
+: ${SPDK_TEST_RDMA_PROV=""}
+export SPDK_TEST_RDMA_PROV
 : ${SPDK_TEST_RBD=0}
 export SPDK_TEST_RBD
 : ${SPDK_TEST_VHOST=0}
@@ -417,13 +419,10 @@ function get_config_params() {
 	xtrace_disable
 	config_params='--enable-debug --enable-werror'
 
-	# for options with dependencies but no test flag, set them here
-	if [[ $SPDK_TEST_NVMF_TRANSPORT == 'rdma' ]]; then
-		if [[ $SPDK_TEST_NVMF_NICS == "mlx5" ]]; then
-			config_params+=' --with-rdma=mlx5_dv'
-		elif [ -f /usr/include/infiniband/verbs.h ]; then
-			config_params+=' --with-rdma'
-		fi
+	if [[ -n "$SPDK_TEST_RDMA_PROV" ]]; then
+		config_params+=" --with-rdma=$SPDK_TEST_RDMA_PROV"
+	elif [[ -f /usr/include/infiniband/verbs.h ]]; then
+		config_params+=" --with-rdma"
 	fi
 
 	if [ $SPDK_TEST_USDT -eq 1 ]; then
