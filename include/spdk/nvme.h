@@ -644,6 +644,7 @@ struct spdk_nvme_tcp_stat {
 	uint64_t received_data_pdus;
 	uint64_t received_data_iovs;
 	uint64_t max_data_iovs_per_pdu;
+	uint64_t rx_iov_fallbacks;
 	uint64_t recv_ddgsts;
 	uint64_t send_ddgsts;
 };

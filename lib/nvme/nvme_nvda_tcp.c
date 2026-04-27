@@ -2778,7 +2778,14 @@ nvme_tcp_calc_and_set_recv_iovs(struct nvme_tcp_req *tcp_req, struct nvme_tcp_qp
 				return -ENOMEM;
 			}
 			tcp_req->ordering.bits.recv_iovs_malloced = 1;
+			tqpair->stats->rx_iov_fallbacks++;
 		}
+	}
+
+	tqpair->stats->received_data_pdus++;
+	tqpair->stats->received_data_iovs += iovcnt;
+	if (iovcnt > tqpair->stats->max_data_iovs_per_pdu) {
+		tqpair->stats->max_data_iovs_per_pdu = iovcnt;
 	}
 
 	tcp_req->recv_iovcnt = 0;
@@ -2827,12 +2834,6 @@ nvme_tcp_req_complete_memory_domain(struct nvme_tcp_req *tcp_req,
 		rc = nvme_tcp_calc_and_set_recv_iovs(tcp_req, tqpair, rsp);
 		if (spdk_unlikely(rc)) {
 			goto out;
-		}
-
-		tqpair->stats->received_data_pdus++;
-		tqpair->stats->received_data_iovs += tcp_req->recv_iovcnt;
-		if (tcp_req->recv_iovcnt > tqpair->stats->max_data_iovs_per_pdu) {
-			tqpair->stats->max_data_iovs_per_pdu = tcp_req->recv_iovcnt;
 		}
 
 		accel_seq = req->accel_sequence;
@@ -3301,12 +3302,6 @@ nvme_tcp_prepare_accel_sequence_c2h(struct nvme_tcp_qpair *tqpair, struct nvme_t
 	rc = nvme_tcp_calc_and_set_recv_iovs(tcp_req, tqpair, &tcp_req->req.cpl);
 	if (spdk_unlikely(rc)) {
 		return rc;
-	}
-
-	tqpair->stats->received_data_pdus++;
-	tqpair->stats->received_data_iovs += tcp_req->recv_iovcnt;
-	if (tcp_req->recv_iovcnt > tqpair->stats->max_data_iovs_per_pdu) {
-		tqpair->stats->max_data_iovs_per_pdu = tcp_req->recv_iovcnt;
 	}
 
 	rc = nvme_tcp_apply_accel_sequence_c2h(tqpair, pdu);

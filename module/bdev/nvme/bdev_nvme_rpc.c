@@ -1224,6 +1224,7 @@ rpc_bdev_nvme_tcp_stats(struct spdk_json_write_ctx *w,
 	spdk_json_write_named_uint64(w, "received_data_pdus", stat->tcp.received_data_pdus);
 	spdk_json_write_named_uint64(w, "received_data_iovs", stat->tcp.received_data_iovs);
 	spdk_json_write_named_uint64(w, "max_data_iovs_per_pdu", stat->tcp.max_data_iovs_per_pdu);
+	spdk_json_write_named_uint64(w, "rx_iov_fallbacks", stat->tcp.rx_iov_fallbacks);
 	spdk_json_write_named_uint64(w, "recv_ddgsts", stat->tcp.recv_ddgsts);
 	spdk_json_write_named_uint64(w, "send_ddgsts", stat->tcp.send_ddgsts);
 }
