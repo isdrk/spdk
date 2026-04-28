@@ -233,6 +233,23 @@ flush_server(void)
 	free(req2);
 }
 
+static void
+recv_next_error_status(void)
+{
+	struct spdk_uring_sock usock = {};
+	struct spdk_sock *sock = &usock.base;
+	struct spdk_sock_buf_token *token = NULL;
+	void *buf = NULL;
+	int rc;
+
+	usock.connection_status = -ECONNRESET;
+
+	rc = uring_sock_recv_next(sock, &buf, &token);
+	CU_ASSERT(rc == -ECONNRESET);
+	CU_ASSERT(buf == NULL);
+	CU_ASSERT(token == NULL);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -246,6 +263,7 @@ main(int argc, char **argv)
 
 	CU_ADD_TEST(suite, flush_client);
 	CU_ADD_TEST(suite, flush_server);
+	CU_ADD_TEST(suite, recv_next_error_status);
 
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
