@@ -733,7 +733,7 @@ uring_sock_recv_next(struct spdk_sock *_sock, void **buf, struct spdk_sock_buf_t
 	struct spdk_uring_buf_tracker *tr;
 
 	if (sock->connection_status < 0) {
-		return -sock->connection_status;
+		return sock->connection_status;
 	}
 
 	tr = STAILQ_FIRST(&sock->recv_stream);
