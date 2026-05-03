@@ -14,6 +14,7 @@ DIRS-$(CONFIG_VBDEV_COMPRESS) += reduce
 DIRS-$(CONFIG_VHOST) += vhost
 DIRS-$(CONFIG_RDMA) += rdma
 DIRS-$(CONFIG_FSDEV) += fsdev
+DIRS-y += telemetry
 ifeq ($(OS),Linux)
 DIRS-y += ftl
 endif

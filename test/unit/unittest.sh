@@ -265,6 +265,8 @@ if [ $(uname -s) = Linux ]; then
 fi
 run_test "unittest_thread" $valgrind $testdir/lib/thread/thread.c/thread_ut
 run_test "unittest_iobuf" $valgrind $testdir/lib/thread/iobuf.c/iobuf_ut
+run_test "unittest_telemetry" $valgrind $testdir/lib/telemetry/telemetry.c/telemetry_ut
+run_test "unittest_telemetry_csv" $valgrind $testdir/lib/telemetry/csv/telemetry_csv_ut
 run_test "unittest_util" unittest_util
 if [[ $CONFIG_FSDEV == y ]]; then
 	run_test "unittest_fsdev" unittest_fsdev
