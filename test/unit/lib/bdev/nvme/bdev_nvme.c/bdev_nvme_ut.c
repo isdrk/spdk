@@ -95,6 +95,31 @@ DEFINE_STUB(spdk_nvme_poll_group_set_interrupt_callback, int,
 DEFINE_STUB(spdk_nvme_ns_is_active, bool, (struct spdk_nvme_ns *ns), true);
 DEFINE_STUB(spdk_nvme_ctrlr_reset_subsystem, int, (struct spdk_nvme_ctrlr *ctrlr), 0);
 DEFINE_STUB(spdk_nvme_ctrlr_is_nssr_supported, bool, (struct spdk_nvme_ctrlr *ctrlr), 0);
+DEFINE_STUB_V(spdk_telemetry_unregister_type, (struct spdk_telemetry_type *type));
+DEFINE_STUB_V(spdk_telemetry_unregister_source, (struct spdk_telemetry_source *src));
+DEFINE_STUB_V(spdk_telemetry_source_pull_complete, (struct spdk_telemetry_source *src, int status));
+DEFINE_STUB(spdk_telemetry_source_get_stats_buffer, void *, (struct spdk_telemetry_source *src),
+	    NULL);
+DEFINE_STUB(spdk_telemetry_source_get_stats_buffer_size, uint64_t,
+	    (struct spdk_telemetry_source *src), 0);
+
+/* We have to manually mock these telemetry registration functions because bdev_nvme code check for type == NULL and src == NULL */
+int
+spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
+			     struct spdk_telemetry_type **type)
+{
+	*type = (struct spdk_telemetry_type *)0xdeadbeef;
+	return 0;
+}
+
+int
+spdk_telemetry_register_source(struct spdk_telemetry_type *type, const char *name,
+			       spdk_telemetry_pull_cb pull_cb, void *pull_cb_arg,
+			       struct spdk_telemetry_source **src)
+{
+	*src = (struct spdk_telemetry_source *)0xdeadbeef;
+	return 0;
+}
 
 int
 spdk_nvme_ctrlr_get_memory_domains(const struct spdk_nvme_ctrlr *ctrlr,

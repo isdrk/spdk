@@ -107,6 +107,7 @@ struct nvme_ctrlr {
 	uint32_t				io_path_cache_clearing : 1;
 	uint32_t				dont_retry : 1;
 	uint32_t				disabled : 1;
+	uint32_t				telemetry_pulling_health_info : 1;
 
 	struct spdk_bdev_nvme_ctrlr_opts	opts;
 
@@ -149,6 +150,9 @@ struct nvme_ctrlr {
 	struct spdk_key				*dhchap_ctrlr_key;
 
 	pthread_mutex_t				mutex;
+
+	struct spdk_telemetry_source		*health_info_source;
+	struct spdk_nvme_health_information_page	*health_page;
 };
 
 struct nvme_bdev_ctrlr {

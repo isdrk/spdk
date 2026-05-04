@@ -27,6 +27,7 @@
 #include "spdk/util.h"
 #include "spdk/uuid.h"
 #include "spdk/barrier.h"
+#include "spdk/telemetry_source.h"
 
 #include "spdk/bdev_module.h"
 #include "spdk/log.h"
@@ -372,6 +373,8 @@ static int nvme_ctrlr_read_ana_log_page(struct nvme_ctrlr *nvme_ctrlr);
 static struct nvme_ns *nvme_ns_alloc(void);
 static void nvme_ns_free(struct nvme_ns *ns);
 
+static void nvme_ctrlr_unregister_telemetry(struct nvme_ctrlr *nvme_ctrlr);
+
 static struct spdk_thread *
 bdev_nvme_get_next_io_qpair_thread(void)
 {
@@ -432,6 +435,7 @@ SPDK_BDEV_MODULE_REGISTER(nvme, &nvme_if)
 struct nvme_bdev_ctrlrs g_nvme_bdev_ctrlrs = TAILQ_HEAD_INITIALIZER(g_nvme_bdev_ctrlrs);
 pthread_mutex_t g_bdev_nvme_mutex = PTHREAD_MUTEX_INITIALIZER;
 bool g_bdev_nvme_module_finish;
+static struct spdk_telemetry_type *g_nvme_bdev_health_info_type = NULL;
 
 struct nvme_bdev_ctrlr *
 nvme_bdev_ctrlr_get_by_name(const char *name)
@@ -825,6 +829,8 @@ nvme_ctrlr_delete(struct nvme_ctrlr *nvme_ctrlr)
 	if (spdk_interrupt_mode_is_enabled()) {
 		spdk_interrupt_unregister(&nvme_ctrlr->intr);
 	}
+
+	nvme_ctrlr_unregister_telemetry(nvme_ctrlr);
 
 	/* First, unregister the adminq poller, as the driver will poll adminq if necessary */
 	spdk_poller_unregister(&nvme_ctrlr->adminq_timer_poller);
@@ -6055,6 +6061,284 @@ dummy_bdev_event_cb(enum spdk_bdev_event_type type, struct spdk_bdev *bdev, void
 {
 }
 
+const struct spdk_telemetry_stat_info nvme_bdev_health_stats_info[] = {
+	SPDK_TELEMETRY_STAT_INFO_UINT64("critical_warning", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_kelvin", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("available_spare_percentage", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("available_spare_threshold_percentage", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("percentage_used", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("data_units_read_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("data_units_read_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("data_units_written_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("data_units_written_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("host_read_commands_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("host_read_commands_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("host_write_commands_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("host_write_commands_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("controller_busy_time_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("controller_busy_time_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("power_cycles_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("power_cycles_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("power_on_hours_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("power_on_hours_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("unsafe_shutdowns_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("unsafe_shutdowns_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("media_errors_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("media_errors_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_err_log_entries_lo", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("num_err_log_entries_hi", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("warning_temperature_time_minutes", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("critical_composite_temperature_time_minutes", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_0", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_1", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_2", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_3", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_4", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_5", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_6", 1),
+	SPDK_TELEMETRY_STAT_INFO_UINT64("temperature_sensor_kelvin_7", 1),
+};
+
+enum nvme_health_stat_idx {
+	NVME_HEALTH_STAT_CRITICAL_WARNING = 0,
+	NVME_HEALTH_STAT_TEMPERATURE,
+	NVME_HEALTH_STAT_AVAILABLE_SPARE,
+	NVME_HEALTH_STAT_AVAILABLE_SPARE_THRESHOLD,
+	NVME_HEALTH_STAT_PERCENTAGE_USED,
+	NVME_HEALTH_STAT_DATA_UNITS_READ_LO,
+	NVME_HEALTH_STAT_DATA_UNITS_READ_HI,
+	NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_LO,
+	NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_HI,
+	NVME_HEALTH_STAT_HOST_READ_COMMANDS_LO,
+	NVME_HEALTH_STAT_HOST_READ_COMMANDS_HI,
+	NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_LO,
+	NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_HI,
+	NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_LO,
+	NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_HI,
+	NVME_HEALTH_STAT_POWER_CYCLES_LO,
+	NVME_HEALTH_STAT_POWER_CYCLES_HI,
+	NVME_HEALTH_STAT_POWER_ON_HOURS_LO,
+	NVME_HEALTH_STAT_POWER_ON_HOURS_HI,
+	NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_LO,
+	NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_HI,
+	NVME_HEALTH_STAT_MEDIA_ERRORS_LO,
+	NVME_HEALTH_STAT_MEDIA_ERRORS_HI,
+	NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_LO,
+	NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_HI,
+	NVME_HEALTH_STAT_WARNING_TEMP_TIME,
+	NVME_HEALTH_STAT_CRITICAL_TEMP_TIME,
+	NVME_HEALTH_STAT_TEMP_SENSOR_0,
+	NVME_HEALTH_STAT_TEMP_SENSOR_1,
+	NVME_HEALTH_STAT_TEMP_SENSOR_2,
+	NVME_HEALTH_STAT_TEMP_SENSOR_3,
+	NVME_HEALTH_STAT_TEMP_SENSOR_4,
+	NVME_HEALTH_STAT_TEMP_SENSOR_5,
+	NVME_HEALTH_STAT_TEMP_SENSOR_6,
+	NVME_HEALTH_STAT_TEMP_SENSOR_7,
+	__NVME_HEALTH_STAT_LAST
+};
+
+const struct spdk_telemetry_type_info nvme_bdev_health_info = {
+	.name = "nvme_bdev_health_info",
+	.num_stats = __NVME_HEALTH_STAT_LAST,
+	.stats = nvme_bdev_health_stats_info,
+};
+
+SPDK_STATIC_ASSERT(SPDK_COUNTOF(nvme_bdev_health_stats_info) == __NVME_HEALTH_STAT_LAST,
+		   "nvme_health_info_fields count mismatch");
+
+static void
+nvme_ctrlr_health_info_pull_cb_done(void *cb_arg, const struct spdk_nvme_cpl *cpl)
+{
+	struct nvme_ctrlr *nvme_ctrlr = cb_arg;
+	uint64_t *stats;
+	uint64_t num_stats;
+	struct spdk_nvme_health_information_page *health_page = nvme_ctrlr->health_page;
+	int rc;
+
+	assert(nvme_ctrlr->health_info_source != NULL);
+	/* The controller is pulling health information */
+	assert(nvme_ctrlr->telemetry_pulling_health_info == true);
+
+	if (spdk_nvme_cpl_is_error(cpl)) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to get health information log page\n");
+		rc = -EIO;
+		goto do_complete;
+	}
+
+	stats = spdk_telemetry_source_get_stats_buffer(nvme_ctrlr->health_info_source);
+	num_stats = spdk_telemetry_source_get_stats_buffer_size(nvme_ctrlr->health_info_source) / sizeof(
+			    uint64_t);
+
+	assert(stats != NULL);
+	assert(num_stats == __NVME_HEALTH_STAT_LAST);
+	assert(num_stats == SPDK_COUNTOF(nvme_bdev_health_stats_info));
+	SPDK_UNUSED(num_stats);
+
+	stats[NVME_HEALTH_STAT_CRITICAL_WARNING] = health_page->critical_warning.raw;
+	stats[NVME_HEALTH_STAT_TEMPERATURE] = health_page->temperature;
+	stats[NVME_HEALTH_STAT_AVAILABLE_SPARE] = health_page->available_spare;
+	stats[NVME_HEALTH_STAT_AVAILABLE_SPARE_THRESHOLD] = health_page->available_spare_threshold;
+	stats[NVME_HEALTH_STAT_PERCENTAGE_USED] = health_page->percentage_used;
+	stats[NVME_HEALTH_STAT_DATA_UNITS_READ_LO] = health_page->data_units_read[0];
+	stats[NVME_HEALTH_STAT_DATA_UNITS_READ_HI] = health_page->data_units_read[1];
+	stats[NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_LO] = health_page->data_units_written[0];
+	stats[NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_HI] = health_page->data_units_written[1];
+	stats[NVME_HEALTH_STAT_HOST_READ_COMMANDS_LO] = health_page->host_read_commands[0];
+	stats[NVME_HEALTH_STAT_HOST_READ_COMMANDS_HI] = health_page->host_read_commands[1];
+	stats[NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_LO] = health_page->host_write_commands[0];
+	stats[NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_HI] = health_page->host_write_commands[1];
+	stats[NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_LO] = health_page->controller_busy_time[0];
+	stats[NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_HI] = health_page->controller_busy_time[1];
+	stats[NVME_HEALTH_STAT_POWER_CYCLES_LO] = health_page->power_cycles[0];
+	stats[NVME_HEALTH_STAT_POWER_CYCLES_HI] = health_page->power_cycles[1];
+	stats[NVME_HEALTH_STAT_POWER_ON_HOURS_LO] = health_page->power_on_hours[0];
+	stats[NVME_HEALTH_STAT_POWER_ON_HOURS_HI] = health_page->power_on_hours[1];
+	stats[NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_LO] = health_page->unsafe_shutdowns[0];
+	stats[NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_HI] = health_page->unsafe_shutdowns[1];
+	stats[NVME_HEALTH_STAT_MEDIA_ERRORS_LO] = health_page->media_errors[0];
+	stats[NVME_HEALTH_STAT_MEDIA_ERRORS_HI] = health_page->media_errors[1];
+	stats[NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_LO] = health_page->num_error_info_log_entries[0];
+	stats[NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_HI] = health_page->num_error_info_log_entries[1];
+	stats[NVME_HEALTH_STAT_WARNING_TEMP_TIME] = health_page->warning_temp_time;
+	stats[NVME_HEALTH_STAT_CRITICAL_TEMP_TIME] = health_page->critical_temp_time;
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_0] = health_page->temp_sensor[0];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_1] = health_page->temp_sensor[1];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_2] = health_page->temp_sensor[2];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_3] = health_page->temp_sensor[3];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_4] = health_page->temp_sensor[4];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_5] = health_page->temp_sensor[5];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_6] = health_page->temp_sensor[6];
+	stats[NVME_HEALTH_STAT_TEMP_SENSOR_7] = health_page->temp_sensor[7];
+
+	NVME_CTRLR_DEBUGLOG(nvme_ctrlr, "Health information pulled successfully\n");
+
+	rc = 0;
+
+do_complete:
+	spdk_telemetry_source_pull_complete(nvme_ctrlr->health_info_source, rc);
+	nvme_ctrlr->telemetry_pulling_health_info = false;
+	nvme_ctrlr_put_ref(nvme_ctrlr);
+}
+
+static void
+nvme_ctrlr_health_info_pull_cb(void *pull_cb_arg, struct spdk_telemetry_source *src)
+{
+	struct nvme_ctrlr *nvme_ctrlr = pull_cb_arg;
+	struct spdk_nvme_ctrlr *ctrlr = nvme_ctrlr->ctrlr;
+	int rc;
+
+	/* The pull callback is always called on the controller's thread */
+	assert(nvme_ctrlr->thread == spdk_get_thread());
+	assert(nvme_ctrlr->health_info_source == src);
+
+	/* get a reference to the controller to prevent it from being destroyed while pulling health information */
+	nvme_ctrlr_get_ref(nvme_ctrlr);
+
+	/* Mark the pull as in-flight before submission so the done callback's invariant holds
+	 * regardless of whether the admin command can complete synchronously.
+	 */
+	nvme_ctrlr->telemetry_pulling_health_info = true;
+
+	rc = spdk_nvme_ctrlr_cmd_get_log_page(ctrlr, SPDK_NVME_LOG_HEALTH_INFORMATION,
+					      SPDK_NVME_GLOBAL_NS_TAG,
+					      nvme_ctrlr->health_page, sizeof(struct spdk_nvme_health_information_page), 0,
+					      nvme_ctrlr_health_info_pull_cb_done, nvme_ctrlr);
+	if (rc != 0) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to get health information log page: %d\n", rc);
+		nvme_ctrlr->telemetry_pulling_health_info = false;
+		spdk_telemetry_source_pull_complete(src, rc);
+		nvme_ctrlr_put_ref(nvme_ctrlr); /* release the reference to the controller */
+		return;
+	}
+}
+
+static int
+nvme_ctrlr_register_telemetry(struct nvme_ctrlr *nvme_ctrlr)
+{
+	int rc;
+	char *source_name;
+
+	assert(nvme_ctrlr->health_info_source == NULL);
+	assert(nvme_ctrlr->health_page == NULL);
+
+	nvme_ctrlr->health_page = calloc(1, sizeof(struct spdk_nvme_health_information_page));
+	if (nvme_ctrlr->health_page == NULL) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to allocate memory for health page\n");
+		rc = -ENOMEM;
+		goto return_error;
+	}
+
+	source_name = spdk_sprintf_alloc(NVME_CTRLR_LOG_FMT, NVME_CTRLR_LOG_ARGS(nvme_ctrlr));
+	if (source_name == NULL) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to allocate name for telemetry source\n");
+		rc = -ENOMEM;
+		goto return_error;
+	}
+
+	rc = spdk_telemetry_register_source(g_nvme_bdev_health_info_type, source_name,
+					    nvme_ctrlr_health_info_pull_cb, nvme_ctrlr,
+					    &nvme_ctrlr->health_info_source);
+	free(source_name);
+	if (rc != 0) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to register telemetry source: %d\n", rc);
+		nvme_ctrlr->health_info_source = NULL;
+		goto return_error;
+	}
+
+	NVME_CTRLR_DEBUGLOG(nvme_ctrlr, "Telemetry source registered\n");
+	return 0;
+
+return_error:
+	free(nvme_ctrlr->health_page);
+	nvme_ctrlr->health_page = NULL;
+	return rc;
+}
+
+static void
+nvme_ctrlr_unregister_telemetry(struct nvme_ctrlr *nvme_ctrlr)
+{
+	if (nvme_ctrlr->health_info_source == NULL) {
+		/* Telemetry was never successfully registered for this controller. */
+		return;
+	}
+
+	assert(!nvme_ctrlr->telemetry_pulling_health_info);
+
+	/* Free the health page */
+	free(nvme_ctrlr->health_page);
+	nvme_ctrlr->health_page = NULL;
+	/* Unregister the health info source */
+	spdk_telemetry_unregister_source(nvme_ctrlr->health_info_source);
+	nvme_ctrlr->health_info_source = NULL;
+
+	NVME_CTRLR_DEBUGLOG(nvme_ctrlr, "Telemetry source unregistered\n");
+}
+
+static void
+nvme_bdev_telemetry_fini(void)
+{
+	assert(g_nvme_bdev_health_info_type != NULL);
+
+	spdk_telemetry_unregister_type(g_nvme_bdev_health_info_type);
+	g_nvme_bdev_health_info_type = NULL;
+}
+
+static int
+nvme_bdev_telemetry_init(void)
+{
+	int rc;
+
+	rc = spdk_telemetry_register_type(&nvme_bdev_health_info, &g_nvme_bdev_health_info_type);
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to register nvme bdev health info telemetry type: %d\n", rc);
+		return rc;
+	}
+
+	SPDK_DEBUGLOG(bdev_nvme, "nvme bdev health info telemetry type registered\n");
+	return 0;
+}
+
 struct bdev_nvme_set_preferred_path_ctx {
 	struct spdk_bdev_desc *desc;
 	struct nvme_ns *nvme_ns;
@@ -6399,7 +6683,15 @@ static int
 nvme_ctrlr_create_done(struct nvme_ctrlr *nvme_ctrlr,
 		       struct nvme_async_probe_ctx *ctx)
 {
+	int rc;
+
 	NVME_CTRLR_INFOLOG(nvme_ctrlr, "ctrlr was created\n");
+
+	rc = nvme_ctrlr_register_telemetry(nvme_ctrlr);
+	if (rc != 0) {
+		NVME_CTRLR_ERRLOG(nvme_ctrlr, "Failed to register telemetry source: %d\n", rc);
+		return rc;
+	}
 
 	spdk_io_device_register(nvme_ctrlr,
 				bdev_nvme_create_ctrlr_channel_cb,
@@ -8566,9 +8858,16 @@ bdev_nvme_stop_discovery(const char *name, spdk_bdev_nvme_stop_discovery_fn cb_f
 static int
 bdev_nvme_library_init(void)
 {
+	int rc;
 	struct spdk_nvme_transport_opts drv_opts = {};
 
 	g_bdev_nvme_init_thread = spdk_get_thread();
+
+	rc = nvme_bdev_telemetry_init();
+	if (rc != 0) {
+		SPDK_ERRLOG("Failed to initialize nvme bdev telemetry: %d\n", rc);
+		return rc;
+	}
 
 	spdk_nvme_transport_get_opts(&drv_opts, sizeof(drv_opts));
 	g_opts.rdma_initial_cq_size = drv_opts.rdma_initial_cq_size;
@@ -8630,6 +8929,7 @@ static void
 bdev_nvme_library_fini_done(void)
 {
 	spdk_io_device_unregister(&g_nvme_bdev_ctrlrs, NULL);
+	nvme_bdev_telemetry_fini();
 	spdk_bdev_module_fini_done();
 }
 
