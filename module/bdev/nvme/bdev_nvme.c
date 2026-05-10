@@ -6395,7 +6395,7 @@ bdev_nvme_remove_poller(void *ctx)
 	return SPDK_POLLER_BUSY;
 }
 
-static void
+static int
 nvme_ctrlr_create_done(struct nvme_ctrlr *nvme_ctrlr,
 		       struct nvme_async_probe_ctx *ctx)
 {
@@ -6413,6 +6413,8 @@ nvme_ctrlr_create_done(struct nvme_ctrlr *nvme_ctrlr,
 		g_hotplug_poller = SPDK_POLLER_REGISTER(bdev_nvme_remove_poller, NULL,
 							NVME_HOTPLUG_POLL_PERIOD_DEFAULT);
 	}
+
+	return 0;
 }
 
 static void
@@ -6420,20 +6422,29 @@ nvme_ctrlr_init_ana_log_page_done(void *_ctx, const struct spdk_nvme_cpl *cpl)
 {
 	struct nvme_ctrlr *nvme_ctrlr = _ctx;
 	struct nvme_async_probe_ctx *ctx = nvme_ctrlr->probe_ctx;
+	int rc;
 
 	nvme_ctrlr->probe_ctx = NULL;
 
 	if (spdk_nvme_cpl_is_error(cpl)) {
-		nvme_ctrlr_delete(nvme_ctrlr);
-
-		if (ctx != NULL) {
-			ctx->reported_bdevs = 0;
-			populate_namespaces_cb(ctx, -1);
-		}
-		return;
+		rc = -EIO;
+		goto on_error;
 	}
 
-	nvme_ctrlr_create_done(nvme_ctrlr, ctx);
+	rc = nvme_ctrlr_create_done(nvme_ctrlr, ctx);
+	if (rc != 0) {
+		goto on_error;
+	}
+
+	return;
+
+on_error:
+	nvme_ctrlr_delete(nvme_ctrlr);
+
+	if (ctx != NULL) {
+		ctx->reported_bdevs = 0;
+		populate_namespaces_cb(ctx, rc);
+	}
 }
 
 static int
@@ -6763,11 +6774,11 @@ nvme_ctrlr_create(struct spdk_nvme_ctrlr *ctrlr,
 
 	if (cdata->cmic.ana_reporting) {
 		rc = nvme_ctrlr_init_ana_log_page(nvme_ctrlr, ctx);
-		if (rc == 0) {
-			return 0;
-		}
 	} else {
-		nvme_ctrlr_create_done(nvme_ctrlr, ctx);
+		rc = nvme_ctrlr_create_done(nvme_ctrlr, ctx);
+	}
+
+	if (rc == 0) {
 		return 0;
 	}
 
