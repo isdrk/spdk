@@ -97,13 +97,15 @@ DEFINE_STUB(spdk_nvme_ctrlr_reset_subsystem, int, (struct spdk_nvme_ctrlr *ctrlr
 DEFINE_STUB(spdk_nvme_ctrlr_is_nssr_supported, bool, (struct spdk_nvme_ctrlr *ctrlr), 0);
 DEFINE_STUB_V(spdk_telemetry_unregister_type, (struct spdk_telemetry_type *type));
 DEFINE_STUB_V(spdk_telemetry_unregister_source, (struct spdk_telemetry_source *src));
-DEFINE_STUB_V(spdk_telemetry_source_pull_complete, (struct spdk_telemetry_source *src, int status));
-DEFINE_STUB(spdk_telemetry_source_get_stats_buffer, void *, (struct spdk_telemetry_source *src),
-	    NULL);
-DEFINE_STUB(spdk_telemetry_source_get_stats_buffer_size, uint64_t,
-	    (struct spdk_telemetry_source *src), 0);
 
-/* We have to manually mock these telemetry registration functions because bdev_nvme code check for type == NULL and src == NULL */
+/* Manual mocks: bdev_nvme asserts that the returned type and src pointers are non-NULL,
+ * and the pull-cb test needs to observe pull_complete calls and supply a stats buffer.
+ */
+static void *g_ut_telemetry_stats_buffer;
+static uint64_t g_ut_telemetry_stats_buffer_size;
+static int g_ut_telemetry_pull_complete_count;
+static int g_ut_telemetry_pull_complete_last_status;
+
 int
 spdk_telemetry_register_type(const struct spdk_telemetry_type_info *type_info,
 			     struct spdk_telemetry_type **type)
@@ -119,6 +121,25 @@ spdk_telemetry_register_source(struct spdk_telemetry_type *type, const char *nam
 {
 	*src = (struct spdk_telemetry_source *)0xdeadbeef;
 	return 0;
+}
+
+void *
+spdk_telemetry_source_get_stats_buffer(struct spdk_telemetry_source *src)
+{
+	return g_ut_telemetry_stats_buffer;
+}
+
+uint64_t
+spdk_telemetry_source_get_stats_buffer_size(struct spdk_telemetry_source *src)
+{
+	return g_ut_telemetry_stats_buffer_size;
+}
+
+void
+spdk_telemetry_source_pull_complete(struct spdk_telemetry_source *src, int status)
+{
+	g_ut_telemetry_pull_complete_count++;
+	g_ut_telemetry_pull_complete_last_status = status;
 }
 
 int
@@ -3293,6 +3314,180 @@ test_init_ana_log_page(void)
 	CU_ASSERT(nvme_ctrlr_get_ns(nvme_ctrlr, 3)->bdev != NULL);
 	CU_ASSERT(nvme_ctrlr_get_ns(nvme_ctrlr, 4)->bdev != NULL);
 	CU_ASSERT(nvme_ctrlr_get_ns(nvme_ctrlr, 5)->bdev != NULL);
+
+	rc = spdk_bdev_nvme_delete("nvme0", &g_any_path, NULL, NULL);
+	CU_ASSERT(rc == 0);
+
+	poll_threads();
+	spdk_delay_us(1000);
+	poll_threads();
+
+	CU_ASSERT(nvme_ctrlr_get_by_name("nvme0") == NULL);
+}
+
+static void
+test_nvme_health_info_pull(void)
+{
+	struct spdk_nvme_transport_id trid = {};
+	struct spdk_nvme_ctrlr *ctrlr;
+	struct spdk_nvme_ctrlr_opts opts = {.hostnqn = UT_HOSTNQN};
+	struct spdk_bdev_nvme_ctrlr_opts bdev_opts = {0};
+	struct nvme_ctrlr *nvme_ctrlr;
+	struct spdk_nvme_health_information_page *health_page;
+	uint64_t stats[__NVME_HEALTH_STAT_LAST];
+	const int STRING_SIZE = 32;
+	const char *attached_names[STRING_SIZE];
+	struct ut_nvme_req *req;
+	int rc;
+
+	spdk_bdev_nvme_get_default_ctrlr_opts(&bdev_opts);
+	bdev_opts.multipath = false;
+
+	set_thread(0);
+
+	memset(attached_names, 0, sizeof(char *) * STRING_SIZE);
+	ut_init_trid(&trid);
+
+	ctrlr = ut_attach_ctrlr(&trid, 1, false, false);
+	SPDK_CU_ASSERT_FATAL(ctrlr != NULL);
+
+	g_ut_attach_ctrlr_status = 0;
+	g_ut_attach_bdev_count = 1;
+
+	rc = spdk_bdev_nvme_create(&trid, "nvme0", attached_names, STRING_SIZE,
+				   attach_ctrlr_done, NULL, &opts, &bdev_opts);
+	CU_ASSERT(rc == 0);
+
+	spdk_delay_us(1000);
+	poll_threads();
+
+	nvme_ctrlr = nvme_ctrlr_get_by_name("nvme0");
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr != NULL);
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr->health_info_source != NULL);
+	SPDK_CU_ASSERT_FATAL(nvme_ctrlr->health_page != NULL);
+
+	memset(stats, 0, sizeof(stats));
+	g_ut_telemetry_stats_buffer = stats;
+	g_ut_telemetry_stats_buffer_size = sizeof(stats);
+
+	/* Success path: drive the pull callback, populate the health page, complete the
+	 * admin command, and verify each enum slot maps to the matching health-page field.
+	 */
+	g_ut_telemetry_pull_complete_count = 0;
+	g_ut_telemetry_pull_complete_last_status = -1;
+
+	nvme_ctrlr_health_info_pull_cb(nvme_ctrlr, nvme_ctrlr->health_info_source);
+
+	CU_ASSERT(nvme_ctrlr->telemetry_pulling_health_info);
+	CU_ASSERT(ctrlr->adminq.num_outstanding_reqs == 1);
+
+	health_page = nvme_ctrlr->health_page;
+	health_page->critical_warning.raw			= 0x01;
+	health_page->temperature				= 320;
+	health_page->available_spare				= 90;
+	health_page->available_spare_threshold			= 10;
+	health_page->percentage_used				= 5;
+	health_page->data_units_read[0]				= 0x1100000000000001ULL;
+	health_page->data_units_read[1]				= 0x1100000000000002ULL;
+	health_page->data_units_written[0]			= 0x2200000000000001ULL;
+	health_page->data_units_written[1]			= 0x2200000000000002ULL;
+	health_page->host_read_commands[0]			= 0x3300000000000001ULL;
+	health_page->host_read_commands[1]			= 0x3300000000000002ULL;
+	health_page->host_write_commands[0]			= 0x4400000000000001ULL;
+	health_page->host_write_commands[1]			= 0x4400000000000002ULL;
+	health_page->controller_busy_time[0]			= 0x5500000000000001ULL;
+	health_page->controller_busy_time[1]			= 0x5500000000000002ULL;
+	health_page->power_cycles[0]				= 0x6600000000000001ULL;
+	health_page->power_cycles[1]				= 0x6600000000000002ULL;
+	health_page->power_on_hours[0]				= 0x7700000000000001ULL;
+	health_page->power_on_hours[1]				= 0x7700000000000002ULL;
+	health_page->unsafe_shutdowns[0]			= 0x8800000000000001ULL;
+	health_page->unsafe_shutdowns[1]			= 0x8800000000000002ULL;
+	health_page->media_errors[0]				= 0x9900000000000001ULL;
+	health_page->media_errors[1]				= 0x9900000000000002ULL;
+	health_page->num_error_info_log_entries[0]		= 0xaa00000000000001ULL;
+	health_page->num_error_info_log_entries[1]		= 0xaa00000000000002ULL;
+	health_page->warning_temp_time				= 0x11223344;
+	health_page->critical_temp_time				= 0x55667788;
+	health_page->temp_sensor[0]				= 300;
+	health_page->temp_sensor[1]				= 301;
+	health_page->temp_sensor[2]				= 302;
+	health_page->temp_sensor[3]				= 303;
+	health_page->temp_sensor[4]				= 304;
+	health_page->temp_sensor[5]				= 305;
+	health_page->temp_sensor[6]				= 306;
+	health_page->temp_sensor[7]				= 307;
+
+	spdk_delay_us(g_opts.nvme_adminq_poll_period_us);
+	poll_threads();
+
+	CU_ASSERT(ctrlr->adminq.num_outstanding_reqs == 0);
+	CU_ASSERT(!nvme_ctrlr->telemetry_pulling_health_info);
+	CU_ASSERT(g_ut_telemetry_pull_complete_count == 1);
+	CU_ASSERT(g_ut_telemetry_pull_complete_last_status == 0);
+
+	CU_ASSERT(stats[NVME_HEALTH_STAT_CRITICAL_WARNING]		== 0x01);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMPERATURE]			== 320);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_AVAILABLE_SPARE]		== 90);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_AVAILABLE_SPARE_THRESHOLD]	== 10);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_PERCENTAGE_USED]		== 5);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_DATA_UNITS_READ_LO]		== 0x1100000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_DATA_UNITS_READ_HI]		== 0x1100000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_LO]		== 0x2200000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_DATA_UNITS_WRITTEN_HI]		== 0x2200000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_HOST_READ_COMMANDS_LO]		== 0x3300000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_HOST_READ_COMMANDS_HI]		== 0x3300000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_LO]	== 0x4400000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_HOST_WRITE_COMMANDS_HI]	== 0x4400000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_LO]	== 0x5500000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_CONTROLLER_BUSY_TIME_HI]	== 0x5500000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_POWER_CYCLES_LO]		== 0x6600000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_POWER_CYCLES_HI]		== 0x6600000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_POWER_ON_HOURS_LO]		== 0x7700000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_POWER_ON_HOURS_HI]		== 0x7700000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_LO]		== 0x8800000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_UNSAFE_SHUTDOWNS_HI]		== 0x8800000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_MEDIA_ERRORS_LO]		== 0x9900000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_MEDIA_ERRORS_HI]		== 0x9900000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_LO]	== 0xaa00000000000001ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_NUM_ERROR_INFO_LOG_ENTRIES_HI]	== 0xaa00000000000002ULL);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_WARNING_TEMP_TIME]		== 0x11223344);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_CRITICAL_TEMP_TIME]		== 0x55667788);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_0]			== 300);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_1]			== 301);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_2]			== 302);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_3]			== 303);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_4]			== 304);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_5]			== 305);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_6]			== 306);
+	CU_ASSERT(stats[NVME_HEALTH_STAT_TEMP_SENSOR_7]			== 307);
+
+	/* Error path: completion CPL reports an error, pull_complete must see -EIO and the
+	 * in-flight flag must be cleared so teardown's assertion passes.
+	 */
+	g_ut_telemetry_pull_complete_count = 0;
+	g_ut_telemetry_pull_complete_last_status = 0;
+
+	nvme_ctrlr_health_info_pull_cb(nvme_ctrlr, nvme_ctrlr->health_info_source);
+
+	CU_ASSERT(nvme_ctrlr->telemetry_pulling_health_info);
+	CU_ASSERT(ctrlr->adminq.num_outstanding_reqs == 1);
+
+	req = ut_get_outstanding_nvme_request(&ctrlr->adminq, nvme_ctrlr);
+	SPDK_CU_ASSERT_FATAL(req != NULL);
+	req->cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
+	req->cpl.status.sct = SPDK_NVME_SCT_GENERIC;
+
+	spdk_delay_us(g_opts.nvme_adminq_poll_period_us);
+	poll_threads();
+
+	CU_ASSERT(ctrlr->adminq.num_outstanding_reqs == 0);
+	CU_ASSERT(!nvme_ctrlr->telemetry_pulling_health_info);
+	CU_ASSERT(g_ut_telemetry_pull_complete_count == 1);
+	CU_ASSERT(g_ut_telemetry_pull_complete_last_status == -EIO);
+
+	g_ut_telemetry_stats_buffer = NULL;
+	g_ut_telemetry_stats_buffer_size = 0;
 
 	rc = spdk_bdev_nvme_delete("nvme0", &g_any_path, NULL, NULL);
 	CU_ASSERT(rc == 0);
@@ -8432,6 +8627,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_bdev_unregister);
 	CU_ADD_TEST(suite, test_compare_ns);
 	CU_ADD_TEST(suite, test_init_ana_log_page);
+	CU_ADD_TEST(suite, test_nvme_health_info_pull);
 	CU_ADD_TEST(suite, test_get_memory_domains);
 	CU_ADD_TEST(suite, test_reconnect_qpair);
 	CU_ADD_TEST(suite, test_create_bdev_ctrlr);
