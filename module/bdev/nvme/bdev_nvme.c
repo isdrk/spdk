@@ -8555,8 +8555,9 @@ bdev_nvme_stop_discovery(const char *name, spdk_bdev_nvme_stop_discovery_fn cb_f
 static int
 bdev_nvme_library_init(void)
 {
-	g_bdev_nvme_init_thread = spdk_get_thread();
 	struct spdk_nvme_transport_opts drv_opts = {};
+
+	g_bdev_nvme_init_thread = spdk_get_thread();
 
 	spdk_nvme_transport_get_opts(&drv_opts, sizeof(drv_opts));
 	g_opts.rdma_initial_cq_size = drv_opts.rdma_initial_cq_size;
