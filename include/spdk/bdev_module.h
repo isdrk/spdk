@@ -1235,7 +1235,8 @@ struct spdk_bdev_io {
 	/** Enumerated value representing the I/O type. */
 	uint8_t type;
 
-	uint8_t reserved0;
+	/** Numeric id of a DMA path registered via \ref spdk_dma_register_path */
+	uint8_t dma_path_id;
 
 	/** Number of IO submission retries */
 	uint16_t num_retries;
@@ -1539,6 +1540,20 @@ void spdk_bdev_io_complete_base_io_status(struct spdk_bdev_io *bdev_io,
  * \return thread that submitted the I/O
  */
 struct spdk_thread *spdk_bdev_io_get_thread(struct spdk_bdev_io *bdev_io);
+
+/**
+ * Get the DMA path id associated with a bdev I/O.
+ *
+ * The id is the value the producer set in
+ * \ref spdk_bdev_ext_io_opts.dma_path_id, which is itself the value
+ * returned by \ref spdk_dma_path_get_id for a path registered with
+ * \ref spdk_dma_register_path. The reserved value 0 means the producer
+ * did not specify a DMA path.
+ *
+ * \param bdev_io I/O
+ * \return DMA path id, or 0 if unspecified.
+ */
+uint8_t spdk_bdev_io_get_dma_path_id(const struct spdk_bdev_io *bdev_io);
 
 /**
  * Get the bdev module's I/O channel that the given bdev_io was submitted on.

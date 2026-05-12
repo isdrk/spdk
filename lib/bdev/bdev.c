@@ -379,7 +379,7 @@ static int bdev_read_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_ch
 				  uint64_t offset_blocks, uint64_t num_blocks,
 				  struct spdk_memory_domain *domain, void *domain_ctx,
 				  struct spdk_accel_sequence *seq, uint32_t dif_check_flags,
-				  bool has_metadata,
+				  bool has_metadata, uint8_t dma_path_id,
 				  spdk_bdev_io_completion_cb cb, void *cb_arg);
 static int bdev_write_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 				   struct iovec *iov, int iovcnt, void *md_buf,
@@ -388,6 +388,7 @@ static int bdev_write_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_c
 				   struct spdk_accel_sequence *seq, uint32_t dif_check_flags,
 				   bool has_metadata,
 				   uint32_t nvme_cdw12_raw, uint32_t nvme_cdw13_raw,
+				   uint8_t dma_path_id,
 				   spdk_bdev_io_completion_cb cb, void *cb_arg);
 
 static int bdev_lock_lba_range(struct spdk_bdev_desc *desc, struct spdk_io_channel *_ch,
@@ -3377,6 +3378,7 @@ bdev_io_split_submit(struct spdk_bdev_io *bdev_io, struct iovec *iov, int iovcnt
 					    bdev_io_use_memory_domain(bdev_io) ? bdev_io->u.bdev.memory_domain_ctx : NULL,
 					    NULL,
 					    bdev_io->u.bdev.dif_check_flags, bdev_io->internal.f.has_metadata,
+					    bdev_io->dma_path_id,
 					    bdev_io_split_done, bdev_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_WRITE:
@@ -3392,6 +3394,7 @@ bdev_io_split_submit(struct spdk_bdev_io *bdev_io, struct iovec *iov, int iovcnt
 					     bdev_io->u.bdev.dif_check_flags, bdev_io->internal.f.has_metadata,
 					     bdev_io->u.bdev.nvme_cdw12.raw,
 					     bdev_io->u.bdev.nvme_cdw13.raw,
+					     bdev_io->dma_path_id,
 					     bdev_io_split_done, bdev_io);
 		break;
 	case SPDK_BDEV_IO_TYPE_UNMAP:
@@ -6609,6 +6612,7 @@ bdev_rw_submit(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *channel,
 	       struct spdk_accel_sequence *seq, uint32_t dif_check_flags,
 	       bool has_metadata,
 	       uint32_t nvme_cdw12_raw, uint32_t nvme_cdw13_raw,
+	       uint8_t dma_path_id,
 	       enum spdk_bdev_io_type io_type,
 	       spdk_bdev_io_completion_cb cb, void *cb_arg)
 {
@@ -6642,6 +6646,7 @@ bdev_rw_submit(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *channel,
 	bdev_io->u.bdev.dif_check_flags = dif_check_flags;
 	bdev_io->u.bdev.nvme_cdw12.raw = nvme_cdw12_raw;
 	bdev_io->u.bdev.nvme_cdw13.raw = nvme_cdw13_raw;
+	bdev_io->dma_path_id = dma_path_id;
 
 	_bdev_io_submit_ext(desc, bdev_io);
 }
@@ -6687,6 +6692,7 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	void *domain_ctx = NULL, *md = NULL;
 	uint32_t dif_check_flags = 0;
 	uint32_t nvme_cdw12_raw;
+	uint8_t dma_path_id = 0;
 	int rc;
 
 	if (spdk_unlikely(!bdev_io_valid_blocks(bdev, offset_blocks, num_blocks))) {
@@ -6719,6 +6725,7 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		domain_ctx = bdev_get_ext_io_opt(opts, memory_domain_ctx, NULL);
 		seq = bdev_get_ext_io_opt(opts, accel_sequence, NULL);
 		nvme_cdw12_raw = bdev_get_ext_io_opt(opts, nvme_cdw12.raw, 0);
+		dma_path_id = bdev_get_ext_io_opt(opts, dma_path_id, 0);
 		if (md) {
 			/* Legacy way to pass MD buffer, conflicts with new way to pass MD buffer */
 			assert(md_buf == NULL);
@@ -6752,7 +6759,8 @@ bdev_readv_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 			   ~(bdev_get_ext_io_opt(opts, dif_check_flags_exclude_mask, 0));
 
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
-		       domain, domain_ctx, seq, dif_check_flags, false, 0, 0, SPDK_BDEV_IO_TYPE_READ, cb, cb_arg);
+		       domain, domain_ctx, seq, dif_check_flags, false, 0, 0, dma_path_id,
+		       SPDK_BDEV_IO_TYPE_READ, cb, cb_arg);
 
 	return 0;
 
@@ -6767,7 +6775,7 @@ bdev_read_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		       uint64_t offset_blocks, uint64_t num_blocks,
 		       struct spdk_memory_domain *domain, void *domain_ctx,
 		       struct spdk_accel_sequence *seq, uint32_t dif_check_flags,
-		       bool has_metadata,
+		       bool has_metadata, uint8_t dma_path_id,
 		       spdk_bdev_io_completion_cb cb, void *cb_arg)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
@@ -6785,7 +6793,7 @@ bdev_read_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
 		       domain, domain_ctx, seq, dif_check_flags, has_metadata,
-		       0, 0, SPDK_BDEV_IO_TYPE_READ, cb, cb_arg);
+		       0, 0, dma_path_id, SPDK_BDEV_IO_TYPE_READ, cb, cb_arg);
 
 	return 0;
 }
@@ -6946,6 +6954,7 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 	uint32_t dif_check_flags = 0;
 	uint32_t nvme_cdw12_raw = 0;
 	uint32_t nvme_cdw13_raw = 0;
+	uint8_t dma_path_id = 0;
 	int rc;
 
 	if (spdk_unlikely(!desc->write)) {
@@ -6982,6 +6991,7 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 		seq = bdev_get_ext_io_opt(opts, accel_sequence, NULL);
 		nvme_cdw12_raw = bdev_get_ext_io_opt(opts, nvme_cdw12.raw, 0);
 		nvme_cdw13_raw = bdev_get_ext_io_opt(opts, nvme_cdw13.raw, 0);
+		dma_path_id = bdev_get_ext_io_opt(opts, dma_path_id, 0);
 		if (md) {
 			/* Legacy way to pass MD buffer, conflicts with new way to pass MD buffer */
 			assert(md_buf == NULL);
@@ -7019,7 +7029,8 @@ bdev_writev_submit(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
 		       domain, domain_ctx, seq, dif_check_flags, false,
-		       nvme_cdw12_raw, nvme_cdw13_raw, SPDK_BDEV_IO_TYPE_WRITE, cb, cb_arg);
+		       nvme_cdw12_raw, nvme_cdw13_raw, dma_path_id,
+		       SPDK_BDEV_IO_TYPE_WRITE, cb, cb_arg);
 
 	return 0;
 
@@ -7036,6 +7047,7 @@ bdev_write_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 			struct spdk_accel_sequence *seq, uint32_t dif_check_flags,
 			bool has_metadata,
 			uint32_t nvme_cdw12_raw, uint32_t nvme_cdw13_raw,
+			uint8_t dma_path_id,
 			spdk_bdev_io_completion_cb cb, void *cb_arg)
 {
 	struct spdk_bdev *bdev = spdk_bdev_desc_get_bdev(desc);
@@ -7057,7 +7069,8 @@ bdev_write_submit_split(struct spdk_bdev_desc *desc, struct spdk_io_channel *ch,
 
 	bdev_rw_submit(desc, channel, bdev_io, iov, iovcnt, md_buf, offset_blocks, num_blocks,
 		       domain, domain_ctx, seq, dif_check_flags, has_metadata,
-		       nvme_cdw12_raw, nvme_cdw13_raw, SPDK_BDEV_IO_TYPE_WRITE, cb, cb_arg);
+		       nvme_cdw12_raw, nvme_cdw13_raw, dma_path_id,
+		       SPDK_BDEV_IO_TYPE_WRITE, cb, cb_arg);
 
 	return 0;
 }
@@ -9153,6 +9166,15 @@ struct spdk_thread *
 spdk_bdev_io_get_thread(struct spdk_bdev_io *bdev_io)
 {
 	return spdk_io_channel_get_thread(bdev_io->internal.ch->channel);
+}
+
+uint8_t
+spdk_bdev_io_get_dma_path_id(const struct spdk_bdev_io *bdev_io)
+{
+	if (bdev_io == NULL) {
+		return 0;
+	}
+	return bdev_io->dma_path_id;
 }
 
 struct spdk_io_channel *

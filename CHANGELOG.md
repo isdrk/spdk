@@ -2,6 +2,13 @@
 
 ## v25.09: (Upcoming Release)
 
+### bdev
+
+Added `dma_path_id` to `spdk_bdev_ext_io_opts`. It is propagated through
+to `spdk_bdev_io` and read back with the new `spdk_bdev_io_get_dma_path_id`
+accessor. The id is the value returned by `spdk_dma_path_get_id` for a
+path registered via `spdk_dma_register_path`; 0 means "unspecified".
+
 ### dma
 
 Added `spdk_dma_register_path` and `spdk_dma_unregister_path` APIs to

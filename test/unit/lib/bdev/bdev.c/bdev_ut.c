@@ -6205,6 +6205,103 @@ bdev_io_ext_no_opts(void)
 }
 
 static void
+bdev_io_ext_dma_path_id(void)
+{
+	struct spdk_bdev *bdev;
+	struct spdk_bdev_desc *desc = NULL;
+	struct spdk_io_channel *io_ch;
+	char io_buf[512];
+	struct iovec iov = { .iov_base = io_buf, .iov_len = 512 };
+	struct ut_expected_io *expected_io;
+	struct spdk_bdev_ext_io_opts ext_io_opts;
+	int rc;
+
+	ut_init_bdev(NULL);
+	bdev = allocate_bdev("bdev0");
+
+	rc = spdk_bdev_open_ext("bdev0", true, bdev_ut_event_cb, NULL, &desc);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(desc != NULL);
+	io_ch = spdk_bdev_get_io_channel(desc);
+	SPDK_CU_ASSERT_FATAL(io_ch != NULL);
+
+	/* Producer sets dma_path_id on a write -> visible on bdev_io. */
+	memset(&ext_io_opts, 0, sizeof(ext_io_opts));
+	ext_io_opts.size = sizeof(ext_io_opts);
+	ext_io_opts.dma_path_id = 7;
+	g_io_done = false;
+	g_bdev_io = NULL;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 14, 1);
+	ut_expected_io_set_iov(expected_io, 0, iov.iov_base, iov.iov_len);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, &iov, 1, 32, 14, io_done, NULL, &ext_io_opts);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(g_bdev_io != NULL);
+	CU_ASSERT(g_bdev_io->dma_path_id == 7);
+	CU_ASSERT(spdk_bdev_io_get_dma_path_id(g_bdev_io) == 7);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* And on a read. */
+	memset(&ext_io_opts, 0, sizeof(ext_io_opts));
+	ext_io_opts.size = sizeof(ext_io_opts);
+	ext_io_opts.dma_path_id = 42;
+	g_io_done = false;
+	g_bdev_io = NULL;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_READ, 32, 14, 1);
+	ut_expected_io_set_iov(expected_io, 0, iov.iov_base, iov.iov_len);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	rc = spdk_bdev_readv_blocks_ext(desc, io_ch, &iov, 1, 32, 14, io_done, NULL, &ext_io_opts);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(g_bdev_io != NULL);
+	CU_ASSERT(g_bdev_io->dma_path_id == 42);
+	CU_ASSERT(spdk_bdev_io_get_dma_path_id(g_bdev_io) == 42);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* No opts -> bdev_io sees the default 0. */
+	g_io_done = false;
+	g_bdev_io = NULL;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 14, 1);
+	ut_expected_io_set_iov(expected_io, 0, iov.iov_base, iov.iov_len);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, &iov, 1, 32, 14, io_done, NULL, NULL);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(g_bdev_io != NULL);
+	CU_ASSERT(g_bdev_io->dma_path_id == 0);
+	CU_ASSERT(spdk_bdev_io_get_dma_path_id(g_bdev_io) == 0);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* opts->size too small to contain dma_path_id -> default 0,
+	 * regardless of any garbage that happens to live past opts->size in
+	 * the caller's struct. */
+	memset(&ext_io_opts, 0, sizeof(ext_io_opts));
+	ext_io_opts.size = offsetof(struct spdk_bdev_ext_io_opts, dma_path_id);
+	ext_io_opts.dma_path_id = 13;
+	g_io_done = false;
+	g_bdev_io = NULL;
+	expected_io = ut_alloc_expected_io(SPDK_BDEV_IO_TYPE_WRITE, 32, 14, 1);
+	ut_expected_io_set_iov(expected_io, 0, iov.iov_base, iov.iov_len);
+	TAILQ_INSERT_TAIL(&g_bdev_ut_channel->expected_io, expected_io, link);
+	rc = spdk_bdev_writev_blocks_ext(desc, io_ch, &iov, 1, 32, 14, io_done, NULL, &ext_io_opts);
+	CU_ASSERT(rc == 0);
+	SPDK_CU_ASSERT_FATAL(g_bdev_io != NULL);
+	CU_ASSERT(g_bdev_io->dma_path_id == 0);
+	CU_ASSERT(spdk_bdev_io_get_dma_path_id(g_bdev_io) == 0);
+	stub_complete_io(1);
+	CU_ASSERT(g_io_done == true);
+
+	/* NULL bdev_io -> accessor returns 0 (sentinel). */
+	CU_ASSERT(spdk_bdev_io_get_dma_path_id(NULL) == 0);
+
+	spdk_put_io_channel(io_ch);
+	spdk_bdev_close(desc);
+	free_bdev(bdev);
+	ut_fini_bdev();
+}
+
+static void
 bdev_io_ext_invalid_opts(void)
 {
 	struct spdk_bdev *bdev;
@@ -8281,6 +8378,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, bdev_get_memory_domains);
 	CU_ADD_TEST(suite, bdev_io_ext);
 	CU_ADD_TEST(suite, bdev_io_ext_no_opts);
+	CU_ADD_TEST(suite, bdev_io_ext_dma_path_id);
 	CU_ADD_TEST(suite, bdev_io_ext_invalid_opts);
 	CU_ADD_TEST(suite, bdev_io_ext_split);
 	CU_ADD_TEST(suite, bdev_io_ext_bounce_buffer);

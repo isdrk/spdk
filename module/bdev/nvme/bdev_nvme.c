@@ -4983,6 +4983,9 @@ bdev_nvme_submit_bypass_request(struct spdk_bdev *bdev, struct spdk_io_channel *
 		}
 		dif_check_flags |= bdev->dif_check_flags &
 				   ~(SPDK_GET_FIELD(opts, dif_check_flags_exclude_mask, 0));
+		/* Ignore opts->dma_path_id for now, we don't have a use for it yet
+		 * in this module.
+		 */
 	}
 
 	switch (bdev_io->type) {
