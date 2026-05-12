@@ -15,6 +15,45 @@ static TAILQ_HEAD(, spdk_memory_domain) g_dma_memory_domains = TAILQ_HEAD_INITIA
 			g_dma_memory_domains);
 static TAILQ_HEAD(, memory_domain_subscriber) g_subscribers_list = TAILQ_HEAD_INITIALIZER(
 			g_subscribers_list);
+static TAILQ_HEAD(, spdk_dma_path) g_dma_paths = TAILQ_HEAD_INITIALIZER(
+			g_dma_paths);
+
+/* Per-id "in use" map. Index 0 is reserved for "no DMA path specified"
+ * on consumers and is therefore never allocated.
+ */
+static bool g_path_id_used[256];
+
+struct spdk_dma_path {
+	char	name[SPDK_DMA_PATH_NAME_MAX_LEN];
+	uint8_t	id;
+	TAILQ_ENTRY(spdk_dma_path) link;
+};
+
+/* Allocate the lowest free id in [1, 255]. Returns 0 when the id space
+ * is exhausted. Caller must hold g_dma_mutex.
+ */
+static uint8_t
+dma_path_alloc_id(void)
+{
+	uint32_t i;
+
+	for (i = 1; i < SPDK_COUNTOF(g_path_id_used); i++) {
+		if (!g_path_id_used[i]) {
+			g_path_id_used[i] = true;
+			return (uint8_t)i;
+		}
+	}
+	return 0;
+}
+
+/* Release a previously allocated id. Caller must hold g_dma_mutex. */
+static void
+dma_path_free_id(uint8_t id)
+{
+	assert(id != 0);
+	assert(g_path_id_used[id]);
+	g_path_id_used[id] = false;
+}
 
 struct spdk_memory_domain {
 	enum spdk_dma_device_type type;
@@ -577,5 +616,107 @@ spdk_memory_domain_operation_supported(struct spdk_memory_domain *domain,
 		return domain->invalidate_cb != NULL;
 	default:
 		return false;
+	}
+}
+
+struct spdk_dma_path *
+spdk_dma_register_path(const struct spdk_dma_path_opts *opts)
+{
+	struct spdk_dma_path *dp, *existing;
+	const size_t name_end = offsetof(struct spdk_dma_path_opts, name) +
+				SPDK_DMA_PATH_NAME_MAX_LEN;
+
+	if (opts == NULL) {
+		SPDK_ERRLOG("opts is NULL\n");
+		return NULL;
+	}
+	if (opts->size < name_end) {
+		SPDK_ERRLOG("opts->size %zu is smaller than required %zu\n",
+			    opts->size, name_end);
+		return NULL;
+	}
+	if (strnlen(opts->name, sizeof(opts->name)) == sizeof(opts->name) ||
+	    opts->name[0] == '\0') {
+		SPDK_ERRLOG("opts->name must be null terminated and not empty\n");
+		return NULL;
+	}
+
+	pthread_mutex_lock(&g_dma_mutex);
+
+	TAILQ_FOREACH(existing, &g_dma_paths, link) {
+		if (strcmp(existing->name, opts->name) == 0) {
+			pthread_mutex_unlock(&g_dma_mutex);
+			SPDK_ERRLOG("DMA path '%s' is already registered\n", opts->name);
+			return NULL;
+		}
+	}
+
+	dp = calloc(1, sizeof(*dp));
+	if (dp == NULL) {
+		pthread_mutex_unlock(&g_dma_mutex);
+		SPDK_ERRLOG("failed to allocate DMA path '%s'\n", opts->name);
+		return NULL;
+	}
+
+	dp->id = dma_path_alloc_id();
+	if (dp->id == 0) {
+		pthread_mutex_unlock(&g_dma_mutex);
+		SPDK_ERRLOG("DMA path id space exhausted\n");
+		free(dp);
+		return NULL;
+	}
+
+	memcpy(dp->name, opts->name, sizeof(dp->name));
+	TAILQ_INSERT_TAIL(&g_dma_paths, dp, link);
+
+	pthread_mutex_unlock(&g_dma_mutex);
+
+	return dp;
+}
+
+void
+spdk_dma_unregister_path(struct spdk_dma_path *dp)
+{
+	if (dp == NULL) {
+		return;
+	}
+
+	pthread_mutex_lock(&g_dma_mutex);
+	TAILQ_REMOVE(&g_dma_paths, dp, link);
+	dma_path_free_id(dp->id);
+	pthread_mutex_unlock(&g_dma_mutex);
+	free(dp);
+}
+
+uint8_t
+spdk_dma_path_get_id(const struct spdk_dma_path *dp)
+{
+	assert(dp != NULL);
+	return dp->id;
+}
+
+const char *
+spdk_dma_path_get_name(const struct spdk_dma_path *dp)
+{
+	assert(dp != NULL);
+	return dp->name;
+}
+
+const char *
+spdk_dma_path_get_name_by_id(uint8_t id)
+{
+	struct spdk_dma_path *dp;
+
+	pthread_mutex_lock(&g_dma_mutex);
+	TAILQ_FOREACH(dp, &g_dma_paths, link) {
+		if (dp->id == id) {
+			break;
+		}
+	}
+	pthread_mutex_unlock(&g_dma_mutex);
+	if (dp != NULL) {
+		return dp->name;
+	} else {
+		return NULL;
 	}
 }

@@ -544,6 +544,100 @@ const char *spdk_dma_device_type_get_name(enum spdk_dma_device_type type);
 bool spdk_memory_domain_operation_supported(struct spdk_memory_domain *domain,
 		enum spdk_dma_operation_type type);
 
+/**
+ * Opaque handle to a registered DMA path.
+ *
+ * A "DMA path" is a logical route over which DMA traffic flows between two
+ * endpoints.
+ */
+struct spdk_dma_path;
+
+#define SPDK_DMA_PATH_NAME_MAX_LEN 16
+
+/**
+ * Options for \ref spdk_dma_register_path.
+ *
+ * The structure is size-versioned: callers must set \b size to
+ * sizeof(struct spdk_dma_path_opts). Future versions may append fields;
+ * older callers passing a smaller \b size will get the documented default
+ * behaviour for any field they do not provide.
+ */
+struct spdk_dma_path_opts {
+	/** Size of this structure in bytes. */
+	size_t size;
+	/** Caller-chosen name for this DMA path. Must be NUL-terminated and
+	 *  non-empty. Names must be unique across all registered DMA paths. */
+	char name[SPDK_DMA_PATH_NAME_MAX_LEN];
+};
+
+/**
+ * Register a named DMA path with the DMA library.
+ *
+ * The DMA library assigns a small numeric id (always >= 1) to the new DMA
+ * path; that id can be embedded in per-I/O metadata and consumed as a
+ * key for DMA path-affinity decisions. This id can be retrieved using
+ * \ref spdk_dma_path_get_id.
+ *
+ * Ids freed by \ref spdk_dma_unregister_path may be reused by subsequent
+ * registrations, so producers that have stamped outgoing I/Os with a given
+ * id must coordinate to drain or reissue those I/Os before unregistering
+ * the corresponding path.
+ *
+ * \param opts Options. \b opts->size must be at least large enough to fully
+ * contain the \b name field.
+ * \return Pointer to the new DMA path on success, or NULL on failure
+ * (NULL or malformed \b opts, empty name, duplicate name, id space
+ * exhausted, or out of memory).
+ */
+struct spdk_dma_path *spdk_dma_register_path(const struct spdk_dma_path_opts *opts);
+
+/**
+ * Unregister a DMA path that was previously returned by
+ * \ref spdk_dma_register_path.
+ *
+ * After this call \b dp is invalid and must not be passed to any other
+ * spdk_dma_path_* function. The id returned by \ref spdk_dma_path_get_id
+ * for \b dp may be reused by a subsequent \ref spdk_dma_register_path
+ * call, so producers that have stamped an outgoing I/O with that id must
+ * coordinate to drain or reissue those I/Os before unregistering.
+ *
+ * Passing NULL is a no-op.
+ *
+ * \param dp DMA path returned by \ref spdk_dma_register_path, or NULL.
+ */
+void spdk_dma_unregister_path(struct spdk_dma_path *dp);
+
+/**
+ * Get the numeric id of a registered DMA path.
+ *
+ * The returned id is always >= 1. The value 0 is reserved by consumers
+ * (for example \ref spdk_bdev_ext_io_opts.dma_path_id) to indicate
+ * "no DMA path specified".
+ *
+ * \param dp DMA path returned by \ref spdk_dma_register_path.
+ * \return Numeric id of the DMA path.
+ */
+uint8_t spdk_dma_path_get_id(const struct spdk_dma_path *dp);
+
+/**
+ * Get the name of a registered DMA path.
+ *
+ * \param dp DMA path returned by \ref spdk_dma_register_path.
+ * \return NUL-terminated name string. Storage is owned by the DMA path and
+ * is valid for the lifetime of the DMA path.
+ */
+const char *spdk_dma_path_get_name(const struct spdk_dma_path *dp);
+
+/**
+ * Get the name of a registered DMA path by its dma_path_id.
+ *
+ * \param id DMA path ID associated with a DMA path returned by \ref spdk_dma_register_path.
+ * \return NUL-terminated name string. Storage is owned by the DMA path and
+ * is valid for the lifetime of the DMA path. Returns NULL if no registered
+ * path with the given ID.
+ */
+const char *spdk_dma_path_get_name_by_id(uint8_t id);
+
 #ifdef __cplusplus
 }
 #endif

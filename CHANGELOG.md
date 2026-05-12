@@ -2,6 +2,13 @@
 
 ## v25.09: (Upcoming Release)
 
+### dma
+
+Added `spdk_dma_register_path` and `spdk_dma_unregister_path` APIs to
+register and tear down named DMA paths. Added `spdk_dma_path_get_id`
+(always >= 1) and `spdk_dma_path_get_name` accessors. The id is intended
+to be embedded in per-I/O metadata such as `spdk_bdev_ext_io_opts.dma_path_id`.
+
 ### python
 
 Moved all cli code inside the python package for easier generation and packaging.

@@ -234,6 +234,120 @@ test_dma(void)
 	CU_ASSERT(spdk_memory_domain_get_first(NULL) == system_domain);
 }
 
+static void
+test_dma_path(void)
+{
+	struct spdk_dma_path_opts opts;
+	struct spdk_dma_path *dp1, *dp2, *dp3, *dp_reuse_name, *dp_reuse_id;
+	bool saved_used[SPDK_COUNTOF(g_path_id_used)];
+	uint8_t freed_id;
+
+	/* NULL opts -> NULL */
+	CU_ASSERT(spdk_dma_register_path(NULL) == NULL);
+
+	/* opts->size too small (cannot fully contain 'name') -> NULL */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = offsetof(struct spdk_dma_path_opts, name);
+	memcpy(opts.name, "small", sizeof("small"));
+	CU_ASSERT(spdk_dma_register_path(&opts) == NULL);
+
+	/* Empty name -> NULL */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	CU_ASSERT(spdk_dma_register_path(&opts) == NULL);
+
+	/* Not null-terminated -> NULL */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memset(opts.name, 'A', sizeof(opts.name));
+	CU_ASSERT(spdk_dma_register_path(&opts) == NULL);
+
+	/* Successful registration: id is 1 (first registration in the test suite). */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "gpci0", sizeof("gpci0"));
+	dp1 = spdk_dma_register_path(&opts);
+	SPDK_CU_ASSERT_FATAL(dp1 != NULL);
+	CU_ASSERT(spdk_dma_path_get_id(dp1) == 1);
+	CU_ASSERT(strcmp(spdk_dma_path_get_name(dp1), "gpci0") == 0);
+	CU_ASSERT(strcmp(spdk_dma_path_get_name_by_id(1), "gpci0") == 0);
+	CU_ASSERT(g_path_id_used[1] == true);
+
+	/* Second registration: id increments to 2, name round-trips. */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "gpci1", sizeof("gpci1"));
+	dp2 = spdk_dma_register_path(&opts);
+	SPDK_CU_ASSERT_FATAL(dp2 != NULL);
+	CU_ASSERT(spdk_dma_path_get_id(dp2) == 2);
+	CU_ASSERT(spdk_dma_path_get_id(dp2) >= 1);
+	CU_ASSERT(strcmp(spdk_dma_path_get_name(dp2), "gpci1") == 0);
+	CU_ASSERT(strcmp(spdk_dma_path_get_name_by_id(2), "gpci1") == 0);
+
+	/* Verify that trying to get name by an invalid ID returns NULL. */
+	CU_ASSERT(spdk_dma_path_get_name_by_id(3) == NULL);
+
+	/* Duplicate name -> NULL, no id is allocated for the failed call. */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "gpci0", sizeof("gpci0"));
+	CU_ASSERT(spdk_dma_register_path(&opts) == NULL);
+	CU_ASSERT(g_path_id_used[3] == false);
+
+	/* opts->size larger than current struct (forward-compat) is accepted. */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts) + 16;
+	memcpy(opts.name, "gpci2", sizeof("gpci2"));
+	dp3 = spdk_dma_register_path(&opts);
+	SPDK_CU_ASSERT_FATAL(dp3 != NULL);
+	CU_ASSERT(spdk_dma_path_get_id(dp3) == 3);
+
+	/* Unregister releases the id back to the allocator. */
+	freed_id = spdk_dma_path_get_id(dp1);
+	spdk_dma_unregister_path(dp1);
+	CU_ASSERT(g_path_id_used[freed_id] == false);
+
+	/* The just-freed name can be reused by a subsequent registration; the
+	 * lowest free id is handed out, which is the id that was just freed. */
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "gpci0", sizeof("gpci0"));
+	dp_reuse_name = spdk_dma_register_path(&opts);
+	SPDK_CU_ASSERT_FATAL(dp_reuse_name != NULL);
+	CU_ASSERT(spdk_dma_path_get_id(dp_reuse_name) == freed_id);
+	CU_ASSERT(strcmp(spdk_dma_path_get_name(dp_reuse_name), "gpci0") == 0);
+
+	/* Unregister + register a brand-new name picks the lowest free id again. */
+	freed_id = spdk_dma_path_get_id(dp_reuse_name);
+	spdk_dma_unregister_path(dp_reuse_name);
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "gpci-new", sizeof("gpci-new"));
+	dp_reuse_id = spdk_dma_register_path(&opts);
+	SPDK_CU_ASSERT_FATAL(dp_reuse_id != NULL);
+	CU_ASSERT(spdk_dma_path_get_id(dp_reuse_id) == freed_id);
+
+	/* Unregister(NULL) is a no-op. */
+	spdk_dma_unregister_path(NULL);
+
+	/* Id space exhaustion: snapshot the bitmap, mark every slot used, and
+	 * confirm the next register call fails. Restore afterward so we don't
+	 * leak state into other tests. */
+	memcpy(saved_used, g_path_id_used, sizeof(saved_used));
+	memset(g_path_id_used, true, sizeof(g_path_id_used));
+	memset(&opts, 0, sizeof(opts));
+	opts.size = sizeof(opts);
+	memcpy(opts.name, "exhausted", sizeof("exhausted"));
+	CU_ASSERT(spdk_dma_register_path(&opts) == NULL);
+	memcpy(g_path_id_used, saved_used, sizeof(saved_used));
+
+	/* Clean up everything the test allocated so global state is left
+	 * exactly as we found it. */
+	spdk_dma_unregister_path(dp2);
+	spdk_dma_unregister_path(dp3);
+	spdk_dma_unregister_path(dp_reuse_id);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -244,6 +358,7 @@ main(int argc, char **argv)
 
 	suite = CU_add_suite("dma_suite", NULL, NULL);
 	CU_ADD_TEST(suite, test_dma);
+	CU_ADD_TEST(suite, test_dma_path);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 	CU_cleanup_registry();

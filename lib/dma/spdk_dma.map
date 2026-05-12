@@ -28,6 +28,11 @@
 	spdk_memory_domain_update_notification_unsubscribe;
 	spdk_memory_domain_operation_supported;
 	spdk_dma_device_type_get_name;
+	spdk_dma_register_path;
+	spdk_dma_unregister_path;
+	spdk_dma_path_get_id;
+	spdk_dma_path_get_name;
+	spdk_dma_path_get_name_by_id;
 
 	local: *;
 };
