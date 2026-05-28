@@ -2550,22 +2550,81 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			struct spdk_nvmf_rdma_transport, transport);
 	struct ibv_send_wr *last;
 	struct spdk_nvmf_rdma_request *data_transfer_req = NULL;
-	struct iovec *iov = translation->iovs;
-	uint32_t iovcnt = translation->iov_count;
-	uint32_t lkey = translation->rdma.lkey;
+	struct iovec *iov;
+	uint32_t iovcnt;
+	uint32_t lkey;
+	void *mem_key = NULL;
 	uint32_t transfer_len = 0, i;
 	uint64_t offset;
 	int rc;
 
 	assert(rdma_req->req.use_accel_seq || rdma_req->req.use_memory_domain);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
-	if (spdk_unlikely(!src_domain ||
-			  spdk_memory_domain_get_dma_device_type(src_domain) != SPDK_DMA_DEVICE_TYPE_RDMA)) {
+
+	if (src_domain == NULL) {
+		/* Direct local-iov path: the caller (a bdev module) hands us a local
+		 * iobuf in src_iov and a placeholder dst_iov pointing into the
+		 * transport's memory_domain_buffer. Translate the local address to
+		 * an lkey here and derive the host-side offset from the placeholder
+		 * so the rest of the function can run unchanged.
+		 */
+		struct spdk_rdma_utils_memory_translation mem_translation;
+		uintptr_t buf_start, buf_end;
+		uintptr_t dst_addr;
+
+		if (spdk_unlikely(src_iovcnt != 1 || dst_iovcnt != 1)) {
+			SPDK_ERRLOG("Direct local-iov transfer requires single src/dst iov (got %u/%u)\n",
+				    src_iovcnt, dst_iovcnt);
+			return -ENOTSUP;
+		}
+		if (spdk_unlikely(translation != NULL)) {
+			SPDK_ERRLOG("Direct local-iov transfer must not supply a translation\n");
+			return -ENOTSUP;
+		}
+		if (spdk_unlikely(src_iov[0].iov_len != dst_iov[0].iov_len)) {
+			SPDK_ERRLOG("Direct local-iov transfer length mismatch src=%zu dst=%zu\n",
+				    src_iov[0].iov_len, dst_iov[0].iov_len);
+			return -EINVAL;
+		}
+		if (spdk_unlikely(rtransport->memory_domain_buffer == NULL)) {
+			SPDK_ERRLOG("Direct local-iov transfer requires memory domain buffer\n");
+			return -ENOTSUP;
+		}
+		buf_start = (uintptr_t)rtransport->memory_domain_buffer;
+		buf_end = buf_start + rtransport->memory_domain_buffer_size;
+		dst_addr = (uintptr_t)dst_iov[0].iov_base;
+		if (spdk_unlikely(dst_addr < buf_start ||
+				  dst_addr + dst_iov[0].iov_len > buf_end)) {
+			SPDK_ERRLOG("Direct local-iov dst iov %p+%zu outside placeholder buffer\n",
+				    dst_iov[0].iov_base, dst_iov[0].iov_len);
+			return -EINVAL;
+		}
+		rc = spdk_rdma_utils_get_translation(rqpair->device->map, src_iov[0].iov_base,
+						     src_iov[0].iov_len, &mem_translation);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Failed to translate local iobuf %p len %zu, rc %d\n",
+				    src_iov[0].iov_base, src_iov[0].iov_len, rc);
+			return rc;
+		}
+		iov = src_iov;
+		iovcnt = 1;
+		lkey = spdk_rdma_utils_memory_translation_get_lkey(&mem_translation);
+		offset = dst_addr - buf_start;
+	} else if (spdk_unlikely(spdk_memory_domain_get_dma_device_type(src_domain) !=
+				 SPDK_DMA_DEVICE_TYPE_RDMA)) {
 		SPDK_ERRLOG("Unexpected source memory domain %p, type %d\n", src_domain,
-			    src_domain ? (int)spdk_memory_domain_get_dma_device_type(src_domain) : -1);
+			    (int)spdk_memory_domain_get_dma_device_type(src_domain));
 		return -ENOTSUP;
+	} else {
+		iov = translation->iovs;
+		iovcnt = translation->iov_count;
+		lkey = translation->rdma.lkey;
+		offset = SPDK_GET_FIELD(translation, offset, 0);
+		if (translation->size >= offsetof(struct spdk_memory_domain_translation_result,
+						  rdma.memory_key) + sizeof(translation->rdma.memory_key)) {
+			mem_key = translation->rdma.memory_key;
+		}
 	}
-	offset = SPDK_GET_FIELD(translation, offset, 0);
 
 	for (i = 0; i < iovcnt; i++) {
 		transfer_len += iov[i].iov_len;
@@ -2575,7 +2634,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 		      rdma_req, offset, transfer_len, rdma_req->req.xfer);
 
 	if (transfer_len != rdma_req->req.length) {
-		if (spdk_unlikely(translation->rdma.memory_key != NULL)) {
+		if (spdk_unlikely(mem_key != NULL)) {
 			SPDK_ERRLOG("Partial data transfer with memory key is not supported\n");
 			return -ENOTSUP;
 		}
@@ -2638,9 +2697,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	} else {
 		/* Read IO: The callback is called when data from the bdev is in local buffers. UMR
 		 * is registered on these buffers. */
-		if (translation->size >= offsetof(struct spdk_memory_domain_translation_result,
-						  rdma.memory_key) + sizeof(translation->rdma.memory_key) &&
-		    translation->rdma.memory_key != NULL) {
+		if (mem_key != NULL) {
 			rc = nvmf_rdma_update_sges_with_key_and_buffer(rdma_req, lkey, iov, iovcnt, transfer_len, offset, 0,
 					&rdma_req->data.wr, &last);
 			if (spdk_unlikely(rc)) {
@@ -2654,7 +2711,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 				return rc;
 			}
 			/* Mkey object is available. We can increment the reference counter and handle IO as usual */
-			rdma_req->data_transfer_mkey = translation->rdma.memory_key;
+			rdma_req->data_transfer_mkey = mem_key;
 			spdk_rdma_provider_memory_key_get_ref(rdma_req->data_transfer_mkey);
 			rdma_req->transfer_cpl_cb = NULL;
 			if (cpl_cb) {
