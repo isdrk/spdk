@@ -163,6 +163,7 @@ DEPDIRS-bdev_delay := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_error := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_iscsi := $(BDEV_DEPS_THREAD)
 DEPDIRS-bdev_malloc := $(BDEV_DEPS_THREAD) accel
+DEPDIRS-bdev_kvmalloc := $(BDEV_DEPS_THREAD) nvme
 DEPDIRS-bdev_null := $(BDEV_DEPS_THREAD)
 ifeq ($(CONFIG_RDMA),y)
 DEPDIRS-bdev_null += dma rdma_utils

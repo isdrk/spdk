@@ -226,6 +226,35 @@ def add_parser(subparsers):
     p.add_argument('name', help='Name of OCF bdev')
     p.set_defaults(func=bdev_ocf_flush_status)
 
+    def bdev_kvmalloc_create(args):
+        print_json(args.client.bdev_kvmalloc_create(
+                                               name=args.name,
+                                               uuid=args.uuid,
+                                               max_key_size=args.max_key_size,
+                                               max_value_size=args.max_value_size,
+                                               optimal_value_granularity=args.optimal_value_granularity,
+                                               numa_id=args.numa_id))
+    p = subparsers.add_parser('bdev_kvmalloc_create', help='Create a bdev with kvmalloc backend (KV command set)')
+    p.add_argument('-b', '--name', help="Name of the bdev")
+    p.add_argument('-u', '--uuid', help="UUID of the bdev (optional)")
+    p.add_argument('-k', '--max-key-size', type=int, default=16,
+                   help='Maximum key size in bytes (default 16)')
+    p.add_argument('-v', '--max-value-size', type=int, default=131072,
+                   help='Maximum value size in bytes (default 131072)')
+    p.add_argument('-o', '--optimal-value-granularity', type=int, default=4096,
+                   help='Optimal value granularity in bytes (default 4096)')
+    p.add_argument('-n', '--numa-id', type=int,
+                   help='NUMA node ID where memory is allocated, if -1 then any NUMA node ID can be used. '
+                        'Default is -1.')
+    p.set_defaults(func=bdev_kvmalloc_create)
+
+    def bdev_kvmalloc_delete(args):
+        args.client.bdev_kvmalloc_delete(name=args.name)
+
+    p = subparsers.add_parser('bdev_kvmalloc_delete', help='Delete a kvmalloc disk')
+    p.add_argument('name', help='kvmalloc bdev name')
+    p.set_defaults(func=bdev_kvmalloc_delete)
+
     def bdev_malloc_create(args):
         num_blocks = (args.total_size * 1024 * 1024) // args.block_size
         print_json(args.client.bdev_malloc_create(
