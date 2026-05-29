@@ -2692,6 +2692,28 @@ int spdk_bdev_get_memory_domains(struct spdk_bdev *bdev, struct spdk_memory_doma
 int spdk_bdev_get_memory_domain_types(struct spdk_bdev *bdev, enum spdk_dma_device_type *types,
 				      uint32_t array_size);
 
+struct spdk_bdev_memory_domain_operation_info {
+	/** Size of this structure in bytes */
+	size_t size;
+	/** The bdev is able to transfer data from a memory domain attached to an IO request using
+	 * spdk_memory_domain_transfer_data function. It should also be able to allocate memory buffer
+	 * for the IO request. */
+	bool domain_transfer_supported;
+};
+
+/**
+ * Fetch operation information for a specific memory domain type and I/O type.
+ *
+ * \param bdev Block device
+ * \param domain_type Memory domain type
+ * \param io_type IO type
+ * \param info Pointer to the operation information structure to be filled by the block device
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_bdev_memory_domain_fetch_operation_info(struct spdk_bdev *bdev,
+		enum spdk_dma_device_type domain_type, enum spdk_bdev_io_type io_type,
+		struct spdk_bdev_memory_domain_operation_info *info);
+
 /**
  * \brief SPDK bdev channel iterator.
  *

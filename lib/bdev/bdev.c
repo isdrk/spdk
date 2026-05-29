@@ -12298,6 +12298,22 @@ spdk_bdev_desc_accel_sequence_supported(struct spdk_bdev_desc *desc,
 	return spdk_bdev_accel_sequence_supported(bdev, io_type);
 }
 
+int
+spdk_bdev_memory_domain_fetch_operation_info(struct spdk_bdev *bdev,
+		enum spdk_dma_device_type domain_type, enum spdk_bdev_io_type io_type,
+		struct spdk_bdev_memory_domain_operation_info *info)
+{
+	if (!bdev) {
+		return -EINVAL;
+	}
+
+	if (bdev->fn_table->memory_domain_fetch_operation_info) {
+		return bdev->fn_table->memory_domain_fetch_operation_info(bdev->ctxt, domain_type, io_type, info);
+	}
+
+	return -ENOTSUP;
+}
+
 SPDK_LOG_REGISTER_COMPONENT(bdev)
 
 static void

@@ -383,6 +383,10 @@ struct spdk_bdev_fn_table {
 	/** Check if bdev can handle spdk_accel_sequence to handle I/O of specific type. */
 	bool (*accel_sequence_supported)(void *ctx, enum spdk_bdev_io_type type);
 
+	/** Fetch operation information for a specific memory domain type and I/O type. */
+	int (*memory_domain_fetch_operation_info)(void *ctx, enum spdk_dma_device_type domain_type,
+			enum spdk_bdev_io_type io_type, struct spdk_bdev_memory_domain_operation_info *info);
+
 	/**
 	 * Check if the bdev is ready to process I/O.
 	 */

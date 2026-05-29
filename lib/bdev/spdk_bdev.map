@@ -136,6 +136,7 @@
 	spdk_bdev_get_media_events;
 	spdk_bdev_get_memory_domains;
 	spdk_bdev_get_memory_domain_types;
+	spdk_bdev_memory_domain_fetch_operation_info;
 	spdk_bdev_readv_blocks_ext;
 	spdk_bdev_writev_blocks_ext;
 	spdk_bdev_for_each_channel;
