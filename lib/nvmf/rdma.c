@@ -2506,8 +2506,8 @@ nvmf_rdma_request_check_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 		      ns->accel_sequence ? "YES" : "NO");
 
 	rdma_req->req.use_accel_seq = ns->accel_sequence;
-	rdma_req->req.use_memory_domain =
-		ns->memory_domain_support[SPDK_DMA_DEVICE_TYPE_RDMA].domain_transfer_supported;
+	rdma_req->req.use_memory_domain = rqpair->device->null_mr != NULL &&
+					  ns->memory_domain_support[SPDK_DMA_DEVICE_TYPE_RDMA].domain_transfer_supported;
 }
 
 static inline int
@@ -3173,17 +3173,22 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 
 	device->null_mr = ibv_alloc_null_mr(device->pd);
 	if (!device->null_mr) {
-		SPDK_ERRLOG("Unable to allocate null MR\n");
-		destroy_ib_device(rtransport, device);
-		return -ENOMEM;
-	}
-	translation.mr_or_key.mr = device->null_mr;
-	rc = spdk_rdma_utils_set_translation(device->map, rtransport->memory_domain_buffer,
-					     rtransport->memory_domain_buffer_size, &translation);
-	if (rc != 0) {
-		SPDK_ERRLOG("Unable to set translation for memory domain buffer\n");
-		destroy_ib_device(rtransport, device);
-		return rc;
+		/* Some RDMA providers (e.g. soft-iWARP) don't implement ibv_alloc_null_mr.
+		 * Without it, the memory-domain transfer path on this device is unavailable but
+		 * the transport otherwise works.  Disable the path on this device.
+		 */
+		SPDK_NOTICELOG("Device %s does not support ibv_alloc_null_mr; "
+			       "memory-domain transfer disabled on this device\n",
+			       ibv_get_device_name(context->device));
+	} else {
+		translation.mr_or_key.mr = device->null_mr;
+		rc = spdk_rdma_utils_set_translation(device->map, rtransport->memory_domain_buffer,
+						     rtransport->memory_domain_buffer_size, &translation);
+		if (rc != 0) {
+			SPDK_ERRLOG("Unable to set translation for memory domain buffer\n");
+			destroy_ib_device(rtransport, device);
+			return rc;
+		}
 	}
 
 	assert(device->map != NULL);
