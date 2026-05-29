@@ -135,6 +135,8 @@ struct spdk_memory_domain_translation_result {
 			void *memory_key;
 		} rdma;
 	};
+	/* The translation result is valid only for the given offset */
+	uint64_t offset;
 };
 
 struct spdk_memory_domain_translation_ctx {
