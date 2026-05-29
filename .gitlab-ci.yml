@@ -96,8 +96,9 @@ code-style-job:
 test-virtio-fs-app:
   stage: test
   tags: [vm_host, x86_64]
-  variables:
-    VIRTIO_FS_TARGET_REF: main
+  parallel:
+    matrix:
+      - VIRTIO_FS_TARGET_REF: [main, cmx_target_alpha]
   script:
     - .ci/run_virtio_fs_app.sh
   dependencies: []
