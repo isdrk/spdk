@@ -340,6 +340,8 @@ function gather_supported_nvmf_pci_devs() {
 	# ConnectX-7
 	mlx+=(${pci_bus_cache["$mellanox:0x1021"]})
 	mlx+=(${pci_bus_cache["$mellanox:0x1022"]})
+	# ConnectX-9
+	mlx+=(${pci_bus_cache["$mellanox:0x1025"]})
 	# BlueField 2
 	mlx+=(${pci_bus_cache["$mellanox:0xa2d6"]})
 	mlx+=(${pci_bus_cache["$mellanox:0xa2d7"]})
