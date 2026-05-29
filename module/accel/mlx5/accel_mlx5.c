@@ -5440,7 +5440,9 @@ accel_mlx5_dev_supports_crypto(struct spdk_mlx5_device_caps *caps)
 static int
 accel_mlx5_init(void)
 {
-	struct spdk_mlx5_device_caps *caps;
+	struct {
+		struct spdk_mlx5_device_caps caps;
+	} *dev_ctx;
 	struct ibv_context **rdma_devs, *dev;
 	int num_devs = 0, rc = 0, i;
 	int best_dev = -1, first_dev = 0;
@@ -5458,8 +5460,8 @@ accel_mlx5_init(void)
 		SPDK_ERRLOG("No Nvidia RDMA devices found");
 		return -ENODEV;
 	}
-	caps = calloc(num_devs, sizeof(*caps));
-	if (!caps) {
+	dev_ctx = calloc(num_devs, sizeof(*dev_ctx));
+	if (!dev_ctx) {
 		rc = -ENOMEM;
 		goto cleanup;
 	}
@@ -5472,25 +5474,25 @@ accel_mlx5_init(void)
 	for (i = 0; i < num_devs; i++) {
 		dev = rdma_devs[i];
 
-		rc = spdk_mlx5_device_query_caps(dev, &caps[i]);
+		rc = spdk_mlx5_device_query_caps(dev, &dev_ctx[i].caps);
 		if (rc) {
 			SPDK_ERRLOG("Failed to get crypto caps, dev %s\n", dev->device->name);
 			goto cleanup;
 		}
-		supports_crypto = accel_mlx5_dev_supports_crypto(&caps[i]);
+		supports_crypto = accel_mlx5_dev_supports_crypto(&dev_ctx[i].caps);
 		if (!supports_crypto) {
 			SPDK_DEBUGLOG(accel_mlx5, "Disable crypto support because dev %s doesn't support it\n",
 				      rdma_devs[i]->device->name);
 			g_accel_mlx5.crypto_supported = false;
 		}
-		if (!caps[i].crc32c_supported) {
+		if (!dev_ctx[i].caps.crc32c_supported) {
 			SPDK_DEBUGLOG(accel_mlx5, "Disable crc32c support because dev %s doesn't support it\n",
 				      rdma_devs[i]->device->name);
 			g_accel_mlx5.crc32c_supported = false;
 		}
 		if (find_best_dev) {
 			/* Find device which supports max number of offloads */
-			dev_stat = (int)supports_crypto + (int)caps[i].crc32c_supported;
+			dev_stat = (int)supports_crypto + (int)dev_ctx[i].caps.crc32c_supported;
 			if (dev_stat > best_dev_stat) {
 				best_dev_stat = dev_stat;
 				best_dev = i;
@@ -5503,8 +5505,8 @@ accel_mlx5_init(void)
 		if (best_dev == -1) {
 			best_dev = 0;
 		}
-		g_accel_mlx5.crypto_supported = accel_mlx5_dev_supports_crypto(&caps[best_dev]);
-		g_accel_mlx5.crc32c_supported = caps[best_dev].crc32c_supported;
+		g_accel_mlx5.crypto_supported = accel_mlx5_dev_supports_crypto(&dev_ctx[best_dev].caps);
+		g_accel_mlx5.crc32c_supported = dev_ctx[best_dev].caps.crc32c_supported;
 		SPDK_NOTICELOG("Select dev %s, crypto %d, crc32c %d\n", rdma_devs[best_dev]->device->name,
 			       g_accel_mlx5.crypto_supported, g_accel_mlx5.crc32c_supported);
 		first_dev = best_dev;
@@ -5527,7 +5529,7 @@ accel_mlx5_init(void)
 
 	for (i = first_dev; i < first_dev + num_devs; i++) {
 		rc = accel_mlx5_dev_ctx_init(&g_accel_mlx5.dev_ctxs[g_accel_mlx5.num_ctxs++],
-					     rdma_devs[i], &caps[i]);
+					     rdma_devs[i], &dev_ctx[i].caps);
 		if (rc) {
 			goto cleanup;
 		}
@@ -5545,7 +5547,7 @@ accel_mlx5_init(void)
 				sizeof(struct accel_mlx5_io_channel), "accel_mlx5");
 	g_accel_mlx5.initialized = true;
 	free(rdma_devs);
-	free(caps);
+	free(dev_ctx);
 
 	if (g_accel_mlx5.attr.enable_driver) {
 		const char *driver_name = spdk_accel_get_driver_name();
@@ -5564,7 +5566,7 @@ accel_mlx5_init(void)
 
 cleanup:
 	free(rdma_devs);
-	free(caps);
+	free(dev_ctx);
 	accel_mlx5_free_resources();
 	spdk_spin_destroy(&g_accel_mlx5.lock);
 
