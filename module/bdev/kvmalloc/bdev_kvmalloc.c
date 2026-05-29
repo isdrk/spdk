@@ -683,12 +683,11 @@ create_kvmalloc_disk(struct spdk_bdev **bdev, const struct kvmalloc_bdev_opts *o
 
 	/*
 	 * KV devices don't have a block layout, but the bdev layer requires
-	 * non-zero blocklen and blockcnt. Use 1-byte blocks with the max
-	 * value size as a nominal capacity.
+	 * non-zero blocklen and blockcnt. Use 1-byte blocks and report an
+	 * unbounded capacity to match the KV identify-NS nsze.
 	 */
 	kvmalloc->disk.blocklen = 1;
-	kvmalloc->disk.blockcnt = opts->max_value_size > 0 ? opts->max_value_size :
-				  KVMALLOC_DEFAULT_MAX_VALUE_SIZE;
+	kvmalloc->disk.blockcnt = UINT64_MAX;
 
 	kvmalloc->disk.ctxt = kvmalloc;
 	kvmalloc->disk.fn_table = &kvmalloc_fn_table;
