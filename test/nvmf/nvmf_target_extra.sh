@@ -27,6 +27,7 @@ if [[ $SPDK_TEST_URING -eq 0 ]]; then
 	if [[ "$SPDK_TEST_NVMF_TRANSPORT" != "tcp" ]]; then
 		run_test "nvmf_ns_masking" test/nvmf/target/ns_masking.sh "${TEST_ARGS[@]}"
 	fi
+	run_test "nvmf_kv" $rootdir/test/nvmf/target/kv.sh "${TEST_ARGS[@]}"
 	if [[ $SPDK_TEST_NVME_CLI -eq 1 ]]; then
 		run_test "nvmf_nvme_cli" $rootdir/test/nvmf/target/nvme_cli.sh "${TEST_ARGS[@]}"
 	fi
