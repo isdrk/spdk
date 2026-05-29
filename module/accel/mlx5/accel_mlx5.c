@@ -4080,6 +4080,7 @@ accel_mlx5_memory_domain_transfer(struct accel_mlx5_task *task,
 	translation.iov.iov_base = NULL;
 	translation.iov.iov_len = base->nbytes;
 	translation.iov_count = 1;
+	translation.iovs = &translation.iov;
 	translation.size = sizeof(translation);
 	translation.rdma.rkey = task->mkeys[0]->mkey;
 	translation.rdma.lkey = task->mkeys[0]->mkey;
