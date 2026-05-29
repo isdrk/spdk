@@ -36,7 +36,7 @@ static int
 nvme_kv_cmd_with_data(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		      uint8_t opc, const void *key, uint8_t key_len,
 		      void *data, uint32_t data_len, uint8_t options,
-		      spdk_nvme_cmd_cb cb_fn, void *cb_arg, bool host_to_ctrlr)
+		      spdk_nvme_cmd_cb cb_fn, void *cb_arg)
 {
 	struct nvme_request *req;
 	struct spdk_nvme_cmd *cmd;
@@ -45,7 +45,7 @@ nvme_kv_cmd_with_data(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 		return -EINVAL;
 	}
 
-	req = nvme_allocate_request_user_copy(qpair, data, data_len, cb_fn, cb_arg, host_to_ctrlr);
+	req = nvme_allocate_request_contig(qpair, data, data_len, cb_fn, cb_arg);
 	if (req == NULL) {
 		return -ENOMEM;
 	}
@@ -101,7 +101,7 @@ spdk_nvme_kv_store(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 {
 	return nvme_kv_cmd_with_data(ns, qpair, SPDK_NVME_OPC_KV_STORE,
 				     key, key_len, (void *)value, value_len, options,
-				     cb_fn, cb_arg, true);
+				     cb_fn, cb_arg);
 }
 
 int
@@ -113,7 +113,7 @@ spdk_nvme_kv_retrieve(struct spdk_nvme_ns *ns, struct spdk_nvme_qpair *qpair,
 {
 	return nvme_kv_cmd_with_data(ns, qpair, SPDK_NVME_OPC_KV_RETRIEVE,
 				     key, key_len, value, value_len, options,
-				     cb_fn, cb_arg, false);
+				     cb_fn, cb_arg);
 }
 
 int
