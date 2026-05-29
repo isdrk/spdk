@@ -690,8 +690,6 @@ create_kvmalloc_disk(struct spdk_bdev **bdev, const struct kvmalloc_bdev_opts *o
 	kvmalloc->novg = opts->optimal_value_granularity > 0 ? opts->optimal_value_granularity :
 			 KVMALLOC_DEFAULT_OPTIMAL_VALUE_GRANULARITY;
 
-	kvmalloc->disk.nsid = 1;
-
 	if (!spdk_uuid_is_null(&opts->uuid)) {
 		spdk_uuid_copy(&kvmalloc->disk.uuid, &opts->uuid);
 	}
