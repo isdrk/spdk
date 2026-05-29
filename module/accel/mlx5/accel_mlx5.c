@@ -2606,11 +2606,6 @@ accel_mlx5_crc_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 	}
 	dev->stats.sig_umrs++;
 
-	/*
-	 * Add the crc destination to the end of sge. A free entry must be available for CRC
-	 * because the task init function reserved it.
-	 */
-	assert(sge.src_sge_count < ACCEL_MLX5_MAX_INLINE_SGE);
 	if (check_op) {
 		mlx5_task->psv->crc = *mlx5_task->base.crc_dst ^ UINT32_MAX;
 	}
