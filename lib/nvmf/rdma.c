@@ -2291,27 +2291,35 @@ nvmf_rdma_req_finish_data_transfer(struct spdk_nvmf_rdma_request *rdma_req, int 
 	cb(rdma_req->transfer_cpl_cb_arg, rc);
 }
 
-static inline struct ibv_send_wr *
-nvmf_rdma_update_sges_with_accel_key(struct spdk_nvmf_rdma_request *rdma_req, uint32_t lkey,
-				     uint32_t send_flags)
+static inline int
+nvmf_rdma_update_sges_with_key_and_buffer(struct spdk_nvmf_rdma_request *rdma_req, uint32_t lkey,
+		struct iovec *iov, uint32_t iovcnt,
+		uint32_t send_flags, struct ibv_send_wr **wr_out)
 {
-	struct ibv_send_wr *wr, *result = NULL;
+	struct ibv_send_wr *wr;
+	uint32_t iovpos = 0, seg_len = 0;
+	uint64_t iov_offset;
+	uint32_t i;
 
 	wr = &rdma_req->data.wr;
 
 	if (wr->next == NULL || wr->next == &rdma_req->rsp.wr) {
-		wr->num_sge = 1;
-		wr->sg_list[0].lkey = lkey;
-		wr->sg_list[0].addr = 0;
-		wr->sg_list[0].length = rdma_req->req.length;
+		wr->num_sge = iovcnt;
+		for (i = 0; i < iovcnt; i++) {
+			wr->sg_list[i].lkey = lkey;
+			wr->sg_list[i].addr = (uint64_t)iov[i].iov_base;
+			wr->sg_list[i].length = iov[i].iov_len;
+		}
 		wr->send_flags |= send_flags;
-		result = wr;
+		*wr_out = wr;
+		return 0;
 	} else {
 		/* Data block descriptor or multi SGL case */
 		struct spdk_nvme_sgl_descriptor *inline_segment, *desc;
-		uint32_t num_sgl_descriptors, i, desc_len;
-		uint64_t offset = 0;
+		struct ibv_sge	*sg_ele;
+		uint32_t num_sgl_descriptors, desc_len;
 
+		iov_offset = 0;
 		inline_segment = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
 		num_sgl_descriptors = inline_segment->unkeyed.length / sizeof(struct spdk_nvme_sgl_descriptor);
 		desc = (struct spdk_nvme_sgl_descriptor *)rdma_req->recv->buf + inline_segment->address;
@@ -2320,23 +2328,37 @@ nvmf_rdma_update_sges_with_accel_key(struct spdk_nvmf_rdma_request *rdma_req, ui
 			desc_len = desc->keyed.length;
 			assert(wr);
 			assert(wr != &rdma_req->rsp.wr);
-			wr->num_sge = 1;
-			wr->sg_list[0].lkey = lkey;
-			wr->sg_list[0].addr = offset;
-			wr->sg_list[0].length = desc_len;
+			wr->num_sge = 0;
+			while (desc_len && iovpos < iovcnt && wr->num_sge < SPDK_NVMF_MAX_SGL_ENTRIES) {
+				sg_ele = &wr->sg_list[wr->num_sge];
+				seg_len = spdk_min((uint32_t)iov[iovpos].iov_len - iov_offset, desc_len);
+				sg_ele->lkey = lkey;
+				sg_ele->addr = (uintptr_t)iov[iovpos].iov_base + iov_offset;
+				sg_ele->length = seg_len;
+				iov_offset += seg_len;
+				assert(desc_len >= seg_len);
+				desc_len -= seg_len;
+				if (iov_offset == iov[iovpos].iov_len) {
+					iov_offset = 0;
+					iovpos++;
+				}
+				wr->num_sge++;
+
+			}
+			if (spdk_unlikely(desc_len)) {
+				SPDK_ERRLOG("Not enough SG entries to hold data buffer\n");
+				return -E2BIG;
+			}
+			wr->send_flags |= send_flags;
 			wr->wr.rdma.remote_addr = desc->address;
 			wr->wr.rdma.rkey = desc->keyed.key;
-			wr->send_flags |= send_flags;
-			offset += desc_len;
-
-			result = wr;
+			*wr_out = wr;
 			wr = wr->next;
 			desc++;
 		}
 	}
 
-	assert(result);
-	return result;
+	return 0;
 }
 
 static int
@@ -2352,6 +2374,11 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 					      struct spdk_nvmf_rdma_qpair, qpair);
 	struct spdk_nvmf_rdma_transport	*rtransport = SPDK_CONTAINEROF(rqpair->qpair.transport,
 			struct spdk_nvmf_rdma_transport, transport);
+	struct ibv_send_wr *last;
+	struct iovec *iov = translation->iovs;
+	uint32_t iovcnt = translation->iov_count;
+	uint32_t lkey = translation->rdma.lkey;
+	int rc;
 
 	assert(rdma_req->req.use_accel_seq);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
@@ -2361,23 +2388,18 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			    src_domain ? (int)spdk_memory_domain_get_dma_device_type(src_domain) : -1);
 		return -ENOTSUP;
 	}
-	if (spdk_unlikely(dst_iovcnt != 1 || !translation || translation->iov_count != 1)) {
-		SPDK_ERRLOG("Unexpected iovcnt %u or missed translation, rdma_req %p\n", dst_iovcnt, rdma_req);
-		return -ENOTSUP;
-	}
-
-	/* While the req was in the RDMA_REQUEST_STATE_NEED_BUFFER state, we allocated a buffer[s] and filled
-	 * one or more Work Requests. Each WR may have several sge elements which may point to memory chunks
-	 * with different Memory Keys.
-	 * But once we registered UMR, all memory is represented as a virtually contig chunk with start address 0.
-	 * Now we need to update all SGEs with new addresses and UMR */
 
 	rdma_req->transfer_cpl_cb = cpl_cb;
 	rdma_req->transfer_cpl_cb_arg = cpl_cb_arg;
 
 	if (rdma_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
-		nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey, 0);
-		SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer H2C\n", rdma_req, translation->rdma.lkey);
+		rc = nvmf_rdma_update_sges_with_key_and_buffer(rdma_req, lkey, iov, iovcnt, 0,
+				&last);
+		if (spdk_unlikely(rc)) {
+			SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
+			return rc;
+		}
+		SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer H2C\n", rdma_req, lkey);
 		/* Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
 		 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
 		 * the media */
@@ -2390,7 +2412,12 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 		if (translation->size >= offsetof(struct spdk_memory_domain_translation_result,
 						  rdma.memory_key) + sizeof(translation->rdma.memory_key) &&
 		    translation->rdma.memory_key != NULL) {
-			nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey, 0);
+			rc = nvmf_rdma_update_sges_with_key_and_buffer(rdma_req, lkey, iov, iovcnt, 0,
+					&last);
+			if (spdk_unlikely(rc)) {
+				SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
+				return rc;
+			}
 			/* Mkey object is available. We can increment the reference counter and handle IO as usual */
 			rdma_req->data_transfer_mkey = translation->rdma.memory_key;
 			spdk_rdma_provider_memory_key_get_ref(rdma_req->data_transfer_mkey);
@@ -2398,13 +2425,18 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 
 			return 0;
 		} else {
-			struct ibv_send_wr *last = nvmf_rdma_update_sges_with_accel_key(rdma_req, translation->rdma.lkey,
-						   IBV_SEND_SIGNALED);
+			last = NULL;
+			rc = nvmf_rdma_update_sges_with_key_and_buffer(rdma_req, lkey, iov, iovcnt,
+					IBV_SEND_SIGNALED, &last);
+			if (spdk_unlikely(rc)) {
+				SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
+				return rc;
+			}
 			/* We need to write data buffers to the host, but
 			 * without sending a response. The response will be sent when bdev finishes IO request -
 			 * when RDMA_WRITE completes and we call the cpl_cb */
 			last->next = NULL;
-			SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, translation->rdma.lkey);
+			SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, lkey);
 			STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
 			rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_HOST_PENDING;
 		}

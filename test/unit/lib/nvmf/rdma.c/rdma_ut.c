@@ -1365,6 +1365,133 @@ test_nvmf_rdma_request_free_data(void)
 }
 
 static void
+test_nvmf_rdma_update_sges_with_key_and_buffer(void)
+{
+	/* Scenario 1: "simple" path (single WR, no chaining) */
+	{
+		struct spdk_nvmf_rdma_request rdma_req = {};
+		struct iovec iov[2] = {};
+		struct ibv_send_wr *wr_out = NULL;
+		const uint32_t lkey = 0x1234;
+		int rc;
+
+		rdma_req.data.wr.sg_list = rdma_req.data.sgl;
+		rdma_req.data.wr.send_flags = 0;
+		rdma_req.data.wr.next = NULL;
+
+		iov[0].iov_base = (void *)0x1000;
+		iov[0].iov_len = 16;
+		iov[1].iov_base = (void *)0x2000;
+		iov[1].iov_len = 32;
+
+		rc = nvmf_rdma_update_sges_with_key_and_buffer(&rdma_req, lkey, iov, 2, IBV_SEND_SIGNALED, &wr_out);
+		CU_ASSERT(rc == 0);
+		CU_ASSERT(wr_out == &rdma_req.data.wr);
+		CU_ASSERT(rdma_req.data.wr.num_sge == 2);
+		CU_ASSERT(rdma_req.data.wr.send_flags & IBV_SEND_SIGNALED);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == 0x1000);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].length == 16);
+		CU_ASSERT(rdma_req.data.wr.sg_list[1].lkey == lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[1].addr == 0x2000);
+		CU_ASSERT(rdma_req.data.wr.sg_list[1].length == 32);
+	}
+
+	/* Scenario 2: multi SGL path with split across iovs and chained WRs */
+	{
+		struct spdk_nvmf_rdma_request rdma_req = {};
+		struct spdk_nvmf_rdma_request_data data2 = {};
+		struct spdk_nvmf_rdma_recv recv = {};
+		union nvmf_h2c_msg cmd = {};
+		struct spdk_nvme_sgl_descriptor sgl_desc[2] = {};
+		struct iovec iov[2] = {};
+		struct ibv_send_wr *wr_out = NULL;
+		const uint32_t lkey = 0xBEEF;
+		int rc;
+
+		rdma_req.data.wr.sg_list = rdma_req.data.sgl;
+		data2.wr.sg_list = data2.sgl;
+
+		rdma_req.data.wr.send_flags = 0;
+		data2.wr.send_flags = 0;
+
+		/* Setup WR chain to force "multi SGL" path */
+		rdma_req.data.wr.next = &data2.wr;
+		data2.wr.next = &rdma_req.rsp.wr;
+
+		rdma_req.recv = &recv;
+		rdma_req.req.cmd = &cmd;
+		rdma_req.recv->buf = (uint8_t *)sgl_desc;
+
+		/* Inline segment points at 2 descriptors starting at address 0 */
+		cmd.nvme_cmd.dptr.sgl1.unkeyed.length = 2 * sizeof(struct spdk_nvme_sgl_descriptor);
+		cmd.nvme_cmd.dptr.sgl1.address = 0;
+
+		sgl_desc[0].keyed.length = 12;
+		sgl_desc[1].keyed.length = 20;
+
+		iov[0].iov_base = (void *)0x1000;
+		iov[0].iov_len = 16;
+		iov[1].iov_base = (void *)0x2000;
+		iov[1].iov_len = 32;
+
+		rc = nvmf_rdma_update_sges_with_key_and_buffer(&rdma_req, lkey, iov, 2, IBV_SEND_SIGNALED, &wr_out);
+		CU_ASSERT(rc == 0);
+		/* wr_out should point to the last WR used */
+		CU_ASSERT(wr_out == &data2.wr);
+
+		/* First descriptor -> first WR: 12 bytes from iov[0] */
+		CU_ASSERT(rdma_req.data.wr.num_sge == 1);
+		CU_ASSERT(rdma_req.data.wr.send_flags & IBV_SEND_SIGNALED);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].lkey == lkey);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].addr == 0x1000);
+		CU_ASSERT(rdma_req.data.wr.sg_list[0].length == 12);
+
+		/* Second descriptor -> second WR: 4 bytes from end of iov[0], then 16 bytes from iov[1] */
+		CU_ASSERT(data2.wr.num_sge == 2);
+		CU_ASSERT(data2.wr.send_flags & IBV_SEND_SIGNALED);
+		CU_ASSERT(data2.wr.sg_list[0].lkey == lkey);
+		CU_ASSERT(data2.wr.sg_list[0].addr == 0x1000 + 12);
+		CU_ASSERT(data2.wr.sg_list[0].length == 4);
+		CU_ASSERT(data2.wr.sg_list[1].lkey == lkey);
+		CU_ASSERT(data2.wr.sg_list[1].addr == 0x2000);
+		CU_ASSERT(data2.wr.sg_list[1].length == 16);
+	}
+
+	/* Scenario 3: multi SGL path returns -E2BIG when iov coverage is insufficient */
+	{
+		struct spdk_nvmf_rdma_request rdma_req = {};
+		struct spdk_nvmf_rdma_request_data data2 = {};
+		struct spdk_nvmf_rdma_recv recv = {};
+		union nvmf_h2c_msg cmd = {};
+		struct spdk_nvme_sgl_descriptor sgl_desc[1] = {};
+		struct iovec iov[1] = {};
+		struct ibv_send_wr *wr_out = NULL;
+		int rc;
+
+		rdma_req.data.wr.sg_list = rdma_req.data.sgl;
+		data2.wr.sg_list = data2.sgl;
+		rdma_req.data.wr.next = &data2.wr;
+		data2.wr.next = &rdma_req.rsp.wr;
+
+		rdma_req.recv = &recv;
+		rdma_req.req.cmd = &cmd;
+		rdma_req.recv->buf = (uint8_t *)sgl_desc;
+
+		cmd.nvme_cmd.dptr.sgl1.unkeyed.length = sizeof(struct spdk_nvme_sgl_descriptor);
+		cmd.nvme_cmd.dptr.sgl1.address = 0;
+		sgl_desc[0].keyed.length = 16;
+
+		iov[0].iov_base = (void *)0x1000;
+		iov[0].iov_len = 8;
+
+		rc = nvmf_rdma_update_sges_with_key_and_buffer(&rdma_req, 0x1, iov, 1, 0, &wr_out);
+		CU_ASSERT(rc == -E2BIG);
+		CU_ASSERT(wr_out == NULL);
+	}
+}
+
+static void
 test_nvmf_rdma_resources_create(void)
 {
 	static struct spdk_nvmf_rdma_resources *rdma_resource;
@@ -1548,6 +1675,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_spdk_nvmf_rdma_request_parse_sgl_with_md);
 	CU_ADD_TEST(suite, test_nvmf_rdma_opts_init);
 	CU_ADD_TEST(suite, test_nvmf_rdma_request_free_data);
+	CU_ADD_TEST(suite, test_nvmf_rdma_update_sges_with_key_and_buffer);
 	CU_ADD_TEST(suite, test_nvmf_rdma_resources_create);
 	CU_ADD_TEST(suite, test_nvmf_rdma_qpair_compare);
 	CU_ADD_TEST(suite, test_nvmf_rdma_resize_cq);

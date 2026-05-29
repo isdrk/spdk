@@ -91,7 +91,8 @@ struct spdk_nvmf_request {
 			uint8_t dif_enabled		: 1;
 			uint8_t first_fused		: 1;
 			uint8_t use_accel_seq		: 1;
-			uint8_t rsvd			: 4;
+			uint8_t use_memory_domain	: 1;
+			uint8_t rsvd			: 3;
 		};
 	};
 	uint8_t				zcopy_phase; /* type enum spdk_nvmf_zcopy_phase */
