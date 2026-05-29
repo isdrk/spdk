@@ -2235,6 +2235,38 @@ int spdk_nvme_ctrlr_cmd_io_raw(struct spdk_nvme_ctrlr *ctrlr,
 			       spdk_nvme_cmd_cb cb_fn, void *cb_arg);
 
 /**
+ * Send the given NVM I/O command to the NVMe controller.
+ *
+ * This is a low level interface for submitting I/O commands directly. Prefer
+ * the spdk_nvme_ns_cmd_* functions instead. The validity of the command will
+ * not be checked!
+ *
+ * When constructing the nvme_command it is not necessary to fill out the PRP
+ * list/SGL or the CID. The driver will handle both of those for you.
+ *
+ * The command is submitted to a qpair allocated by spdk_nvme_ctrlr_alloc_io_qpair().
+ * The user must ensure that only one thread submits I/O on a given qpair at any
+ * given time.
+ *
+ * \param ctrlr Opaque handle to NVMe controller.
+ * \param qpair I/O qpair to submit command.
+ * \param cmd NVM I/O command to submit.
+ * \param iovs Scatter-gather list of data buffers.
+ * \param iovcnt Size of the `iovs` array.
+ * \param cb_fn Callback function invoked when the I/O command completes.
+ * \param cb_arg Argument passed to callback function.
+ *
+ * \return 0 if successfully submitted, negated errnos on the following error conditions:
+ * -ENOMEM: The request cannot be allocated.
+ * -ENXIO: The qpair is failed at the transport level.
+ */
+int spdk_nvme_ctrlr_cmd_io_raw_iov(struct spdk_nvme_ctrlr *ctrlr,
+				   struct spdk_nvme_qpair *qpair,
+				   struct spdk_nvme_cmd *cmd,
+				   struct iovec *iovs, uint32_t iovcnt,
+				   spdk_nvme_cmd_cb cb_fn, void *cb_arg);
+
+/**
  * Send the given NVM I/O command with metadata to the NVMe controller.
  *
  * This is a low level interface for submitting I/O commands directly. Prefer

@@ -120,6 +120,28 @@ spdk_nvme_ctrlr_cmd_iov_raw_with_md(struct spdk_nvme_ctrlr *ctrlr,
 }
 
 int
+spdk_nvme_ctrlr_cmd_io_raw_iov(struct spdk_nvme_ctrlr *ctrlr,
+			       struct spdk_nvme_qpair *qpair,
+			       struct spdk_nvme_cmd *cmd,
+			       struct iovec *iovs, uint32_t iovcnt,
+			       spdk_nvme_cmd_cb cb_fn, void *cb_arg)
+{
+	struct nvme_request *req;
+
+	req = nvme_allocate_request(qpair);
+	if (req == NULL) {
+		return -ENOMEM;
+	}
+
+	NVME_INIT_REQUEST_IOV(req, cb_fn, cb_arg, iovs, iovcnt, NULL,
+			      spdk_iov_length(iovs, iovcnt), 0, 0, 0);
+	req->qpair = qpair;
+	memcpy(&req->cmd, cmd, sizeof(req->cmd));
+
+	return nvme_qpair_submit_request(qpair, req);
+}
+
+int
 spdk_nvme_ctrlr_cmd_admin_raw(struct spdk_nvme_ctrlr *ctrlr,
 			      struct spdk_nvme_cmd *cmd,
 			      void *buf, uint32_t len,
