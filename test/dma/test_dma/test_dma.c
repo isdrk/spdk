@@ -15,14 +15,22 @@
 
 #include <infiniband/verbs.h>
 
+#define DMA_TEST_MAX_MRS 16
+
 struct dma_test_task;
+
+struct dma_test_mr_entry {
+	struct ibv_pd *pd;
+	struct ibv_mr *mr;
+};
 
 struct dma_test_req {
 	struct iovec *iovs;
 	struct spdk_bdev_ext_io_opts io_opts;
 	uint64_t io_offset;
 	uint64_t submit_tsc;
-	struct ibv_mr *mr;
+	struct dma_test_mr_entry mrs[DMA_TEST_MAX_MRS];
+	uint32_t num_mrs;
 	struct dma_test_task *task;
 	void *buffer;
 	uint32_t idx;
@@ -452,6 +460,40 @@ dma_test_memzero_cb(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 }
 
 
+static struct ibv_mr *
+dma_test_req_get_mr(struct dma_test_req *req, struct ibv_pd *pd)
+{
+	struct ibv_mr *mr;
+	uint32_t i;
+
+	for (i = 0; i < req->num_mrs; i++) {
+		if (req->mrs[i].pd == pd) {
+			return req->mrs[i].mr;
+		}
+	}
+
+	if (spdk_unlikely(req->num_mrs == DMA_TEST_MAX_MRS)) {
+		fprintf(stderr, "MR cache exhausted (limit %u), increase DMA_TEST_MAX_MRS\n",
+			DMA_TEST_MAX_MRS);
+		return NULL;
+	}
+
+	mr = ibv_reg_mr(pd, req->buffer, g_io_size,
+			IBV_ACCESS_LOCAL_WRITE |
+			IBV_ACCESS_REMOTE_READ |
+			IBV_ACCESS_REMOTE_WRITE);
+	if (!mr) {
+		fprintf(stderr, "Failed to register memory region, errno %d\n", errno);
+		return NULL;
+	}
+
+	req->mrs[req->num_mrs].pd = pd;
+	req->mrs[req->num_mrs].mr = mr;
+	req->num_mrs++;
+
+	return mr;
+}
+
 static int
 dma_test_translate_memory_cb(struct spdk_memory_domain *src_domain, void *src_domain_ctx,
 			     struct spdk_memory_domain *dst_domain, struct spdk_memory_domain_translation_ctx *dst_domain_ctx,
@@ -460,6 +502,7 @@ dma_test_translate_memory_cb(struct spdk_memory_domain *src_domain, void *src_do
 	struct dma_test_req *req = src_domain_ctx;
 	struct dma_test_task *task = req->task;
 	struct ibv_qp *dst_domain_qp = (struct ibv_qp *)dst_domain_ctx->rdma.ibv_qp;
+	struct ibv_mr *mr;
 
 	if (spdk_unlikely(addr < req->buffer ||
 			  (uint8_t *)addr + len > (uint8_t *)req->buffer + g_io_size)) {
@@ -467,22 +510,16 @@ dma_test_translate_memory_cb(struct spdk_memory_domain *src_domain, void *src_do
 		return -1;
 	}
 
-	if (spdk_unlikely(!req->mr)) {
-		req->mr = ibv_reg_mr(dst_domain_qp->pd, req->buffer, g_io_size,
-				     IBV_ACCESS_LOCAL_WRITE |
-				     IBV_ACCESS_REMOTE_READ |
-				     IBV_ACCESS_REMOTE_WRITE);
-		if (!req->mr) {
-			fprintf(stderr, "Failed to register memory region, errno %d\n", errno);
-			return -1;
-		}
+	mr = dma_test_req_get_mr(req, dst_domain_qp->pd);
+	if (spdk_unlikely(!mr)) {
+		return -1;
 	}
 
 	result->iov.iov_base = addr;
 	result->iov.iov_len = len;
 	result->iov_count = 1;
-	result->rdma.lkey = req->mr->lkey;
-	result->rdma.rkey = req->mr->rkey;
+	result->rdma.lkey = mr->lkey;
+	result->rdma.rkey = mr->rkey;
 	result->dst_domain = dst_domain;
 
 	task->num_translations++;
@@ -827,12 +864,12 @@ static void
 destroy_task(struct dma_test_task *task)
 {
 	struct dma_test_req *req;
-	uint32_t i;
+	uint32_t i, j;
 
 	for (i = 0; i < g_queue_depth; i++) {
 		req = &task->reqs[i];
-		if (req->mr) {
-			ibv_dereg_mr(req->mr);
+		for (j = 0; j < req->num_mrs; j++) {
+			ibv_dereg_mr(req->mrs[j].mr);
 		}
 		free(req->buffer);
 		free(req->iovs);
