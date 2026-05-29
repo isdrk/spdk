@@ -832,22 +832,22 @@ enum nvme_ctrlr_state {
 	/**
 	 * Get Identify I/O Command Set Specific Controller data structure for the NVM command set.
 	 */
-	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_NVM,
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_NVM_SPECIFIC,
 
 	/**
 	 * Waiting for Identify I/O Command Set Specific Controller NVM command to be completed.
 	 */
-	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_NVM,
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_NVM_SPECIFIC,
 
 	/**
 	 * Get Identify I/O Command Set Specific Controller data structure for the ZNS command set.
 	 */
-	NVME_CTRLR_STATE_IDENTIFY_IOCS_SPECIFIC_ZNS,
+	NVME_CTRLR_STATE_IDENTIFY_IOCS_ZNS_SPECIFIC,
 
 	/**
 	 * Waiting for Identify I/O Command Set Specific Controller ZNS command to be completed.
 	 */
-	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_SPECIFIC_ZNS,
+	NVME_CTRLR_STATE_WAIT_FOR_IDENTIFY_IOCS_ZNS_SPECIFIC,
 
 	/**
 	 * Get Commands Supported and Effects log page for the Zoned Namespace Command Set.
