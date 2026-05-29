@@ -1831,6 +1831,12 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 		goto out;
 	}
 
+	if (spdk_unlikely(length > rtransport->transport.opts.max_io_size)) {
+		SPDK_ERRLOG("SGL length 0x%x exceeds max io size 0x%x\n",
+			    length, rtransport->transport.opts.max_io_size);
+		return -EINVAL;
+	}
+
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport,
 					   length);
 	rdma_req->iovpos = 0;
@@ -1930,13 +1936,6 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 		desc++;
 	}
 
-	if (spdk_unlikely(total_length > rtransport->transport.opts.max_io_size)) {
-		SPDK_ERRLOG("Multi SGL length 0x%x exceeds max io size 0x%x\n",
-			    total_length, rtransport->transport.opts.max_io_size);
-		req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_DATA_SGL_LENGTH_INVALID;
-		return -EINVAL;
-	}
-
 	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1);
 	if (spdk_unlikely(rc != 0)) {
 		return -ENOMEM;
@@ -1947,6 +1946,13 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 		req->length = total_length;
 		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
 		goto out;
+	}
+
+	if (spdk_unlikely(total_length > rtransport->transport.opts.max_io_size)) {
+		SPDK_ERRLOG("Multi SGL length 0x%x exceeds max io size 0x%x\n",
+			    total_length, rtransport->transport.opts.max_io_size);
+		req->rsp->nvme_cpl.status.sc = SPDK_NVME_SC_DATA_SGL_LENGTH_INVALID;
+		return -EINVAL;
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, total_length);
@@ -2088,12 +2094,6 @@ nvmf_rdma_request_parse_sgl(struct spdk_nvmf_rdma_transport *rtransport,
 	     sgl->keyed.subtype == SPDK_NVME_SGL_SUBTYPE_INVALIDATE_KEY)) {
 
 		length = sgl->keyed.length;
-		if (spdk_unlikely(length > rtransport->transport.opts.max_io_size)) {
-			SPDK_ERRLOG("SGL length 0x%x exceeds max io size 0x%x\n",
-				    length, rtransport->transport.opts.max_io_size);
-			rsp->status.sc = SPDK_NVME_SC_DATA_SGL_LENGTH_INVALID;
-			return -1;
-		}
 #ifdef SPDK_CONFIG_RDMA_SEND_WITH_INVAL
 		if ((device->attr.device_cap_flags & IBV_DEVICE_MEM_MGT_EXTENSIONS) != 0) {
 			if (sgl->keyed.subtype == SPDK_NVME_SGL_SUBTYPE_INVALIDATE_KEY) {
