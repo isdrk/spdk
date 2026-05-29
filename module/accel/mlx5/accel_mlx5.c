@@ -2740,7 +2740,7 @@ accel_mlx5_crc_mkey_task_continue(struct accel_mlx5_task *task)
 		return 0;
 	}
 	if (task->num_ops == 0) {
-		rc = accel_mlx5_task_alloc_sig_ctx(task, dev->sig_mkeys);
+		rc = accel_mlx5_task_alloc_sig_mkey_ctx(task);
 		if (spdk_unlikely(rc != 0)) {
 			if (rc == -ENOMEM) {
 				accel_mlx5_dev_nomem_task_mkey_repeat(dev, task);
