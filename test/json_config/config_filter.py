@@ -45,6 +45,7 @@ def filter_methods(do_remove_global_rpcs):
         'sock_set_default_impl',
         'framework_set_scheduler',
         'accel_crypto_key_create',
+        'accel_set_driver',
         'accel_assign_opc',
         'accel_set_options',
         'mlx5_scan_accel_module',

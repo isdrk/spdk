@@ -108,6 +108,7 @@ DEFINE_STUB(spdk_accel_get_memory_domain, struct spdk_memory_domain *, (void), N
 DEFINE_STUB(spdk_accel_get_opcode_name, const char *, (enum spdk_accel_opcode opcode), "pewpew");
 DEFINE_STUB_V(spdk_accel_driver_register, (struct spdk_accel_driver *driver));
 DEFINE_STUB(spdk_accel_set_driver, int, (const char *name), 0);
+DEFINE_STUB(spdk_accel_get_driver_name, const char *, (void), NULL);
 DEFINE_STUB(spdk_rdma_utils_get_memory_domain, struct spdk_memory_domain *,
 	    (struct ibv_pd *pd, enum spdk_dma_device_type type), NULL);
 DEFINE_STUB(spdk_rdma_utils_put_memory_domain, int, (struct spdk_memory_domain *domain), 0);

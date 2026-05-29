@@ -5551,9 +5551,15 @@ accel_mlx5_init(void)
 	free(caps);
 
 	if (g_accel_mlx5.attr.enable_driver) {
+		const char *driver_name = spdk_accel_get_driver_name();
+
 		SPDK_NOTICELOG("Enabling mlx5 platform driver\n");
-		spdk_accel_driver_register(&g_accel_mlx5_driver);
-		spdk_accel_set_driver(g_accel_mlx5_driver.name);
+		/* The app can be loaded from json config which could have already set the driver.
+		 * Check if mlx5 driver is already set to avoid errors
+		 */
+		if (driver_name == NULL || strcmp(driver_name, g_accel_mlx5_driver.name) != 0) {
+			spdk_accel_set_driver(g_accel_mlx5_driver.name);
+		}
 		spdk_mlx5_umr_implementer_register(true);
 	}
 
@@ -6552,4 +6558,5 @@ static struct spdk_accel_driver g_accel_mlx5_driver = {
 };
 
 SPDK_ACCEL_MODULE_REGISTER(mlx5, &g_accel_mlx5.module)
+SPDK_ACCEL_DRIVER_REGISTER(mlx5, &g_accel_mlx5_driver)
 SPDK_LOG_REGISTER_COMPONENT(accel_mlx5)
