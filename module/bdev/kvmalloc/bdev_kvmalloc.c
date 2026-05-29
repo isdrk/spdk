@@ -473,14 +473,26 @@ kvmalloc_handle_admin_identify(struct kvmalloc_disk *kvmalloc, struct spdk_bdev_
 	switch (cns) {
 	case SPDK_NVME_IDENTIFY_NS_IOCS: {
 		struct spdk_nvme_kv_ns_data *nsdata;
+		const struct spdk_uuid *uuid;
 
 		memset(buf, 0, nbytes);
 		nsdata = buf;
+
+		/* In-memory KV store has no fixed capacity. Report an unbounded
+		 * namespace size and leave nuse zero so capacity-aware hosts
+		 * don't reject the namespace. */
+		nsdata->nsze = UINT64_MAX;
+		nsdata->nuse = 0;
+
 		nsdata->nkvf = 0;
 		nsdata->kvfc.kvfi = 0;
 		nsdata->novg = kvmalloc->novg;
 		nsdata->kvf[0].kvkml = kvmalloc->mks;
 		nsdata->kvf[0].kvvml = kvmalloc->mvs;
+
+		uuid = spdk_bdev_get_uuid(&kvmalloc->disk);
+		SPDK_STATIC_ASSERT(sizeof(nsdata->nguid) == sizeof(*uuid), "size mismatch");
+		memcpy(nsdata->nguid, uuid, sizeof(nsdata->nguid));
 
 		spdk_bdev_io_complete_nvme_status(bdev_io, 0,
 						  SPDK_NVME_SCT_GENERIC,
