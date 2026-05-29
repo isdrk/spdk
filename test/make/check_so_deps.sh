@@ -103,7 +103,7 @@ function get_release() {
 		fi
 	fi
 
-	tag=$(git describe --tags --abbrev=0 --exclude=LTS --exclude="*-pre" $version)
+	tag=$(git describe --tags --abbrev=0 --exclude=LTS --exclude="*-pre" --exclude="*-cmx" $version)
 	echo "${tag:0:6}"
 }
 
