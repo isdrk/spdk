@@ -540,7 +540,8 @@ function check_bash_style() {
 	shfmt_bins=($(compgen -c shfmt | uniq || true))
 	for bin in "${shfmt_bins[@]}"; do
 		shfmt_version=$("$bin" --version)
-		if [[ $shfmt_version == "$supported_shfmt_version" ]]; then
+		# Accept both "v3.8.0" and "3.8.0" — different distros/builds report the version with or without the leading 'v'.
+		if [[ ${shfmt_version#v} == "${supported_shfmt_version#v}" ]]; then
 			shfmt=$bin
 			break
 		fi
