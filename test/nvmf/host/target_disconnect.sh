@@ -43,6 +43,7 @@ function nvmf_target_disconnect_tc2() {
 
 	sleep 2
 	kill -9 $nvmfpid
+	wait $nvmfpid || :
 
 	sleep 2
 	disconnect_init $NVMF_FIRST_TARGET_IP
@@ -58,6 +59,7 @@ function nvmf_target_disconnect_tc3() {
 
 	sleep 2
 	kill -9 $nvmfpid
+	wait $nvmfpid || :
 
 	sleep 2
 	disconnect_init $NVMF_SECOND_TARGET_IP
