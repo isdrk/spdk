@@ -6273,6 +6273,43 @@ accel_mlx5_task_merge_copy_mkey(struct accel_mlx5_task *task, struct accel_mlx5_
 }
 
 static inline int
+accel_mlx5_task_merge_crc32c_mkey(struct accel_mlx5_task *crc32c, struct accel_mlx5_io_channel *ch)
+{
+	struct spdk_memory_domain_rdma_ctx *domain_ctx;
+	size_t ctx_size;
+	int rc;
+
+	domain_ctx = spdk_memory_domain_get_user_context(crc32c->base.src_domain, &ctx_size);
+	if (spdk_unlikely(!domain_ctx || domain_ctx->size != ctx_size)) {
+		SPDK_ERRLOG("no domain context or wrong size, ctx ptr %p, size %zu\n", domain_ctx, ctx_size);
+		return -ENOTSUP;
+	}
+	if (spdk_unlikely(!domain_ctx->ibv_pd)) {
+		SPDK_ERRLOG("no destination domain PD, task %p\n", crc32c);
+		return -ENOTSUP;
+	}
+
+	rc = accel_mlx5_task_assign_qp_by_pd(crc32c, ch, domain_ctx->ibv_pd);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+
+	/* Update crypto task memory domain, complete copy task */
+	SPDK_DEBUGLOG(accel_mlx5, "Merge crc32c task (%p)\n", crc32c);
+	accel_mlx5_task_reset(crc32c);
+	crc32c->mlx5_opcode = ACCEL_MLX5_OPC_CRC32C_MKEY;
+	crc32c->needs_data_transfer = 1;
+	crc32c->needs_epilogue = 1;
+	crc32c->inplace = 1;
+	crc32c->base.dst_domain = crc32c->base.src_domain;
+	crc32c->base.dst_domain_ctx = crc32c->base.src_domain_ctx;
+	crc32c->base.src_domain = NULL;
+	crc32c->base.src_domain_ctx = NULL;
+
+	return 0;
+}
+
+static inline int
 accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 				   struct accel_mlx5_io_channel *accel_ch)
 {
@@ -6291,6 +6328,13 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 			    SPDK_DMA_DEVICE_TYPE_RDMA &&
 			    accel_mlx5_compare_iovs(first_base->d.iovs, first_base->s.iovs, first_base->s.iovcnt)) {
 				return accel_mlx5_task_merge_copy_mkey(first, accel_ch);
+			}
+			break;
+		case SPDK_ACCEL_OPC_CRC32C:
+			if (first_base->src_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
+			    SPDK_DMA_DEVICE_TYPE_RDMA) {
+				return accel_mlx5_task_merge_crc32c_mkey(first, accel_ch);
 			}
 			break;
 		default:
