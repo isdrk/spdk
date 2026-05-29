@@ -2195,11 +2195,6 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
 		goto err;
 	}
 
-	/* Cache the zcopy and accel sequence capability of the bdev device */
-	ns->zcopy = spdk_bdev_io_type_supported(ns->bdev, SPDK_BDEV_IO_TYPE_ZCOPY);
-	ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_READ) &&
-			     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_WRITE);
-
 	if (spdk_uuid_is_null(&opts.uuid)) {
 		opts.uuid = *spdk_bdev_get_uuid(ns->bdev);
 	}
@@ -2239,6 +2234,17 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
 				goto err;
 			}
 		}
+	}
+
+	/* Cache the zcopy and accel sequence capability of the bdev device */
+	ns->zcopy = spdk_bdev_io_type_supported(ns->bdev, SPDK_BDEV_IO_TYPE_ZCOPY);
+	if (ns->csi == SPDK_NVME_CSI_KV) {
+		ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc,
+				     SPDK_BDEV_IO_TYPE_NVME_IOV_MD) &&
+				     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_NVME_IO);
+	} else {
+		ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_READ) &&
+				     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_WRITE);
 	}
 
 	first_ns = spdk_nvmf_subsystem_get_first_ns(subsystem);
