@@ -532,6 +532,9 @@ struct spdk_nvmf_rdma_transport {
 	void				*memory_domain_buffer;
 	size_t				memory_domain_buffer_size;
 
+	/* Accel sequences are supported */
+	bool				accel_sequence_supported;
+
 	TAILQ_HEAD(, spdk_nvmf_rdma_device)	devices;
 	TAILQ_HEAD(, spdk_nvmf_rdma_port)	ports;
 	TAILQ_HEAD(, spdk_nvmf_rdma_poll_group)	poll_groups;
@@ -1542,9 +1545,7 @@ nvmf_rdma_connect(struct spdk_nvmf_transport *transport, struct rdma_cm_event *e
 	rqpair->qpair.qid = private_data->qid;
 	rqpair->qpair.numa.id_valid = 1;
 	rqpair->qpair.numa.id = spdk_rdma_cm_id_get_numa_id(rqpair->cm_id);
-	rqpair->start_accel_sequence = spdk_rdma_provider_accel_sequence_supported() &&
-				       rqpair->qpair.qid != 0 && !rtransport->transport.opts.dif_insert_or_strip &&
-				       rtransport->rdma_opts.in_capsule_data_disabled;
+	rqpair->start_accel_sequence = rtransport->accel_sequence_supported && rqpair->qpair.qid != 0;
 
 	SPDK_DEBUGLOG(rdma, "qpair %p id %u support accel %s\n", rqpair, rqpair->qpair.qid,
 		      rqpair->start_accel_sequence ? "YES" : "NO");
@@ -3604,6 +3605,10 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		opts->in_capsule_data_size = min_in_capsule_data_size;
 		rtransport->rdma_opts.in_capsule_data_disabled = true;
 	}
+
+	rtransport->accel_sequence_supported = spdk_rdma_provider_accel_sequence_supported() &&
+					       !opts->dif_insert_or_strip &&
+					       rtransport->rdma_opts.in_capsule_data_disabled;
 
 	rtransport->event_channel = rdma_create_event_channel();
 	if (rtransport->event_channel == NULL) {
