@@ -4370,6 +4370,88 @@ Example response:
 }
 ~~~
 
+### bdev_kvmalloc_create {#rpc_bdev_kvmalloc_create}
+
+Construct @ref bdev_config_kvmalloc
+
+#### Parameters
+
+ Name                     | Optional   | Type    | Description
+------------------------- | ---------- | ------- | -------------------------------------------------------------------------------------------------------------
+ name                     | Optional   | string  | Bdev name to use
+ uuid                     | Optional   | string  | UUID of new bdev
+ max_key_size             | Optional   | number  | Maximum key size
+ max_value_size           | Optional   | number  | Maximum value size
+ optimal_value_granularity| Optional   | number  | Optional value granularity in bytes
+ numa_id                  | Optional   | number  | NUMA ID
+
+#### Response
+
+Name of newly created bdev.
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "max_key_size": 16,
+    "name": "kvmalloc0",
+    "uuid": "2b6601ba-eada-44fb-9a83-a20eb9eb9e90",
+    "optimal_value_granularity": 131072
+  },
+  "jsonrpc": "2.0",
+  "method": "bdev_kvmalloc_create",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "kvmalloc0"
+}
+~~~
+
+### bdev_kvmalloc_delete {#rpc_bdev_kvmalloc_delete}
+
+Delete @ref bdev_config_kvmalloc
+
+#### Parameters
+
+ Name   | Optional   | Type   | Description
+------- | ---------- | ------ | --------------
+ name   | Required   | string | Bdev name
+
+#### Example
+
+Example request:
+
+~~~json
+{
+  "params": {
+    "name": "kvmalloc0"
+  },
+  "jsonrpc": "2.0",
+  "method": "bdev_kvmalloc_delete",
+  "id": 1
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### bdev_null_create {#rpc_bdev_null_create}
 
 Construct @ref bdev_config_null
