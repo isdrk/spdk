@@ -11,7 +11,9 @@
 #include "spdk/nvmf.h"
 #include "spdk_internal/mock.h"
 
+#include "spdk/bdev.h"
 #include "spdk/bdev_module.h"
+#include "spdk/dma.h"
 #include "nvmf/subsystem.c"
 #include "nvmf/transport.c"
 
@@ -89,6 +91,65 @@ DEFINE_STUB(spdk_bdev_get_module_ctx, void *, (struct spdk_bdev_desc *desc), NUL
 DEFINE_STUB(spdk_bdev_get_nvme_nsid, uint32_t, (struct spdk_bdev *bdev), 0);
 DEFINE_STUB(spdk_bdev_get_nvme_csi, enum spdk_nvme_csi, (const struct spdk_bdev *bdev),
 	    SPDK_NVME_CSI_NVM);
+static int g_ut_bdev_get_memory_domain_types_rc;
+static enum spdk_dma_device_type g_ut_bdev_memory_domain_types[16];
+static uint32_t g_ut_bdev_memory_domain_types_num;
+static int g_ut_bdev_memory_domain_fetch_rc;
+static bool g_ut_bdev_memory_domain_transfer_supported;
+
+static void
+ut_reset_bdev_memory_domain_mocks(void)
+{
+	g_ut_bdev_get_memory_domain_types_rc = 0;
+	g_ut_bdev_memory_domain_types_num = 0;
+	memset(g_ut_bdev_memory_domain_types, 0, sizeof(g_ut_bdev_memory_domain_types));
+	g_ut_bdev_memory_domain_fetch_rc = 0;
+	g_ut_bdev_memory_domain_transfer_supported = true;
+}
+
+int
+spdk_bdev_get_memory_domain_types(struct spdk_bdev *bdev, enum spdk_dma_device_type *types,
+				  uint32_t array_size)
+{
+	uint32_t i;
+
+	(void)bdev;
+
+	if (g_ut_bdev_get_memory_domain_types_rc < 0) {
+		return g_ut_bdev_get_memory_domain_types_rc;
+	}
+
+	if (g_ut_bdev_memory_domain_types_num > array_size) {
+		for (i = 0; i < array_size; i++) {
+			types[i] = g_ut_bdev_memory_domain_types[i];
+		}
+		return (int)g_ut_bdev_memory_domain_types_num;
+	}
+
+	for (i = 0; i < g_ut_bdev_memory_domain_types_num && i < array_size; i++) {
+		types[i] = g_ut_bdev_memory_domain_types[i];
+	}
+	return (int)g_ut_bdev_memory_domain_types_num;
+}
+
+int
+spdk_bdev_memory_domain_fetch_operation_info(struct spdk_bdev *bdev,
+		enum spdk_dma_device_type domain_type, enum spdk_bdev_io_type io_type,
+		struct spdk_bdev_memory_domain_operation_info *info)
+{
+	(void)bdev;
+	(void)domain_type;
+	(void)io_type;
+
+	if (g_ut_bdev_memory_domain_fetch_rc != 0) {
+		return g_ut_bdev_memory_domain_fetch_rc;
+	}
+
+	if (info != NULL && info->size >= sizeof(struct spdk_bdev_memory_domain_operation_info)) {
+		info->domain_transfer_supported = g_ut_bdev_memory_domain_transfer_supported;
+	}
+	return 0;
+}
 
 static struct spdk_nvmf_transport g_transport = {};
 
@@ -2231,6 +2292,79 @@ test_nvmf_reservation_custom_ops(void)
 }
 
 static void
+test_nvmf_ns_set_memory_domain_support(void)
+{
+	struct spdk_bdev bdev = {};
+	struct spdk_nvmf_ns ns = { .bdev = &bdev };
+	enum spdk_bdev_io_type io_types[] = { SPDK_BDEV_IO_TYPE_READ };
+	size_t i;
+
+	/* Callee always zeroes ns->memory_domain_support first */
+	memset(ns.memory_domain_support, 0x5a, sizeof(ns.memory_domain_support));
+
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_get_memory_domain_types_rc = -EIO;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	for (i = 0; i < sizeof(ns.memory_domain_support); i++) {
+		CU_ASSERT(((const uint8_t *)ns.memory_domain_support)[i] == 0);
+	}
+
+	/* Zero domain types from bdev: nothing marked supported */
+	memset(ns.memory_domain_support, 0x5a, sizeof(ns.memory_domain_support));
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_memory_domain_types_num = 0;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	for (i = 0; i < sizeof(ns.memory_domain_support); i++) {
+		CU_ASSERT(((const uint8_t *)ns.memory_domain_support)[i] == 0);
+	}
+
+	/* RDMA listed by bdev; transfer supported for the I/O type */
+	memset(ns.memory_domain_support, 0, sizeof(ns.memory_domain_support));
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_memory_domain_types_num = 1;
+	g_ut_bdev_memory_domain_types[0] = SPDK_DMA_DEVICE_TYPE_RDMA;
+	g_ut_bdev_memory_domain_fetch_rc = 0;
+	g_ut_bdev_memory_domain_transfer_supported = true;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	CU_ASSERT(ns.memory_domain_support[0].domain_type_supported == true);
+	CU_ASSERT(ns.memory_domain_support[0].domain_transfer_supported == true);
+
+	/* RDMA matched but fetch fails: type flagged, transfer not */
+	memset(ns.memory_domain_support, 0, sizeof(ns.memory_domain_support));
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_memory_domain_types_num = 1;
+	g_ut_bdev_memory_domain_types[0] = SPDK_DMA_DEVICE_TYPE_RDMA;
+	g_ut_bdev_memory_domain_fetch_rc = -ENOTSUP;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	CU_ASSERT(ns.memory_domain_support[0].domain_type_supported == true);
+	CU_ASSERT(ns.memory_domain_support[0].domain_transfer_supported == false);
+
+	/* Fetch succeeds but bdev reports no domain transfer */
+	memset(ns.memory_domain_support, 0, sizeof(ns.memory_domain_support));
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_memory_domain_types_num = 1;
+	g_ut_bdev_memory_domain_types[0] = SPDK_DMA_DEVICE_TYPE_RDMA;
+	g_ut_bdev_memory_domain_fetch_rc = 0;
+	g_ut_bdev_memory_domain_transfer_supported = false;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	CU_ASSERT(ns.memory_domain_support[0].domain_type_supported == true);
+	CU_ASSERT(ns.memory_domain_support[0].domain_transfer_supported == false);
+
+	/* DMA only: domain_type_supported uses bdev list index j; transfer uses required index i */
+	memset(ns.memory_domain_support, 0, sizeof(ns.memory_domain_support));
+	ut_reset_bdev_memory_domain_mocks();
+	g_ut_bdev_memory_domain_types_num = 1;
+	g_ut_bdev_memory_domain_types[0] = SPDK_DMA_DEVICE_TYPE_DMA;
+	g_ut_bdev_memory_domain_fetch_rc = 0;
+	g_ut_bdev_memory_domain_transfer_supported = true;
+	nvmf_ns_set_memory_domain_support(&ns, io_types, SPDK_COUNTOF(io_types));
+	CU_ASSERT(ns.memory_domain_support[0].domain_type_supported == false);
+	CU_ASSERT(ns.memory_domain_support[0].domain_transfer_supported == false);
+	CU_ASSERT(ns.memory_domain_support[1].domain_type_supported == true);
+	CU_ASSERT(ns.memory_domain_support[1].domain_transfer_supported == true);
+}
+
+static void
 test_nvmf_ns_reservation_add_max_registrants(void)
 {
 	struct spdk_nvmf_ns_reservation_ops ops = {
@@ -2298,6 +2432,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_nvmf_subsystem_state_change);
 	CU_ADD_TEST(suite, test_nvmf_reservation_custom_ops);
 	CU_ADD_TEST(suite, test_nvmf_ns_reservation_add_max_registrants);
+	CU_ADD_TEST(suite, test_nvmf_ns_set_memory_domain_support);
 
 	allocate_threads(1);
 	set_thread(0);

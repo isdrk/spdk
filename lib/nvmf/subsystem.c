@@ -2073,6 +2073,67 @@ nvmf_subsystem_zone_append_supported(struct spdk_nvmf_subsystem *subsystem)
 	return false;
 }
 
+static inline void
+nvmf_ns_set_memory_domain_support(struct spdk_nvmf_ns *ns, enum spdk_bdev_io_type *io_types,
+				  uint32_t type_count)
+{
+	enum spdk_dma_device_type supported_types[16] = {};
+	const enum spdk_dma_device_type required_types[] = {
+		SPDK_DMA_DEVICE_TYPE_RDMA,
+		SPDK_DMA_DEVICE_TYPE_DMA,
+		SPDK_DMA_DEVICE_TYPE_ACCEL,
+	};
+	uint32_t i, j, k, supported_types_count = SPDK_COUNTOF(supported_types),
+			  required_types_count = SPDK_COUNTOF(required_types);
+	uint32_t type;
+	int rc;
+
+	memset(ns->memory_domain_support, 0, sizeof(ns->memory_domain_support));
+
+	rc = spdk_bdev_get_memory_domain_types(ns->bdev, supported_types, supported_types_count);
+	if (rc <= 0) {
+		if (rc != 0) {
+			SPDK_ERRLOG("Failed to get memory domain types for bdev %s, rc %d\n", spdk_bdev_get_name(ns->bdev),
+				    rc);
+		}
+		return;
+	}
+	if (rc > (int)supported_types_count) {
+		SPDK_WARNLOG("bdev %s supports %d memory domains but only %u will be processed\n",
+			     spdk_bdev_get_name(ns->bdev), rc, supported_types_count);
+		rc = supported_types_count;
+	}
+	supported_types_count = rc;
+
+	for (i = 0; i < required_types_count; i++) {
+		for (j = 0; j < supported_types_count; j++) {
+			if (required_types[i] == supported_types[j]) {
+				bool all_opcodes_supported = true;
+
+				type = required_types[i];
+				ns->memory_domain_support[type].domain_type_supported = true;
+
+				for (k = 0; k < type_count && all_opcodes_supported; k++) {
+					struct spdk_bdev_memory_domain_operation_info info = {.size = sizeof(info)};
+
+					rc = spdk_bdev_memory_domain_fetch_operation_info(ns->bdev, required_types[i], io_types[k], &info);
+					if (rc != 0) {
+						SPDK_ERRLOG("Failed to fetch operation information for bdev %s, memory domain type %d, io type %d\n",
+							    spdk_bdev_get_name(ns->bdev), supported_types[i], io_types[k]);
+						all_opcodes_supported = false;
+						break;
+					}
+					all_opcodes_supported = all_opcodes_supported && info.domain_transfer_supported;
+				}
+				SPDK_NOTICELOG("domain %d supported, data transfer %s\n", required_types[i],
+					       all_opcodes_supported ? "supported" : "not supported");
+				ns->memory_domain_support[type].domain_transfer_supported = all_opcodes_supported;
+				break;
+			}
+		}
+	}
+}
+
 uint32_t
 spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char *bdev_name,
 			       const struct spdk_nvmf_ns_opts *user_opts, size_t opts_size,
@@ -2242,9 +2303,13 @@ spdk_nvmf_subsystem_add_ns_ext(struct spdk_nvmf_subsystem *subsystem, const char
 		ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc,
 				     SPDK_BDEV_IO_TYPE_NVME_IOV_MD) &&
 				     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_NVME_IO);
+		nvmf_ns_set_memory_domain_support(ns, (enum spdk_bdev_io_type []) {SPDK_BDEV_IO_TYPE_NVME_IOV_MD, SPDK_BDEV_IO_TYPE_NVME_IO},
+		2);
 	} else {
 		ns->accel_sequence = spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_READ) &&
 				     spdk_bdev_desc_accel_sequence_supported(ns->desc, SPDK_BDEV_IO_TYPE_WRITE);
+		nvmf_ns_set_memory_domain_support(ns, (enum spdk_bdev_io_type []) {SPDK_BDEV_IO_TYPE_READ, SPDK_BDEV_IO_TYPE_WRITE},
+		2);
 	}
 
 	first_ns = spdk_nvmf_subsystem_get_first_ns(subsystem);

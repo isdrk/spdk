@@ -166,12 +166,26 @@ struct spdk_nvmf_registrant {
 	uint64_t rkey;
 };
 
+#define NVMF_NS_MEMORY_DOMAINS_COUNT 4
+
 struct spdk_nvmf_ns {
 	uint32_t nsid;
 	uint32_t anagrpid;
 	struct spdk_nvmf_subsystem *subsystem;
 	struct spdk_bdev *bdev;
 	struct spdk_bdev_desc *desc;
+
+	struct {
+		union {
+			uint8_t raw;
+			struct {
+				uint8_t domain_type_supported : 1;
+				uint8_t domain_transfer_supported : 1;
+				uint8_t rsvd : 6;
+			};
+		};
+		/* Indexed by enum spdk_dma_device_type, up to and including SPDK_DMA_DEVICE_TYPE_ACCEL */
+	} memory_domain_support[NVMF_NS_MEMORY_DOMAINS_COUNT];
 	/* Accel sequence is supported by block device */
 	bool accel_sequence;
 	/* Persist Through Power Loss feature is enabled */
