@@ -192,7 +192,7 @@ struct accel_mlx5_task {
 			 be encrypted during RX. */
 			uint8_t enc_order : 2;
 			uint8_t needs_epilogue : 1;
-			uint8_t reserved : 1;
+			uint8_t clear_psv_error : 1;
 		};
 	};
 	uint8_t mlx5_opcode;
@@ -1328,6 +1328,9 @@ accel_mlx5_encrypt_crc_task_complete(struct accel_mlx5_task *mlx5_task)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
+	if (mlx5_task->clear_psv_error) {
+		mlx5_task->psv->bits.error = 0;
+	}
 	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, 0);
 }
@@ -1344,6 +1347,9 @@ accel_mlx5_crc_decrypt_task_complete(struct accel_mlx5_task *mlx5_task)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->crypto_sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
+	if (mlx5_task->clear_psv_error && sigerr == 0) {
+		mlx5_task->psv->bits.error = 0;
+	}
 	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, sigerr);
 }
@@ -1555,6 +1561,7 @@ accel_mlx5_encrypt_and_crc_task_process(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
+		mlx5_task->clear_psv_error = 1;
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 	}
 
@@ -1731,6 +1738,7 @@ accel_mlx5_crc_and_decrypt_task_process(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
+		mlx5_task->clear_psv_error = 1;
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 	}
 
@@ -1816,6 +1824,9 @@ accel_mlx5_sig_task_complete(struct accel_mlx5_task *mlx5_task, int status)
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
 	spdk_mlx5_mkey_pool_put_bulk(dev->sig_mkeys, mlx5_task->mkeys, mlx5_task->num_ops);
+	if (mlx5_task->clear_psv_error && status == 0) {
+		mlx5_task->psv->bits.error = 0;
+	}
 	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 	spdk_accel_task_complete(&mlx5_task->base, status);
 }
@@ -1978,6 +1989,7 @@ accel_mlx5_crc_task_process_one_req(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
+		mlx5_task->clear_psv_error = 1;
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 	}
 
@@ -2190,6 +2202,7 @@ accel_mlx5_crc_task_process_multi_req(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
+		mlx5_task->clear_psv_error = 1;
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, mlx5_task);
 	}
 
@@ -2614,6 +2627,7 @@ accel_mlx5_crc_mkey_task_process(struct accel_mlx5_task *mlx5_task)
 			SPDK_ERRLOG("SET_PSV failed with %d\n", rc);
 			return rc;
 		}
+		mlx5_task->clear_psv_error = 1;
 		ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED_SIGNALED(dev, qp, mlx5_task);
 	}
 	mlx5_task->num_submitted_reqs++;
@@ -2755,6 +2769,9 @@ accel_mlx5_crc_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 		sigerr = accel_mlx5_task_check_sigerr(mlx5_task);
 	} else {
 		*mlx5_task->base.crc_dst = mlx5_task->psv->crc ^ UINT32_MAX;
+	}
+	if (mlx5_task->clear_psv_error && sigerr == 0) {
+		mlx5_task->psv->bits.error = 0;
 	}
 	spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
 	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
@@ -3904,6 +3921,9 @@ accel_mlx5_dif_mkey_task_complete(struct accel_mlx5_task *mlx5_task)
 
 	/* Normal task completion without allocated mkeys is not possible */
 	assert(mlx5_task->num_ops);
+	if (mlx5_task->clear_psv_error && sigerr == 0) {
+		mlx5_task->psv->bits.error = 0;
+	}
 	spdk_mlx5_mkey_pool_put(dev->sig_mkeys, mlx5_task->mkeys[0]);
 	spdk_mlx5_psv_pool_put(&mlx5_task->psv);
 
