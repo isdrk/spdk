@@ -43,7 +43,8 @@ const struct spdk_nvme_kv_ns_data *spdk_nvme_kv_ns_get_data(const struct spdk_nv
  * \return pointer to the controller data, or NULL if the controller does not
  * support the Key-Value Command Set.
  */
-const struct spdk_nvme_kv_ctrlr_data *spdk_nvme_kv_ctrlr_get_data(const struct spdk_nvme_ctrlr *ctrlr);
+const struct spdk_nvme_kv_ctrlr_data *spdk_nvme_kv_ctrlr_get_data(const struct spdk_nvme_ctrlr
+		*ctrlr);
 
 /**
  * Submit a KV Store command to the specified NVMe namespace.

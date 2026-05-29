@@ -6009,8 +6009,7 @@ spdk_bdev_get_nvme_nsid(struct spdk_bdev *bdev)
 }
 
 enum spdk_nvme_csi
-spdk_bdev_get_nvme_csi(const struct spdk_bdev *bdev)
-{
+spdk_bdev_get_nvme_csi(const struct spdk_bdev *bdev) {
 	return bdev->csi;
 }
 
