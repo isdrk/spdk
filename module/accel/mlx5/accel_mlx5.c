@@ -6256,6 +6256,23 @@ accel_mlx5_task_merge_copy_read_copy(struct accel_mlx5_task *read_copy,
 }
 
 static inline int
+accel_mlx5_task_merge_copy_mkey(struct accel_mlx5_task *task, struct accel_mlx5_io_channel *ch)
+{
+	int rc;
+
+	SPDK_DEBUGLOG(accel_mlx5, "MKEY task %p\n", task);
+	rc = accel_mlx5_task_assign_qp_by_domain_pd(task, ch, task->base.dst_domain);
+	if (spdk_unlikely(rc)) {
+		return rc;
+	}
+	accel_mlx5_task_reset(task);
+	task->mlx5_opcode = ACCEL_MLX5_OPC_MKEY;
+	task->needs_data_transfer = 1;
+	task->inplace = 1;
+	return 0;
+}
+
+static inline int
 accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 				   struct accel_mlx5_io_channel *accel_ch)
 {
@@ -6267,20 +6284,17 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 	SPDK_DEBUGLOG(accel_mlx5, "first %p, opc %d; next %p, opc %d\n", first_base, first_base->op_code,
 		      next_base,  next_base ? next_base->op_code : -1);
 	if (!next_base) {
-		if (first_base->op_code == SPDK_ACCEL_OPC_COPY && first_base->dst_domain &&
-		    spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
-		    SPDK_DMA_DEVICE_TYPE_RDMA &&
-		    accel_mlx5_compare_iovs(first_base->d.iovs, first_base->s.iovs, first_base->s.iovcnt)) {
-			SPDK_DEBUGLOG(accel_mlx5, "MKEY task %p\n", first);
-			rc = accel_mlx5_task_assign_qp_by_domain_pd(first, accel_ch, first_base->dst_domain);
-			if (spdk_unlikely(rc)) {
-				return rc;
+		switch (first_base->op_code) {
+		case SPDK_ACCEL_OPC_COPY:
+			if (first_base->dst_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
+			    SPDK_DMA_DEVICE_TYPE_RDMA &&
+			    accel_mlx5_compare_iovs(first_base->d.iovs, first_base->s.iovs, first_base->s.iovcnt)) {
+				return accel_mlx5_task_merge_copy_mkey(first, accel_ch);
 			}
-			accel_mlx5_task_reset(first);
-			first->mlx5_opcode = ACCEL_MLX5_OPC_MKEY;
-			first->needs_data_transfer = 1;
-			first->inplace = 1;
-			return 0;
+			break;
+		default:
+			break;
 		}
 	}
 
