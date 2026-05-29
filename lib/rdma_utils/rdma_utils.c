@@ -239,6 +239,18 @@ spdk_rdma_utils_get_translation(struct spdk_rdma_utils_mem_map *map, void *addre
 	return 0;
 }
 
+int
+spdk_rdma_utils_set_translation(struct spdk_rdma_utils_mem_map *map, void *address,
+				size_t length, struct spdk_rdma_utils_memory_translation *translation)
+{
+	assert(map);
+	assert(address);
+	assert(translation);
+
+	return spdk_mem_map_set_translation(map->map, (uint64_t)address, length,
+					    (uint64_t)translation->mr_or_key.mr);
+}
+
 
 static struct rdma_utils_device *
 rdma_add_dev(struct ibv_context *context)

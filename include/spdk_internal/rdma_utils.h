@@ -68,6 +68,18 @@ int spdk_rdma_utils_get_translation(struct spdk_rdma_utils_mem_map *map, void *a
 				    size_t length, struct spdk_rdma_utils_memory_translation *translation);
 
 /**
+ * Set a translation for the given address and length.
+ *
+ * \param map Pointer to translation map
+ * \param address Memory address for translation
+ * \param length Length of the memory address
+ * \param translation Pointer to translation result to be set
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_rdma_utils_set_translation(struct spdk_rdma_utils_mem_map *map, void *address,
+				    size_t length, struct spdk_rdma_utils_memory_translation *translation);
+
+/**
  * Helper function for retrieving Local Memory Key. Should be applied to a translation
  * returned by \b spdk_rdma_utils_get_translation
  *

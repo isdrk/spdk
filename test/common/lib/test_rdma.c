@@ -47,6 +47,9 @@ DEFINE_STUB(spdk_rdma_utils_create_mem_map, struct spdk_rdma_utils_mem_map *, (s
 		struct spdk_nvme_rdma_hooks *hooks, uint32_t access_flags), NULL)
 DEFINE_STUB_V(spdk_rdma_utils_free_mem_map, (struct spdk_rdma_utils_mem_map **map));
 DEFINE_STUB_V(spdk_rdma_utils_check_wc_error, (int num_completions, struct ibv_wc *wc));
+DEFINE_STUB(spdk_rdma_utils_set_translation, int, (struct spdk_rdma_utils_mem_map *map,
+		void *address,
+		size_t length, struct spdk_rdma_utils_memory_translation *translation), 0);
 DEFINE_RETURN_MOCK(spdk_rdma_utils_get_memory_domain, struct spdk_memory_domain *);
 struct spdk_memory_domain *spdk_rdma_utils_get_memory_domain(struct ibv_pd *pd,
 		enum spdk_dma_device_type type)

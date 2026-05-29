@@ -478,6 +478,7 @@ struct spdk_nvmf_rdma_device {
 	struct spdk_rdma_utils_mem_map		*map;
 	struct ibv_pd				*pd;
 
+	struct ibv_mr				*null_mr;
 	int					num_srq;
 	bool					need_destroy;
 	bool					ready_to_destroy;
@@ -517,6 +518,11 @@ struct spdk_nvmf_rdma_transport {
 	/* fields used to poll RDMA/IB events */
 	nfds_t			npoll_fds;
 	struct pollfd		*poll_fds;
+	/* No real memory is allocated for this buffer, translation is set to null MR
+	 * All CPU reads/writes cause page fault; all RDMA reads/writes are ignored
+	 */
+	void				*memory_domain_buffer;
+	size_t				memory_domain_buffer_size;
 
 	TAILQ_HEAD(, spdk_nvmf_rdma_device)	devices;
 	TAILQ_HEAD(, spdk_nvmf_rdma_port)	ports;
@@ -3031,6 +3037,9 @@ static int
 create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context *context,
 		 struct spdk_nvmf_rdma_device **new_device)
 {
+	struct spdk_rdma_utils_memory_translation translation = {
+		.translation_type = SPDK_RDMA_UTILS_TRANSLATION_MR,
+	};
 	struct spdk_nvmf_rdma_device	*device;
 	int				rc = 0;
 
@@ -3097,6 +3106,21 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 		return -ENOMEM;
 	}
 
+	device->null_mr = ibv_alloc_null_mr(device->pd);
+	if (!device->null_mr) {
+		SPDK_ERRLOG("Unable to allocate null MR\n");
+		destroy_ib_device(rtransport, device);
+		return -ENOMEM;
+	}
+	translation.mr_or_key.mr = device->null_mr;
+	rc = spdk_rdma_utils_set_translation(device->map, rtransport->memory_domain_buffer,
+					     rtransport->memory_domain_buffer_size, &translation);
+	if (rc != 0) {
+		SPDK_ERRLOG("Unable to set translation for memory domain buffer\n");
+		destroy_ib_device(rtransport, device);
+		return rc;
+	}
+
 	assert(device->map != NULL);
 	assert(device->pd != NULL);
 
@@ -3148,6 +3172,45 @@ generate_poll_fds(struct spdk_nvmf_rdma_transport *rtransport)
 		rtransport->poll_fds[i].fd = device->context->async_fd;
 		rtransport->poll_fds[i++].events = POLLIN;
 	}
+
+	return 0;
+}
+
+static int
+nvmf_rdma_alloc_memory_domain_buffer(struct spdk_nvmf_rdma_transport *rtransport,
+				     uint32_t max_io_size)
+{
+	uint8_t *buffer, *buffer_aligned;
+	size_t size_aligned, reminder, io_size_aligned;
+
+	io_size_aligned = SPDK_ALIGN_CEIL(max_io_size, VALUE_2MB);
+	size_aligned = io_size_aligned + VALUE_2MB;
+
+	buffer = mmap(NULL, size_aligned, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (buffer == MAP_FAILED) {
+		SPDK_ERRLOG("mmap() failed: %s (%d)\n", spdk_strerror(errno), errno);
+		return -errno;
+	}
+	buffer_aligned = (uint8_t *)(SPDK_ALIGN_CEIL((uintptr_t)buffer, VALUE_2MB));
+
+	assert(buffer_aligned >= buffer);
+	reminder = buffer_aligned - buffer;
+	if (reminder) {
+		munmap(buffer, reminder);
+		size_aligned -= reminder;
+	}
+
+	assert(size_aligned >= io_size_aligned);
+	reminder = (buffer_aligned + size_aligned) - (buffer_aligned + io_size_aligned);
+	if (reminder) {
+		munmap(buffer_aligned + io_size_aligned, reminder);
+	}
+
+	rtransport->memory_domain_buffer = buffer_aligned;
+	rtransport->memory_domain_buffer_size = io_size_aligned;
+
+	SPDK_DEBUGLOG(rdma, "Allocated memory domain buffer %p with size %zu\n",
+		      rtransport->memory_domain_buffer, rtransport->memory_domain_buffer_size);
 
 	return 0;
 }
@@ -3299,6 +3362,13 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		return NULL;
 	}
 
+	rc = nvmf_rdma_alloc_memory_domain_buffer(rtransport, opts->max_io_size);
+	if (rc < 0) {
+		SPDK_ERRLOG("Unable to allocate memory domain buffer, rc %d\n", rc);
+		nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+		return NULL;
+	}
+
 	contexts = rdma_get_devices(NULL);
 	if (contexts == NULL) {
 		SPDK_ERRLOG("rdma_get_devices() failed: %s (%d)\n", spdk_strerror(errno), errno);
@@ -3358,6 +3428,9 @@ destroy_ib_device(struct spdk_nvmf_rdma_transport *rtransport,
 {
 	TAILQ_REMOVE(&rtransport->devices, device, link);
 	spdk_rdma_utils_free_mem_map(&device->map);
+	if (device->null_mr) {
+		ibv_dereg_mr(device->null_mr);
+	}
 	if (device->pd) {
 		if (!g_nvmf_hooks.get_ibv_pd) {
 			spdk_rdma_utils_put_pd(device->pd);
@@ -3415,6 +3488,9 @@ nvmf_rdma_destroy(struct spdk_nvmf_transport *transport,
 
 	TAILQ_FOREACH_SAFE(device, &rtransport->devices, link, device_tmp) {
 		destroy_ib_device(rtransport, device);
+	}
+	if (rtransport->memory_domain_buffer != NULL) {
+		munmap(rtransport->memory_domain_buffer, rtransport->memory_domain_buffer_size);
 	}
 
 	if (rtransport->data_wr_pool != NULL) {
