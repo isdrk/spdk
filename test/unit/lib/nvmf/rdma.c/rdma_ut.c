@@ -1431,6 +1431,8 @@ test_nvmf_rdma_update_sges_with_key_and_buffer(void)
 		rdma_req.recv->buf = (uint8_t *)sgl_desc;
 
 		/* Inline segment points at 2 descriptors starting at address 0 */
+		cmd.nvme_cmd.dptr.sgl1.generic.type = SPDK_NVME_SGL_TYPE_LAST_SEGMENT;
+		cmd.nvme_cmd.dptr.sgl1.generic.subtype = SPDK_NVME_SGL_SUBTYPE_OFFSET;
 		cmd.nvme_cmd.dptr.sgl1.unkeyed.length = 2 * sizeof(struct spdk_nvme_sgl_descriptor);
 		cmd.nvme_cmd.dptr.sgl1.address = 0;
 
@@ -1501,6 +1503,8 @@ test_nvmf_rdma_update_sges_with_key_and_buffer(void)
 		rdma_req.recv->buf = (uint8_t *)sgl_desc;
 
 		/* Inline segment points at 2 descriptors starting at address 0 */
+		cmd.nvme_cmd.dptr.sgl1.generic.type = SPDK_NVME_SGL_TYPE_LAST_SEGMENT;
+		cmd.nvme_cmd.dptr.sgl1.generic.subtype = SPDK_NVME_SGL_SUBTYPE_OFFSET;
 		cmd.nvme_cmd.dptr.sgl1.unkeyed.length = 2 * sizeof(struct spdk_nvme_sgl_descriptor);
 		cmd.nvme_cmd.dptr.sgl1.address = 0;
 
@@ -1566,6 +1570,8 @@ test_nvmf_rdma_update_sges_with_key_and_buffer(void)
 		rdma_req.req.cmd = &cmd;
 		rdma_req.recv->buf = (uint8_t *)sgl_desc;
 
+		cmd.nvme_cmd.dptr.sgl1.generic.type = SPDK_NVME_SGL_TYPE_LAST_SEGMENT;
+		cmd.nvme_cmd.dptr.sgl1.generic.subtype = SPDK_NVME_SGL_SUBTYPE_OFFSET;
 		cmd.nvme_cmd.dptr.sgl1.unkeyed.length = sizeof(struct spdk_nvme_sgl_descriptor);
 		cmd.nvme_cmd.dptr.sgl1.address = 0;
 		sgl_desc[0].keyed.length = 16;

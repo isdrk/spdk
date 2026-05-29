@@ -2380,20 +2380,10 @@ nvmf_rdma_update_sges_with_key_and_buffer(struct spdk_nvmf_rdma_request *rdma_re
 		sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
 		recv_buf = rdma_req->recv->buf;
 	}
+	rdma_req->num_outstanding_data_wr = 0;
 
-	if (wr->next == NULL || wr->next == &rdma_req->rsp.wr) {
-		wr->num_sge = iovcnt;
-		for (i = 0; i < iovcnt && remaining_len > 0; i++) {
-			wr->sg_list[i].lkey = lkey;
-			wr->sg_list[i].addr = (uint64_t)iov[i].iov_base;
-			wr->sg_list[i].length = spdk_min(iov[i].iov_len, remaining_len);
-			remaining_len -= wr->sg_list[i].length;
-		}
-		wr->send_flags |= send_flags;
-		wr->wr.rdma.remote_addr = sgl->address + remote_addr_offset;
-		wr->wr.rdma.rkey = sgl->keyed.key;
-		*wr_out = wr;
-	} else {
+	if (sgl->generic.type == SPDK_NVME_SGL_TYPE_LAST_SEGMENT &&
+	    sgl->generic.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) {
 		/* Data block descriptor or multi SGL case */
 		struct spdk_nvme_sgl_descriptor *desc;
 		struct ibv_sge	*sg_ele;
@@ -2409,7 +2399,6 @@ nvmf_rdma_update_sges_with_key_and_buffer(struct spdk_nvmf_rdma_request *rdma_re
 				remote_addr_offset -= desc_len;
 				desc++;
 				continue;
-
 			}
 			assert(desc_len > remote_addr_offset);
 			desc_len -= remote_addr_offset;
@@ -2432,10 +2421,11 @@ nvmf_rdma_update_sges_with_key_and_buffer(struct spdk_nvmf_rdma_request *rdma_re
 					iovpos++;
 				}
 				wr->num_sge++;
-
 			}
-			if (spdk_unlikely(desc_len)) {
-				SPDK_ERRLOG("Not enough SG entries to hold data buffer\n");
+			if (spdk_unlikely(desc_len && remaining_len)) {
+				/* Either desc_len or remaining_len must be fully consumed */
+				SPDK_ERRLOG("Not enough SG entries to hold data buffer, remaining io len %u, desc len %u\n",
+					    remaining_len, desc_len);
 				return -E2BIG;
 			}
 			wr->send_flags |= send_flags;
@@ -2444,8 +2434,28 @@ nvmf_rdma_update_sges_with_key_and_buffer(struct spdk_nvmf_rdma_request *rdma_re
 			remote_addr_offset = 0;
 			*wr_out = wr;
 			wr = wr->next;
+			rdma_req->num_outstanding_data_wr++;
 			desc++;
 		}
+		if (spdk_unlikely(remaining_len > 0)) {
+			SPDK_ERRLOG("Not enough SG entries to hold data buffer, remaining io len %u\n", remaining_len);
+			return -E2BIG;
+		}
+	} else {
+		assert(wr->next == NULL || wr->next == &rdma_req->rsp.wr);
+		assert(iovcnt <= SPDK_NVMF_MAX_SGL_ENTRIES);
+		wr->num_sge = iovcnt;
+		for (i = 0; i < iovcnt && remaining_len > 0; i++) {
+			wr->sg_list[i].lkey = lkey;
+			wr->sg_list[i].addr = (uint64_t)iov[i].iov_base;
+			wr->sg_list[i].length = spdk_min(iov[i].iov_len, remaining_len);
+			remaining_len -= wr->sg_list[i].length;
+		}
+		wr->send_flags |= send_flags;
+		wr->wr.rdma.remote_addr = sgl->address + remote_addr_offset;
+		wr->wr.rdma.rkey = sgl->keyed.key;
+		*wr_out = wr;
+		rdma_req->num_outstanding_data_wr++;
 	}
 
 	return 0;
@@ -2476,7 +2486,6 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 	data_transfer_req->data.wr.send_flags = IBV_SEND_SIGNALED;
 	data_transfer_req->data.wr.sg_list = data_transfer_req->data.sgl;
 	data_transfer_req->data.wr.num_sge = SPDK_COUNTOF(data_transfer_req->data.sgl);
-	data_transfer_req->num_outstanding_data_wr = 1;
 
 	nvmf_rdma_setup_wr(&data_transfer_req->data.wr, NULL, data_transfer_req->req.xfer);
 
@@ -2519,7 +2528,6 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 				return rc;
 			}
 		}
-		data_transfer_req->num_outstanding_data_wr = num_wrs;
 	}
 	rdma_req->num_outstanding_data_transfer_requests++;
 	TAILQ_INSERT_TAIL(&rdma_req->outstanding_data_transfer_requests, data_transfer_req,
