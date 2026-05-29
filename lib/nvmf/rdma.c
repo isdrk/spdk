@@ -2218,11 +2218,9 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->fused_failed = 0;
 	rdma_req->data_transferred = 0;
 	rdma_req->req.use_accel_seq = false;
-	if (rdma_req->req.memory_domain) {
-		rdma_req->req.use_memory_domain = false;
-		rdma_req->req.memory_domain = NULL;
-		rdma_req->req.memory_domain_ctx = NULL;
-	}
+	rdma_req->req.use_memory_domain = false;
+	rdma_req->req.memory_domain = NULL;
+	rdma_req->req.memory_domain_ctx = NULL;
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
 		/* This req was part of a valid fused pair, but failed before it got to
