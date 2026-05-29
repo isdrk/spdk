@@ -38,6 +38,10 @@
 int __itt_init_ittlib(const char *, __itt_group_id);
 #endif
 
+SPDK_LOG_DEPRECATION_REGISTER(bdev_get_memory_domains,
+			      "use spdk_bdev_get_memory_domain_types instead",
+			      "v26.09", SPDK_LOG_DEPRECATION_EVERY_24H);
+
 #define SPDK_BDEV_IO_POOL_SIZE			(64 * 1024 - 1)
 #define SPDK_BDEV_IO_CACHE_SIZE			256
 #define SPDK_BDEV_AUTO_EXAMINE			true
@@ -4860,7 +4864,10 @@ bdev_channel_create(void *io_device, void *ctx_buf)
 		TAILQ_INSERT_TAIL(&ch->locked_ranges, new_range, tailq);
 	}
 
-	bdev->memory_domains_supported = spdk_bdev_get_memory_domains(bdev, NULL, 0) > 0;
+	bdev->memory_domains_supported =
+		spdk_bdev_get_memory_domain_types(bdev, NULL, 0) > 0 ||
+		(bdev->fn_table->get_memory_domains &&
+		 bdev->fn_table->get_memory_domains(bdev->ctxt, NULL, 0) > 0);
 
 	spdk_spin_unlock(&bdev->internal.spinlock);
 
@@ -4871,7 +4878,10 @@ void
 spdk_bdev_update_connected(struct spdk_bdev *bdev)
 {
 	spdk_spin_lock(&bdev->internal.spinlock);
-	bdev->memory_domains_supported = spdk_bdev_get_memory_domains(bdev, NULL, 0) > 0;
+	bdev->memory_domains_supported =
+		spdk_bdev_get_memory_domain_types(bdev, NULL, 0) > 0 ||
+		(bdev->fn_table->get_memory_domains &&
+		 bdev->fn_table->get_memory_domains(bdev->ctxt, NULL, 0) > 0);
 	spdk_spin_unlock(&bdev->internal.spinlock);
 }
 
@@ -9341,7 +9351,14 @@ bdev_register(struct spdk_bdev *bdev)
 		}
 	}
 
-	bdev->memory_domains_supported = spdk_bdev_get_memory_domains(bdev, NULL, 0) > 0;
+	if (bdev->fn_table->get_memory_domains && !bdev->fn_table->get_memory_domain_types) {
+		SPDK_LOG_DEPRECATED(bdev_get_memory_domains);
+	}
+
+	bdev->memory_domains_supported =
+		spdk_bdev_get_memory_domain_types(bdev, NULL, 0) > 0 ||
+		(bdev->fn_table->get_memory_domains &&
+		 bdev->fn_table->get_memory_domains(bdev->ctxt, NULL, 0) > 0);
 
 	/* If the user didn't specify a write unit size, set it to one. */
 	if (bdev->write_unit_size == 0) {
@@ -11938,8 +11955,29 @@ spdk_bdev_get_memory_domains(struct spdk_bdev *bdev, struct spdk_memory_domain *
 		return -EINVAL;
 	}
 
+	SPDK_LOG_DEPRECATED(bdev_get_memory_domains);
+
 	if (bdev->fn_table->get_memory_domains) {
 		return bdev->fn_table->get_memory_domains(bdev->ctxt, domains, array_size);
+	}
+
+	return 0;
+}
+
+int
+spdk_bdev_get_memory_domain_types(struct spdk_bdev *bdev, enum spdk_dma_device_type *types,
+				  uint32_t array_size)
+{
+	if (!bdev) {
+		return -EINVAL;
+	}
+
+	if ((types == NULL) != (array_size == 0)) {
+		return -EINVAL;
+	}
+
+	if (bdev->fn_table->get_memory_domain_types) {
+		return bdev->fn_table->get_memory_domain_types(bdev->ctxt, types, array_size);
 	}
 
 	return 0;
