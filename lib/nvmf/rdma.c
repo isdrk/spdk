@@ -2414,35 +2414,35 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	return 0;
 }
 
-static inline bool
-nvmf_rdma_request_need_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
-				      struct spdk_nvmf_rdma_request *rdma_req)
+static inline void
+nvmf_rdma_request_check_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
+				       struct spdk_nvmf_rdma_request *rdma_req)
 {
 	struct spdk_nvmf_subsystem *subsys;
 	struct spdk_nvmf_ns *ns;
 	uint8_t opc;
 
 	if (!rqpair->start_accel_sequence) {
-		return false;
+		return;
 	}
 	opc = rdma_req->req.cmd->nvme_cmd.opc;
 	if (spdk_unlikely(opc == SPDK_NVME_OPC_FABRIC || !rqpair->qpair.ctrlr ||
 			  !rqpair->qpair.ctrlr->subsys)) {
-		return false;
+		return;
 	}
 	subsys = rqpair->qpair.ctrlr->subsys;
 	ns = _nvmf_subsystem_get_ns(subsys, rdma_req->req.cmd->nvme_cmd.nsid);
 	if (spdk_unlikely(!ns)) {
-		return false;
+		return;
 	}
 	if (ns->csi != SPDK_NVME_CSI_KV && (opc != SPDK_NVME_OPC_READ && opc != SPDK_NVME_OPC_WRITE)) {
-		return false;
+		return;
 	}
 
 	SPDK_DEBUGLOG(rdma, "rqpair %p id %u, req %p, accel_seq %s\n", rqpair, rqpair->qpair.qid, rdma_req,
 		      ns->accel_sequence ? "YES" : "NO");
 
-	return ns->accel_sequence;
+	rdma_req->req.use_accel_seq = ns->accel_sequence;
 }
 
 static inline int
@@ -2655,7 +2655,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 				/* This request needs to wait in line to obtain a buffer */
 				break;
 			}
-			rdma_req->req.use_accel_seq = nvmf_rdma_request_need_accel_sequence(rqpair, rdma_req);
+			nvmf_rdma_request_check_accel_sequence(rqpair, rdma_req);
 
 			/* Try to get a data buffer */
 			rc = nvmf_rdma_request_parse_sgl(rtransport, device, rdma_req);
