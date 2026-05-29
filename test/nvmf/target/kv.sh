@@ -73,8 +73,7 @@ $rpc_py nvmf_get_subsystems
 
 echo "=== Running spdk_nvme_perf against KV target (loopback) ==="
 perf_r="trtype:$TEST_TRANSPORT adrfam:IPv4 traddr:$NVMF_FIRST_TARGET_IP trsvcid:$NVMF_PORT subnqn:$NVMF_KV_SUBNQN"
-run_app "$SPDK_BIN_DIR/spdk_nvme_perf" -q 4 -o 4096 -w randrw -M 50 -t 2 \
-	-r "$perf_r" || {
+$SPDK_BIN_DIR/spdk_nvme_perf -q 4 -o 4096 -w randrw -M 50 -t 2 -r "$perf_r" || {
 	echo "ERROR: spdk_nvme_perf against KV target failed"
 	exit 1
 }
