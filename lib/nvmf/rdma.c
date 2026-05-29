@@ -1786,6 +1786,19 @@ nvmf_rdma_calc_num_wrs(uint32_t length, uint32_t io_unit_size, uint32_t block_si
 	return SPDK_CEIL_DIV(num_sge, SPDK_NVMF_MAX_SGL_ENTRIES);
 }
 
+static inline void
+nvmf_rdma_req_set_memory_domain(struct spdk_nvmf_rdma_transport *rtransport,
+				struct spdk_nvmf_rdma_qpair *rqpair,
+				struct spdk_nvmf_rdma_request *rdma_req)
+{
+	SPDK_DEBUGLOG(rdma, "Memory domain is used for request %p\n", rdma_req);
+	rdma_req->req.iovcnt = 1;
+	rdma_req->req.iov[0].iov_base = rtransport->memory_domain_buffer;
+	rdma_req->req.iov[0].iov_len = rdma_req->req.length;
+	rdma_req->req.memory_domain = rqpair->rdma_qp->domain;
+	rdma_req->req.memory_domain_ctx = rdma_req;
+}
+
 static int
 nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 			    struct spdk_nvmf_rdma_device *device,
@@ -1795,7 +1808,7 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 	struct spdk_nvmf_rdma_poll_group	*rgroup;
 	struct spdk_nvmf_request		*req = &rdma_req->req;
 	struct ibv_send_wr			*wr = &rdma_req->data.wr;
-	int					rc;
+	int					rc = 0;
 	uint32_t				num_wrs = 1;
 	uint32_t				length;
 
@@ -1810,6 +1823,12 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 		req->dif.orig_length = length;
 		length = spdk_dif_get_length_with_md(length, &req->dif.dif_ctx);
 		req->dif.elba_length = length;
+	}
+
+	if (req->use_memory_domain) {
+		/* We do not allocate buffers if memory domain is used */
+		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
+		goto out;
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport,
@@ -1921,6 +1940,12 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1);
 	if (spdk_unlikely(rc != 0)) {
 		return -ENOMEM;
+	}
+
+	if (req->use_memory_domain) {
+		/* We do not allocate buffers if memory domain is used */
+		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
+		goto out;
 	}
 
 	rc = spdk_nvmf_request_get_buffers(req, &rgroup->group, &rtransport->transport, total_length);
@@ -2142,6 +2167,7 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 
 	if (rdma_req->req.data_from_pool) {
 		rgroup = rqpair->poller->group;
+		assert(!rdma_req->req.use_memory_domain);
 
 		spdk_nvmf_request_free_buffers(&rdma_req->req, &rgroup->group, &rtransport->transport);
 	}
@@ -2166,6 +2192,11 @@ _nvmf_rdma_request_free(struct spdk_nvmf_rdma_request *rdma_req,
 	rdma_req->fused_failed = 0;
 	rdma_req->data_transferred = 0;
 	rdma_req->req.use_accel_seq = false;
+	if (rdma_req->req.memory_domain) {
+		rdma_req->req.use_memory_domain = false;
+		rdma_req->req.memory_domain = NULL;
+		rdma_req->req.memory_domain_ctx = NULL;
+	}
 	rdma_req->transfer_wr = NULL;
 	if (rdma_req->fused_pair) {
 		/* This req was part of a valid fused pair, but failed before it got to
@@ -2380,7 +2411,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	uint32_t lkey = translation->rdma.lkey;
 	int rc;
 
-	assert(rdma_req->req.use_accel_seq);
+	assert(rdma_req->req.use_accel_seq || rdma_req->req.use_memory_domain);
 	assert(rdma_req->state == RDMA_REQUEST_STATE_EXECUTING);
 	if (spdk_unlikely(!src_domain ||
 			  spdk_memory_domain_get_dma_device_type(src_domain) != SPDK_DMA_DEVICE_TYPE_RDMA)) {
@@ -2403,7 +2434,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 		/* Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
 		 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
 		 * the media */
-		assert(rdma_req->req.data_from_pool);
+		assert(rdma_req->req.data_from_pool || rdma_req->req.use_memory_domain);
 		STAILQ_INSERT_TAIL(&rqpair->pending_rdma_read_queue, rdma_req, state_link);
 		rdma_req->state = RDMA_REQUEST_STATE_DATA_TRANSFER_TO_CONTROLLER_PENDING;
 	} else {
@@ -2475,6 +2506,8 @@ nvmf_rdma_request_check_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 		      ns->accel_sequence ? "YES" : "NO");
 
 	rdma_req->req.use_accel_seq = ns->accel_sequence;
+	rdma_req->req.use_memory_domain =
+		ns->memory_domain_support[SPDK_DMA_DEVICE_TYPE_RDMA].domain_transfer_supported;
 }
 
 static inline int
@@ -2706,7 +2739,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 
 			STAILQ_REMOVE_HEAD(&rgroup->group.pending_buf_queue, buf_link);
 
-			if (rdma_req->req.use_accel_seq) {
+			if (rdma_req->req.use_accel_seq && !rdma_req->req.use_memory_domain) {
 				STAILQ_INSERT_TAIL(&rgroup->pending_accel_queue, rdma_req, state_link);
 				rdma_req->state = RDMA_REQUEST_STATE_NEED_ACCEL_TASK;
 				break;
