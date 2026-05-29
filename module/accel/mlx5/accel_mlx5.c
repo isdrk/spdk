@@ -5999,53 +5999,63 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 		}
 		break;
 	case SPDK_ACCEL_OPC_COPY:
-		if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DECRYPT &&
-		    first_base->dst_domain &&  spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
-		    SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			return accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
-					first, accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
-					SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE);
-		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_ENCRYPT &&
-			   first_base->src_domain &&  spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
-			   SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			rc = accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
-							       first, accel_ch, first_base->src_domain, first_base->src_domain_ctx,
-							       SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY);
-			if (spdk_unlikely(rc)) {
-				return rc;
+		if (!next_base || TAILQ_NEXT(next_base, seq_link) != NULL) {
+			break;
+		}
+		switch (next_base->op_code) {
+		case SPDK_ACCEL_OPC_DECRYPT:
+			if (first_base->dst_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
+				return accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
+						first, accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
+						SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_WIRE);
 			}
-			next_base->s.iovs = next_base->d.iovs;
-			next_base->s.iovcnt = next_base->d.iovcnt;
-			return 0;
-		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DIF_GENERATE_COPY &&
-			   first_base->src_domain && spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
-			   SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			rc = accel_mlx5_task_merge_copy_dif_generate_copy(next_base, first_base,
-					accel_ch, first_base->src_domain, first_base->src_domain_ctx,
-					true);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			next_base->s.iovs = next_base->d.iovs;
-			next_base->s.iovcnt = next_base->d.iovcnt;
-			return 0;
-		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_DIF_VERIFY_COPY &&
-			   first_base->dst_domain && spdk_memory_domain_get_dma_device_type(first_base->dst_domain) ==
-			   SPDK_DMA_DEVICE_TYPE_RDMA && TAILQ_NEXT(next_base, seq_link) == NULL) {
-			rc = accel_mlx5_task_merge_copy_dif_verify_copy(next_base, first_base,
-					accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
-					false);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-			next_base->s.iovs = next_base->d.iovs;
-			next_base->s.iovcnt = next_base->d.iovcnt;
-			return 0;
-		} else if (next_base && next_base->op_code == SPDK_ACCEL_OPC_COPY &&
-			   TAILQ_NEXT(next_base, seq_link) == NULL) {
+			break;
+		case SPDK_ACCEL_OPC_ENCRYPT:
 			if (first_base->src_domain &&
-			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) ==
-			    SPDK_DMA_DEVICE_TYPE_RDMA) {
+			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
+				rc = accel_mlx5_task_merge_copy_crypto(SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
+								       first, accel_ch, first_base->src_domain, first_base->src_domain_ctx,
+								       SPDK_MLX5_ENCRYPTION_ORDER_ENCRYPTED_RAW_MEMORY);
+				if (spdk_unlikely(rc)) {
+					return rc;
+				}
+				next_base->s.iovs = next_base->d.iovs;
+				next_base->s.iovcnt = next_base->d.iovcnt;
+				return 0;
+			}
+			break;
+		case SPDK_ACCEL_OPC_DIF_GENERATE_COPY:
+			if (first_base->src_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
+				rc = accel_mlx5_task_merge_copy_dif_generate_copy(next_base, first_base,
+						accel_ch, first_base->src_domain, first_base->src_domain_ctx,
+						true);
+				if (spdk_unlikely(rc)) {
+					return rc;
+				}
+				next_base->s.iovs = next_base->d.iovs;
+				next_base->s.iovcnt = next_base->d.iovcnt;
+				return 0;
+			}
+			break;
+		case SPDK_ACCEL_OPC_DIF_VERIFY_COPY:
+			if (first_base->dst_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->dst_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
+				rc = accel_mlx5_task_merge_copy_dif_verify_copy(next_base, first_base,
+						accel_ch, first_base->dst_domain, first_base->dst_domain_ctx,
+						false);
+				if (spdk_unlikely(rc)) {
+					return rc;
+				}
+				next_base->s.iovs = next_base->d.iovs;
+				next_base->s.iovcnt = next_base->d.iovcnt;
+				return 0;
+			}
+			break;
+		case SPDK_ACCEL_OPC_COPY:
+			if (first_base->src_domain &&
+			    spdk_memory_domain_get_dma_device_type(first_base->src_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
 				rc = accel_mlx5_task_merge_copy_write_copy(
 					     SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
 					     first, accel_ch, first_base->src_domain, first_base->src_domain_ctx);
@@ -6056,8 +6066,7 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 				next_base->s.iovcnt = next_base->d.iovcnt;
 				return 0;
 			} else if (next_base->src_domain &&
-				   spdk_memory_domain_get_dma_device_type(next_base->src_domain) ==
-				   SPDK_DMA_DEVICE_TYPE_RDMA) {
+				   spdk_memory_domain_get_dma_device_type(next_base->src_domain) == SPDK_DMA_DEVICE_TYPE_RDMA) {
 				rc = accel_mlx5_task_merge_copy_read_copy(first,
 						SPDK_CONTAINEROF(next_base, struct accel_mlx5_task, base),
 						accel_ch, next_base->src_domain, next_base->src_domain_ctx);
@@ -6068,6 +6077,9 @@ accel_mlx5_driver_examine_sequence(struct spdk_accel_sequence *seq,
 				first_base->d.iovcnt = first_base->s.iovcnt;
 				return 0;
 			}
+			break;
+		default:
+			break;
 		}
 		break;
 	case SPDK_ACCEL_OPC_DECRYPT:
