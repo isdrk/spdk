@@ -153,6 +153,7 @@ prepare_for_test(struct spdk_nvme_ns *ns, struct spdk_nvme_ctrlr *ctrlr,
 		req->qpair = qpair;
 		STAILQ_INSERT_HEAD(&qpair->free_req, req, stailq);
 	}
+	qpair->active_free_req = &qpair->free_req;
 
 	g_request = NULL;
 }
