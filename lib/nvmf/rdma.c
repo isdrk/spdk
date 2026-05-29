@@ -2588,7 +2588,8 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			/* Data transfer in the middle, need to allocate an additional rdma_req */
 			data_transfer_req = spdk_mempool_get(rtransport->data_transfer_req_pool);
 			if (spdk_unlikely(data_transfer_req == NULL)) {
-				SPDK_ERRLOG("Failed to allocate data transfer request\n");
+				rdma_req->common_transfers_length -= transfer_len;
+				SPDK_DEBUGLOG(rdma, "Failed to allocate data transfer request\n");
 				return -ENOMEM;
 			}
 			SPDK_DEBUGLOG(rdma, "main req %p, data transfer req %p\n", rdma_req, data_transfer_req);
@@ -2598,6 +2599,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 				/* The auxiliary rdma_req must not have any additional WRs in case of the failure */
 				assert(data_transfer_req->data.wr.next == NULL);
 				spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
+				rdma_req->common_transfers_length -= transfer_len;
 				return rc;
 			}
 			rdma_req = data_transfer_req;
