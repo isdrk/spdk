@@ -1008,7 +1008,7 @@ test_nvmf_bdev_ctrlr_nvme_passthru(void)
 
 	/* NVME_IO not supported */
 	memset(&rsp, 0, sizeof(rsp));
-	MOCK_SET(spdk_bdev_nvme_iov_passthru_md, -ENOTSUP);
+	MOCK_SET(spdk_bdev_nvme_iov_passthru_ext, -ENOTSUP);
 	rc = nvmf_bdev_ctrlr_nvme_passthru_io(&bdev, desc, &ch, &req);
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE);
 	CU_ASSERT(rsp.nvme_cpl.status.sct == SPDK_NVME_SCT_GENERIC);
@@ -1017,12 +1017,12 @@ test_nvmf_bdev_ctrlr_nvme_passthru(void)
 
 	/* NVME_IO no channel - queue IO */
 	memset(&rsp, 0, sizeof(rsp));
-	MOCK_SET(spdk_bdev_nvme_iov_passthru_md, -ENOMEM);
+	MOCK_SET(spdk_bdev_nvme_iov_passthru_ext, -ENOMEM);
 	rc = nvmf_bdev_ctrlr_nvme_passthru_io(&bdev, desc, &ch, &req);
 	CU_ASSERT(rc == SPDK_NVMF_REQUEST_EXEC_STATUS_ASYNCHRONOUS);
 	CU_ASSERT(group.stat.pending_bdev_io == 1);
 
-	MOCK_SET(spdk_bdev_nvme_iov_passthru_md, 0);
+	MOCK_SET(spdk_bdev_nvme_iov_passthru_ext, 0);
 
 	/* NVME_ADMIN success */
 	memset(&rsp, 0, sizeof(rsp));
