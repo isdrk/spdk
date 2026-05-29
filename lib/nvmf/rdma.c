@@ -2424,12 +2424,12 @@ nvmf_rdma_request_need_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 			  !rqpair->qpair.ctrlr->subsys)) {
 		return false;
 	}
-	if (opc != SPDK_NVME_OPC_READ && opc != SPDK_NVME_OPC_WRITE) {
-		return false;
-	}
 	subsys = rqpair->qpair.ctrlr->subsys;
 	ns = _nvmf_subsystem_get_ns(subsys, rdma_req->req.cmd->nvme_cmd.nsid);
 	if (spdk_unlikely(!ns)) {
+		return false;
+	}
+	if (ns->csi != SPDK_NVME_CSI_KV && (opc != SPDK_NVME_OPC_READ && opc != SPDK_NVME_OPC_WRITE)) {
 		return false;
 	}
 
