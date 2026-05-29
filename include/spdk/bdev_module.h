@@ -528,7 +528,9 @@ struct spdk_bdev {
 		 */
 		uint32_t media_events : 1;
 
-		uint32_t reserved : 26;
+		uint32_t memory_domains_supported : 1;
+
+		uint32_t reserved : 25;
 	};
 
 	/**

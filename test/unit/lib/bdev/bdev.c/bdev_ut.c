@@ -8238,6 +8238,7 @@ bdev_io_ext_metadata(void)
 
 	spdk_put_io_channel(io_ch);
 	spdk_bdev_close(desc);
+	poll_threads();
 
 	/* Caller has memory domain. The underlying bdev supports memory domain and
 	 * accel sequence.
@@ -8323,6 +8324,9 @@ bdev_io_ext_metadata(void)
 
 	free_bdev(bdev);
 	ut_fini_bdev();
+
+	fn_table.get_memory_domains = NULL;
+	fn_table.accel_sequence_supported = NULL;
 }
 
 int
