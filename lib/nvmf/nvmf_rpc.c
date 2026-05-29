@@ -2534,6 +2534,10 @@ static const struct spdk_json_object_decoder nvmf_rpc_create_transport_decoder[]
 		spdk_json_decode_bool, true
 	},
 	{
+		"enforce_memory_domain_transfer", offsetof(struct nvmf_rpc_create_transport_ctx, opts.enforce_memory_domain_transfer),
+		spdk_json_decode_bool, true
+	},
+	{
 		"msdbd", offsetof(struct nvmf_rpc_create_transport_ctx, opts.msdbd),
 		spdk_json_decode_uint8, true
 	},

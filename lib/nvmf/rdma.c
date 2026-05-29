@@ -3381,11 +3381,19 @@ create_ib_device(struct spdk_nvmf_rdma_transport *rtransport, struct ibv_context
 	if (!device->null_mr) {
 		/* Some RDMA providers (e.g. soft-iWARP) don't implement ibv_alloc_null_mr.
 		 * Without it, the memory-domain transfer path on this device is unavailable but
-		 * the transport otherwise works.  Disable the path on this device.
+		 * the transport otherwise works unless it enforces memory domain transfer.
 		 */
-		SPDK_NOTICELOG("Device %s does not support ibv_alloc_null_mr; "
-			       "memory-domain transfer disabled on this device\n",
-			       ibv_get_device_name(context->device));
+		if (rtransport->transport.opts.enforce_memory_domain_transfer) {
+			SPDK_ERRLOG("Device %s does not support ibv_alloc_null_mr required with "
+				    "memory-domain data transfer\n",
+				    ibv_get_device_name(context->device));
+			destroy_ib_device(rtransport, device);
+			return -EINVAL;
+		} else {
+			SPDK_NOTICELOG("Device %s does not support ibv_alloc_null_mr; "
+				       "memory-domain transfer disabled on this device\n",
+				       ibv_get_device_name(context->device));
+		}
 	} else {
 		translation.mr_or_key.mr = device->null_mr;
 		rc = spdk_rdma_utils_set_translation(device->map, rtransport->memory_domain_buffer,
@@ -3606,9 +3614,30 @@ nvmf_rdma_create(struct spdk_nvmf_transport_opts *opts)
 		rtransport->rdma_opts.in_capsule_data_disabled = true;
 	}
 
+	if (opts->enforce_memory_domain_transfer) {
+		if (!spdk_rdma_provider_accel_sequence_supported()) {
+			SPDK_ERRLOG("Unsupported configuration: memory domain data transfer "
+				    "requires RDMA provider with accel support\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		if (opts->dif_insert_or_strip) {
+			SPDK_ERRLOG("Unsupported configuration: memory domain data transfer "
+				    "requires dif_insert_or_strip to be disabled\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+		if (!rtransport->rdma_opts.in_capsule_data_disabled) {
+			SPDK_ERRLOG("Unsupported configuration: memory domain data transfer "
+				    "requires in-capsule data to be disabled\n");
+			nvmf_rdma_destroy(&rtransport->transport, NULL, NULL);
+			return NULL;
+		}
+	}
 	rtransport->accel_sequence_supported = spdk_rdma_provider_accel_sequence_supported() &&
 					       !opts->dif_insert_or_strip &&
 					       rtransport->rdma_opts.in_capsule_data_disabled;
+	assert(!opts->enforce_memory_domain_transfer || rtransport->accel_sequence_supported);
 
 	rtransport->event_channel = rdma_create_event_channel();
 	if (rtransport->event_channel == NULL) {
@@ -6201,6 +6230,23 @@ nvmf_rdma_qpair_abort_request(struct spdk_nvmf_qpair *qpair,
 	_nvmf_rdma_qpair_abort_request(req);
 }
 
+static int
+nvmf_rdma_subsystem_add_ns(struct spdk_nvmf_transport *transport,
+			   const struct spdk_nvmf_subsystem *subsystem, struct spdk_nvmf_ns *ns)
+{
+	if (!transport->opts.enforce_memory_domain_transfer) {
+		return 0;
+	}
+
+	if (!ns->memory_domain_support[SPDK_DMA_DEVICE_TYPE_RDMA].domain_transfer_supported) {
+		SPDK_ERRLOG("Unable to add namespace: transport enforces memory domain transfer, "
+			    "but namespace doesn't support it\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static void
 nvmf_rdma_poll_group_dump_stat(struct spdk_nvmf_transport_poll_group *group,
 			       struct spdk_json_write_ctx *w)
@@ -6282,6 +6328,8 @@ const struct spdk_nvmf_transport_ops spdk_nvmf_transport_rdma = {
 	.qpair_get_local_trid = nvmf_rdma_qpair_get_local_trid,
 	.qpair_get_listen_trid = nvmf_rdma_qpair_get_listen_trid,
 	.qpair_abort_request = nvmf_rdma_qpair_abort_request,
+
+	.subsystem_add_ns = nvmf_rdma_subsystem_add_ns,
 
 	.poll_group_dump_stat = nvmf_rdma_poll_group_dump_stat,
 };

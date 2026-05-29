@@ -87,6 +87,8 @@ nvmf_transport_dump_opts(struct spdk_nvmf_transport *transport, struct spdk_json
 	spdk_json_write_named_uint32(w, "buf_cache_size", opts->buf_cache_size);
 	spdk_json_write_named_bool(w, "dif_insert_or_strip", opts->dif_insert_or_strip);
 	spdk_json_write_named_bool(w, "zcopy", opts->zcopy);
+	spdk_json_write_named_bool(w, "enforce_memory_domain_transfer",
+				   opts->enforce_memory_domain_transfer);
 
 	if (transport->ops->dump_opts) {
 		transport->ops->dump_opts(transport, w);
@@ -185,6 +187,7 @@ nvmf_transport_opts_copy(struct spdk_nvmf_transport_opts *opts,
 	SET_FIELD(data_wr_pool_size);
 	SET_FIELD(min_kato);
 	SET_FIELD(kas);
+	SET_FIELD(enforce_memory_domain_transfer);
 
 	/* Do not remove this statement, you should always update this statement when you adding a new field,
 	 * and do not forget to add the SET_FIELD statement for your added field. */
@@ -312,28 +315,31 @@ nvmf_transport_create(const char *transport_name, struct spdk_nvmf_transport_opt
 	kas_in_ms = ctx->opts.kas * NVMF_KAS_TIME_UNIT_IN_MS;
 	ctx->opts.min_kato = spdk_round_up(ctx->opts.min_kato, kas_in_ms);
 
-	spdk_iobuf_get_opts(&opts_iobuf, sizeof(opts_iobuf));
-	if (ctx->opts.io_unit_size == 0) {
-		SPDK_ERRLOG("io_unit_size cannot be 0\n");
-		goto err;
-	}
-	if (ctx->opts.io_unit_size > opts_iobuf.large_bufsize) {
-		SPDK_ERRLOG("io_unit_size %u is larger than iobuf pool large buffer size %d\n",
-			    ctx->opts.io_unit_size, opts_iobuf.large_bufsize);
-		goto err;
-	}
+	if (!ctx->opts.enforce_memory_domain_transfer) {
+		spdk_iobuf_get_opts(&opts_iobuf, sizeof(opts_iobuf));
+		if (ctx->opts.io_unit_size == 0) {
+			SPDK_ERRLOG("io_unit_size cannot be 0\n");
+			goto err;
+		}
 
-	if (ctx->opts.io_unit_size <= opts_iobuf.small_bufsize) {
-		/* We'll be using the small buffer pool only */
-		count = opts_iobuf.small_pool_count;
-	} else {
-		count = spdk_min(opts_iobuf.small_pool_count, opts_iobuf.large_pool_count);
-	}
+		if (ctx->opts.io_unit_size > opts_iobuf.large_bufsize) {
+			SPDK_ERRLOG("io_unit_size %u is larger than iobuf pool large buffer size "
+				    "%d\n", ctx->opts.io_unit_size, opts_iobuf.large_bufsize);
+			goto err;
+		}
 
-	if (ctx->opts.num_shared_buffers > count) {
-		SPDK_WARNLOG("The num_shared_buffers value (%u) is larger than the available iobuf"
-			     " pool size (%lu). Please increase the iobuf pool sizes.\n",
-			     ctx->opts.num_shared_buffers, count);
+		if (ctx->opts.io_unit_size <= opts_iobuf.small_bufsize) {
+			/* We'll be using the small buffer pool only */
+			count = opts_iobuf.small_pool_count;
+		} else {
+			count = spdk_min(opts_iobuf.small_pool_count, opts_iobuf.large_pool_count);
+		}
+
+		if (ctx->opts.num_shared_buffers > count) {
+			SPDK_WARNLOG("The num_shared_buffers value (%u) is larger than the "
+				     "available iobuf  pool size (%lu). Please increase the iobuf "
+				     "pool sizes.\n", ctx->opts.num_shared_buffers, count);
+		}
 	}
 
 	ctx->cb_fn = cb_fn;
@@ -896,6 +902,7 @@ spdk_nvmf_transport_opts_init(const char *transport_name,
 	opts_local.disable_command_passthru = false;
 	opts_local.kas = NVMF_DEFAULT_KAS;
 	opts_local.min_kato = NVMF_DEFAULT_MIN_KATO;
+	opts_local.enforce_memory_domain_transfer = false;
 	ops->opts_init(&opts_local);
 
 	nvmf_transport_opts_copy(opts, &opts_local, opts_size);

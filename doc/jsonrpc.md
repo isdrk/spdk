@@ -8942,38 +8942,39 @@ Initialize an NVMe-oF transport with the given options.
 
 #### Parameters
 
- Name                     | Optional   | Type    | Description
-------------------------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------
- trtype                   | Required   | string  | Transport type (ex. RDMA)
- tgt_name                 | Optional   | string  | Parent NVMe-oF target name.
- max_queue_depth          | Optional   | number  | Max number of outstanding I/O per queue
- max_io_qpairs_per_ctrlr  | Optional   | number  | Max number of IO qpairs per controller
- in_capsule_data_size     | Optional   | number  | Max number of in-capsule data size
- max_io_size              | Optional   | number  | Max I/O size (bytes)
- io_unit_size             | Optional   | number  | I/O unit size (bytes)
- max_aq_depth             | Optional   | number  | Max number of admin cmds per AQ
- num_shared_buffers       | Optional   | number  | The number of pooled data buffers available to the transport
- buf_cache_size           | Optional   | number  | The number of shared buffers to reserve for each poll group
- num_cqe                  | Optional   | number  | The number of CQ entries. Only used when no_srq=true (RDMA only)
- max_srq_depth            | Optional   | number  | The number of elements in a per-thread shared receive queue (RDMA only)
- no_srq                   | Optional   | boolean | Disable shared receive queue even for devices that support it. (RDMA only)
- c2h_success              | Optional   | boolean | Disable C2H success optimization (TCP only)
- dif_insert_or_strip      | Optional   | boolean | Enable DIF insert for write I/O and DIF strip for read I/O DIF
- sock_priority            | Optional   | number  | The socket priority of the connection owned by this transport (TCP only)
- acceptor_backlog         | Optional   | number  | The number of pending connections allowed in backlog before failing new connection attempts (RDMA only)
- abort_timeout_sec        | Optional   | number  | Abort execution timeout value, in seconds
- no_wr_batching           | Optional   | boolean | Disable work requests batching (RDMA only)
- control_msg_num          | Optional   | number  | The number of control messages per poll group (TCP only)
- disable_mappable_bar0    | Optional   | boolean | disable client mmap() of BAR0 (VFIO-USER only)
- disable_adaptive_irq     | Optional   | boolean | Disable adaptive interrupt feature (VFIO-USER only)
- disable_shadow_doorbells | Optional   | boolean | disable shadow doorbell support (VFIO-USER only)
- zcopy                    | Optional   | boolean | Use zero-copy operations if the underlying bdev supports them
- ack_timeout              | Optional   | number  | ACK timeout in milliseconds
- data_wr_pool_size        | Optional   | number  | RDMA data WR pool size (RDMA only)
- disable_command_passthru | Optional   | boolean | Disallow command passthru.
- data_wr_pool_size        | Optional   | number  | RDMA data WR pool size (RDMA only)
- kas                      | Optional   | number  | The granularity of the KATO (Keep Alive Timeout) in 100 millisecond units
- min_kato                 | Optional   | number  | The minimum Keep Alive Timeout value in milliseconds
+ Name                           | Optional   | Type    | Description
+------------------------------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------
+ trtype                         | Required   | string  | Transport type (ex. RDMA)
+ tgt_name                       | Optional   | string  | Parent NVMe-oF target name.
+ max_queue_depth                | Optional   | number  | Max number of outstanding I/O per queue
+ max_io_qpairs_per_ctrlr        | Optional   | number  | Max number of IO qpairs per controller
+ in_capsule_data_size           | Optional   | number  | Max number of in-capsule data size
+ max_io_size                    | Optional   | number  | Max I/O size (bytes)
+ io_unit_size                   | Optional   | number  | I/O unit size (bytes)
+ max_aq_depth                   | Optional   | number  | Max number of admin cmds per AQ
+ num_shared_buffers             | Optional   | number  | The number of pooled data buffers available to the transport
+ buf_cache_size                 | Optional   | number  | The number of shared buffers to reserve for each poll group
+ num_cqe                        | Optional   | number  | The number of CQ entries. Only used when no_srq=true (RDMA only)
+ max_srq_depth                  | Optional   | number  | The number of elements in a per-thread shared receive queue (RDMA only)
+ no_srq                         | Optional   | boolean | Disable shared receive queue even for devices that support it. (RDMA only)
+ c2h_success                    | Optional   | boolean | Disable C2H success optimization (TCP only)
+ dif_insert_or_strip            | Optional   | boolean | Enable DIF insert for write I/O and DIF strip for read I/O DIF
+ sock_priority                  | Optional   | number  | The socket priority of the connection owned by this transport (TCP only)
+ acceptor_backlog               | Optional   | number  | The number of pending connections allowed in backlog before failing new connection attempts (RDMA only)
+ abort_timeout_sec              | Optional   | number  | Abort execution timeout value, in seconds
+ no_wr_batching                 | Optional   | boolean | Disable work requests batching (RDMA only)
+ control_msg_num                | Optional   | number  | The number of control messages per poll group (TCP only)
+ disable_mappable_bar0          | Optional   | boolean | disable client mmap() of BAR0 (VFIO-USER only)
+ disable_adaptive_irq           | Optional   | boolean | Disable adaptive interrupt feature (VFIO-USER only)
+ disable_shadow_doorbells       | Optional   | boolean | disable shadow doorbell support (VFIO-USER only)
+ zcopy                          | Optional   | boolean | Use zero-copy operations if the underlying bdev supports them
+ ack_timeout                    | Optional   | number  | ACK timeout in milliseconds
+ data_wr_pool_size              | Optional   | number  | RDMA data WR pool size (RDMA only)
+ disable_command_passthru       | Optional   | boolean | Disallow command passthru.
+ enforce_memory_domain_transfer | Optional   | boolean | Requires that all READ/WRITE requests are transferred with memory domain data transfer
+ data_wr_pool_size              | Optional   | number  | RDMA data WR pool size (RDMA only)
+ kas                            | Optional   | number  | The granularity of the KATO (Keep Alive Timeout) in 100 millisecond units
+ min_kato                       | Optional   | number  | The minimum Keep Alive Timeout value in milliseconds
 
 #### Example
 
