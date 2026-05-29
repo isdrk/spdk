@@ -1944,6 +1944,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 
 	if (req->use_memory_domain) {
 		/* We do not allocate buffers if memory domain is used */
+		req->length = total_length;
 		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
 		goto out;
 	}
