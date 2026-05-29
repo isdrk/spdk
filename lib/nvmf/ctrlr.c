@@ -3239,7 +3239,13 @@ spdk_nvmf_ctrlr_identify_ns_ext(struct spdk_nvmf_request *req)
 		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
 	}
 
-	assert(ns->passthru_nsid != 0);
+	if (ns->passthru_nsid == 0) {
+		spdk_iov_xfer_init(&ix, req->iov, req->iovcnt);
+		spdk_iov_xfer_from_buf(&ix, &nsdata, sizeof(nsdata));
+
+		return SPDK_NVMF_REQUEST_EXEC_STATUS_COMPLETE;
+	}
+
 	req->orig_nsid = ns->nsid;
 	cmd->nsid = ns->passthru_nsid;
 
