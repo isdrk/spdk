@@ -3733,6 +3733,22 @@ nvmf_ns_is_ptpl_capable(const struct spdk_nvmf_ns *ns)
 	return g_reservation_ops.is_ptpl_capable(ns);
 }
 
+struct spdk_nvme_rescap
+nvmf_ns_get_rescap(struct spdk_nvmf_ns *ns)
+{
+	struct spdk_nvme_rescap rescap = {
+		.persist = nvmf_ns_is_ptpl_capable(ns),
+		.write_exclusive = 1,
+		.exclusive_access = 1,
+		.write_exclusive_reg_only = 1,
+		.exclusive_access_reg_only = 1,
+		.write_exclusive_all_reg = 1,
+		.exclusive_access_all_reg = 1,
+		.ignore_existing_key = 1,
+	};
+	return rescap;
+}
+
 static int
 nvmf_ns_reservation_update(const struct spdk_nvmf_ns *ns,
 			   const struct spdk_nvmf_reservation_info *info)
