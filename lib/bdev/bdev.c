@@ -2567,6 +2567,7 @@ spdk_bdev_initialize(spdk_bdev_init_cb cb_fn, void *cb_arg)
 	bdev_module_action_complete();
 }
 
+
 static void
 bdev_mgr_unregister_cb(void *io_device)
 {
