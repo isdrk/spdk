@@ -6008,6 +6008,12 @@ spdk_bdev_get_nvme_nsid(struct spdk_bdev *bdev)
 	return bdev->nsid;
 }
 
+enum spdk_nvme_csi
+spdk_bdev_get_nvme_csi(const struct spdk_bdev *bdev)
+{
+	return bdev->csi;
+}
+
 uint32_t
 spdk_bdev_desc_get_block_size(struct spdk_bdev_desc *desc)
 {

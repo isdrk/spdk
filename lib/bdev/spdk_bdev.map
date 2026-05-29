@@ -142,6 +142,7 @@
 	spdk_bdev_copy_blocks;
 	spdk_bdev_get_nvme_ctratt;
 	spdk_bdev_get_nvme_nsid;
+	spdk_bdev_get_nvme_csi;
 	spdk_bdev_get_io_type_name;
 	spdk_bdev_get_io_type;
 	spdk_bdev_wait_for_ready;
