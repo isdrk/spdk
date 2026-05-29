@@ -124,9 +124,11 @@ kvmalloc_find_entry(struct kvmalloc_tree *tree, const uint8_t *key, uint8_t key_
 /* Handle KV STORE command */
 static void
 kvmalloc_handle_store(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd *cmd,
-		      void *data, uint32_t data_len, struct spdk_bdev_io *bdev_io)
+		      struct iovec *iovs, int iovcnt, uint32_t data_len,
+		      struct spdk_bdev_io *bdev_io)
 {
 	struct kvmalloc_kv_entry *entry;
+	struct spdk_iov_xfer ix;
 	uint8_t *key;
 	uint8_t key_len;
 	uint8_t options;
@@ -149,6 +151,7 @@ kvmalloc_handle_store(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd
 	}
 
 	options = cmd->cdw11_bits.kv.ro;
+	spdk_iov_xfer_init(&ix, iovs, iovcnt);
 
 	spdk_spin_lock(&kvmalloc->kv_tree_lock);
 
@@ -178,7 +181,7 @@ kvmalloc_handle_store(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd
 			free(entry->value);
 			entry->value = new_value;
 		}
-		memcpy(entry->value, data, data_len);
+		spdk_iov_xfer_to_buf(&ix, entry->value, data_len);
 		entry->value_len = data_len;
 		free(key);
 	} else {
@@ -211,7 +214,7 @@ kvmalloc_handle_store(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd
 			spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_NOMEM);
 			return;
 		}
-		memcpy(entry->value, data, data_len);
+		spdk_iov_xfer_to_buf(&ix, entry->value, data_len);
 		entry->value_len = data_len;
 
 		if (RB_INSERT(kvmalloc_tree, &kvmalloc->kv_tree, entry) != NULL) {
@@ -235,9 +238,11 @@ kvmalloc_handle_store(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd
 /* Handle KV RETRIEVE command */
 static void
 kvmalloc_handle_retrieve(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd *cmd,
-			 void *data, uint32_t data_len, struct spdk_bdev_io *bdev_io)
+			 struct iovec *iovs, int iovcnt, uint32_t data_len,
+			 struct spdk_bdev_io *bdev_io)
 {
 	struct kvmalloc_kv_entry *entry;
+	struct spdk_iov_xfer ix;
 	uint8_t *key;
 	uint8_t key_len;
 	uint32_t copy_len;
@@ -251,6 +256,8 @@ kvmalloc_handle_retrieve(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_
 						  SPDK_NVME_SC_INVALID_FIELD);
 		return;
 	}
+
+	spdk_iov_xfer_init(&ix, iovs, iovcnt);
 
 	spdk_spin_lock(&kvmalloc->kv_tree_lock);
 
@@ -266,7 +273,7 @@ kvmalloc_handle_retrieve(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_
 	}
 
 	copy_len = spdk_min(data_len, entry->value_len);
-	memcpy(data, entry->value, copy_len);
+	spdk_iov_xfer_from_buf(&ix, entry->value, copy_len);
 	value_len = entry->value_len;
 
 	spdk_spin_unlock(&kvmalloc->kv_tree_lock);
@@ -396,17 +403,20 @@ kvmalloc_find_start(struct kvmalloc_tree *tree, const uint8_t *search_key, uint8
  */
 static void
 kvmalloc_handle_list(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd *cmd,
-		     void *data, uint32_t data_len, struct spdk_bdev_io *bdev_io)
+		     struct iovec *iovs, int iovcnt, uint32_t data_len,
+		     struct spdk_bdev_io *bdev_io)
 {
 	struct kvmalloc_kv_entry *entry;
+	struct spdk_iov_xfer ix;
 	uint8_t *start_key = NULL;
 	uint8_t start_key_len = 0;
 	uint32_t written = 0;
 	uint32_t remaining;
+	uint8_t *buf;
 	uint8_t *out_ptr;
 	int rc;
 
-	if (data == NULL || data_len < 4) {
+	if (iovcnt == 0 || data_len < 4) {
 		spdk_bdev_io_complete_nvme_status(bdev_io, 0,
 						  SPDK_NVME_SCT_GENERIC,
 						  SPDK_NVME_SC_INVALID_FIELD);
@@ -423,9 +433,18 @@ kvmalloc_handle_list(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd 
 		}
 	}
 
-	out_ptr = (uint8_t *)data + 4;
+	/* Build the response into a contiguous buffer. The count at offset 0
+	 * is only known after the loop runs, and writing it last keeps the
+	 * iov-scatter at the end simple. */
+	buf = calloc(1, data_len);
+	if (buf == NULL) {
+		free(start_key);
+		spdk_bdev_io_complete(bdev_io, SPDK_BDEV_IO_STATUS_NOMEM);
+		return;
+	}
+
+	out_ptr = buf + 4;
 	remaining = data_len - 4;
-	memset(data, 0, 4);
 
 	spdk_spin_lock(&kvmalloc->kv_tree_lock);
 
@@ -437,7 +456,6 @@ kvmalloc_handle_list(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd 
 			break;
 		}
 
-		memset(out_ptr, 0, entry_len);
 		*(uint16_t *)out_ptr = entry->key_len;
 		memcpy(out_ptr + 2, entry->key, entry->key_len);
 		out_ptr += entry_len;
@@ -450,7 +468,12 @@ kvmalloc_handle_list(struct kvmalloc_disk *kvmalloc, const struct spdk_nvme_cmd 
 
 	free(start_key);
 
-	*(uint32_t *)data = written;
+	*(uint32_t *)buf = written;
+
+	spdk_iov_xfer_init(&ix, iovs, iovcnt);
+	spdk_iov_xfer_from_buf(&ix, buf, data_len);
+
+	free(buf);
 
 	spdk_bdev_io_complete_nvme_status(bdev_io, 0,
 					  SPDK_NVME_SCT_GENERIC,
@@ -526,46 +549,62 @@ kvmalloc_submit_request(struct spdk_io_channel *ch, struct spdk_bdev_io *bdev_io
 {
 	struct kvmalloc_disk *kvmalloc = bdev_io->bdev->ctxt;
 	struct spdk_nvme_cmd *cmd;
-	void *data = NULL;
+	struct iovec single_iov;
+	struct iovec *iovs = NULL;
 	uint32_t data_len = 0;
+	int iovcnt = 0;
 
 	switch (bdev_io->type) {
-	case SPDK_BDEV_IO_TYPE_NVME_IO:
-		cmd = &bdev_io->u.nvme_passthru.cmd;
-		data = bdev_io->u.nvme_passthru.buf;
-		data_len = bdev_io->u.nvme_passthru.nbytes;
-
-		switch (cmd->opc) {
-		case SPDK_NVME_OPC_KV_STORE:
-			kvmalloc_handle_store(kvmalloc, cmd, data, data_len, bdev_io);
-			return;
-		case SPDK_NVME_OPC_KV_RETRIEVE:
-			kvmalloc_handle_retrieve(kvmalloc, cmd, data, data_len, bdev_io);
-			return;
-		case SPDK_NVME_OPC_KV_DELETE:
-			kvmalloc_handle_delete(kvmalloc, cmd, bdev_io);
-			return;
-		case SPDK_NVME_OPC_KV_EXIST:
-			kvmalloc_handle_exist(kvmalloc, cmd, bdev_io);
-			return;
-		case SPDK_NVME_OPC_KV_LIST:
-			kvmalloc_handle_list(kvmalloc, cmd, data, data_len, bdev_io);
-			return;
-		default:
-			break;
-		}
-		break;
 	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
 		cmd = &bdev_io->u.nvme_passthru.cmd;
 		if (cmd->opc == SPDK_NVME_OPC_IDENTIFY) {
 			kvmalloc_handle_admin_identify(kvmalloc, bdev_io);
 			return;
 		}
+		goto invalid;
+	case SPDK_BDEV_IO_TYPE_NVME_IO:
+		/* Buffer-style passthru. Wrap buf in a single-element iov so
+		 * the I/O handlers can use the iov interface uniformly. */
+		cmd = &bdev_io->u.nvme_passthru.cmd;
+		data_len = bdev_io->u.nvme_passthru.nbytes;
+		if (bdev_io->u.nvme_passthru.buf != NULL) {
+			single_iov.iov_base = bdev_io->u.nvme_passthru.buf;
+			single_iov.iov_len = data_len;
+			iovs = &single_iov;
+			iovcnt = 1;
+		}
 		break;
+	case SPDK_BDEV_IO_TYPE_NVME_IOV_MD:
+		cmd = &bdev_io->u.nvme_passthru.cmd;
+		data_len = bdev_io->u.nvme_passthru.nbytes;
+		iovs = bdev_io->u.nvme_passthru.iovs;
+		iovcnt = bdev_io->u.nvme_passthru.iovcnt;
+		break;
+	default:
+		goto invalid;
+	}
+
+	switch (cmd->opc) {
+	case SPDK_NVME_OPC_KV_STORE:
+		kvmalloc_handle_store(kvmalloc, cmd, iovs, iovcnt, data_len, bdev_io);
+		return;
+	case SPDK_NVME_OPC_KV_RETRIEVE:
+		kvmalloc_handle_retrieve(kvmalloc, cmd, iovs, iovcnt, data_len, bdev_io);
+		return;
+	case SPDK_NVME_OPC_KV_DELETE:
+		kvmalloc_handle_delete(kvmalloc, cmd, bdev_io);
+		return;
+	case SPDK_NVME_OPC_KV_EXIST:
+		kvmalloc_handle_exist(kvmalloc, cmd, bdev_io);
+		return;
+	case SPDK_NVME_OPC_KV_LIST:
+		kvmalloc_handle_list(kvmalloc, cmd, iovs, iovcnt, data_len, bdev_io);
+		return;
 	default:
 		break;
 	}
 
+invalid:
 	spdk_bdev_io_complete_nvme_status(bdev_io, 0,
 					  SPDK_NVME_SCT_GENERIC,
 					  SPDK_NVME_SC_INVALID_OPCODE);
@@ -576,6 +615,7 @@ kvmalloc_io_type_supported(void *ctx, enum spdk_bdev_io_type io_type)
 {
 	switch (io_type) {
 	case SPDK_BDEV_IO_TYPE_NVME_IO:
+	case SPDK_BDEV_IO_TYPE_NVME_IOV_MD:
 	case SPDK_BDEV_IO_TYPE_NVME_ADMIN:
 		return true;
 	default:
