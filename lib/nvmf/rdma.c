@@ -2337,15 +2337,28 @@ nvmf_rdma_poll_group_insert_need_buffer_req(struct spdk_nvmf_rdma_poll_group *rg
 	}
 }
 
-static inline void
-nvmf_rdma_req_finish_data_transfer(struct spdk_nvmf_rdma_request *rdma_req, int rc)
+/* Returns true if that was a partial data transfer and the partial rdma_req was completed and the pointer is no longer valid */
+static inline bool
+nvmf_rdma_req_finish_data_transfer_release_partial(struct spdk_nvmf_rdma_request *rdma_req,
+		struct spdk_nvmf_rdma_transport *rtransport, int rc)
 {
 	spdk_memory_domain_data_cpl_cb cb = rdma_req->transfer_cpl_cb;
+	void *cpl_cb_arg = rdma_req->transfer_cpl_cb_arg;
+	bool is_partial = rdma_req->main_request != NULL;
 
-	SPDK_DEBUGLOG(rdma, "req %p, finish data transfer, rc %d\n", rdma_req, rc);
 	rdma_req->transfer_cpl_cb = NULL;
+	rdma_req->transfer_cpl_cb_arg = NULL;
 	assert(cb);
-	cb(rdma_req->transfer_cpl_cb_arg, rc);
+
+	SPDK_DEBUGLOG(rdma, "req %p, finish data transfer, rc %d, is_partial %d\n", rdma_req, rc,
+		      is_partial);
+	if (is_partial) {
+		nvmf_rdma_release_data_transfer_request(rdma_req, rtransport);
+	}
+
+	cb(cpl_cb_arg, rc);
+
+	return is_partial;
 }
 
 static inline int
@@ -2628,7 +2641,10 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			/* Mkey object is available. We can increment the reference counter and handle IO as usual */
 			rdma_req->data_transfer_mkey = translation->rdma.memory_key;
 			spdk_rdma_provider_memory_key_get_ref(rdma_req->data_transfer_mkey);
-			nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
+			rdma_req->transfer_cpl_cb = NULL;
+			if (cpl_cb) {
+				cpl_cb(cpl_cb_arg, 0);
+			}
 
 			return 0;
 		} else {
@@ -2796,10 +2812,7 @@ nvmf_rdma_request_process(struct spdk_nvmf_rdma_transport *rtransport,
 			break;
 		}
 		if (rdma_req->transfer_cpl_cb) {
-			nvmf_rdma_req_finish_data_transfer(rdma_req, -EIO);
-			if (rdma_req->main_request) {
-				nvmf_rdma_release_data_transfer_request(rdma_req, rtransport);
-			}
+			nvmf_rdma_req_finish_data_transfer_release_partial(rdma_req, rtransport, -EIO);
 			/* Wait for completion callback from the controller */
 			return true;
 		}
@@ -5766,9 +5779,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 						if (rdma_req->transfer_cpl_cb) {
 							/* We need to wait for bdev layer to call req_complete */
 							rdma_req->state = RDMA_REQUEST_STATE_EXECUTING;
-							nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
-							if (rdma_req->main_request) {
-								nvmf_rdma_release_data_transfer_request(rdma_req, rtransport);
+							if (nvmf_rdma_req_finish_data_transfer_release_partial(rdma_req, rtransport, 0)) {
 								break;
 							}
 						} else {
@@ -5786,9 +5797,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 						/* Set a flag that data is already transferred, we only need to send the response once bdev completes the req */
 						rdma_req->data_transferred = 1;
 						rdma_req->state = RDMA_REQUEST_STATE_EXECUTING;
-						nvmf_rdma_req_finish_data_transfer(rdma_req, 0);
-						if (rdma_req->main_request) {
-							nvmf_rdma_release_data_transfer_request(rdma_req, rtransport);
+						if (nvmf_rdma_req_finish_data_transfer_release_partial(rdma_req, rtransport, 0)) {
 							break;
 						}
 					}
@@ -5844,10 +5853,7 @@ nvmf_rdma_poller_poll(struct spdk_nvmf_rdma_transport *rtransport,
 				 * As result, if qpair is in the process of disconnect and that was the last outstanding IO,
 				 * the qpair can be destroyed via qpair_fini callback. We must not reference qpair after
 				 * completing data transfer in error path to avoid heap-use after free or double free */
-				nvmf_rdma_req_finish_data_transfer(rdma_req, -EIO);
-				if (rdma_req->main_request) {
-					nvmf_rdma_release_data_transfer_request(rdma_req, rtransport);
-				}
+				nvmf_rdma_req_finish_data_transfer_release_partial(rdma_req, rtransport, -EIO);
 			} else {
 				nvmf_rdma_destroy_drained_qpair(rqpair);
 			}
