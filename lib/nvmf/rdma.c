@@ -2610,6 +2610,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 	rdma_req->transfer_cpl_cb_arg = cpl_cb_arg;
 
 	if (rdma_req->req.xfer == SPDK_NVME_DATA_HOST_TO_CONTROLLER) {
+		last = NULL;
 		rc = nvmf_rdma_update_sges_with_key_and_buffer(rdma_req, lkey, iov, iovcnt, transfer_len, offset, 0,
 				&rdma_req->data.wr, &last);
 		if (spdk_unlikely(rc)) {
@@ -2622,6 +2623,11 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
 			return rc;
 		}
+		/* If this is the main request, it might have allocated more wrs during initial
+		 * setup, so we also need to free them here.
+		 */
+		_nvmf_rdma_request_free_data(rdma_req, last->next, rtransport->data_wr_pool);
+		last->next = NULL;
 		SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer H2C\n", rdma_req, lkey);
 		/* Write IO: UMR is configured on iovs, start transfer from the host, offload is applied
 		 * during RDMA_READ operation. Once transfer_in completes, bdev layer writes data to
