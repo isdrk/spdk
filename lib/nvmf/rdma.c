@@ -2670,9 +2670,14 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 				SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
 				return rc;
 			}
-			/* We need to write data buffers to the host, but
-			 * without sending a response. The response will be sent when bdev finishes IO request -
-			 * when RDMA_WRITE completes and we call the cpl_cb */
+			/* We need to write data buffers to the host, but without sending a
+			 * response. The response will be sent when bdev finishes IO request - when
+			 * RDMA_WRITE completes and we call the cpl_cb.
+			 *
+			 * If this is the main request, it might have allocated more wrs during
+			 * initial setup, so we also need to free them here.
+			 */
+			_nvmf_rdma_request_free_data(rdma_req, last->next, rtransport->data_wr_pool);
 			last->next = NULL;
 			SPDK_DEBUGLOG(rdma, "req %p, lkey %u, transfer C2H\n", rdma_req, lkey);
 			STAILQ_INSERT_TAIL(&rqpair->pending_rdma_write_queue, rdma_req, state_link);
