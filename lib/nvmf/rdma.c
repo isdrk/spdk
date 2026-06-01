@@ -265,7 +265,7 @@ struct spdk_nvmf_rdma_request {
 	uint64_t				receive_tsc;
 	struct spdk_nvmf_rdma_request		*fused_pair;
 	STAILQ_ENTRY(spdk_nvmf_rdma_request)	state_link;
-	struct ibv_send_wr			*remaining_tranfer_in_wrs;
+	struct ibv_send_wr			*remaining_transfer_in_wrs;
 	struct ibv_send_wr			*transfer_wr;
 	struct spdk_nvmf_rdma_request_data	data;
 	void					*data_transfer_mkey;
@@ -275,7 +275,6 @@ struct spdk_nvmf_rdma_request {
 	struct spdk_nvmf_rdma_request		*main_request;
 	TAILQ_HEAD(, spdk_nvmf_rdma_request)	outstanding_data_transfer_requests;
 	TAILQ_ENTRY(spdk_nvmf_rdma_request)	data_transfer_request_link;
-	uint32_t				common_transfers_length;
 };
 
 struct spdk_nvmf_rdma_resource_opts {
@@ -675,10 +674,10 @@ nvmf_rdma_request_free_data(struct spdk_nvmf_rdma_request *rdma_req,
 
 	_nvmf_rdma_request_free_data(rdma_req, rdma_req->transfer_wr, rtransport->data_wr_pool);
 
-	if (rdma_req->remaining_tranfer_in_wrs) {
-		_nvmf_rdma_request_free_data(rdma_req, rdma_req->remaining_tranfer_in_wrs,
+	if (rdma_req->remaining_transfer_in_wrs) {
+		_nvmf_rdma_request_free_data(rdma_req, rdma_req->remaining_transfer_in_wrs,
 					     rtransport->data_wr_pool);
-		rdma_req->remaining_tranfer_in_wrs = NULL;
+		rdma_req->remaining_transfer_in_wrs = NULL;
 	}
 
 	rdma_req->data.wr.next = NULL;
@@ -1246,8 +1245,8 @@ nvmf_rdma_request_reset_transfer_in(struct spdk_nvmf_rdma_request *rdma_req,
 {
 	/* Put completed WRs back to pool and move transfer_wr pointer */
 	_nvmf_rdma_request_free_data(rdma_req, rdma_req->transfer_wr, rtransport->data_wr_pool);
-	rdma_req->transfer_wr = rdma_req->remaining_tranfer_in_wrs;
-	rdma_req->remaining_tranfer_in_wrs = NULL;
+	rdma_req->transfer_wr = rdma_req->remaining_transfer_in_wrs;
+	rdma_req->remaining_transfer_in_wrs = NULL;
 	rdma_req->num_outstanding_data_wr = rdma_req->num_remaining_data_wr;
 	rdma_req->num_remaining_data_wr = 0;
 }
@@ -1271,7 +1270,7 @@ request_prepare_transfer_in_part(struct spdk_nvmf_request *req, uint32_t num_rea
 		wr = wr->next;
 	}
 
-	rdma_req->remaining_tranfer_in_wrs = wr->next;
+	rdma_req->remaining_transfer_in_wrs = wr->next;
 	rdma_req->num_remaining_data_wr = rdma_req->num_outstanding_data_wr - num_reads_available;
 	rdma_req->num_outstanding_data_wr = num_reads_available;
 	/* Break chain of WRs to send only part. Once this portion completes, we continue sending RDMA_READs */
@@ -1819,7 +1818,11 @@ nvmf_rdma_req_set_memory_domain(struct spdk_nvmf_rdma_transport *rtransport,
 	rdma_req->req.iov[0].iov_len = rdma_req->req.length;
 	rdma_req->req.memory_domain = rqpair->rdma_qp->domain;
 	rdma_req->req.memory_domain_ctx = rdma_req;
-	rdma_req->common_transfers_length = 0;
+	/* The bdev module owns all data movement for memory-domain requests and
+	 * only completes the I/O once its transfers finish. The top-level request
+	 * must therefore never post data WRs of its own in request_transfer_out;
+	 * mark the data as already transferred up front. */
+	rdma_req->data_transferred = 1;
 }
 
 static int
@@ -1909,8 +1912,11 @@ nvmf_rdma_request_fill_iovs(struct spdk_nvmf_rdma_transport *rtransport,
 	}
 
 out:
-	/* set the number of outstanding data WRs for this request. */
-	rdma_req->num_outstanding_data_wr = num_wrs;
+	/* For use_memory_domain mode, no data WRs are posted here; the bdev
+	 * module posts them later via spdk_memory_domain_transfer_data and
+	 * manages num_outstanding_data_wr itself.
+	 */
+	rdma_req->num_outstanding_data_wr = req->use_memory_domain ? 0 : num_wrs;
 
 	return rc;
 
@@ -1934,7 +1940,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 	uint32_t				num_sgl_descriptors;
 	uint32_t				lengths[SPDK_NVMF_MAX_SGL_ENTRIES], total_length = 0;
 	uint32_t				i;
-	int					rc;
+	int					rc = 0;
 
 	rqpair = SPDK_CONTAINEROF(rdma_req->req.qpair, struct spdk_nvmf_rdma_qpair, qpair);
 	rgroup = rqpair->poller->group;
@@ -1959,16 +1965,16 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 		desc++;
 	}
 
-	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
-	if (spdk_unlikely(rc != 0)) {
-		return -ENOMEM;
-	}
-
 	if (req->use_memory_domain) {
 		/* We do not allocate buffers if memory domain is used */
 		req->length = total_length;
 		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
 		goto out;
+	}
+
+	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
+	if (spdk_unlikely(rc != 0)) {
+		return -ENOMEM;
 	}
 
 	if (spdk_unlikely(total_length > rtransport->transport.opts.max_io_size)) {
@@ -2045,7 +2051,7 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 #endif
 
 out:
-	rdma_req->num_outstanding_data_wr = num_sgl_descriptors;
+	rdma_req->num_outstanding_data_wr = req->use_memory_domain ? 0 : num_sgl_descriptors;
 
 	return rc;
 
@@ -2478,6 +2484,11 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 	data_transfer_req->data.wr.sg_list = data_transfer_req->data.sgl;
 	data_transfer_req->req.use_memory_domain = 1;
 	data_transfer_req->transfer_wr = &data_transfer_req->data.wr;
+	/* This struct is recycled from a mempool; clear partial-transfer state
+	 * left by a previous use so a stale value cannot trigger a spurious
+	 * re-post (reset_transfer_in) when this transfer's read completes. */
+	data_transfer_req->num_remaining_data_wr = 0;
+	data_transfer_req->remaining_transfer_in_wrs = NULL;
 
 	data_transfer_req->data_wr.type = RDMA_WR_TYPE_DATA;
 	data_transfer_req->data.wr.wr_id = (uintptr_t)&data_transfer_req->data_wr;
@@ -2497,7 +2508,13 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 		uint32_t i, num_wrs = 0, desc_len, remote_addr_offset = offset, remaining_len = transfer_len;
 		desc = (struct spdk_nvme_sgl_descriptor *)rdma_req->recv->buf + sgl->address;
 
-		for (i = 0; i < num_sgl_descriptors; i++) {
+		/* The loop must stop once the transfer range is fully covered. The
+		 * remaining_len > 0 guard mirrors nvmf_rdma_update_sges_with_key_and_buffer,
+		 * which actually builds the WRs: without it, a transfer that ends exactly
+		 * on a descriptor boundary counts one extra WR for the following
+		 * descriptor, over-allocating the chain. That phantom WR is then posted
+		 * and completes without being accounted in num_outstanding_data_wr. */
+		for (i = 0; i < num_sgl_descriptors && remaining_len > 0; i++) {
 			desc_len = desc->unkeyed.length;
 			if (remote_addr_offset >= desc_len) {
 				/* Skip the descriptors that are already transferred */
@@ -2642,26 +2659,36 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			SPDK_ERRLOG("Data transfer request pool is not initialized\n");
 			return -ENOTSUP;
 		}
-		rdma_req->common_transfers_length += transfer_len;
-		if (rdma_req->common_transfers_length < rdma_req->req.length) {
-			/* Data transfer in the middle, need to allocate an additional rdma_req */
-			data_transfer_req = spdk_mempool_get(rtransport->data_transfer_req_pool);
-			if (spdk_unlikely(data_transfer_req == NULL)) {
-				rdma_req->common_transfers_length -= transfer_len;
-				SPDK_DEBUGLOG(rdma, "Failed to allocate data transfer request\n");
-				return -ENOMEM;
-			}
-			SPDK_DEBUGLOG(rdma, "main req %p, data transfer req %p\n", rdma_req, data_transfer_req);
-			rc = nvmf_rdma_request_init_data_transfer_request(rdma_req, data_transfer_req, transfer_len,
-					offset);
+		/* Any transfer that does not span the full request data range uses a
+		 * dedicated auxiliary request. The top-level request is reused only
+		 * when a single transfer covers the whole range, so a bdev module may
+		 * transfer less than req.length in total. */
+		data_transfer_req = spdk_mempool_get(rtransport->data_transfer_req_pool);
+		if (spdk_unlikely(data_transfer_req == NULL)) {
+			SPDK_ERRLOG("Failed to allocate data transfer request\n");
+			return -ENOMEM;
+		}
+		SPDK_DEBUGLOG(rdma, "main req %p, data transfer req %p\n", rdma_req, data_transfer_req);
+		rc = nvmf_rdma_request_init_data_transfer_request(rdma_req, data_transfer_req, transfer_len,
+				offset);
+		if (spdk_unlikely(rc)) {
+			/* The auxiliary rdma_req must not have any additional WRs in case of the failure */
+			assert(data_transfer_req->data.wr.next == NULL);
+			spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
+			return rc;
+		}
+		rdma_req = data_transfer_req;
+	} else {
+		struct spdk_nvme_sgl_descriptor *sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
+
+		if (sgl->generic.type == SPDK_NVME_SGL_TYPE_LAST_SEGMENT &&
+		    sgl->generic.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) {
+			uint32_t num_sgl_descriptors = sgl->unkeyed.length / sizeof(struct spdk_nvme_sgl_descriptor);
+
+			rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
 			if (spdk_unlikely(rc)) {
-				/* The auxiliary rdma_req must not have any additional WRs in case of the failure */
-				assert(data_transfer_req->data.wr.next == NULL);
-				spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
-				rdma_req->common_transfers_length -= transfer_len;
 				return rc;
 			}
-			rdma_req = data_transfer_req;
 		}
 	}
 
@@ -2674,10 +2701,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 				&rdma_req->data.wr, &last);
 		if (spdk_unlikely(rc)) {
 			if (rdma_req == data_transfer_req) {
-				rdma_req->main_request->common_transfers_length -= transfer_len;
-				_nvmf_rdma_request_free_data(rdma_req, &rdma_req->data.wr, rtransport->data_wr_pool);
-				spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
-				data_transfer_req = NULL;
+				nvmf_rdma_release_data_transfer_request(data_transfer_req, rtransport);
 			}
 			SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
 			return rc;
@@ -2702,10 +2726,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 					&rdma_req->data.wr, &last);
 			if (spdk_unlikely(rc)) {
 				if (rdma_req == data_transfer_req) {
-					rdma_req->main_request->common_transfers_length -= transfer_len;
-					_nvmf_rdma_request_free_data(rdma_req, &rdma_req->data.wr, rtransport->data_wr_pool);
-					spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
-					data_transfer_req = NULL;
+					nvmf_rdma_release_data_transfer_request(data_transfer_req, rtransport);
 				}
 				SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
 				return rc;
@@ -2725,10 +2746,7 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 					IBV_SEND_SIGNALED, &rdma_req->data.wr, &last);
 			if (spdk_unlikely(rc)) {
 				if (rdma_req == data_transfer_req) {
-					rdma_req->main_request->common_transfers_length -= transfer_len;
-					_nvmf_rdma_request_free_data(rdma_req, &rdma_req->data.wr, rtransport->data_wr_pool);
-					spdk_mempool_put(rtransport->data_transfer_req_pool, data_transfer_req);
-					data_transfer_req = NULL;
+					nvmf_rdma_release_data_transfer_request(data_transfer_req, rtransport);
 				}
 				SPDK_ERRLOG("Failed to update sges, rc %d\n", rc);
 				return rc;
