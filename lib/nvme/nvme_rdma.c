@@ -3203,7 +3203,7 @@ nvme_rdma_qpair_process_cq_completions(struct nvme_rdma_qpair *rdma_qpair, uint3
 
 	rc = spdk_rdma_utils_poll_cq(rdma_qpair->cq, batch_size, wc);
 	if (spdk_unlikely(rc < 0)) {
-		NVME_RQPAIR_ERRLOG(rdma_qpair, "Error polling CQ! (%d): %s\n", errno, spdk_strerror(errno));
+		NVME_RQPAIR_ERRLOG(rdma_qpair, "Error polling CQ! (%d): %s\n", rc, spdk_strerror(-rc));
 		return -ECANCELED;
 	} else if (rc == 0) {
 		return 0;
@@ -3713,7 +3713,7 @@ nvme_rdma_poller_process_cq_completions(struct nvme_rdma_poller *poller, uint32_
 
 	rc = spdk_rdma_utils_poll_cq(poller->cq, batch_size, wc);
 	if (spdk_unlikely(rc < 0)) {
-		SPDK_ERRLOG("Error polling CQ of poller(%p)! (%d): %s\n", poller, errno, spdk_strerror(errno));
+		SPDK_ERRLOG("Error polling CQ of poller(%p)! (%d): %s\n", poller, rc, spdk_strerror(-rc));
 		return -ECANCELED;
 	} else if (rc == 0) {
 		return 0;
