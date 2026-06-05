@@ -57,7 +57,6 @@ rpc_mlx5_scan_accel_module(struct spdk_jsonrpc_request *request,
 			free(attr.allowed_devs);
 			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_PARSE_ERROR,
 							 "spdk_json_decode_object failed");
-			free(attr.allowed_devs);
 			return;
 		}
 	}
