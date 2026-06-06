@@ -3982,6 +3982,7 @@ nvmf_tcp_qpair_process(struct spdk_nvmf_tcp_qpair *tqpair)
 				}
 
 				nvmf_tcp_qpair_disconnect(tqpair);
+				break;
 			} else if (rc == 0) {
 				break;
 			}
