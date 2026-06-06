@@ -1176,6 +1176,7 @@ static void
 spdk_xlio_socket_event_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, int event, int value)
 {
 	struct spdk_xlio_sock *sock = (struct spdk_xlio_sock *)userdata_sq;
+	struct spdk_xlio_sock_group *group;
 
 	switch (event) {
 	case XLIO_SOCKET_EVENT_ESTABLISHED:
@@ -1189,16 +1190,20 @@ spdk_xlio_socket_event_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, int ev
 		xlio_sock_put(sock);
 		break;
 	case XLIO_SOCKET_EVENT_CLOSED:
-		SPDK_DEBUGLOG(sock_xlio, "%p: CLOSED\n", sock);
-		/* The remote side closed the connection. Set an error here
-		 * and wait for the user to close the socket for clean up. */
-		sock->rc = ENOTCONN;
-		break;
+		/* CLOSED event's value is 0/undefined; use ENOTCONN to indicate graceful close */
+		value = ENOTCONN;
+	/* FALLTHROUGH */
 	case XLIO_SOCKET_EVENT_ERROR:
-		SPDK_DEBUGLOG(sock_xlio, "%p: ERROR (%d)\n", sock, value);
-		/* There was an error. Set the error here and wait for the
-		 * user to close the socket for clean up. */
+		SPDK_INFOLOG(sock_xlio, "%p: %s (%d)\n", sock,
+			     event == XLIO_SOCKET_EVENT_CLOSED ? "CLOSED" : "ERROR", value);
+		/* Set the error code and add socket to pending_rx list so poll
+		 * will return it and the upper layer can detect the disconnect/error. */
 		sock->rc = value;
+		group = sock->group;
+		if (group != NULL && !sock->events.rx && !sock->events.accept) {
+			sock->events.rx = true;
+			STAILQ_INSERT_TAIL(&group->pending_rx, sock, link);
+		}
 		break;
 
 	}
@@ -1411,6 +1416,12 @@ xlio_sock_group_poll(struct spdk_sock_group_impl *_group, int max_events, struct
 	STAILQ_FOREACH(sock, &group->pending_rx, link) {
 		if (count >= max_events) {
 			break;
+		}
+
+		/* Skip sockets that are closing or already closed to avoid
+		 * returning them for processing after close has started. */
+		if (sock->base.flags.closed) {
+			continue;
 		}
 
 		socks[count++] = &sock->base;
