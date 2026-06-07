@@ -15,7 +15,20 @@
 #include "dte_doca_shim.h"
 
 #include <doca_error.h>
+#include <doca_version.h>
 #include <doca_telemetry_exporter.h>
+
+/* We define our macro as DOCA_VERSION_LTE_CURRENT() uses casting to size_t, which is not supported by the preprocessor. */
+#define DOCA_VERSION_AT_LEAST(maj, min, pat) \
+    ((DOCA_VERSION_MAJOR > (maj)) || \
+     (DOCA_VERSION_MAJOR == (maj) && DOCA_VERSION_MINOR > (min)) || \
+     (DOCA_VERSION_MAJOR == (maj) && DOCA_VERSION_MINOR == (min) && DOCA_VERSION_PATCH >= (pat)))
+
+#if DOCA_VERSION_AT_LEAST(3, 5, 31)
+#define SOURCE_EXPORT_ARGS (struct doca_telemetry_exporter_source *p1, doca_telemetry_exporter_type_index_t p2, const void *p3, int p4)
+#else
+#define SOURCE_EXPORT_ARGS (struct doca_telemetry_exporter_source *p1, doca_telemetry_exporter_type_index_t p2, void *p3, int p4)
+#endif
 
 /* DOCA Telemetry Exporter symbols info */
 #define DOCA_SYMBOLS() \
@@ -46,10 +59,9 @@
 	DOCA_SYMBOL_VOID2(source_set_id, (struct doca_telemetry_exporter_source *p1, const char *p2)) \
 	DOCA_SYMBOL_VOID2(source_set_tag, (struct doca_telemetry_exporter_source *p1, const char *p2)) \
 	DOCA_SYMBOL_ERR1(source_start, (struct doca_telemetry_exporter_source *p1)) \
-	DOCA_SYMBOL_ERR4(source_report, (struct doca_telemetry_exporter_source *p1, doca_telemetry_exporter_type_index_t p2, void *p3, int p4)) \
+	DOCA_SYMBOL_ERR4(source_report, SOURCE_EXPORT_ARGS) \
 	DOCA_SYMBOL_ERR1(source_flush, (struct doca_telemetry_exporter_source *p1)) \
 	DOCA_SYMBOL_ERR1(source_destroy, (struct doca_telemetry_exporter_source *p1))
-
 
 #define DECLARE_DOCA_SYMBOL(return_type, name, args) \
 	return_type (*name)args; \
