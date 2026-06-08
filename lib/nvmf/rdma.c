@@ -2515,7 +2515,7 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 		 * descriptor, over-allocating the chain. That phantom WR is then posted
 		 * and completes without being accounted in num_outstanding_data_wr. */
 		for (i = 0; i < num_sgl_descriptors && remaining_len > 0; i++) {
-			desc_len = desc->unkeyed.length;
+			desc_len = desc->keyed.length;
 			if (remote_addr_offset >= desc_len) {
 				/* Skip the descriptors that are already transferred */
 				remote_addr_offset -= desc_len;
