@@ -449,10 +449,6 @@ spdk_jsonrpc_server_poll(struct spdk_jsonrpc_server *server)
 			} else if (rc > 0) {
 				busy = 1;
 			}
-
-			if (!STAILQ_EMPTY(&conn->outstanding_queue)) {
-				busy = 1;
-			}
 		}
 	}
 
