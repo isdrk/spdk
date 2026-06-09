@@ -1965,16 +1965,16 @@ nvmf_rdma_request_fill_iovs_multi_sgl(struct spdk_nvmf_rdma_transport *rtranspor
 		desc++;
 	}
 
+	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
+	if (spdk_unlikely(rc != 0)) {
+		return -ENOMEM;
+	}
+
 	if (req->use_memory_domain) {
 		/* We do not allocate buffers if memory domain is used */
 		req->length = total_length;
 		nvmf_rdma_req_set_memory_domain(rtransport, rqpair, rdma_req);
 		goto out;
-	}
-
-	rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
-	if (spdk_unlikely(rc != 0)) {
-		return -ENOMEM;
 	}
 
 	if (spdk_unlikely(total_length > rtransport->transport.opts.max_io_size)) {
@@ -2678,18 +2678,6 @@ nvmf_rdma_memory_domain_transfer_data(struct spdk_memory_domain *dst_domain, voi
 			return rc;
 		}
 		rdma_req = data_transfer_req;
-	} else {
-		struct spdk_nvme_sgl_descriptor *sgl = &rdma_req->req.cmd->nvme_cmd.dptr.sgl1;
-
-		if (sgl->generic.type == SPDK_NVME_SGL_TYPE_LAST_SEGMENT &&
-		    sgl->generic.subtype == SPDK_NVME_SGL_SUBTYPE_OFFSET) {
-			uint32_t num_sgl_descriptors = sgl->unkeyed.length / sizeof(struct spdk_nvme_sgl_descriptor);
-
-			rc = nvmf_request_alloc_wrs(rtransport, rdma_req, num_sgl_descriptors - 1, true);
-			if (spdk_unlikely(rc)) {
-				return rc;
-			}
-		}
 	}
 
 	rdma_req->transfer_cpl_cb = cpl_cb;
