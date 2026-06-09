@@ -1178,6 +1178,12 @@ spdk_xlio_socket_event_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, int ev
 	struct spdk_xlio_sock *sock = (struct spdk_xlio_sock *)userdata_sq;
 	struct spdk_xlio_sock_group *group;
 
+	if (spdk_unlikely(sock == NULL)) {
+		SPDK_INFOLOG(sock_xlio, "xlio_sock 0x%lx event %d with NULL userdata_sq\n",
+			     xlio_sock, event);
+		return;
+	}
+
 	switch (event) {
 	case XLIO_SOCKET_EVENT_ESTABLISHED:
 		SPDK_DEBUGLOG(sock_xlio, "%p: ESTABLISHED\n", sock);
