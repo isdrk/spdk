@@ -258,6 +258,8 @@ struct spdk_fsdev_open_opts {
 	uint32_t		max_segments;
 	/** Maximum size of payload in a single I/O operation */
 	uint32_t		max_xfer_size;
+	/** Page size of the FUSE/virtio-fs driver connected to this fsdev */
+	uint32_t		page_size;
 };
 
 /**

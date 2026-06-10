@@ -394,6 +394,16 @@ uint32_t spdk_fsdev_io_get_max_segments(struct spdk_fsdev_io *fsdev_io);
  */
 uint32_t spdk_fsdev_io_get_max_xfer_size(struct spdk_fsdev_io *fsdev_io);
 
+/**
+ * Get the page size used by the user sending this I/O.  This value is the same for all I/Os and
+ * is valid until receiving FUSE_DESTROY or the next FUSE_INIT.
+ *
+ * \param fsdev_io I/O
+ *
+ * \return Driver page size.
+ */
+uint32_t spdk_fsdev_io_get_page_size(struct spdk_fsdev_io *fsdev_io);
+
 typedef void (*spdk_fsdev_io_cleanup_cb)(void *cb_arg);
 
 /**

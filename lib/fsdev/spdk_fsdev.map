@@ -52,6 +52,7 @@
 	spdk_fsdev_io_get_io_channel;
 	spdk_fsdev_io_get_max_segments;
 	spdk_fsdev_io_get_max_xfer_size;
+	spdk_fsdev_io_get_page_size;
 	spdk_fsdev_module_list_add;
 	spdk_fsdev_module_list_find;
 	spdk_fsdev_notify_fuse;

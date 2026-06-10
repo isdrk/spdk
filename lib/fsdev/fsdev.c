@@ -195,6 +195,7 @@ struct spdk_fsdev_desc {
 	uint32_t			refs;
 	uint32_t			max_segments;
 	uint32_t			max_xfer_size;
+	uint32_t			page_size;
 	TAILQ_ENTRY(spdk_fsdev_desc)	link;
 };
 
@@ -1847,6 +1848,12 @@ spdk_fsdev_io_get_max_xfer_size(struct spdk_fsdev_io *fsdev_io)
 	return fsdev_io->internal.desc->max_xfer_size;
 }
 
+uint32_t
+spdk_fsdev_io_get_page_size(struct spdk_fsdev_io *fsdev_io)
+{
+	return fsdev_io->internal.desc->page_size;
+}
+
 static void
 fsdev_io_stat_pull_io_stat_done_cb(struct spdk_fsdev *fsdev, struct spdk_fsdev_io_stat *stat,
 				   void *cb_arg, int rc)
@@ -2249,6 +2256,11 @@ spdk_fsdev_open_ext(const char *fsdev_name, struct spdk_fsdev_open_opts *opts,
 	desc->max_xfer_size = SPDK_GET_FIELD(opts, max_xfer_size, 0);
 	if (desc->max_xfer_size == 0) {
 		desc->max_xfer_size = UINT32_MAX;
+	}
+
+	desc->page_size = SPDK_GET_FIELD(opts, page_size, 0);
+	if (desc->page_size == 0) {
+		desc->page_size = 4096;
 	}
 
 	rc = fsdev_open(fsdev, desc);

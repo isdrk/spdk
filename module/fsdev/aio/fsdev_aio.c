@@ -1653,7 +1653,7 @@ fsdev_aio_op_init(struct spdk_io_channel *ch, struct spdk_fsdev_io *fsdev_io)
 	init_out->max_write = spdk_min(spdk_fsdev_io_get_max_xfer_size(fsdev_io),
 				       vfsdev->mount_opts.max_xfer_size);
 	init_out->max_pages = spdk_min(spdk_fsdev_io_get_max_segments(fsdev_io),
-				       init_out->max_write / 4096);
+				       init_out->max_write / spdk_fsdev_io_get_page_size(fsdev_io));
 	init_out->time_gran = 1;
 
 	if (vfsdev->opts.writeback_cache_enabled && (init_in->flags & FUSE_WRITEBACK_CACHE)) {

@@ -1494,6 +1494,7 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 	struct spdk_fuse_mount *mnt;
 	struct spdk_fsdev *fsdev;
 	struct spdk_fsdev_open_opts open_opts = {};
+	long page_size;
 	int rc;
 
 	if (mountpoint != NULL && spdk_env_get_core_count() == 1) {
@@ -1552,10 +1553,18 @@ fsdev_fuse_mount_init(struct spdk_fuse_mount **_mnt, const char *name, const cha
 		}
 	}
 
-	open_opts.size = SPDK_SIZEOF(&open_opts, max_xfer_size);
+	page_size = sysconf(_SC_PAGESIZE);
+	if (page_size <= 0 || page_size > UINT32_MAX) {
+		SPDK_ERRLOG("failed to get system page size\n");
+		rc = -EINVAL;
+		goto error;
+	}
+
+	open_opts.size = SPDK_SIZEOF(&open_opts, page_size);
 	open_opts.event_cb_fn = fsdev_fuse_fsdev_event_cb;
 	open_opts.event_cb_ctx = mnt;
 	open_opts.max_xfer_size = mnt->max_xfer_size;
+	open_opts.page_size = (uint32_t)page_size;
 	rc = spdk_fsdev_open_ext(name, &open_opts, &mnt->fsdev_desc);
 	if (rc != 0) {
 		SPDK_ERRLOG("%s: failed to open fsdev: %s\n", mnt->name, spdk_strerror(-rc));
