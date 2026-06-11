@@ -34,6 +34,7 @@ stop_monitor_resources() {
 update_tag_monitor_resources() {
 	local tag=${1:-N/A}
 
+	mkdir -p "$(dirname "$TEST_TAG_FILE")"
 	echo "$tag" > "$TEST_TAG_FILE"
 	signal_monitor_resources USR1
 }
@@ -64,9 +65,9 @@ rm_pm_pid() {
 }
 
 TEST_TAG=${TEST_TAG:-N/A}
-TEST_TAG_FILE=${TEST_TAG_FILE:-"$_pmrootdir/.run_test_name"}
 # autotest's $output_dir has a prio
 PM_OUTPUTDIR=${output_dir:-/tmp}/power
+TEST_TAG_FILE=${TEST_TAG_FILE:-"${output_dir:-/tmp}/.run_test_name"}
 PM_OS=$(uname -s)
 PM_HW=true
 
@@ -92,6 +93,10 @@ if [[ $PM_OS == FreeBSD ]]; then
 elif [[ $PM_OS == Linux && $PM_HW == true ]]; then
 	MONITOR_RESOURCES+=(collect-cpu-temp)
 	MONITOR_RESOURCES+=(collect-bmc-pm)
+fi
+
+if [[ ! -d ${output_dir:-/tmp} ]]; then
+	mkdir -p "${output_dir:-/tmp}"
 fi
 
 if [[ ! -d $PM_OUTPUTDIR ]]; then
