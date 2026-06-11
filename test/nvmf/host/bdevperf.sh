@@ -26,6 +26,8 @@ tgt_init
 
 "$rootdir/build/examples/bdevperf" --json <(gen_nvmf_target_json) -q 128 -o 4096 -w verify -t 1
 
+"$rootdir/build/examples/bdevperf" --json <(gen_nvmf_target_json) -q 128 -o 16384 --io-unit-size 2048 -w verify -t 1
+
 "$rootdir/build/examples/bdevperf" --json <(gen_nvmf_target_json) -q 128 -o 4096 -w verify -t 15 -f -r /var/tmp/bdevperf.sock &
 bdevperfpid=$!
 
