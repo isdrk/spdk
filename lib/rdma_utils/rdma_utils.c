@@ -33,6 +33,8 @@ struct spdk_rdma_utils_mem_map {
 	uint32_t				ref_count;
 	uint32_t				access_flags;
 	LIST_ENTRY(spdk_rdma_utils_mem_map)	link;
+	/* contains a fake MR that will be used to inject errors */
+	struct ibv_mr				error_mr;
 };
 
 struct rdma_utils_memory_domain {
@@ -60,6 +62,10 @@ static bool g_wc_enable_error_injection = false;
 static enum ibv_wc_status g_wc_error_injection_status = IBV_WC_SUCCESS;
 static uint32_t g_wc_error_inject_rate_num = 0;
 static uint32_t g_wc_error_inject_rate_den = 1;
+
+static bool g_mr_enable_error_injection = false;
+static uint32_t g_mr_error_inject_rate_num = 0;
+static uint32_t g_mr_error_inject_rate_den = 1;
 
 static int
 rdma_utils_mem_notify(void *cb_ctx, struct spdk_mem_map *map,
@@ -175,6 +181,14 @@ spdk_rdma_utils_create_mem_map(struct ibv_pd *pd, struct spdk_nvme_rdma_hooks *h
 	}
 	LIST_INSERT_HEAD(&g_rdma_utils_mr_maps, map, link);
 
+	map->error_mr.pd = pd;
+	map->error_mr.context = pd->context;
+	map->error_mr.length = 0xffffff;
+	map->error_mr.addr = (void *)0x1;
+	map->error_mr.lkey = 0x1;
+	map->error_mr.rkey = 0x1;
+	map->error_mr.handle = 0;
+
 	pthread_mutex_unlock(&g_rdma_mr_maps_mutex);
 
 	return map;
@@ -225,6 +239,13 @@ spdk_rdma_utils_get_translation(struct spdk_rdma_utils_mem_map *map, void *addre
 		translation->translation_type = SPDK_RDMA_UTILS_TRANSLATION_KEY;
 		translation->mr_or_key.key = spdk_mem_map_translate(map->map, (uint64_t)address, &real_length);
 	} else {
+		if (spdk_unlikely(g_mr_enable_error_injection)) {
+			if (((uint32_t)rand() % g_mr_error_inject_rate_den) < g_mr_error_inject_rate_num) {
+				translation->translation_type = SPDK_RDMA_UTILS_TRANSLATION_MR;
+				translation->mr_or_key.mr = &map->error_mr;
+				return 0;
+			}
+		}
 		translation->translation_type = SPDK_RDMA_UTILS_TRANSLATION_MR;
 		translation->mr_or_key.mr = (struct ibv_mr *)spdk_mem_map_translate(map->map, (uint64_t)address,
 					    &real_length);
@@ -251,6 +272,31 @@ spdk_rdma_utils_set_translation(struct spdk_rdma_utils_mem_map *map, void *addre
 					    (uint64_t)translation->mr_or_key.mr);
 }
 
+int
+spdk_rdma_utils_inject_memory_translation_error(uint32_t err_rate_num, uint32_t err_rate_den)
+{
+	if (err_rate_den == 0 || err_rate_num > err_rate_den) {
+		SPDK_ERRLOG("Invalid error injection rate: numerator=%u, denominator=%u\n", err_rate_num,
+			    err_rate_den);
+		return -EINVAL;
+	}
+
+	g_mr_error_inject_rate_num = err_rate_num;
+	g_mr_error_inject_rate_den = err_rate_den;
+	spdk_smp_mb();
+	g_mr_enable_error_injection = true;
+
+	return 0;
+}
+
+void
+spdk_rdma_utils_cancel_memory_translation_error(void)
+{
+	g_mr_enable_error_injection = false;
+	spdk_smp_mb();
+	g_mr_error_inject_rate_num = 0;
+	g_mr_error_inject_rate_den = 1;
+}
 
 static struct rdma_utils_device *
 rdma_add_dev(struct ibv_context *context)

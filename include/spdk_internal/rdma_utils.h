@@ -110,6 +110,20 @@ spdk_rdma_utils_memory_translation_get_rkey(
 }
 
 /**
+ * Inject memory translation error with error rate of \p err_rate_num / \p err_rate_den.
+ *
+ * \param err_rate_num Error rate numerator
+ * \param err_rate_den Error rate denominator
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_rdma_utils_inject_memory_translation_error(uint32_t err_rate_num, uint32_t err_rate_den);
+
+/**
+ * Cancel memory translation error injection.
+ */
+void spdk_rdma_utils_cancel_memory_translation_error(void);
+
+/**
  * Get a Protection Domain for an RDMA device context.
  *
  * \param context RDMA device context
