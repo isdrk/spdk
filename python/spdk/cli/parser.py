@@ -726,6 +726,25 @@ def add_parser(subparsers):
                    help="Enable HW offloads on network QP")
     p.set_defaults(func=rdma_provider_set_opts)
 
+    def rdma_provider_inject_error(args):
+        args.client.rdma_provider_inject_error(type=args.type, rate_num=args.rate_num,
+                                               rate_denom=args.rate_denom, wc_status=args.wc_status)
+
+    p = subparsers.add_parser('rdma_provider_inject_error', help='Enable RDMA provider error injection')
+    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey'])
+    p.add_argument('rate_num', help="Error rate numerator", type=int)
+    p.add_argument('rate_denom', help="Error rate denominator", type=int)
+    p.add_argument('-s', '--wc-status', dest='wc_status', type=int, default=None,
+                   help="ibv_wc_status value to inject (only valid for 'cq' type)")
+    p.set_defaults(func=rdma_provider_inject_error)
+
+    def rdma_provider_cancel_error(args):
+        args.client.rdma_provider_cancel_error(type=args.type)
+
+    p = subparsers.add_parser('rdma_provider_cancel_error', help='Disable RDMA provider error injection')
+    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey'])
+    p.set_defaults(func=rdma_provider_cancel_error)
+
     def fuse_set_options(args):
         args.client.fuse_set_options(max_xfer_size=args.max_xfer_size,
                                      max_io_depth=args.max_io_depth, clone_fd=args.clone_fd,

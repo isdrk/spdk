@@ -14970,6 +14970,82 @@ Example response:
 }
 ~~~
 
+### rdma_provider_inject_error {#rdma_provider_inject_error}
+
+Enable rdma_provider error injection. Completions (`cq`) or memory translations
+(`mkey`) are failed at a rate of `rate_num` / `rate_denom`.
+
+#### Parameters
+
+Name                    | Optional | Type   | Description
+----------------------- | -------- | ------ | -----------
+type                    | Required | string | Error injection type, either `cq` or `mkey`
+rate_num                | Required | number | Error rate numerator
+rate_denom              | Required | number | Error rate denominator
+wc_status               | Optional | number | ibv_wc_status value to inject, only valid for the `cq` type (default: IBV_WC_GENERAL_ERR)
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_inject_error",
+  "id": 1,
+  "params": {
+    "type": "cq",
+    "rate_num": 1,
+    "rate_denom": 1000,
+    "wc_status": 4
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
+### rdma_provider_cancel_error {#rdma_provider_cancel_error}
+
+Disable rdma_provider error injection that was previously enabled with
+`rdma_provider_inject_error`.
+
+#### Parameters
+
+Name                    | Optional | Type   | Description
+----------------------- | -------- | ------ | -----------
+type                    | Required | string | Error injection type, either `cq` or `mkey`
+
+#### Example
+
+Example request:
+~~~json
+{
+  "jsonrpc": "2.0",
+  "method": "rdma_provider_cancel_error",
+  "id": 1,
+  "params": {
+    "type": "cq"
+  }
+}
+~~~
+
+Example response:
+
+~~~json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": true
+}
+~~~
+
 ### fuse_set_options {#fuse_set_options}
 
 Set FUSE library options.
