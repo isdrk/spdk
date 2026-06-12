@@ -11,6 +11,7 @@
 #include "spdk/string.h"
 #include "spdk/likely.h"
 #include "spdk/dma.h"
+#include "spdk/barrier.h"
 
 #include "spdk_internal/mlx5.h"
 #include "spdk_internal/rdma_provider.h"
@@ -40,6 +41,34 @@ static struct spdk_rdma_provider_opts g_mlx5_dv_opts = {
 	.opts_size = sizeof(struct spdk_rdma_provider_opts),
 	.support_offload_on_qp = false,
 };
+
+static bool g_send_wr_enable_error_injection = false;
+static uint32_t g_send_wr_error_inject_rate_num = 0;
+static uint32_t g_send_wr_error_inject_rate_den = 1;
+
+static bool g_recv_wr_enable_error_injection = false;
+static uint32_t g_recv_wr_error_inject_rate_num = 0;
+static uint32_t g_recv_wr_error_inject_rate_den = 1;
+
+static inline bool
+rdma_provider_inject_send_wr_error(void)
+{
+	if (spdk_unlikely(g_send_wr_enable_error_injection)) {
+		return ((uint32_t)rand() % g_send_wr_error_inject_rate_den) < g_send_wr_error_inject_rate_num;
+	}
+
+	return false;
+}
+
+static inline bool
+rdma_provider_inject_recv_wr_error(void)
+{
+	if (spdk_unlikely(g_recv_wr_enable_error_injection)) {
+		return ((uint32_t)rand() % g_recv_wr_error_inject_rate_den) < g_recv_wr_error_inject_rate_num;
+	}
+
+	return false;
+}
 
 struct spdk_rdma_provider_qp *
 spdk_rdma_provider_qp_create(struct rdma_cm_id *cm_id,
@@ -321,12 +350,14 @@ spdk_rdma_provider_qp_flush_send_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
 	assert(bad_wr);
 	assert(spdk_rdma_qp);
 
-
 	if (spdk_unlikely(spdk_rdma_qp->send_wrs.first == NULL)) {
 		return 0;
 	}
 
 	dv_qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_rdma_mlx5_dv_qp, common);
+	if (spdk_unlikely(!dv_qp->send_err && rdma_provider_inject_send_wr_error())) {
+		dv_qp->send_err = -EIO;
+	}
 	if (spdk_unlikely(dv_qp->send_err)) {
 		/* If send_err is not zero that means that no WRs are posted to NIC */
 		*bad_wr = spdk_rdma_qp->send_wrs.first;
@@ -522,6 +553,9 @@ spdk_rdma_provider_qp_flush_recv_wrs(struct spdk_rdma_provider_qp *spdk_rdma_qp,
 	}
 
 	dv_qp = SPDK_CONTAINEROF(spdk_rdma_qp, struct spdk_rdma_mlx5_dv_qp, common);
+	if (spdk_unlikely(!dv_qp->recv_err && rdma_provider_inject_recv_wr_error())) {
+		dv_qp->recv_err = -EIO;
+	}
 	if (spdk_likely(!dv_qp->recv_err)) {
 		spdk_mlx5_qp_complete_recv(dv_qp->mlx5_qp);
 	} else {
@@ -693,6 +727,58 @@ spdk_rdma_provider_memory_key_get_key(void *_mkey)
 	struct spdk_mlx5_mkey_pool_obj *mkey = _mkey;
 
 	return mkey->mkey;
+}
+
+int
+spdk_rdma_provider_inject_send_wr_error(uint32_t err_rate_num, uint32_t err_rate_den)
+{
+	if (err_rate_den == 0 || err_rate_num > err_rate_den) {
+		SPDK_ERRLOG("Invalid error injection rate: numerator=%u, denominator=%u\n", err_rate_num,
+			    err_rate_den);
+		return -EINVAL;
+	}
+
+	g_send_wr_error_inject_rate_num = err_rate_num;
+	g_send_wr_error_inject_rate_den = err_rate_den;
+	spdk_smp_mb();
+	g_send_wr_enable_error_injection = true;
+
+	return 0;
+}
+
+void
+spdk_rdma_provider_cancel_send_wr_error(void)
+{
+	g_send_wr_enable_error_injection = false;
+	spdk_smp_mb();
+	g_send_wr_error_inject_rate_num = 0;
+	g_send_wr_error_inject_rate_den = 1;
+}
+
+int
+spdk_rdma_provider_inject_recv_wr_error(uint32_t err_rate_num, uint32_t err_rate_den)
+{
+	if (err_rate_den == 0 || err_rate_num > err_rate_den) {
+		SPDK_ERRLOG("Invalid error injection rate: numerator=%u, denominator=%u\n", err_rate_num,
+			    err_rate_den);
+		return -EINVAL;
+	}
+
+	g_recv_wr_error_inject_rate_num = err_rate_num;
+	g_recv_wr_error_inject_rate_den = err_rate_den;
+	spdk_smp_mb();
+	g_recv_wr_enable_error_injection = true;
+
+	return 0;
+}
+
+void
+spdk_rdma_provider_cancel_recv_wr_error(void)
+{
+	g_recv_wr_enable_error_injection = false;
+	spdk_smp_mb();
+	g_recv_wr_error_inject_rate_num = 0;
+	g_recv_wr_error_inject_rate_den = 1;
 }
 
 SPDK_LOG_REGISTER_COMPONENT(rdma_mlx5_dv)

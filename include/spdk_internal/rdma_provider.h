@@ -324,4 +324,36 @@ int spdk_rdma_provider_get_opts(struct spdk_rdma_provider_opts *opts, size_t opt
  */
 void spdk_rdma_provider_subsystem_config_json(struct spdk_json_write_ctx *w);
 
+/**
+ * Enable error injection on the send Work Request path. When enabled,
+ * spdk_rdma_provider_qp_flush_send_wrs() fails a fraction of its flushes at a
+ * rate of \b err_rate_num / \b err_rate_den.
+ *
+ * \param err_rate_num Error rate numerator
+ * \param err_rate_den Error rate denominator
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_rdma_provider_inject_send_wr_error(uint32_t err_rate_num, uint32_t err_rate_den);
+
+/**
+ * Cancel send Work Request error injection.
+ */
+void spdk_rdma_provider_cancel_send_wr_error(void);
+
+/**
+ * Enable error injection on the receive Work Request path. When enabled,
+ * spdk_rdma_provider_qp_flush_recv_wrs() fails a fraction of its
+ * flushes at a rate of \b err_rate_num / \b err_rate_den.
+ *
+ * \param err_rate_num Error rate numerator
+ * \param err_rate_den Error rate denominator
+ * \return 0 on success, negated errno on failure
+ */
+int spdk_rdma_provider_inject_recv_wr_error(uint32_t err_rate_num, uint32_t err_rate_den);
+
+/**
+ * Cancel receive Work Request error injection.
+ */
+void spdk_rdma_provider_cancel_recv_wr_error(void);
+
 #endif /* SPDK_RDMA_H */

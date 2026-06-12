@@ -80,6 +80,8 @@ SPDK_RPC_REGISTER("rdma_provider_set_opts", rpc_rdma_provider_set_opts, SPDK_RPC
 enum rdma_provider_error_type {
 	RDMA_PROVIDER_ERROR_TYPE_CQ,
 	RDMA_PROVIDER_ERROR_TYPE_MKEY,
+	RDMA_PROVIDER_ERROR_TYPE_RQ,
+	RDMA_PROVIDER_ERROR_TYPE_SQ,
 	RDMA_PROVIDER_ERROR_TYPE_INVALID,
 };
 
@@ -96,6 +98,12 @@ rdma_provider_parse_error_type(const char *type)
 	}
 	if (strcmp(type, "mkey") == 0) {
 		return RDMA_PROVIDER_ERROR_TYPE_MKEY;
+	}
+	if (strcmp(type, "rq") == 0) {
+		return RDMA_PROVIDER_ERROR_TYPE_RQ;
+	}
+	if (strcmp(type, "sq") == 0) {
+		return RDMA_PROVIDER_ERROR_TYPE_SQ;
 	}
 	return RDMA_PROVIDER_ERROR_TYPE_INVALID;
 }
@@ -119,6 +127,7 @@ rpc_rdma_provider_inject_error(struct spdk_jsonrpc_request *request,
 			       const struct spdk_json_val *params)
 {
 	struct rpc_rdma_provider_inject_error req = {.wc_status = RPC_RDMA_PROVIDER_WC_STATUS_UNSET};
+	enum rdma_provider_error_type error_type = RDMA_PROVIDER_ERROR_TYPE_INVALID;
 	int rc = 0;
 
 	if (spdk_json_decode_object(params, rpc_rdma_provider_inject_error_decoders,
@@ -128,7 +137,16 @@ rpc_rdma_provider_inject_error(struct spdk_jsonrpc_request *request,
 		goto out;
 	}
 
-	switch (rdma_provider_parse_error_type(req.type)) {
+	error_type = rdma_provider_parse_error_type(req.type);
+
+	if (error_type != RDMA_PROVIDER_ERROR_TYPE_CQ &&
+	    req.wc_status != RPC_RDMA_PROVIDER_WC_STATUS_UNSET) {
+		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						 "'wc_status' is only valid for the 'cq' error type");
+		goto out;
+	}
+
+	switch (error_type) {
 	case RDMA_PROVIDER_ERROR_TYPE_CQ: {
 		enum ibv_wc_status status = IBV_WC_GENERAL_ERR;
 
@@ -145,17 +163,17 @@ rpc_rdma_provider_inject_error(struct spdk_jsonrpc_request *request,
 		break;
 	}
 	case RDMA_PROVIDER_ERROR_TYPE_MKEY:
-		if (req.wc_status != RPC_RDMA_PROVIDER_WC_STATUS_UNSET) {
-			spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-							 "'wc_status' is only valid for the 'cq' error type");
-			goto out;
-		}
-
 		rc = spdk_rdma_utils_inject_memory_translation_error(req.rate_num, req.rate_denom);
+		break;
+	case RDMA_PROVIDER_ERROR_TYPE_RQ:
+		rc = spdk_rdma_provider_inject_recv_wr_error(req.rate_num, req.rate_denom);
+		break;
+	case RDMA_PROVIDER_ERROR_TYPE_SQ:
+		rc = spdk_rdma_provider_inject_send_wr_error(req.rate_num, req.rate_denom);
 		break;
 	default:
 		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						     "Invalid error type '%s', expected 'cq' or 'mkey'", req.type);
+						     "Invalid error type '%s', expected 'cq', 'mkey', 'rq' or 'sq'", req.type);
 		goto out;
 	}
 
@@ -198,9 +216,15 @@ rpc_rdma_provider_cancel_error(struct spdk_jsonrpc_request *request,
 	case RDMA_PROVIDER_ERROR_TYPE_MKEY:
 		spdk_rdma_utils_cancel_memory_translation_error();
 		break;
+	case RDMA_PROVIDER_ERROR_TYPE_RQ:
+		spdk_rdma_provider_cancel_recv_wr_error();
+		break;
+	case RDMA_PROVIDER_ERROR_TYPE_SQ:
+		spdk_rdma_provider_cancel_send_wr_error();
+		break;
 	default:
 		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						     "Invalid error type '%s', expected 'cq' or 'mkey'", req.type);
+						     "Invalid error type '%s', expected 'cq', 'mkey', 'rq' or 'sq'", req.type);
 		goto out;
 	}
 

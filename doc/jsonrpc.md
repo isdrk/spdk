@@ -14972,14 +14972,16 @@ Example response:
 
 ### rdma_provider_inject_error {#rdma_provider_inject_error}
 
-Enable rdma_provider error injection. Completions (`cq`) or memory translations
-(`mkey`) are failed at a rate of `rate_num` / `rate_denom`.
+Enable rdma_provider error injection. Completions (`cq`), memory translations
+(`mkey`), receive Work Request flushes (`rq`) or send Work Request flushes
+(`sq`) are failed at a rate of `rate_num` / `rate_denom`. The `rq` type fails
+both regular receive queue and shared receive queue flushes.
 
 #### Parameters
 
 Name                    | Optional | Type   | Description
 ----------------------- | -------- | ------ | -----------
-type                    | Required | string | Error injection type, either `cq` or `mkey`
+type                    | Required | string | Error injection type, one of `cq`, `mkey`, `rq` or `sq`
 rate_num                | Required | number | Error rate numerator
 rate_denom              | Required | number | Error rate denominator
 wc_status               | Optional | number | ibv_wc_status value to inject, only valid for the `cq` type (default: IBV_WC_GENERAL_ERR)
@@ -15020,7 +15022,7 @@ Disable rdma_provider error injection that was previously enabled with
 
 Name                    | Optional | Type   | Description
 ----------------------- | -------- | ------ | -----------
-type                    | Required | string | Error injection type, either `cq` or `mkey`
+type                    | Required | string | Error injection type, one of `cq`, `mkey`, `rq` or `sq`
 
 #### Example
 

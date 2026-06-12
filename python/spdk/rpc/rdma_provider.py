@@ -30,7 +30,7 @@ def rdma_provider_inject_error(client, type, rate_num, rate_denom, wc_status=Non
     """Enable RDMA provider error injection.
 
     Args:
-        type: Error injection type, either 'cq' or 'mkey'
+        type: Error injection type, one of 'cq', 'mkey', 'rq' or 'sq'
         rate_num: Error rate numerator
         rate_denom: Error rate denominator
         wc_status: (optional) ibv_wc_status value to inject, only valid for 'cq' type
@@ -52,7 +52,7 @@ def rdma_provider_cancel_error(client, type):
     """Disable RDMA provider error injection.
 
     Args:
-        type: Error injection type, either 'cq' or 'mkey'
+        type: Error injection type, one of 'cq', 'mkey', 'rq' or 'sq'
     """
 
     return client.call('rdma_provider_cancel_error', {'type': type})

@@ -731,7 +731,7 @@ def add_parser(subparsers):
                                                rate_denom=args.rate_denom, wc_status=args.wc_status)
 
     p = subparsers.add_parser('rdma_provider_inject_error', help='Enable RDMA provider error injection')
-    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey'])
+    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey', 'rq', 'sq'])
     p.add_argument('rate_num', help="Error rate numerator", type=int)
     p.add_argument('rate_denom', help="Error rate denominator", type=int)
     p.add_argument('-s', '--wc-status', dest='wc_status', type=int, default=None,
@@ -742,7 +742,7 @@ def add_parser(subparsers):
         args.client.rdma_provider_cancel_error(type=args.type)
 
     p = subparsers.add_parser('rdma_provider_cancel_error', help='Disable RDMA provider error injection')
-    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey'])
+    p.add_argument('type', help="Error injection type", choices=['cq', 'mkey', 'rq', 'sq'])
     p.set_defaults(func=rdma_provider_cancel_error)
 
     def fuse_set_options(args):

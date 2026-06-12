@@ -26,6 +26,10 @@
 	spdk_rdma_provider_memory_key_get_ref;
 	spdk_rdma_provider_memory_key_put_ref;
 	spdk_rdma_provider_memory_key_get_key;
+	spdk_rdma_provider_inject_send_wr_error;
+	spdk_rdma_provider_cancel_send_wr_error;
+	spdk_rdma_provider_inject_recv_wr_error;
+	spdk_rdma_provider_cancel_recv_wr_error;
 
 	local: *;
 };

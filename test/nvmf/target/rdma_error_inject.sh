@@ -26,7 +26,7 @@ nvmftestinit
 function start_target() {
 	nvmfappstart -m "$tgt_core_mask"
 
-	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS -u 8192
+	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS -u 8192 --no-srq
 	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
 	$rpc_py nvmf_create_subsystem $NVME_SUBNQN -a -s $NVMF_SERIAL
 	$rpc_py nvmf_subsystem_add_ns $NVME_SUBNQN Malloc0
@@ -72,8 +72,8 @@ function stop_bdevperf() {
 	trap 'process_shm --id $NVMF_APP_SHM_ID || :; nvmftestfini' SIGINT SIGTERM EXIT
 }
 
-# Run the cq/mkey error injection sequence against the SPDK app reachable on
-# the supplied RPC socket ("" selects the default target socket).
+# Run the cq/mkey/rq/sq error injection sequence against the SPDK app reachable
+# on the supplied RPC socket ("" selects the default target socket).
 function inject_error_sequence() {
 	local sock=$1
 	local rpc_args=()
@@ -92,6 +92,22 @@ function inject_error_sequence() {
 	$rpc_py "${rpc_args[@]}" rdma_provider_inject_error mkey 1 1000
 	sleep 10
 	$rpc_py "${rpc_args[@]}" rdma_provider_cancel_error mkey
+
+	# allow bdevperf to reconnect
+	sleep 5
+
+	# Inject recv WR flush errors with 1/1000 probability
+	$rpc_py "${rpc_args[@]}" rdma_provider_inject_error rq 1 1000
+	sleep 10
+	$rpc_py "${rpc_args[@]}" rdma_provider_cancel_error rq
+
+	# allow bdevperf to reconnect
+	sleep 5
+
+	# Inject send WR flush errors with 1/1000 probability
+	$rpc_py "${rpc_args[@]}" rdma_provider_inject_error sq 1 1000
+	sleep 10
+	$rpc_py "${rpc_args[@]}" rdma_provider_cancel_error sq
 
 	# allow bdevperf to reconnect
 	sleep 5

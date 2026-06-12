@@ -426,3 +426,25 @@ spdk_rdma_provider_memory_key_get_key(void *mkey)
 {
 	return UINT32_MAX;
 }
+
+int
+spdk_rdma_provider_inject_send_wr_error(uint32_t err_rate_num, uint32_t err_rate_den)
+{
+	return -ENOTSUP;
+}
+
+void
+spdk_rdma_provider_cancel_send_wr_error(void)
+{
+}
+
+int
+spdk_rdma_provider_inject_recv_wr_error(uint32_t err_rate_num, uint32_t err_rate_den)
+{
+	return -ENOTSUP;
+}
+
+void
+spdk_rdma_provider_cancel_recv_wr_error(void)
+{
+}
