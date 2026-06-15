@@ -49,8 +49,10 @@ _parse_log_level(char *level)
 		return SPDK_LOG_INFO;
 	} else if (!strcasecmp(level, "DEBUG")) {
 		return SPDK_LOG_DEBUG;
+	} else if (!strcasecmp(level, "DISABLED")) {
+		return SPDK_LOG_DISABLED;
 	}
-	return -1;
+	return -EINVAL;
 }
 
 static const char *
@@ -66,6 +68,8 @@ _log_get_level_name(int level)
 		return "INFO";
 	} else if (level == SPDK_LOG_DEBUG) {
 		return "DEBUG";
+	} else if (level == SPDK_LOG_DISABLED) {
+		return "DISABLED";
 	}
 	return NULL;
 }
@@ -86,10 +90,10 @@ rpc_log_set_print_level(struct spdk_jsonrpc_request *request,
 	}
 
 	level = _parse_log_level(req.level);
-	if (level == -1) {
-		SPDK_DEBUGLOG(log_rpc, "tried to set invalid log level\n");
-		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
-						 "invalid log level");
+	if (level == -EINVAL) {
+		SPDK_ERRLOG("tried to set invalid log level %s\n", req.level);
+		spdk_jsonrpc_send_error_response_fmt(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
+						     "invalid log level %s", req.level);
 		goto end;
 	}
 
@@ -147,7 +151,7 @@ rpc_log_set_level(struct spdk_jsonrpc_request *request,
 	}
 
 	level = _parse_log_level(req.level);
-	if (level == -1) {
+	if (level == -EINVAL) {
 		SPDK_DEBUGLOG(log_rpc, "tried to set invalid log level\n");
 		spdk_jsonrpc_send_error_response(request, SPDK_JSONRPC_ERROR_INVALID_PARAMS,
 						 "invalid log level");
