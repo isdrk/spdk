@@ -897,6 +897,9 @@ nvme_rdma_qpair_submit_sends(struct nvme_rdma_qpair *rqpair)
 		NVME_RQPAIR_ERRLOG(rqpair, "Failed to post WRs on send queue, errno %d (%s), bad_wr %p\n",
 				   rc, spdk_strerror(rc), bad_send_wr);
 		nvme_rdma_reset_failed_sends(rqpair, bad_send_wr);
+		if (rqpair->qpair.transport_failure_reason == SPDK_NVME_QPAIR_FAILURE_NONE) {
+			rqpair->qpair.transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_LOCAL;
+		}
 	}
 
 	return rc;
@@ -911,6 +914,9 @@ nvme_rdma_qpair_submit_recvs(struct nvme_rdma_qpair *rqpair)
 	rc = spdk_rdma_provider_qp_flush_recv_wrs(rqpair->rdma_qp, &bad_recv_wr);
 	if (spdk_unlikely(rc)) {
 		nvme_rdma_reset_failed_recvs(rqpair->rsps, bad_recv_wr, rc);
+		if (rqpair->qpair.transport_failure_reason == SPDK_NVME_QPAIR_FAILURE_NONE) {
+			rqpair->qpair.transport_failure_reason = SPDK_NVME_QPAIR_FAILURE_LOCAL;
+		}
 	}
 
 	return rc;
@@ -2373,18 +2379,6 @@ nvme_rdma_qpair_destroy(struct nvme_rdma_qpair *rqpair)
 
 static void nvme_rdma_qpair_abort_reqs(struct spdk_nvme_qpair *qpair, uint32_t dnr);
 
-static void
-nvme_rdma_qpair_flush_send_wrs(struct nvme_rdma_qpair *rqpair)
-{
-	struct ibv_send_wr *bad_wr = NULL;
-	int rc;
-
-	rc = spdk_rdma_provider_qp_flush_send_wrs(rqpair->rdma_qp, &bad_wr);
-	if (rc) {
-		nvme_rdma_reset_failed_sends(rqpair, bad_wr);
-	}
-}
-
 static inline void
 nvme_rdma_finish_outstanding_accel_transfers(struct nvme_rdma_qpair *rqpair)
 {
@@ -2423,7 +2417,7 @@ static int
 nvme_rdma_qpair_disconnected(struct nvme_rdma_qpair *rqpair, int ret)
 {
 	if (rqpair->rdma_qp != NULL) {
-		nvme_rdma_qpair_flush_send_wrs(rqpair);
+		nvme_rdma_qpair_submit_sends(rqpair);
 	}
 
 	if (rqpair->num_active_accel_reqs != 0) {
@@ -2932,7 +2926,13 @@ nvme_rdma_qpair_submit_request(struct spdk_nvme_qpair *qpair,
 
 	nvme_rdma_qpair_add_req(rqpair, rdma_req);
 
-	return _nvme_rdma_qpair_submit_request(rqpair, rdma_req);
+	rc = _nvme_rdma_qpair_submit_request(rqpair, rdma_req);
+	if (spdk_unlikely(rc)) {
+		nvme_rdma_qpair_remove_req(rqpair, rdma_req);
+		nvme_rdma_req_put(rqpair, rdma_req);
+	}
+
+	return rc;
 }
 
 static int
