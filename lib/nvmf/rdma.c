@@ -2783,12 +2783,12 @@ nvmf_rdma_request_check_accel_sequence(struct spdk_nvmf_rdma_qpair *rqpair,
 		return;
 	}
 
-	SPDK_DEBUGLOG(rdma, "rqpair %p id %u, req %p, accel_seq %s\n", rqpair, rqpair->qpair.qid, rdma_req,
-		      ns->accel_sequence ? "YES" : "NO");
-
 	rdma_req->req.use_accel_seq = ns->accel_sequence;
 	rdma_req->req.use_memory_domain = rqpair->device->null_mr != NULL &&
 					  ns->memory_domain_support[SPDK_DMA_DEVICE_TYPE_RDMA].domain_transfer_supported;
+	SPDK_DEBUGLOG(rdma, "rqpair %p id %u, req %p, accel_seq %s, domain_trasfer %s\n", rqpair,
+		      rqpair->qpair.qid, rdma_req,
+		      ns->accel_sequence ? "YES" : "NO", rdma_req->req.use_memory_domain ? "YES" : "NO");
 }
 
 static inline int
@@ -5529,6 +5529,7 @@ _qp_reset_failed_recvs(struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_recv_wr *
 		bad_recv_wr = bad_recv_wr->next;
 		rqpair->current_recv_depth++;
 	}
+	rqpair->ibv_in_error_state = true;
 	spdk_nvmf_qpair_disconnect(&rqpair->qpair);
 }
 
@@ -5562,20 +5563,19 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 		       struct spdk_nvmf_rdma_qpair *rqpair, struct ibv_send_wr *bad_wr, int rc)
 {
 	struct spdk_nvmf_rdma_wr	*bad_rdma_wr;
-	struct spdk_nvmf_rdma_request	*prev_rdma_req = NULL, *cur_rdma_req = NULL;
+	struct spdk_nvmf_rdma_request	*prev_rdma_req = NULL, *cur_rdma_req = NULL, *req_tmp;
+	STAILQ_HEAD(, spdk_nvmf_rdma_request) failed_requests = STAILQ_HEAD_INITIALIZER(failed_requests);
+	uint32_t outstanding_data_wr = 0;
 
 	SPDK_ERRLOG("Failed to post a send for the qpair %p with errno %d\n", rqpair, -rc);
+
+	rqpair->ibv_in_error_state = true;
+
 	for (; bad_wr != NULL; bad_wr = bad_wr->next) {
 		bad_rdma_wr = (struct spdk_nvmf_rdma_wr *)bad_wr->wr_id;
-		assert(rqpair->current_send_depth > 0);
-		rqpair->current_send_depth--;
 		switch (bad_rdma_wr->type) {
 		case RDMA_WR_TYPE_DATA:
 			cur_rdma_req = SPDK_CONTAINEROF(bad_rdma_wr, struct spdk_nvmf_rdma_request, data_wr);
-			if (bad_wr->opcode == IBV_WR_RDMA_READ) {
-				assert(rqpair->current_read_depth > 0);
-				rqpair->current_read_depth--;
-			}
 			break;
 		case RDMA_WR_TYPE_SEND:
 			cur_rdma_req = SPDK_CONTAINEROF(bad_rdma_wr, struct spdk_nvmf_rdma_request, rsp_wr);
@@ -5594,13 +5594,41 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 
 		switch (cur_rdma_req->state) {
 		case RDMA_REQUEST_STATE_TRANSFERRING_HOST_TO_CONTROLLER:
-			cur_rdma_req->req.rsp->nvme_cpl.status.sc = SPDK_NVME_SC_INTERNAL_DEVICE_ERROR;
-			STAILQ_INSERT_TAIL(&rqpair->pending_rdma_send_queue, cur_rdma_req, state_link);
-			cur_rdma_req->state = RDMA_REQUEST_STATE_READY_TO_COMPLETE_PENDING;
+			SPDK_DEBUGLOG(rdma,
+				      "rqpair %p id %u, read depth %u, send depth %u; req %p, num_outstanding_data_wr %u, num_remaining_data_wr %u\n",
+				      rqpair, rqpair->qpair.qid, rqpair->current_read_depth, rqpair->current_send_depth, cur_rdma_req,
+				      cur_rdma_req->num_outstanding_data_wr, cur_rdma_req->num_remaining_data_wr);
+			assert(rqpair->current_read_depth >= cur_rdma_req->num_outstanding_data_wr);
+			rqpair->current_read_depth -= cur_rdma_req->num_outstanding_data_wr;
+			assert(rqpair->current_send_depth >= cur_rdma_req->num_outstanding_data_wr);
+			rqpair->current_send_depth -= cur_rdma_req->num_outstanding_data_wr;
+			if (cur_rdma_req->num_remaining_data_wr) {
+				/* Partially sent request is still in the pending_rdma_read_queue,
+				 * remove it before completing */
+				cur_rdma_req->num_remaining_data_wr = 0;
+				STAILQ_REMOVE(&rqpair->pending_rdma_read_queue, cur_rdma_req, spdk_nvmf_rdma_request, state_link);
+			}
+			cur_rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
 			break;
 		case RDMA_REQUEST_STATE_TRANSFERRING_CONTROLLER_TO_HOST:
 		case RDMA_REQUEST_STATE_COMPLETING:
+			if (cur_rdma_req->req.xfer == SPDK_NVME_DATA_CONTROLLER_TO_HOST) {
+				/* Outstanding RDMA_WRITE WRs chained with the response SEND (+1). */
+				outstanding_data_wr = cur_rdma_req->num_outstanding_data_wr;
+			}
+			if (!cur_rdma_req->transfer_cpl_cb) {
+				/* We don't chain a response if memory_domain or accel data transfer is used */
+				outstanding_data_wr++;
+			}
+			assert(rqpair->current_send_depth >= outstanding_data_wr);
+			SPDK_DEBUGLOG(rdma,
+				      "rqpair %p id %u, send depth %u; req %p, num_outstanding_data_wr %u, num_remaining_data_wr %u\n",
+				      rqpair, rqpair->qpair.qid, rqpair->current_send_depth, cur_rdma_req,
+				      cur_rdma_req->num_outstanding_data_wr, cur_rdma_req->num_remaining_data_wr);
+			rqpair->current_send_depth -= outstanding_data_wr;
+			cur_rdma_req->num_outstanding_data_wr = 0;
 			cur_rdma_req->state = RDMA_REQUEST_STATE_COMPLETED;
+			outstanding_data_wr = 0;
 			break;
 		default:
 			SPDK_ERRLOG("Found a request in a bad state %d when draining pending SEND requests for qpair %p\n",
@@ -5608,8 +5636,16 @@ _qp_reset_failed_sends(struct spdk_nvmf_rdma_transport *rtransport,
 			continue;
 		}
 
-		nvmf_rdma_request_process(rtransport, cur_rdma_req);
 		prev_rdma_req = cur_rdma_req;
+		/* When a request is freed, wr chain may be broken. To keep bad_wr linked we first
+		 * need to iterate all WRs and keep request which needs to be comlpleted in a list
+		 * The state_link isn't used at this moment and can be used to keep request in the list */
+		STAILQ_INSERT_TAIL(&failed_requests, cur_rdma_req, state_link);
+	}
+
+	STAILQ_FOREACH_SAFE(cur_rdma_req, &failed_requests, state_link, req_tmp) {
+		STAILQ_REMOVE(&failed_requests, cur_rdma_req, spdk_nvmf_rdma_request, state_link);
+		nvmf_rdma_request_process(rtransport, cur_rdma_req);
 	}
 
 	if (spdk_nvmf_qpair_is_active(&rqpair->qpair)) {
