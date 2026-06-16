@@ -73,6 +73,7 @@ if [[ $NET_TYPE == phy ]]; then
 		# Disabled due to https://github.com/spdk/spdk/issues/3345
 		# run_test "nvmf_device_removal" test/nvmf/target/device_removal.sh "${TEST_ARGS[@]}"
 		run_test "nvmf_srq_overwhelm" "$rootdir/test/nvmf/target/srq_overwhelm.sh" "${TEST_ARGS[@]}"
+		run_test "nvmf_rdma_error_inject" "$rootdir/test/nvmf/target/rdma_error_inject.sh" "${TEST_ARGS[@]}"
 	fi
 fi
 

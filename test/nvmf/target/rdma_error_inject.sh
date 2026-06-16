@@ -24,9 +24,11 @@ fi
 nvmftestinit
 
 function start_target() {
+	local extra_opts=${1:-""}
+
 	nvmfappstart -m "$tgt_core_mask"
 
-	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS -u 8192 --no-srq
+	$rpc_py nvmf_create_transport $NVMF_TRANSPORT_OPTS -u 8192 --no-srq $extra_opts
 	$rpc_py bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
 	$rpc_py nvmf_create_subsystem $NVME_SUBNQN -a -s $NVMF_SERIAL
 	$rpc_py nvmf_subsystem_add_ns $NVME_SUBNQN Malloc0
@@ -34,7 +36,7 @@ function start_target() {
 }
 
 function start_bdevperf() {
-	mkdir -p $testdir
+	local extra_opts=${1:-""}
 
 	# -o 16384 io size, --io-unit-size 2048 splits each IO into fragmented buffers.
 	# -f keeps the job running across I/O failures: injected errors may complete an
@@ -48,7 +50,7 @@ function start_bdevperf() {
 	waitforlisten $bdevperf_pid $bdevperf_rpc_sock
 
 	# bdev_retry_count -1 means infinite I/O retries at the bdev layer
-	$rpc_py -s $bdevperf_rpc_sock bdev_nvme_set_options -r -1
+	$rpc_py -s $bdevperf_rpc_sock bdev_nvme_set_options -r -1 $extra_opts
 
 	# -l -1 ctrlr_loss_timeout_sec -1 means infinite reconnects
 	# -o 2 reconnect_delay_sec is 2 sec
@@ -125,6 +127,25 @@ function test_inject_error_on_target() {
 	nvmfpid=
 }
 
+function test_inject_error_on_target_with_accel() {
+	start_target "--in-capsule-data-size 0"
+	start_bdevperf
+
+	inject_error_sequence ""
+
+	stop_bdevperf
+
+	stats=$($rpc_py accel_mlx5_dump_stats -l total)
+	val=$(echo $stats | jq -r '.total.umrs.umrs')
+	if [[ "$val" == 0 ]]; then
+		echo "Target didn't use accel_mlx5"
+		return 1
+	fi
+
+	killprocess $nvmfpid
+	nvmfpid=
+}
+
 function test_inject_error_on_initiator() {
 	start_target
 	start_bdevperf
@@ -137,7 +158,28 @@ function test_inject_error_on_initiator() {
 	nvmfpid=
 }
 
+function test_inject_error_on_initiator_with_accel() {
+	start_target
+	start_bdevperf "--enable-rdma-umr-per-io"
+
+	inject_error_sequence "$bdevperf_rpc_sock"
+
+	stats=$($rpc_py -s $bdevperf_rpc_sock accel_mlx5_dump_stats -l total)
+	val=$(echo $stats | jq -r '.total.umrs.umrs')
+	if [[ "$val" == 0 ]]; then
+		echo "Initiator didn't use accel_mlx5"
+		return 1
+	fi
+
+	stop_bdevperf
+
+	killprocess $nvmfpid
+	nvmfpid=
+}
+
 run_test "nvmf_rdma_error_inject_target" test_inject_error_on_target
+run_test "nvmf_rdma_error_inject_target_with_accel" test_inject_error_on_target_with_accel
 run_test "nvmf_rdma_error_inject_initiator" test_inject_error_on_initiator
+run_test "nvmf_rdma_error_inject_initiator_with_accel" test_inject_error_on_initiator_with_accel
 
 nvmftestfini
