@@ -7,6 +7,7 @@ testdir=$(readlink -f $(dirname $0))
 rootdir=$(readlink -f $testdir/../../..)
 source $rootdir/test/common/autotest_common.sh
 source $rootdir/test/nvmf/common.sh
+rpcs_txt=$output_dir/rpcs.txt
 
 MALLOC_BDEV_SIZE=64
 MALLOC_BLOCK_SIZE=512
@@ -19,15 +20,15 @@ function starttarget() {
 
 	timing_enter create_subsystem
 	# Create subsystem
-	rm -rf $testdir/rpcs.txt
-	cat <<- EOL >> $testdir/rpcs.txt
+	rm -f "$rpcs_txt"
+	cat <<- EOL >> "$rpcs_txt"
 		bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc0
 		nvmf_create_subsystem nqn.2016-06.io.spdk:cnode0 -s SPDK0
 		nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode0 Malloc0
 		nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode0 -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
 		nvmf_subsystem_add_host nqn.2016-06.io.spdk:cnode0 nqn.2016-06.io.spdk:host0
 	EOL
-	$rpc_py < $testdir/rpcs.txt
+	$rpc_py < "$rpcs_txt"
 	timing_exit create_subsystems
 
 }
@@ -35,7 +36,7 @@ function starttarget() {
 function stoptarget() {
 	rm -f ./local-job0-0-verify.state
 	rm -rf $testdir/bdevperf.conf
-	rm -rf $testdir/rpcs.txt
+	rm -f "$rpcs_txt"
 
 	nvmftestfini
 }
@@ -69,10 +70,11 @@ function nvmf_host_management() {
 	starttarget
 
 	# Run bdevperf
-	$rootdir/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "0") -q 64 -o 65536 -w verify -t 10 "${NO_HUGE[@]}" &
+	"$rootdir"/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "0") -q 64 -o 65536 -w verify -t 10 "${NO_HUGE[@]}" --wait-for-rpc &
 	perfpid=$!
 	waitforlisten $perfpid /var/tmp/bdevperf.sock
-	$rpc_py -s /var/tmp/bdevperf.sock framework_wait_init
+	$rpc_py -s /var/tmp/bdevperf.sock bdev_set_options --disable-rw-bypass
+	$rpc_py -s /var/tmp/bdevperf.sock framework_start_init
 
 	# Expand the trap to clean up bdevperf if something goes wrong
 	trap 'process_shm --id $NVMF_APP_SHM_ID; kill -9 $perfpid || true; nvmftestfini; exit 1' SIGINT SIGTERM EXIT
