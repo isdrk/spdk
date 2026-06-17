@@ -11,6 +11,7 @@ source $rootdir/test/nvmf/common.sh
 
 MALLOC_BDEV_SIZE=64
 MALLOC_BLOCK_SIZE=512
+rpcs_txt=$output_dir/rpcs.txt
 
 function starttarget() {
 	nvmftestinit
@@ -24,16 +25,16 @@ function starttarget() {
 
 	timing_enter create_subsystems
 	# Create subsystems
-	rm -rf $testdir/rpcs.txt
+	rm -f "$rpcs_txt"
 	for i in "${num_subsystems[@]}"; do
-		cat <<- EOL >> $testdir/rpcs.txt
+		cat <<- EOL >> "$rpcs_txt"
 			bdev_malloc_create $MALLOC_BDEV_SIZE $MALLOC_BLOCK_SIZE -b Malloc$i
 			nvmf_create_subsystem nqn.2016-06.io.spdk:cnode$i -a -s SPDK$i
 			nvmf_subsystem_add_ns nqn.2016-06.io.spdk:cnode$i Malloc$i
 			nvmf_subsystem_add_listener nqn.2016-06.io.spdk:cnode$i -t $TEST_TRANSPORT -a $NVMF_FIRST_TARGET_IP -s $NVMF_PORT
 		EOL
 	done
-	$rpc_py < $testdir/rpcs.txt
+	$rpc_py < "$rpcs_txt"
 	timing_exit create_subsystems
 
 }
@@ -41,7 +42,7 @@ function starttarget() {
 function stoptarget() {
 	rm -f ./local-job0-0-verify.state
 	rm -rf $testdir/bdevperf.conf
-	rm -rf $testdir/rpcs.txt
+	rm -f "$rpcs_txt"
 
 	nvmftestfini
 }
