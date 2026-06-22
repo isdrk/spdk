@@ -1136,12 +1136,12 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 	if (rqpair->srq == NULL && nvmf_rdma_resize_cq(rqpair, device) < 0) {
 		SPDK_ERRLOG("Failed to resize the completion queue. Cannot initialize qpair.\n");
-		goto error;
+		return -ENOMEM;
 	}
 
 	rqpair->rdma_qp = spdk_rdma_provider_qp_create(rqpair->cm_id, &qp_init_attr);
 	if (!rqpair->rdma_qp) {
-		goto error;
+		return -EIO;
 	}
 
 	rqpair->qp_num = rqpair->rdma_qp->qp->qp_num;
@@ -1167,8 +1167,7 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 
 		if (!rqpair->resources) {
 			SPDK_ERRLOG("Unable to allocate resources for receive queue.\n");
-			rdma_destroy_qp(rqpair->cm_id);
-			goto error;
+			return -ENOMEM;
 		}
 	} else {
 		rqpair->resources = rqpair->poller->resources;
@@ -1181,11 +1180,6 @@ nvmf_rdma_qpair_initialize(struct spdk_nvmf_qpair *qpair)
 	rqpair->qpair.queue_depth = 0;
 
 	return 0;
-
-error:
-	rdma_destroy_id(rqpair->cm_id);
-	rqpair->cm_id = NULL;
-	return -1;
 }
 
 /* Append the given recv wr structure to the resource structs outstanding recvs list. */
