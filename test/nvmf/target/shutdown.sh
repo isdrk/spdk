@@ -101,10 +101,11 @@ function nvmf_shutdown_tc2() {
 	starttarget
 
 	# Run bdevperf
-	$rootdir/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "${num_subsystems[@]}") -q 64 -o 65536 -w verify -t 10 &
+	$rootdir/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "${num_subsystems[@]}") -q 64 -o 65536 -w verify -t 10 --wait-for-rpc &
 	perfpid=$!
 	waitforlisten $perfpid /var/tmp/bdevperf.sock
-	$rpc_py -s /var/tmp/bdevperf.sock framework_wait_init
+	$rpc_py -s /var/tmp/bdevperf.sock bdev_set_options --disable-rw-bypass
+	$rpc_py -s /var/tmp/bdevperf.sock framework_start_init
 
 	waitforio /var/tmp/bdevperf.sock Nvme1n1
 
@@ -123,10 +124,11 @@ function nvmf_shutdown_tc3() {
 	starttarget
 
 	# Run bdevperf
-	$rootdir/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "${num_subsystems[@]}") -q 64 -o 65536 -w verify -t 10 &
+	$rootdir/build/examples/bdevperf -r /var/tmp/bdevperf.sock --json <(gen_nvmf_target_json "${num_subsystems[@]}") -q 64 -o 65536 -w verify -t 10 --wait-for-rpc &
 	perfpid=$!
 	waitforlisten $perfpid /var/tmp/bdevperf.sock
-	$rpc_py -s /var/tmp/bdevperf.sock framework_wait_init
+	$rpc_py -s /var/tmp/bdevperf.sock bdev_set_options --disable-rw-bypass
+	$rpc_py -s /var/tmp/bdevperf.sock framework_start_init
 
 	# Expand the trap to clean up bdevperf if something goes wrong
 	trap 'process_shm --id $NVMF_APP_SHM_ID; kill -9 $perfpid || true; nvmftestfini; exit 1' SIGINT SIGTERM EXIT
