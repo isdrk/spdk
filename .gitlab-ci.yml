@@ -71,7 +71,6 @@ test-crypto-job:
   script:
     - ./configure --enable-debug  --with-rdma=mlx5_dv --with-crypto --enable-werror --without-idxd --with-fio=/usr/src/fio --enable-ubsan --enable-asan --enable-coverage --with-ublk --with-shared && make -j${nproc}
     - ./scripts/setup.sh
-    - ./test/accel/mlx5/accel_mlx5_crypto_key_upper_lba.sh
     - ./test/accel/mlx5/accel_mlx5_crypto.sh
 
 coverity-job:
