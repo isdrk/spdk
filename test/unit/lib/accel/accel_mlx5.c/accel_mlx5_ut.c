@@ -59,11 +59,6 @@ DEFINE_STUB(spdk_mlx5_qp_rdma_read, int, (struct spdk_mlx5_qp *qp, struct ibv_sg
 DEFINE_STUB(spdk_mlx5_qp_rdma_write, int, (struct spdk_mlx5_qp *qp, struct ibv_sge *sge,
 		uint32_t sge_count,
 		uint64_t dstaddr, uint32_t rkey, uint64_t wrid, uint32_t flags), 0);
-DEFINE_STUB(spdk_mlx5_umr_configure_trans_sig_crypto, int, (struct spdk_mlx5_qp *qp,
-		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-		uint64_t wr_id, uint32_t flags), 0);
 DEFINE_STUB(spdk_mlx5_umr_configure_trans_sig, int, (struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr, struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
 		uint64_t wr_id, uint32_t flags), 0);

@@ -2587,7 +2587,6 @@ Example response:
       "umrs": {
         "crypto_umrs": 1234,
         "sig_umrs": 2345,
-        "sig_crypto_umrs": 3456,
         "total": 7035
       },
       "rdma": {
@@ -2610,8 +2609,6 @@ Example response:
         "encrypt_mkey": 0,
         "decrypt_mkey": 0,
         "crc32c": 2345,
-        "encrypt_crc": 3456,
-        "crc_decrypt": 0,
         "total": 7035
       }
     }
