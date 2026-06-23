@@ -4803,8 +4803,6 @@ accel_mlx5_create_qp(struct accel_mlx5_dev *dev, struct accel_mlx5_qp *qp)
 	mlx5_qp_attr.cap.max_recv_wr = 0;
 	mlx5_qp_attr.cap.max_send_sge = ACCEL_MLX5_MAX_INLINE_SGE;
 	mlx5_qp_attr.cap.max_inline_data = sizeof(struct ibv_sge) * ACCEL_MLX5_MAX_INLINE_SGE;
-	mlx5_qp_attr.aes_xts_inc_64 = (dev->dev_ctx->caps.crypto_supported == 1) ?
-				      dev->dev_ctx->caps.crypto.tweak_inc_64 : false;
 
 	rc = spdk_mlx5_qp_create(dev->dev_ctx->pd, dev->cq, &mlx5_qp_attr, &qp->qp);
 	if (rc) {
@@ -5655,7 +5653,6 @@ accel_mlx5_crypto_key_init(struct spdk_accel_crypto_key *key)
 	memcpy(attr.dek, key->key, key->key_size);
 	memcpy(attr.dek + key->key_size, key->key2, key->key2_size);
 	attr.dek_len = key->key_size + key->key2_size;
-	attr.tweak_upper_lba = key->tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_INCR_512_UPPER_LBA;
 
 	rc = spdk_mlx5_crypto_keytag_create(&attr, &keytag);
 	spdk_memset_s(attr.dek, attr.dek_len, 0, attr.dek_len);
@@ -5870,31 +5867,12 @@ accel_mlx5_crypto_supports_cipher(enum spdk_accel_cipher cipher, size_t key_size
 static bool
 accel_mlx5_crypto_supports_tweak_mode(enum spdk_accel_crypto_tweak_mode tweak_mode)
 {
-	struct ibv_context **devs;
-	struct spdk_mlx5_device_caps caps;
-	int devs_count, i, rc;
-	bool upper_lba_supported;
-
 	if (!g_accel_mlx5.crypto_supported) {
 		return false;
 	}
 
 	if (tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_SIMPLE_LBA) {
 		return true;
-	}
-	if (tweak_mode == SPDK_ACCEL_CRYPTO_TWEAK_MODE_INCR_512_UPPER_LBA) {
-		upper_lba_supported = true;
-		devs = spdk_mlx5_crypto_devs_get(&devs_count);
-		assert(devs);
-		for (i = 0; i < devs_count; i++) {
-			rc = spdk_mlx5_device_query_caps(devs[i], &caps);
-			if (rc || !caps.crypto_supported || !caps.crypto.tweak_inc_64) {
-				upper_lba_supported = false;
-				break;
-			}
-		}
-		spdk_mlx5_crypto_devs_release(devs);
-		return upper_lba_supported;
 	}
 
 	return false;
