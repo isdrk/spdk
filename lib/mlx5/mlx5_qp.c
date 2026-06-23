@@ -197,7 +197,6 @@ mlx5_qp_init(struct ibv_pd *pd, const struct spdk_mlx5_qp_attr *attr, struct ibv
 	qp->max_send_sge = attr->cap.max_send_sge;
 	qp->rx_available = qp->hw.rq_wqe_cnt;
 	qp->max_recv_sge = attr->cap.max_recv_sge;
-	qp->aes_xts_inc_64 = attr->aes_xts_inc_64;
 	rc = posix_memalign((void **)&qp->sq_completions, 4096,
 			    qp->hw.sq_wqe_cnt * sizeof(*qp->sq_completions));
 	if (rc) {

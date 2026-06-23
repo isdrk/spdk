@@ -272,8 +272,6 @@ spdk_mlx5_device_query_caps(struct ibv_context *context, struct spdk_mlx5_device
 					    capability.cmd_hca_cap.aes_xts_multi_block_be_tweak);
 	caps->crypto.multi_block_le_tweak = DEVX_GET(query_hca_cap_out, out,
 					    capability.cmd_hca_cap.aes_xts_multi_block_le_tweak);
-	caps->crypto.tweak_inc_64 = DEVX_GET(query_hca_cap_out, out,
-					     capability.cmd_hca_cap.aes_xts_tweak_inc_64);
 
 	opmod = MLX5_SET_HCA_CAP_OP_MOD_CRYPTO | HCA_CAP_OPMOD_GET_CUR;
 	memset(&out, 0, sizeof(out));
@@ -397,17 +395,6 @@ mlx5_crypto_dek_query(struct mlx5_crypto_dek *dek, struct mlx5_crypto_dek_query_
 	return 0;
 }
 
-static const enum spdk_mlx5_crypto_key_tweak_mode g_tweak_mode_map[][2] = {
-	[0] = { /* SIMPLE or LOWER LBA */
-		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE,
-		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE,
-	},
-	[1] = { /* UPPER LBA */
-		[0] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE,
-		[1] = SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE,
-	}
-};
-
 int
 spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 			       struct spdk_mlx5_crypto_keytag **out)
@@ -517,7 +504,8 @@ spdk_mlx5_crypto_keytag_create(struct spdk_mlx5_crypto_dek_create_attr *attr,
 		dek->pd = pd;
 		dek->context = devs[i];
 		/* We have only mode one BE mode, if it is not set then tweak is LE */
-		dek->tweak_mode = g_tweak_mode_map[!!attr->tweak_upper_lba][!!dev_caps.crypto.multi_block_be_tweak];
+		dek->tweak_mode = dev_caps.crypto.multi_block_be_tweak ?
+				  SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE : SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE;
 	}
 
 	if (dek_attr.keytag) {

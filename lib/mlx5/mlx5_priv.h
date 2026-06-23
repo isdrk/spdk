@@ -105,7 +105,6 @@ struct spdk_mlx5_qp {
 	 * connected qpairs. */
 	uint8_t extra_flags;
 	uint8_t cached_extra_flags;
-	bool aes_xts_inc_64;
 };
 
 enum {

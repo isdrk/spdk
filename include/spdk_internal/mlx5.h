@@ -67,8 +67,6 @@ struct spdk_mlx5_crypto_dek_create_attr {
 	char *dek;
 	/* Length of the dek */
 	size_t dek_len;
-	/* LBA is located in upper part of a tweak */
-	bool tweak_upper_lba;
 };
 
 struct spdk_mlx5_cq;
@@ -90,7 +88,6 @@ struct spdk_mlx5_qp_attr {
 	/* If set then CQ_UPDATE will be cleared for every ctrl WQE and only last ctrl WQE before ringing the doorbell
 	 * will be updated with CQ_UPDATE flag */
 	bool siglast;
-	bool aes_xts_inc_64;
 };
 
 struct spdk_mlx5_cq_completion {
@@ -214,8 +211,6 @@ enum spdk_mlx5_block_size_selector {
 enum spdk_mlx5_crypto_key_tweak_mode {
 	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_BE	= 0,
 	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_SIMPLE_LBA_LE	= 1,
-	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_BE	= 2,
-	SPDK_MLX5_CRYPTO_KEY_TWEAK_MODE_UPPER_LBA_LE	= 3
 };
 
 struct spdk_mlx5_crypto_dek_data {
@@ -310,7 +305,6 @@ struct spdk_mlx5_device_crypto_caps {
 	uint8_t single_block_le_tweak : 1;
 	uint8_t multi_block_be_tweak : 1;
 	uint8_t multi_block_le_tweak : 1;
-	uint8_t tweak_inc_64 : 1;
 	uint8_t large_mtu_tweak : 1;
 };
 
