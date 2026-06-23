@@ -647,28 +647,6 @@ int spdk_mlx5_umr_configure_trans_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_
 				      uint32_t flags);
 
 /**
- * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with crypto and CRC32C capabilities.
- *
- * Besides crypto and signature capabilities, it allows to gather memory chunks into virtually contig (from the NIC point of view)
- * memory space with start address 0. The user must ensure that \b qp's capacity is enough to perform this operation.
- *
- * \param qp Qpair to be used for UMR configuration. If RDMA operation which references this UMR is used on the same \b qp
- * then it is not necessary to wait for the UMR configuration to complete. Instead, first RDMA operation after UMR
- * configuration must have flag SPDK_MLX5_WQE_CTRL_INITIATOR_SMALL_FENCE set to 1
- * \param umr_attr Common UMR attributes, describe memory layout
- * \param sig_attr Signature UMR attributes
- * \param crypto_attr Crypto UMR attributes
- * \param wr_id wrid which is returned in the CQE
- * \param flags SPDK_MLX5_WQE_CTRL_CE_CQ_UPDATE to have a signaled completion; Any of SPDK_MLX5_WQE_CTRL_FENCE* or 0
- * \return 0 on success, negated errno on failure
- */
-int spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
-		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-		uint64_t wr_id, uint32_t flags);
-
-/**
  * Configure User Memory Region obtained using \ref spdk_mlx5_mkey_pool_get_bulk with T10 DIF capabilities.
  *
  * Besides signature capabilities, it allows to gather memory chunks into virtually contig (from the NIC point of view)

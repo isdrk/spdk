@@ -17,11 +17,9 @@
 #define MLX5_UMR_POOL_VALID_FLAGS_MASK (~(SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO | SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE))
 #define MLX5_CRYPTO_BSF_P_TYPE_CRYPTO (0x1)
 #define MLX5_CRYPTO_BSF_SIZE_64B (0x2)
-#define MLX5_CRYPTO_BSF_SIZE_WITH_SIG (0x3)
 
 #define MLX5_SIG_BSF_SIZE_32B (0x1)
 #define MLX5_SIG_BSF_SIZE_64B (0x2)
-#define MLX5_SIG_BSF_SIZE_WITH_CRYPTO (0x3)
 /* Transaction Format Selector */
 #define MLX5_SIG_BSF_TFS_CRC32C (64)
 #define MLX5_SIG_BSF_TFS_SHIFT (24)
@@ -275,6 +273,10 @@ mlx5_mkey_pool_create_mkey(struct mlx5_mkey **_mkey, struct ibv_pd *pd,
 		bsf_size += 64;
 	}
 	if (flags & SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE) {
+		if (flags & SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO) {
+			SPDK_ERRLOG("Crypto and signature flags cannot be set together\n");
+			return -EINVAL;
+		}
 		bsf_size += 64;
 	}
 	if (max_sges > caps->max_klm_count) {
@@ -315,7 +317,6 @@ static const char *g_mkey_pool_names[] = {
 	[0] = "m", /* mkey */
 	[SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "c", /* crypto */
 	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE] = "s", /* signature */
-	[SPDK_MLX5_MKEY_POOL_FLAG_SIGNATURE | SPDK_MLX5_MKEY_POOL_FLAG_CRYPTO] = "sc", /* sig_crypto */
 };
 
 static void
@@ -852,9 +853,9 @@ mlx5_build_inline_mtt(struct mlx5_hw_qp *qp, uint32_t *to_end, struct mlx5_wqe_u
 }
 
 static inline void
-_mlx5_set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf,
-			     struct spdk_mlx5_umr_crypto_attr *attr,
-			     uint32_t raw_data_size, uint8_t bsf_size)
+mlx5_set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf,
+			    struct spdk_mlx5_umr_crypto_attr *attr,
+			    uint32_t raw_data_size)
 {
 	uint64_t *iv = (void *)bsf->xts_initial_tweak;
 
@@ -873,27 +874,12 @@ _mlx5_set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf,
 		break;
 	}
 
-	bsf->size_type = (bsf_size << 6) | MLX5_CRYPTO_BSF_P_TYPE_CRYPTO;
+	bsf->size_type = (MLX5_CRYPTO_BSF_SIZE_64B << 6) | MLX5_CRYPTO_BSF_P_TYPE_CRYPTO;
 	bsf->enc_order = attr->enc_order;
 	bsf->raw_data_size = htobe32(raw_data_size);
 	bsf->crypto_block_size_pointer = attr->bs_selector;
 	bsf->dek_pointer = htobe32(attr->dek_obj_id);
 	*((uint64_t *)bsf->keytag) = attr->keytag;
-}
-
-static inline void
-mlx5_set_umr_crypto_bsf_seg(struct mlx5_crypto_bsf_seg *bsf, struct spdk_mlx5_umr_crypto_attr *attr,
-			    uint32_t raw_data_size)
-{
-	_mlx5_set_umr_crypto_bsf_seg(bsf, attr, raw_data_size, MLX5_CRYPTO_BSF_SIZE_64B);
-}
-
-static inline void
-mlx5_set_umr_crypto_bsf_seg_with_sig(struct mlx5_crypto_bsf_seg *bsf,
-				     struct spdk_mlx5_umr_crypto_attr *attr,
-				     uint32_t raw_data_size)
-{
-	_mlx5_set_umr_crypto_bsf_seg(bsf, attr, raw_data_size, MLX5_CRYPTO_BSF_SIZE_WITH_SIG);
 }
 
 static inline uint8_t
@@ -904,15 +890,14 @@ mlx5_get_crc32c_tfs(uint32_t seed)
 }
 
 static inline void
-_mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
-				struct spdk_mlx5_umr_trans_sig_attr *attr,
-				uint8_t bsf_size)
+mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
+			       struct spdk_mlx5_umr_trans_sig_attr *attr)
 {
 	uint32_t tfs_psv;
 	uint32_t init_gen;
 
 	memset(bsf, 0, sizeof(*bsf));
-	bsf->basic.bsf_size_sbs = (bsf_size << 6);
+	bsf->basic.bsf_size_sbs = (MLX5_SIG_BSF_SIZE_32B << 6);
 	bsf->basic.raw_data_size = htobe32(attr->raw_data_size);
 	bsf->basic.check_byte_mask = 0xff;
 
@@ -935,20 +920,6 @@ _mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
 		}
 		bsf->ext.t_init_gen_pro_size = htobe32(init_gen);
 	}
-}
-
-static inline void
-mlx5_set_umr_trans_sig_bsf_seg(struct mlx5_sig_bsf_seg *bsf,
-			       struct spdk_mlx5_umr_trans_sig_attr *attr)
-{
-	_mlx5_set_umr_trans_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_32B);
-}
-
-static inline void
-mlx5_set_umr_trans_sig_bsf_seg_with_crypto(struct mlx5_sig_bsf_seg *bsf,
-		struct spdk_mlx5_umr_trans_sig_attr *attr)
-{
-	_mlx5_set_umr_trans_sig_bsf_seg(bsf, attr, MLX5_SIG_BSF_SIZE_WITH_CRYPTO);
 }
 
 static inline void
@@ -1653,150 +1624,6 @@ spdk_mlx5_umr_configure(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_attr *umr_
 }
 
 static inline void
-mlx5_umr_configure_with_wrap_around_trans_sig_crypto(struct spdk_mlx5_qp *dv_qp,
-		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-		uint64_t wr_id, uint32_t flags, uint32_t wqe_size,
-		uint32_t umr_wqe_n_bb, uint32_t mtt_size)
-{
-	struct mlx5_hw_qp *hw = &dv_qp->hw;
-	struct mlx5_wqe_ctrl_seg *ctrl;
-	struct mlx5_wqe_ctrl_seg *gen_ctrl;
-	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
-	struct mlx5_wqe_mkey_context_seg *mkey;
-	struct mlx5_wqe_umr_klm_seg *klm;
-	struct mlx5_sig_bsf_seg *sig_bsf;
-	struct mlx5_crypto_bsf_seg *crypto_bsf;
-	uint8_t fm_ce_se;
-	uint32_t pi, to_end;
-
-	fm_ce_se = mlx5_qp_fm_ce_se_update(dv_qp, (uint8_t)flags);
-
-	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
-	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
-	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
-
-	/*
-	 * sizeof(gen_ctrl) + sizeof(umr_ctrl) == MLX5_SEND_WQE_BB,
-	 * so do not need to worry about wqe buffer wrap around.
-	 *
-	 * build genenal ctrl segment
-	 */
-	gen_ctrl = ctrl;
-	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
-			  hw->qp_num, fm_ce_se,
-			  SPDK_CEIL_DIV(wqe_size, 16), 0,
-			  htobe32(umr_attr->mkey));
-
-	/* build umr ctrl segment */
-	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
-	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	mlx5_set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
-	mlx5_set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(*sig_bsf) + sizeof(*crypto_bsf));
-
-	/* build mkey context segment */
-	mkey = mlx5_qp_get_next_wqebb(hw, &to_end, ctrl);
-	mlx5_set_umr_mkey_seg(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
-
-	/* build KLM */
-	klm = mlx5_qp_get_next_wqebb(hw, &to_end, mkey);
-	sig_bsf = mlx5_build_inline_mtt(hw, &to_end, klm, umr_attr);
-
-	/* build signature BSF */
-	mlx5_set_umr_trans_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
-
-	/* build crypto BSF */
-	crypto_bsf = mlx5_qp_get_next_wqebb(hw, &to_end, sig_bsf);
-	/*
-	 * raw_data_size is equal for signature and crypto operations because we apply both
-	 * operations for the same data.
-	 */
-	mlx5_set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size);
-
-	mlx5_qp_submit_sq_wqe(dv_qp, ctrl, umr_wqe_n_bb, pi);
-
-	mlx5_qp_set_sq_comp(dv_qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
-	assert(dv_qp->tx_available >= umr_wqe_n_bb);
-	dv_qp->tx_available -= umr_wqe_n_bb;
-}
-
-static inline void
-mlx5_umr_configure_full_trans_sig_crypto(struct spdk_mlx5_qp *qp,
-		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		struct spdk_mlx5_umr_crypto_attr *crypto_attr, uint64_t wr_id, uint32_t flags,
-		uint32_t wqe_size, uint32_t umr_wqe_n_bb, uint32_t mtt_size)
-{
-	struct mlx5_hw_qp *hw = &qp->hw;
-	struct mlx5_wqe_ctrl_seg *ctrl;
-	struct mlx5_wqe_ctrl_seg *gen_ctrl;
-	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
-	struct mlx5_wqe_mkey_context_seg *mkey;
-	struct mlx5_wqe_umr_klm_seg *klm;
-	struct mlx5_sig_bsf_seg *sig_bsf;
-	struct mlx5_crypto_bsf_seg *crypto_bsf;
-	uint8_t fm_ce_se;
-	uint32_t pi;
-	uint32_t i;
-
-	fm_ce_se = mlx5_qp_fm_ce_se_update(qp, (uint8_t)flags);
-
-	ctrl = (struct mlx5_wqe_ctrl_seg *)mlx5_qp_get_wqe_bb(hw);
-	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
-	gen_ctrl = ctrl;
-	mlx5_set_ctrl_seg(gen_ctrl, hw->sq_pi, MLX5_OPCODE_UMR, 0,
-			  hw->qp_num, fm_ce_se,
-			  SPDK_CEIL_DIV(wqe_size, 16), 0,
-			  htobe32(umr_attr->mkey));
-
-	/* build umr ctrl segment */
-	umr_ctrl = (struct mlx5_wqe_umr_ctrl_seg *)(gen_ctrl + 1);
-	memset(umr_ctrl, 0, sizeof(*umr_ctrl));
-	mlx5_set_umr_ctrl_seg_mtt_sig(umr_ctrl, mtt_size);
-	mlx5_set_umr_ctrl_seg_bsf_size(umr_ctrl, sizeof(*sig_bsf) + sizeof(*crypto_bsf));
-
-	/* build mkey context segment */
-	mkey = (struct mlx5_wqe_mkey_context_seg *)(umr_ctrl + 1);
-	memset(mkey, 0, sizeof(*mkey));
-	mlx5_set_umr_mkey_seg_mtt(mkey, umr_attr);
-	mlx5_set_umr_mkey_seg_sig(mkey, sig_attr->sigerr_count);
-
-	klm = (struct mlx5_wqe_umr_klm_seg *)(mkey + 1);
-	for (i = 0; i < umr_attr->sge_count; i++) {
-		mlx5_set_umr_inline_klm_seg(klm, &umr_attr->sge[i]);
-		/* sizeof(*klm) * 4 == MLX5_SEND_WQE_BB */
-		klm = klm + 1;
-	}
-	/* fill PAD if existing */
-	/* PAD entries is to make whole mtt aligned to 64B(MLX5_SEND_WQE_BB),
-	 * So it will not happen warp around during fill PAD entries. */
-	for (; i < mtt_size; i++) {
-		memset(klm, 0, sizeof(*klm));
-		klm = klm + 1;
-	}
-
-	/* build signature BSF */
-	sig_bsf = (struct mlx5_sig_bsf_seg *)klm;
-	mlx5_set_umr_trans_sig_bsf_seg_with_crypto(sig_bsf, sig_attr);
-
-	/* build crypto BSF */
-	crypto_bsf = (struct mlx5_crypto_bsf_seg *)(sig_bsf + 1);
-	/*
-	 * raw_data_size is equal for signature and crypto operations because we apply both
-	 * operations for the same data.
-	 */
-	mlx5_set_umr_crypto_bsf_seg_with_sig(crypto_bsf, crypto_attr, sig_attr->raw_data_size);
-
-	mlx5_qp_submit_sq_wqe(qp, ctrl, umr_wqe_n_bb, pi);
-
-	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
-	assert(qp->tx_available >= umr_wqe_n_bb);
-	qp->tx_available -= umr_wqe_n_bb;
-}
-
-static inline void
 mlx5_umr_configure_with_wrap_around_block_sig(struct spdk_mlx5_qp *qp,
 		struct spdk_mlx5_umr_attr *umr_attr,
 		struct spdk_mlx5_umr_block_sig_attr *sig_attr, uint64_t wr_id,
@@ -1915,64 +1742,6 @@ mlx5_umr_configure_full_block_sig(struct spdk_mlx5_qp *qp, struct spdk_mlx5_umr_
 	mlx5_qp_set_sq_comp(qp, pi, wr_id, fm_ce_se, umr_wqe_n_bb);
 	assert(qp->tx_available >= umr_wqe_n_bb);
 	qp->tx_available -= umr_wqe_n_bb;
-}
-
-int
-spdk_mlx5_umr_configure_trans_sig_crypto(struct spdk_mlx5_qp *qp,
-		struct spdk_mlx5_umr_attr *umr_attr,
-		struct spdk_mlx5_umr_trans_sig_attr *sig_attr,
-		struct spdk_mlx5_umr_crypto_attr *crypto_attr,
-		uint64_t wr_id, uint32_t flags)
-{
-	struct mlx5_hw_qp *hw = &qp->hw;
-	uint32_t pi, to_end, umr_wqe_n_bb;
-	uint32_t wqe_size, mtt_size;
-	uint32_t inline_klm_size;
-
-	if (spdk_unlikely(!umr_attr->sge_count || umr_attr->mb != NULL)) {
-		return -EINVAL;
-	}
-	qp->extra_flags = qp->cached_extra_flags;
-
-	pi = hw->sq_pi & (hw->sq_wqe_cnt - 1);
-	to_end = (hw->sq_wqe_cnt - pi) * MLX5_SEND_WQE_BB;
-
-	/*
-	 * UMR WQE LAYOUT:
-	 * ----------------------------------------------------------------------------------------
-	 * | gen_ctrl | umr_ctrl | mkey_ctx | inline klm mtt | inline sig bsf | inline crypto bsf |
-	 * ----------------------------------------------------------------------------------------
-	 *   16bytes    48bytes    64bytes   sg_count*16 bytes    64 bytes         64 bytes
-	 *
-	 * Note: size of inline klm mtt should be aligned to 64 bytes.
-	 */
-	wqe_size = sizeof(struct mlx5_wqe_ctrl_seg) + sizeof(struct mlx5_wqe_umr_ctrl_seg) + sizeof(
-			   struct mlx5_wqe_mkey_context_seg);
-	mtt_size = SPDK_ALIGN_CEIL(umr_attr->sge_count, 4);
-	inline_klm_size = mtt_size * sizeof(union mlx5_wqe_umr_inline_seg);
-	wqe_size += inline_klm_size;
-	wqe_size += sizeof(struct mlx5_sig_bsf_seg);
-	wqe_size += sizeof(struct mlx5_crypto_bsf_seg);
-
-	umr_wqe_n_bb = SPDK_CEIL_DIV(wqe_size, MLX5_SEND_WQE_BB);
-	if (spdk_unlikely(umr_wqe_n_bb > qp->tx_available)) {
-		return -ENOMEM;
-	}
-	if (spdk_unlikely(umr_attr->sge_count > qp->max_send_sge)) {
-		return -E2BIG;
-	}
-
-	if (spdk_unlikely(to_end < wqe_size)) {
-		mlx5_umr_configure_with_wrap_around_trans_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id,
-				flags,
-				wqe_size, umr_wqe_n_bb, mtt_size);
-	} else {
-		mlx5_umr_configure_full_trans_sig_crypto(qp, umr_attr, sig_attr, crypto_attr, wr_id, flags,
-				wqe_size,
-				umr_wqe_n_bb, mtt_size);
-	}
-
-	return 0;
 }
 
 int
