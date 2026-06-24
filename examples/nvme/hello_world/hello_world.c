@@ -3,6 +3,7 @@
  *   All rights reserved.
  */
 
+#include "spdk/config.h"
 #include "spdk/stdinc.h"
 
 #include "spdk/nvme.h"
@@ -402,7 +403,14 @@ parse_args(int argc, char **argv, struct spdk_env_opts *env_opts)
 	while ((op = getopt(argc, argv, "d:ghi:r:L:V")) != -1) {
 		switch (op) {
 		case 'V':
+#ifndef SPDK_CONFIG_VMD
+			fprintf(stderr, "%s -V requires CONFIG_VMD=y\n", argv[0]);
+			usage(argv[0]);
+			g_vmd = false;
+			return 1;
+#else
 			g_vmd = true;
+#endif
 			break;
 		case 'i':
 			env_opts->shm_id = spdk_strtol(optarg, 10);
@@ -476,12 +484,12 @@ main(int argc, char **argv)
 	}
 
 	printf("Initializing NVMe Controllers\n");
-
+#ifdef SPDK_CONFIG_VMD
 	if (g_vmd && spdk_vmd_init()) {
 		fprintf(stderr, "Failed to initialize VMD."
 			" Some NVMe devices can be unavailable.\n");
 	}
-
+#endif
 	/*
 	 * Start the SPDK NVMe enumeration process.  probe_cb will be called
 	 *  for each NVMe controller found, giving our application a choice on
@@ -508,10 +516,11 @@ main(int argc, char **argv)
 exit:
 	fflush(stdout);
 	cleanup();
+#ifdef SPDK_CONFIG_VMD
 	if (g_vmd) {
 		spdk_vmd_fini();
 	}
-
+#endif
 	spdk_env_fini();
 	return rc;
 }

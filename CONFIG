@@ -286,3 +286,6 @@ CONFIG_DOCA_ENABLED=y
 
 # Path to DOCA include directory
 CONFIG_DOCA_INCLUDE_DIR=/opt/mellanox/doca/include
+
+# Enable VMD support
+CONFIG_VMD=

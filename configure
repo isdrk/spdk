@@ -144,6 +144,8 @@ function usage() {
 	echo " --with-dpcp=DIR           DPCP library path. Only used with --with-static-xlio."
 	echo " --with-doca[=DIR]         Path to DOCA include directory"
 	echo " --without-doca            DOCA is not enabled"
+	echo " --with-vmd                Enable VMD support."
+	echo " --without-vmd             No path required."
 	echo ""
 	echo "Environment variables:"
 	echo ""
@@ -751,6 +753,12 @@ for i in "$@"; do
 			check_dir "$i"
 			CONFIG[DOCA_ENABLED]=y
 			CONFIG[DOCA_INCLUDE_DIR]=$(readlink -f ${i#*=})
+			;;
+		--with-vmd)
+			CONFIG[VMD]=y
+			;;
+		--without-vmd)
+			CONFIG[VMD]=n
 			;;
 		--)
 			break
@@ -1485,6 +1493,17 @@ if [[ "${CONFIG[DEBUG]}" = "y" && $arch = aarch64* && "$CC_TYPE" = "gcc" ]]; the
 			CONFIG[ARCH]=armv8.2-a+crypto
 		fi
 	fi
+fi
+
+# VMD only works on x86_64, so enable it there by default and disable it everywhere else
+if [[ $arch == x86_64* ]]; then
+	[[ -z "${CONFIG[VMD]}" ]] && CONFIG[VMD]=y
+else
+	if [[ "${CONFIG[VMD]}" == y ]]; then
+		echo "ERROR: VMD is only supported under x86_64"
+		exit 1
+	fi
+	CONFIG[VMD]=n
 fi
 
 # We are now ready to generate final configuration. But first do sanity
