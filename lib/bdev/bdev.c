@@ -6664,6 +6664,7 @@ bdev_rw_bypass(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *bdev_ch,
 	       struct spdk_bdev_ext_io_opts *opts)
 {
 	struct spdk_bdev *bdev = desc->bdev;
+	int rc;
 
 	/* Initialize only critical fields of bdev_io structure */
 	bdev_io->internal.ch = bdev_ch;
@@ -6676,8 +6677,18 @@ bdev_rw_bypass(struct spdk_bdev_desc *desc, struct spdk_bdev_channel *bdev_ch,
 	bdev_io->type = io_type;
 	bdev_io->bdev = bdev;
 
-	return bdev->fn_table->submit_bypass_request(bdev, bdev_ch->channel, bdev_io, iov, iovcnt,
+	spdk_trace_record(TRACE_BDEV_IO_START, bdev_ch->trace_id, num_blocks,
+			  (uintptr_t)bdev_io, (uint64_t)bdev_io->type, bdev_io->internal.caller_ctx,
+			  offset_blocks, bdev_ch->queue_depth);
+
+	rc = bdev->fn_table->submit_bypass_request(bdev, bdev_ch->channel, bdev_io, iov, iovcnt,
 			offset_blocks, num_blocks, cb, cb_arg, opts);
+	if (spdk_unlikely(rc != 0)) {
+		spdk_trace_record(TRACE_BDEV_IO_DONE, bdev_ch->trace_id, 0, (uintptr_t)bdev_io,
+				  bdev_io->internal.caller_ctx, bdev_ch->queue_depth);
+	}
+
+	return rc;
 }
 
 static inline int
@@ -8888,6 +8899,9 @@ spdk_bdev_io_complete(struct spdk_bdev_io *bdev_io, enum spdk_bdev_io_status sta
 	bdev_io->internal.status = status;
 
 	if (bdev_io->internal.f.bypass) {
+		spdk_trace_record(TRACE_BDEV_IO_DONE, bdev_ch->trace_id, 0, (uintptr_t)bdev_io,
+				  bdev_io->internal.caller_ctx, bdev_ch->queue_depth);
+
 		if (spdk_unlikely(!TAILQ_EMPTY(&shared_resource->nomem_io))) {
 			bdev_shared_ch_retry_io(shared_resource);
 		}
