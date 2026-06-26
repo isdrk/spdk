@@ -5745,7 +5745,7 @@ nvmf_rdma_release_data_transfer_request(struct spdk_nvmf_rdma_request *rdma_req,
 	main_req->num_outstanding_data_transfer_requests--;
 	TAILQ_REMOVE(&main_req->outstanding_data_transfer_requests, rdma_req, data_transfer_request_link);
 
-	_nvmf_rdma_request_free_data(rdma_req, &rdma_req->data.wr, rtransport->data_wr_pool);
+	_nvmf_rdma_request_free_data(rdma_req, rdma_req->transfer_wr, rtransport->data_wr_pool);
 	rdma_req->main_request = NULL;
 	spdk_mempool_put(rtransport->data_transfer_req_pool, rdma_req);
 }
