@@ -606,8 +606,8 @@ restore_failed:
 	return NULL;
 }
 
-void
-spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
+static void
+rmem_pool_free(struct spdk_rmem_pool *pool, bool unlink_file)
 {
 	struct spdk_rmem_entry *entry;
 	uint32_t i;
@@ -628,10 +628,25 @@ spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
 		free(entry);
 	}
 	munmap(pool->mapped.addr, pool->mapped.size);
-	unlinkat(g_backend_dir, pool->name, 0);
-	SPDK_DEBUGLOG(rmem, "%s: rmem pool destroyed\n", pool->name);
+	if (unlink_file) {
+		unlinkat(g_backend_dir, pool->name, 0);
+	}
+	SPDK_DEBUGLOG(rmem, "%s: rmem pool %s\n", pool->name,
+		      unlink_file ? "destroyed" : "detached");
 	free(pool->mirror_entries);
 	free(pool);
+}
+
+void
+spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool)
+{
+	rmem_pool_free(pool, true);
+}
+
+void
+spdk_rmem_pool_detach(struct spdk_rmem_pool *pool)
+{
+	rmem_pool_free(pool, false);
 }
 
 struct spdk_rmem_entry *

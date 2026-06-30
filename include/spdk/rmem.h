@@ -156,6 +156,17 @@ struct spdk_rmem_pool *spdk_rmem_pool_restore(const char *name, uint32_t entry_s
 void spdk_rmem_pool_destroy(struct spdk_rmem_pool *pool);
 
 /**
+ * Detach rmem pool.
+ *
+ * Frees all in-memory state associated with the pool and removes it from the
+ * pool registry, but preserves the underlying backing file so the pool can be
+ * restored later (e.g. by a successor instance during live update).
+ *
+ * \param pool Pool object.
+ */
+void spdk_rmem_pool_detach(struct spdk_rmem_pool *pool);
+
+/**
  * Get rmem entry.
  *
  * \param pool Pool object.
