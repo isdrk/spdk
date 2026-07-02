@@ -206,6 +206,24 @@ int spdk_json_write_int64(struct spdk_json_write_ctx *w, int64_t val);
 int spdk_json_write_uint64(struct spdk_json_write_ctx *w, uint64_t val);
 int spdk_json_write_uint128(struct spdk_json_write_ctx *w, uint64_t low_val, uint64_t high_val);
 int spdk_json_write_double(struct spdk_json_write_ctx *w, double val);
+
+/**
+ * Write a double as a JSON number using a caller-supplied printf format.
+ *
+ * Unlike spdk_json_write_double(), which always uses "%.20e" (scientific
+ * notation), this allows control over the textual representation (e.g. "%.3f").
+ * The value is emitted as a JSON number (unquoted), not a string.
+ *
+ * The caller is responsible for supplying a format that produces a valid JSON
+ * number; for example "%f", "%e" and "%g" are all safe for finite values.
+ *
+ * \param w JSON write context.
+ * \param fmt printf-style format string applied to a single double argument.
+ * \param val Value to write.
+ * \return 0 on success or negative on failure.
+ */
+int spdk_json_write_double_fmt(struct spdk_json_write_ctx *w, const char *fmt, double val);
+
 int spdk_json_write_string(struct spdk_json_write_ctx *w, const char *val);
 int spdk_json_write_string_raw(struct spdk_json_write_ctx *w, const char *val, size_t len);
 int spdk_json_write_bytearray(struct spdk_json_write_ctx *w, const void *val, size_t len);
@@ -263,6 +281,21 @@ int spdk_json_write_named_uint64(struct spdk_json_write_ctx *w, const char *name
 int spdk_json_write_named_uint128(struct spdk_json_write_ctx *w, const char *name,
 				  uint64_t low_val, uint64_t high_val);
 int spdk_json_write_named_double(struct spdk_json_write_ctx *w, const char *name, double val);
+
+/**
+ * Write a name/value pair where the value is a double formatted with a
+ * caller-supplied printf format and emitted as a JSON number (unquoted).
+ *
+ * See spdk_json_write_double_fmt() for formatting details and caveats.
+ *
+ * \param w JSON write context.
+ * \param name Name of the property.
+ * \param fmt printf-style format string applied to a single double argument.
+ * \param val Value to write.
+ * \return 0 on success or negative on failure.
+ */
+int spdk_json_write_named_double_fmt(struct spdk_json_write_ctx *w, const char *name,
+				     const char *fmt, double val);
 
 int spdk_json_write_named_string(struct spdk_json_write_ctx *w, const char *name, const char *val);
 int spdk_json_write_named_string_fmt(struct spdk_json_write_ctx *w, const char *name,

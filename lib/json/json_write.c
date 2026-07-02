@@ -4,6 +4,7 @@
  */
 
 #include "spdk/json.h"
+#include "spdk/string.h"
 
 #include "spdk_internal/utf.h"
 
@@ -333,6 +334,22 @@ spdk_json_write_double(struct spdk_json_write_ctx *w, double val)
 	count = snprintf(buf, sizeof(buf), "%.20e", val);
 	if (count <= 0 || (size_t)count >= sizeof(buf)) { return fail(w); }
 	return emit(w, buf, count);
+}
+
+int
+spdk_json_write_double_fmt(struct spdk_json_write_ctx *w, const char *fmt, double val)
+{
+	char *s;
+	int rc;
+
+	if (begin_value(w)) { return fail(w); }
+
+	s = spdk_sprintf_alloc(fmt, val);
+	if (s == NULL) { return fail(w); }
+
+	rc = emit(w, s, strlen(s));
+	free(s);
+	return rc;
 }
 
 static void
@@ -767,6 +784,15 @@ spdk_json_write_named_double(struct spdk_json_write_ctx *w, const char *name, do
 	int rc = spdk_json_write_name(w, name);
 
 	return rc ? rc : spdk_json_write_double(w, val);
+}
+
+int
+spdk_json_write_named_double_fmt(struct spdk_json_write_ctx *w, const char *name,
+				 const char *fmt, double val)
+{
+	int rc = spdk_json_write_name(w, name);
+
+	return rc ? rc : spdk_json_write_double_fmt(w, fmt, val);
 }
 
 int

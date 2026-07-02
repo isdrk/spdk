@@ -104,6 +104,9 @@ write_cb(void *cb_ctx, const void *data, size_t size)
 	CU_ASSERT(spdk_json_write_named_uint128(w, name, low, high) == 0);
 
 #define VAL_DOUBLE(d) CU_ASSERT(spdk_json_write_double(w, d) == 0);
+#define VAL_DOUBLE_FMT(fmt, d) CU_ASSERT(spdk_json_write_double_fmt(w, fmt, d) == 0);
+#define VAL_NAME_DOUBLE_FMT(name, fmt, d) \
+	CU_ASSERT(spdk_json_write_named_double_fmt(w, name, fmt, d) == 0);
 
 #define VAL_UUID(u) CU_ASSERT(spdk_json_write_uuid(w, u) == 0)
 
@@ -558,6 +561,32 @@ test_write_number_double(void)
 }
 
 static void
+test_write_number_double_fmt(void)
+{
+	struct spdk_json_write_ctx *w;
+
+	/* Fixed-point format emits a clean JSON number (unquoted). */
+	BEGIN();
+	VAL_DOUBLE_FMT("%.3f", 1234.5678);
+	END("1234.568");
+
+	BEGIN();
+	VAL_DOUBLE_FMT("%.3f", -1234.5678);
+	END("-1234.568");
+
+	BEGIN();
+	VAL_DOUBLE_FMT("%.0f", 0.0);
+	END("0");
+
+	/* Named variant produces a name/number pair inside an object. */
+	BEGIN();
+	CU_ASSERT(spdk_json_write_object_begin(w) == 0);
+	VAL_NAME_DOUBLE_FMT("end_us", "%.3f", 1234.5678);
+	CU_ASSERT(spdk_json_write_object_end(w) == 0);
+	END("{\"end_us\":1234.568}");
+}
+
+static void
 test_write_uuid(void)
 {
 	struct spdk_json_write_ctx *w;
@@ -928,6 +957,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_write_number_int64);
 	CU_ADD_TEST(suite, test_write_number_uint64);
 	CU_ADD_TEST(suite, test_write_number_double);
+	CU_ADD_TEST(suite, test_write_number_double_fmt);
 	CU_ADD_TEST(suite, test_write_uuid);
 	CU_ADD_TEST(suite, test_write_array);
 	CU_ADD_TEST(suite, test_write_object);
