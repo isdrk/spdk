@@ -107,6 +107,16 @@ test-virtio-fs-app:
       - trigger.json
       - pipeline.json
 
+test-cmx-target:
+  stage: test
+  trigger:
+    project: spdk_team/cmx-target
+    branch: main
+    strategy: depend
+  variables:
+    SPDK_REVISION: ${CI_COMMIT_SHA}
+    SPDK_REMOTE: ${SPDK_INTERNAL_REPO_URL}
+
 autotest-summary-job:
   stage: post-test
   tags: [vm_host, x86_64]
