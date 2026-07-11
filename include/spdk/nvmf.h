@@ -1256,6 +1256,15 @@ int spdk_nvmf_subsystem_set_mn(struct spdk_nvmf_subsystem *subsystem, const char
 const char *spdk_nvmf_subsystem_get_nqn(const struct spdk_nvmf_subsystem *subsystem);
 
 /**
+ * Check whether an NVMe Qualified Name is valid according to the NVMe-oF specification.
+ *
+ * \param nqn NQN string to validate.
+ *
+ * \return true if the NQN is valid, false otherwise.
+ */
+bool spdk_nvmf_nqn_is_valid(const char *nqn);
+
+/**
  * Get the type of the specified subsystem.
  *
  * \param subsystem Subsystem to query.

@@ -71,6 +71,7 @@
 	spdk_nvmf_subsystem_get_mn;
 	spdk_nvmf_subsystem_set_mn;
 	spdk_nvmf_subsystem_get_nqn;
+	spdk_nvmf_nqn_is_valid;
 	spdk_nvmf_subsystem_get_type;
 	spdk_nvmf_subsystem_get_max_nsid;
 	spdk_nvmf_transport_opts_init;

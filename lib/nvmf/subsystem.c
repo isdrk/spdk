@@ -213,6 +213,16 @@ nvmf_nqn_is_valid(const char *nqn)
 	return true;
 }
 
+bool
+spdk_nvmf_nqn_is_valid(const char *nqn)
+{
+	if (nqn == NULL) {
+		return false;
+	}
+
+	return nvmf_nqn_is_valid(nqn);
+}
+
 static void subsystem_state_change_on_pg(struct spdk_io_channel_iter *i);
 
 struct spdk_nvmf_subsystem *
