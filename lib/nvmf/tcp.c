@@ -2326,8 +2326,8 @@ nvmf_tcp_h2c_data_hdr_handle(struct spdk_nvmf_tcp_transport *ttransport,
 	SPDK_DEBUGLOG(nvmf_tcp, "tqpair=%p, r2t_info: datao=%u, datal=%u, cccid=%u, ttag=%u\n",
 		      tqpair, h2c_data->datao, h2c_data->datal, h2c_data->cccid, h2c_data->ttag);
 
-	if (h2c_data->ttag > tqpair->resource_count) {
-		SPDK_DEBUGLOG(nvmf_tcp, "ttag %u is larger than allowed %u.\n", h2c_data->ttag,
+	if (h2c_data->ttag == 0 || h2c_data->ttag > tqpair->resource_count) {
+		SPDK_DEBUGLOG(nvmf_tcp, "ttag %u is out of range [1, %u]\n", h2c_data->ttag,
 			      tqpair->resource_count);
 		fes = SPDK_NVME_TCP_TERM_REQ_FES_PDU_SEQUENCE_ERROR;
 		error_offset = offsetof(struct spdk_nvme_tcp_h2c_data_hdr, ttag);
