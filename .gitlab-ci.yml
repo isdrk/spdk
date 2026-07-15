@@ -92,20 +92,15 @@ code-style-job:
   script:
     - ./scripts/check_format.sh
 
-test-virtio-fs-app:
+test-virtio-fs:
   stage: test
-  tags: [vm_host, x86_64]
-  parallel:
-    matrix:
-      - VIRTIO_FS_TARGET_REF: [main, cmx_target_alpha]
-  script:
-    - .ci/run_virtio_fs_app.sh
-  dependencies: []
-  artifacts:
-    when: always
-    paths:
-      - trigger.json
-      - pipeline.json
+  trigger:
+    project: spdk_team/virtio-fs-target
+    branch: main
+    strategy: depend
+  variables:
+    SPDK_REVISION: ${CI_COMMIT_SHA}
+    SPDK_REMOTE: ${SPDK_INTERNAL_REPO_URL}
 
 test-cmx-target:
   stage: test
