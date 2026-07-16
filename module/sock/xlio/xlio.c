@@ -792,6 +792,12 @@ xlio_sock_close(struct spdk_sock_group_impl *_group, struct spdk_sock *_sock)
 		xlio_socket_flush(sock->xlio_sock);
 	}
 
+	assert(!sock->events.accept);
+	if (sock->events.rx && _group != NULL) {
+		STAILQ_REMOVE(&group->pending_rx, sock, spdk_xlio_sock, link);
+		sock->events.rx = false;
+	}
+
 	/* Dump all data that is waiting to be received. This is safe. */
 	STAILQ_FOREACH_SAFE(segment, &sock->pending_stream, link, tsegment) {
 		STAILQ_REMOVE_HEAD(&sock->pending_stream, link);
