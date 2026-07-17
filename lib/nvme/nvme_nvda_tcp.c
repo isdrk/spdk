@@ -1528,6 +1528,7 @@ nvme_tcp_req_get(struct nvme_tcp_qpair *tqpair, struct nvme_tcp_req *tcp_req)
 	tcp_req->r2tl_remain = 0;
 	tcp_req->r2tl_remain_next = 0;
 	tcp_req->active_r2ts = 0;
+	memset(&tcp_req->req.cpl, 0, sizeof(tcp_req->req.cpl));
 	tcp_req->pdu.iovcnt = 0;
 	tcp_req->pdu.data_iovcnt = 0;
 	assert(tcp_req->ordering.bits.state == NVME_TCP_REQ_FREE);
