@@ -18,6 +18,7 @@
 #include "spdk_internal/assert.h"
 #include "spdk_internal/sgl.h"
 #include "accel_mlx5.h"
+#include "spdk/net.h"
 
 #include <infiniband/mlx5dv.h>
 #include <rdma/rdma_cma.h>
@@ -36,6 +37,7 @@
 
 /* Assume we have up to 16 devices */
 #define ACCEL_MLX5_ALLOWED_DEVS_MAX_LEN ((SPDK_MLX5_DEV_MAX_NAME_LEN + 1) * 16)
+#define ACCEL_MLX5_SYSFS_PATH_MAX 512
 
 #define ACCEL_MLX5_UPDATE_ON_WR_SUBMITTED(qp, task)	\
 do {							\
@@ -4646,18 +4648,91 @@ accel_mlx5_dev_supports_crypto(struct spdk_mlx5_device_caps *caps)
 }
 
 static int
+accel_mlx5_netdev_ipv4_get(const char *ifname, char *addr, size_t addr_len)
+{
+	struct ifaddrs *ifa, *ifa_start;
+	int rc = -ENOENT;
+
+	if (getifaddrs(&ifa_start) != 0) {
+		return -errno;
+	}
+
+	for (ifa = ifa_start; ifa != NULL; ifa = ifa->ifa_next) {
+		if (ifa->ifa_addr == NULL || ifa->ifa_name == NULL) {
+			continue;
+		}
+		if (strcmp(ifa->ifa_name, ifname) != 0) {
+			continue;
+		}
+		if (ifa->ifa_addr->sa_family != AF_INET) {
+			continue;
+		}
+
+		rc = spdk_net_get_address_string(ifa->ifa_addr, addr, addr_len);
+		if (rc == 0) {
+			break;
+		}
+	}
+
+	freeifaddrs(ifa_start);
+	return rc;
+}
+
+/* Find the first netdev with IPv4 address */
+static int
+accel_mlx5_ibv_get_ipv4_addr(struct ibv_context *ctx, char *addr, size_t addr_len)
+{
+	const char *ibdev_path;
+	char path[ACCEL_MLX5_SYSFS_PATH_MAX];
+	DIR *dir;
+	struct dirent *dent;
+	int rc = -ENOENT;
+
+	if (ctx == NULL || addr == NULL || addr_len == 0) {
+		return -EINVAL;
+	}
+
+	ibdev_path = ctx->device->ibdev_path;
+	if (ibdev_path == NULL) {
+		return -EINVAL;
+	}
+
+	snprintf(path, sizeof(path), "%s/device/net", ibdev_path);
+	dir = opendir(path);
+	if (dir == NULL) {
+		return -errno;
+	}
+
+	while ((dent = readdir(dir)) != NULL) {
+		if (strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..") == 0) {
+			continue;
+		}
+		if (accel_mlx5_netdev_ipv4_get(dent->d_name, addr, addr_len) == 0) {
+			rc = 0;
+			break;
+		}
+	}
+	closedir(dir);
+
+	return rc;
+}
+
+static int
 accel_mlx5_init(void)
 {
 	struct {
 		struct spdk_mlx5_device_caps caps;
+		bool has_ip;
 		bool selected;
 	} *dev_ctx;
+	char ip_addr[INET_ADDRSTRLEN];
 	struct ibv_context **rdma_devs, *dev;
-	int num_devs = 0, rc = 0, i, num_selected_devs;
+	int num_devs = 0, rc = 0, i, num_selected_devs, num_devs_with_ip = 0;
 	int best_dev = -1;
 	int best_dev_stat = 0, dev_stat;
 	bool supports_crypto;
 	bool find_best_dev = g_accel_mlx5.allowed_devs_count == 0;
+	bool filter_by_ip = true;
 	const char **dev_names = NULL;
 
 	if (!g_accel_mlx5.enabled) {
@@ -4695,6 +4770,9 @@ accel_mlx5_init(void)
 			SPDK_ERRLOG("Failed to get crypto caps, dev %s\n", dev->device->name);
 			goto cleanup;
 		}
+		dev_ctx[i].has_ip = (accel_mlx5_ibv_get_ipv4_addr(dev, ip_addr, sizeof(ip_addr)) == 0);
+		num_devs_with_ip += !!dev_ctx[i].has_ip;
+
 		supports_crypto = accel_mlx5_dev_supports_crypto(&dev_ctx[i].caps);
 		if (!supports_crypto) {
 			SPDK_DEBUGLOG(accel_mlx5, "Disable crypto support because dev %s doesn't support it\n",
@@ -4712,6 +4790,10 @@ accel_mlx5_init(void)
 			if (dev_stat > best_dev_stat) {
 				best_dev_stat = dev_stat;
 				best_dev = i;
+			} else if (dev_stat == best_dev_stat && best_dev != -1 && !dev_ctx[best_dev].has_ip &&
+				   dev_ctx[i].has_ip) {
+				/* Prioritize device with IP address */
+				best_dev = i;
 			}
 		}
 	}
@@ -4723,6 +4805,10 @@ accel_mlx5_init(void)
 		}
 
 		num_selected_devs = 0;
+		if (num_devs_with_ip == 0 || !dev_ctx[best_dev].has_ip) {
+			filter_by_ip = false;
+		}
+
 		g_accel_mlx5.crypto_supported = accel_mlx5_dev_supports_crypto(&dev_ctx[best_dev].caps);
 		g_accel_mlx5.crc32c_supported = dev_ctx[best_dev].caps.crc32c_supported;
 		for (i = 0; i < num_devs; i++) {
@@ -4732,6 +4818,10 @@ accel_mlx5_init(void)
 			}
 			if (g_accel_mlx5.crc32c_supported &&
 			    !dev_ctx[i].caps.crc32c_supported) {
+				continue;
+			}
+			if (filter_by_ip && !dev_ctx[i].has_ip) {
+				SPDK_DEBUGLOG(accel_mlx5, "dev %s doesn't have IP, skipping\n", rdma_devs[i]->device->name);
 				continue;
 			}
 
