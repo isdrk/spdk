@@ -35,6 +35,7 @@ struct dte_type;
 struct dte_source {
 	struct dte_type *type;
 	struct doca_telemetry_exporter_source *doca_source;
+	bool started;
 	TAILQ_ENTRY(dte_source) link; /* For the type's sources list */
 	char name[];
 };
@@ -49,7 +50,6 @@ struct dte_type {
 
 struct dte_mgr {
 	bool initialized;
-	bool started;
 	struct doca_telemetry_exporter_schema *schema;
 	struct spdk_telemetry_exporter exporter;
 	struct dte_config config;
@@ -59,11 +59,10 @@ struct dte_mgr {
 
 static struct dte_mgr g_dte_mgr = {0};
 
-
 static inline bool
 dte_is_started(void)
 {
-	return g_dte_mgr.started;
+	return g_dte_mgr.schema != NULL;
 }
 
 static void
@@ -202,10 +201,11 @@ static void
 dte_telemetry_unregister_type(struct dte_type *type)
 {
 	assert(type != NULL);
-	assert(type->doca_type != NULL);
 
-	doca_telemetry_exporter_type_destroy(type->doca_type);
-	type->doca_type = NULL;
+	if (type->doca_type != NULL) {
+		doca_telemetry_exporter_type_destroy(type->doca_type);
+		type->doca_type = NULL;
+	}
 }
 
 static doca_error_t
@@ -246,10 +246,64 @@ type_error:
 	return ret;
 }
 
+static void
+dte_source_stop(struct dte_source *source)
+{
+	assert(source != NULL);
+
+	if (source->started) {
+		doca_telemetry_exporter_source_destroy(source->doca_source);
+		source->started = false;
+		source->doca_source = NULL;
+
+		SPDK_DEBUGLOG(telemetry_dte, "source %s:%s stopped\n", source->type->info->name, source->name);
+	}
+}
+
+static doca_error_t
+dte_source_start(struct dte_source *source)
+{
+	doca_error_t ret;
+	const struct dte_type *type;
+
+	assert(source != NULL);
+	assert(!source->started);
+	assert(g_dte_mgr.schema != NULL);
+
+	type = source->type;
+
+	ret = doca_telemetry_exporter_source_create(g_dte_mgr.schema, &source->doca_source);
+	if (ret != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to create doca telemetry source for %s:%s: %s\n", type->info->name,
+			    source->name, doca_error_get_name(ret));
+		goto source_create_error;
+	}
+
+	doca_telemetry_exporter_source_set_id(source->doca_source, g_dte_mgr.hostname);
+	doca_telemetry_exporter_source_set_tag(source->doca_source, source->name);
+
+	ret = doca_telemetry_exporter_source_start(source->doca_source);
+	if (ret != DOCA_SUCCESS) {
+		SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, source->name,
+			    doca_error_get_name(ret));
+		goto source_start_error;
+	}
+
+	source->started = true;
+
+	SPDK_DEBUGLOG(telemetry_dte, "source %s:%s started\n", type->info->name, source->name);
+	return DOCA_SUCCESS;
+
+source_start_error:
+	doca_telemetry_exporter_source_destroy(source->doca_source);
+	source->doca_source = NULL;
+source_create_error:
+	return ret;
+}
+
 static struct dte_source *
 dte_source_create(struct dte_type *type, const char *name)
 {
-	doca_error_t ret;
 	struct dte_source *source;
 	size_t len = strlen(name);
 
@@ -259,43 +313,17 @@ dte_source_create(struct dte_type *type, const char *name)
 		return NULL;
 	}
 
-	ret = doca_telemetry_exporter_source_create(g_dte_mgr.schema, &source->doca_source);
-	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to create doca telemetry source for %s:%s: %s\n", type->info->name, name,
-			    doca_error_get_name(ret));
-		goto source_create_error;
-	}
-
-	doca_telemetry_exporter_source_set_id(source->doca_source, g_dte_mgr.hostname);
-	doca_telemetry_exporter_source_set_tag(source->doca_source, name);
-
-	if (dte_is_started()) {
-		ret = doca_telemetry_exporter_source_start(source->doca_source);
-		if (ret != DOCA_SUCCESS) {
-			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, name,
-				    doca_error_get_name(ret));
-			goto source_start_error;
-		}
-	}
-
 	memcpy(source->name, name, len + 1);
 	source->type = type;
 
 	SPDK_DEBUGLOG(telemetry_dte, "source %s:%s created\n", type->info->name, name);
-
 	return source;
-
-source_start_error:
-	doca_telemetry_exporter_source_destroy(source->doca_source);
-source_create_error:
-	free(source);
-	return NULL;
 }
 
 static void
 dte_source_destroy(struct dte_source *source)
 {
-	doca_telemetry_exporter_source_destroy(source->doca_source);
+	dte_source_stop(source);
 	SPDK_DEBUGLOG(telemetry_dte, "source %s:%s destroyed\n", source->type->info->name, source->name);
 	free(source);
 }
@@ -308,6 +336,9 @@ dte_type_destroy(struct dte_type *type)
 		TAILQ_REMOVE(&type->sources, source, link);
 		dte_source_destroy(source);
 	}
+
+	dte_telemetry_unregister_type(type);
+
 	TAILQ_REMOVE(&g_dte_mgr.types, type, link);
 	SPDK_DEBUGLOG(telemetry_dte, "type %s destroyed\n", type->info->name);
 	free(type);
@@ -391,22 +422,54 @@ dte_schema_create(const char *name)
 	return schema;
 }
 
+static void
+dte_type_stop(struct dte_type *type)
+{
+	struct dte_source *source;
+
+	assert(type != NULL);
+
+	/* Stop all sources */
+	TAILQ_FOREACH(source, &type->sources, link) {
+		dte_source_stop(source);
+	}
+}
+
 static doca_error_t
 dte_type_start(struct dte_type *type)
 {
-	struct dte_source *source;
 	doca_error_t ret;
+	struct dte_source *source;
+
+	assert(type != NULL);
 
 	TAILQ_FOREACH(source, &type->sources, link) {
-		ret = doca_telemetry_exporter_source_start(source->doca_source);
+		ret = dte_source_start(source);
 		if (ret != DOCA_SUCCESS) {
-			/* NOTE: Unfortunately, there's no DOCA API to stop the schema or sources. So we just log the error and continue. */
-			SPDK_WARNLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name,
-				     source->name, doca_error_get_name(ret));
+			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, source->name,
+				    doca_error_get_name(ret));
+			dte_type_stop(type);
+			return ret;
 		}
 	}
 
 	return DOCA_SUCCESS;
+}
+
+static void
+dte_schema_stop(void)
+{
+	struct dte_type *type;
+
+	assert(g_dte_mgr.schema != NULL);
+
+	/* Stop all types and unregister them */
+	TAILQ_FOREACH(type, &g_dte_mgr.types, link) {
+		dte_type_stop(type);
+		dte_telemetry_unregister_type(type);
+	}
+
+	dte_schema_destroy();
 }
 
 static doca_error_t
@@ -415,31 +478,50 @@ dte_schema_start(void)
 	doca_error_t ret;
 	struct dte_type *type;
 
+	assert(g_dte_mgr.schema == NULL);
+
+	g_dte_mgr.schema = dte_schema_create("SPDK DTE");
+	if (g_dte_mgr.schema == NULL) {
+		SPDK_ERRLOG("Failed to create schema\n");
+		return DOCA_ERROR_NO_MEMORY;
+	}
+
+	/* Register all types */
+	TAILQ_FOREACH(type, &g_dte_mgr.types, link) {
+		ret = dte_telemetry_register_type(type);
+		if (ret != DOCA_SUCCESS) {
+			SPDK_ERRLOG("Failed to register %s type\n", type->info->name);
+			goto on_error;
+		}
+	}
+
 	/* Start the schema */
 	ret = doca_telemetry_exporter_schema_start(g_dte_mgr.schema);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to start the doca telemetry schema: %s\n", doca_error_get_name(ret));
-		return ret;
+		goto on_error;
 	}
 
-	/* Start the sources */
+	/* Start all types */
 	TAILQ_FOREACH(type, &g_dte_mgr.types, link) {
 		ret = dte_type_start(type);
 		if (ret != DOCA_SUCCESS) {
 			SPDK_ERRLOG("Failed to start %s type\n", type->info->name);
-			return ret;
+			goto on_error;
 		}
 	}
 
 	SPDK_DEBUGLOG(telemetry_dte, "Schema started\n");
-
 	return DOCA_SUCCESS;
+
+on_error:
+	dte_schema_stop();
+	return ret;
 }
 
 static struct dte_type *
 dte_type_create(const struct spdk_telemetry_type_info *type_info)
 {
-	doca_error_t ret;
 	struct dte_type *type;
 
 	type = calloc(1, sizeof(*type));
@@ -449,15 +531,6 @@ dte_type_create(const struct spdk_telemetry_type_info *type_info)
 	}
 
 	type->info = type_info;
-
-	/* Register type */
-	ret = dte_telemetry_register_type(type);
-	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to register %s type\n", type_info->name);
-		free(type);
-		return NULL;
-	}
-
 	TAILQ_INIT(&type->sources);
 
 	SPDK_DEBUGLOG(telemetry_dte, "Type %s with %" PRIu64 " stats created\n", type_info->name,
@@ -487,7 +560,6 @@ dte_fini(void)
 		dte_type_destroy(type);
 	}
 	dte_schema_destroy();
-	g_dte_mgr.started = false;
 	g_dte_mgr.initialized = false;
 	SPDK_DEBUGLOG(telemetry_dte, "DTE finalized\n");
 }
@@ -511,7 +583,7 @@ dte_start(void *ctx)
 		return -EINVAL;
 	}
 
-	g_dte_mgr.started = true;
+	SPDK_DEBUGLOG(telemetry_dte, "DTE exporter started\n");
 	return 0;
 }
 
@@ -521,12 +593,9 @@ dte_stop(void *ctx)
 	assert(g_dte_mgr.initialized);
 	assert(dte_is_started());
 
-	/* NOTE: As there's no way to stop the schema, stop is logical only, restart is unsupported,
-	 * and a destruct/recreate cycle is required to start exporting again.
-	 * So we just set the started flag to false and return.
-	 */
+	dte_schema_stop();
 
-	g_dte_mgr.started = false;
+	SPDK_DEBUGLOG(telemetry_dte, "DTE exporter stopped\n");
 }
 
 static struct spdk_telemetry_type_handle *
@@ -534,7 +603,13 @@ dte_register_type(void *ctx, const struct spdk_telemetry_type_info *type_info)
 {
 	struct dte_type *type;
 
-	assert(!dte_is_started());
+	/* DOCA Telemetry Exporter API does not allow to register a type after the schema is started.
+	 * See doca_telemetry_exporter_schema_start() documentation.
+	 */
+	if (dte_is_started()) {
+		SPDK_ERRLOG("Cannot register type %s after the schema is started\n", type_info->name);
+		return NULL;
+	}
 
 	type = dte_type_create(type_info);
 	if (type == NULL) {
@@ -547,23 +622,11 @@ dte_register_type(void *ctx, const struct spdk_telemetry_type_info *type_info)
 }
 
 static void
-dte_do_unregister_source(struct dte_source *source)
-{
-	assert(source != NULL);
-
-	TAILQ_REMOVE(&source->type->sources, source, link);
-	dte_source_destroy(source);
-}
-
-
-static void
 dte_unregister_type(void *ctx, struct spdk_telemetry_type_handle *_type)
 {
 	struct dte_type *type = (struct dte_type *)_type;
 
 	assert(type != NULL);
-	assert(!dte_is_started());
-	assert(TAILQ_EMPTY(&type->sources));
 
 	dte_type_destroy(type);
 }
@@ -579,6 +642,18 @@ dte_register_source(void *ctx, struct spdk_telemetry_type_handle *type_handle, c
 		return NULL;
 	}
 
+	if (dte_is_started()) {
+		doca_error_t ret;
+
+		ret = dte_source_start(source);
+		if (ret != DOCA_SUCCESS) {
+			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, name,
+				    doca_error_get_name(ret));
+			dte_source_destroy(source);
+			return NULL;
+		}
+	}
+
 	TAILQ_INSERT_TAIL(&type->sources, source, link);
 
 	return (struct spdk_telemetry_source_handle *)source;
@@ -589,7 +664,8 @@ dte_unregister_source(void *ctx, struct spdk_telemetry_source_handle *_source)
 {
 	struct dte_source *source = (struct dte_source *)_source;
 
-	dte_do_unregister_source(source);
+	TAILQ_REMOVE(&source->type->sources, source, link);
+	dte_source_destroy(source);
 }
 
 static bool
@@ -598,7 +674,12 @@ dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const 
 {
 	doca_error_t ret;
 	struct dte_source *source = (struct dte_source *)_source;
-	struct dte_type *type = source->type;
+	const struct dte_type *type;
+
+	assert(source != NULL);
+	assert(source->started);
+
+	type = source->type;
 
 	/* NOTE: We cast the stats_buffer to void * to avoid a warning about the const qualifier.
 	 * We'll remove the casting once the doca_telemetry_exporter_schema_set_buf_size() prototype is fixed.
@@ -775,13 +856,6 @@ dte_create(const struct dte_config *config)
 	g_dte_mgr.exporter.module = &dte_module;
 	g_dte_mgr.config = *config;
 
-	g_dte_mgr.schema = dte_schema_create("SPDK DTE");
-	if (g_dte_mgr.schema == NULL) {
-		SPDK_ERRLOG("Failed to create schema\n");
-		res = -ENOMEM;
-		goto dte_create_error;
-	}
-
 	dte_set_env(true);
 
 	res = spdk_telemetry_exporter_register(&g_dte_mgr.exporter);
@@ -793,8 +867,6 @@ dte_create(const struct dte_config *config)
 	return 0;
 
 exporter_register_error:
-	dte_schema_destroy();
-dte_create_error:
 	g_dte_mgr.exporter.ctxt = NULL;
 	memset(&g_dte_mgr.config, 0, sizeof(g_dte_mgr.config));
 	dte_set_env(false);
