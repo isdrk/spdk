@@ -58,6 +58,13 @@ struct dte_mgr {
 
 static struct dte_mgr g_dte_mgr = {0};
 
+
+static inline bool
+dte_is_started(void)
+{
+	return g_dte_mgr.started;
+}
+
 static void
 dte_set_env(bool set)
 {
@@ -252,7 +259,7 @@ dte_source_create(struct dte_type *type, const char *name)
 	doca_telemetry_exporter_source_set_id(source->doca_source, g_dte_mgr.hostname);
 	doca_telemetry_exporter_source_set_tag(source->doca_source, name);
 
-	if (g_dte_mgr.started) {
+	if (dte_is_started()) {
 		ret = doca_telemetry_exporter_source_start(source->doca_source);
 		if (ret != DOCA_SUCCESS) {
 			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, name,
@@ -471,7 +478,7 @@ dte_start(void *ctx)
 {
 	doca_error_t ret;
 	assert(g_dte_mgr.initialized);
-	assert(!g_dte_mgr.started);
+	assert(!dte_is_started());
 
 	ret = dte_schema_start();
 	if (ret != DOCA_SUCCESS) {
@@ -487,7 +494,7 @@ static void
 dte_stop(void *ctx)
 {
 	assert(g_dte_mgr.initialized);
-	assert(g_dte_mgr.started);
+	assert(dte_is_started());
 
 	/* NOTE: As there's no way to stop the schema, stop is logical only, restart is unsupported,
 	 * and a destruct/recreate cycle is required to start exporting again.
@@ -502,7 +509,7 @@ dte_register_type(void *ctx, const struct spdk_telemetry_type_info *type_info)
 {
 	struct dte_type *type;
 
-	assert(!g_dte_mgr.started);
+	assert(!dte_is_started());
 
 	type = dte_type_create(type_info);
 	if (type == NULL) {
@@ -530,7 +537,7 @@ dte_unregister_type(void *ctx, struct spdk_telemetry_type_handle *_type)
 	struct dte_type *type = (struct dte_type *)_type;
 
 	assert(type != NULL);
-	assert(!g_dte_mgr.started);
+	assert(!dte_is_started());
 	assert(TAILQ_EMPTY(&type->sources));
 
 	dte_type_destroy(type);
