@@ -40,6 +40,7 @@ struct dte_source {
 };
 
 struct dte_type {
+	struct doca_telemetry_exporter_type *doca_type;
 	doca_telemetry_exporter_type_index_t type_index;
 	TAILQ_ENTRY(dte_type) link; /* For the types list */
 	TAILQ_HEAD(, dte_source) sources;
@@ -197,42 +198,51 @@ dte_type_add_stats(struct doca_telemetry_exporter_type *type,
 	return ret;
 }
 
+static void
+dte_telemetry_unregister_type(struct dte_type *type)
+{
+	assert(type != NULL);
+	assert(type->doca_type != NULL);
+
+	doca_telemetry_exporter_type_destroy(type->doca_type);
+	type->doca_type = NULL;
+}
+
 static doca_error_t
-dte_telemetry_register_type(struct doca_telemetry_exporter_schema *schema,
-			    const struct spdk_telemetry_type_info *type_info,
-			    doca_telemetry_exporter_type_index_t *type_index)
+dte_telemetry_register_type(struct dte_type *type)
 {
 	doca_error_t ret;
-	struct doca_telemetry_exporter_type *type = NULL;
+	const struct spdk_telemetry_type_info *type_info = type->info;
 
 	/* Register type */
-	ret = doca_telemetry_exporter_type_create(&type);
+	ret = doca_telemetry_exporter_type_create(&type->doca_type);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to create type %s: %s\n", type_info->name, doca_error_get_name(ret));
 		return ret;
 	}
 
 	/* Add stats to the type */
-	ret = dte_type_add_stats(type, type_info);
+	ret = dte_type_add_stats(type->doca_type, type->info);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to add stats to type %s: %s\n", type_info->name, doca_error_get_name(ret));
 		goto type_error;
 	}
 
 	/* Register the type to the schema */
-	ret = doca_telemetry_exporter_schema_add_type(schema, type_info->name, type, type_index);
+	ret = doca_telemetry_exporter_schema_add_type(g_dte_mgr.schema, type->info->name, type->doca_type,
+			&type->type_index);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to add type %s to schema: %s\n", type_info->name, doca_error_get_name(ret));
 		goto type_error;
 	}
 
 	SPDK_DEBUGLOG(telemetry_dte, "Registered type %s with index %" PRIu64 "\n", type_info->name,
-		      (uint64_t)*type_index);
+		      (uint64_t)type->type_index);
 
 	return DOCA_SUCCESS;
 
 type_error:
-	doca_telemetry_exporter_type_destroy(type);
+	dte_telemetry_unregister_type(type);
 	return ret;
 }
 
@@ -424,15 +434,16 @@ dte_type_create(const struct spdk_telemetry_type_info *type_info)
 		return NULL;
 	}
 
+	type->info = type_info;
+
 	/* Register type */
-	ret = dte_telemetry_register_type(g_dte_mgr.schema, type_info, &type->type_index);
+	ret = dte_telemetry_register_type(type);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to register %s type\n", type_info->name);
 		free(type);
 		return NULL;
 	}
 
-	type->info = type_info;
 	TAILQ_INIT(&type->sources);
 
 	SPDK_DEBUGLOG(telemetry_dte, "Type %s with %" PRIu64 " stats created\n", type_info->name,
