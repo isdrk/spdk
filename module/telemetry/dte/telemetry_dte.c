@@ -392,6 +392,24 @@ dte_schema_create(const char *name)
 }
 
 static doca_error_t
+dte_type_start(struct dte_type *type)
+{
+	struct dte_source *source;
+	doca_error_t ret;
+
+	TAILQ_FOREACH(source, &type->sources, link) {
+		ret = doca_telemetry_exporter_source_start(source->doca_source);
+		if (ret != DOCA_SUCCESS) {
+			/* NOTE: Unfortunately, there's no DOCA API to stop the schema or sources. So we just log the error and continue. */
+			SPDK_WARNLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name,
+				     source->name, doca_error_get_name(ret));
+		}
+	}
+
+	return DOCA_SUCCESS;
+}
+
+static doca_error_t
 dte_schema_start(void)
 {
 	doca_error_t ret;
@@ -406,14 +424,10 @@ dte_schema_start(void)
 
 	/* Start the sources */
 	TAILQ_FOREACH(type, &g_dte_mgr.types, link) {
-		struct dte_source *source;
-		TAILQ_FOREACH(source, &type->sources, link) {
-			ret = doca_telemetry_exporter_source_start(source->doca_source);
-			if (ret != DOCA_SUCCESS) {
-				/* NOTE: Unfortunately, there's no DOCA API to stop the schema or sources. So we just log the error and continue. */
-				SPDK_WARNLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name,
-					     source->name, doca_error_get_name(ret));
-			}
+		ret = dte_type_start(type);
+		if (ret != DOCA_SUCCESS) {
+			SPDK_ERRLOG("Failed to start %s type\n", type->info->name);
+			return ret;
 		}
 	}
 
