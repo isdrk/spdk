@@ -2471,6 +2471,7 @@ nvmf_rdma_request_init_data_transfer_request(struct spdk_nvmf_rdma_request *rdma
 
 	data_transfer_req->main_request = rdma_req;
 	data_transfer_req->req.qpair = rdma_req->req.qpair;
+	data_transfer_req->req.rsp = rdma_req->req.rsp;
 	data_transfer_req->req.xfer = rdma_req->req.xfer;
 	data_transfer_req->is_duplicated_aer = 0;
 	data_transfer_req->fused_failed = 0;
