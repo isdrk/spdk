@@ -269,8 +269,8 @@ CONFIG_HAVE_STRUCT_STAT_ST_ATIMESPEC=n
 # libc contains the copy_file_range
 CONFIG_COPY_FILE_RANGE=n
 
-# liblz4 is available
-CONFIG_HAVE_LZ4=n
+# liblz4 compression support
+CONFIG_LZ4=
 
 # libaio has the RW flags (version >= 0.3.111)
 CONFIG_AIO_HAVE_RW_FLAGS=n

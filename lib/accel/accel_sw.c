@@ -19,7 +19,7 @@
 #include "spdk/xor.h"
 #include "spdk/dif.h"
 
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 #include <lz4.h>
 #endif
 
@@ -59,7 +59,7 @@ struct sw_accel_io_channel {
 	uint8_t                         level_buf_mem[ISAL_DEF_LVL0_DEFAULT + ISAL_DEF_LVL1_DEFAULT +
 					      ISAL_DEF_LVL2_DEFAULT + ISAL_DEF_LVL3_DEFAULT];
 #endif
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	/* for lz4 */
 	LZ4_stream_t                    *lz4_stream;
 	LZ4_streamDecode_t              *lz4_stream_decode;
@@ -207,7 +207,7 @@ _sw_accel_check_crc32cv(uint32_t *expected_crc, struct iovec *iov, uint32_t iovc
 static int
 _sw_accel_compress_lz4(struct sw_accel_io_channel *sw_ch, struct spdk_accel_task *accel_task)
 {
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	LZ4_stream_t *stream = sw_ch->lz4_stream;
 	struct iovec *siov = accel_task->s.iovs;
 	struct iovec *diov = accel_task->d.iovs;
@@ -257,7 +257,7 @@ _sw_accel_compress_lz4(struct sw_accel_io_channel *sw_ch, struct spdk_accel_task
 static int
 _sw_accel_decompress_lz4(struct sw_accel_io_channel *sw_ch, struct spdk_accel_task *accel_task)
 {
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	LZ4_streamDecode_t *stream = sw_ch->lz4_stream_decode;
 	struct iovec *siov = accel_task->s.iovs;
 	struct iovec *diov = accel_task->d.iovs;
@@ -823,7 +823,7 @@ sw_accel_create_cb(void *io_device, void *ctx_buf)
 	STAILQ_INIT(&sw_ch->tasks_to_complete);
 	sw_ch->completion_poller = NULL;
 
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	sw_ch->lz4_stream = LZ4_createStream();
 	if (sw_ch->lz4_stream == NULL) {
 		SPDK_ERRLOG("Failed to create the lz4 stream for compression\n");
@@ -871,7 +871,7 @@ sw_accel_destroy_cb(void *io_device, void *ctx_buf)
 {
 	struct sw_accel_io_channel *sw_ch = ctx_buf;
 
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	LZ4_freeStream(sw_ch->lz4_stream);
 	LZ4_freeStreamDecode(sw_ch->lz4_stream_decode);
 #endif
@@ -978,7 +978,7 @@ sw_accel_compress_supports_algo(enum spdk_accel_comp_algo algo)
 {
 	switch (algo) {
 	case SPDK_ACCEL_COMP_ALGO_DEFLATE:
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 	case SPDK_ACCEL_COMP_ALGO_LZ4:
 #endif
 		return true;
@@ -1002,7 +1002,7 @@ sw_accel_get_compress_level_range(enum spdk_accel_comp_algo algo,
 		return -EINVAL;
 #endif
 	case SPDK_ACCEL_COMP_ALGO_LZ4:
-#ifdef SPDK_CONFIG_HAVE_LZ4
+#ifdef SPDK_CONFIG_LZ4
 		*min_level = 1;
 		*max_level = 65537;
 		return 0;

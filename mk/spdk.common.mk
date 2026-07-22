@@ -360,7 +360,7 @@ SYS_LIBS += -lssl
 SYS_LIBS += -lcrypto
 SYS_LIBS += -lm
 
-ifeq ($(CONFIG_HAVE_LZ4),y)
+ifeq ($(CONFIG_LZ4),y)
 SYS_LIBS += -llz4
 endif
 

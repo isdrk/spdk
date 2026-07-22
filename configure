@@ -115,6 +115,8 @@ function usage() {
 	echo " --without-uring-zns       Build I/O uring module without ZNS (zoned namespaces) support."
 	echo " --with-openssl[=DIR]      Build OPENSSL with custom path. Otherwise the regular system paths will"
 	echo "                           be searched."
+	echo " --with-lz4                Enable lz4 compression support."
+	echo " --without-lz4             Disable lz4 even if present on the system."
 	echo " --with-fuse               Build FUSE components for mounting a blobfs filesystem."
 	echo " --without-fuse            No path required."
 	echo " --with-fsdev              Build fsdev library components"
@@ -635,6 +637,12 @@ for i in "$@"; do
 		--with-openssl=*)
 			check_dir "$i"
 			CONFIG[OPENSSL_PATH]=$(readlink -f ${i#*=})
+			;;
+		--with-lz4)
+			CONFIG[LZ4]=y
+			;;
+		--without-lz4)
+			CONFIG[LZ4]=n
 			;;
 		--with-fuse)
 			CONFIG[FUSE]=y
@@ -1194,9 +1202,16 @@ if echo -e '#include <openssl/evp.h>\nint main(void) { EVP_MAC *m = EVP_MAC_fetc
 	CONFIG[HAVE_EVP_MAC]=y
 fi
 
-if echo -e '#include <lz4.h>\nint main(void) { return 0; }\n' \
-	| "${BUILD_CMD[@]}" -llz4 - 2> /dev/null; then
-	CONFIG[HAVE_LZ4]="y"
+if [[ "${CONFIG[LZ4]}" != "n" ]]; then
+	if echo -e '#include <lz4.h>\nint main(void) { return 0; }\n' \
+		| "${BUILD_CMD[@]}" -llz4 - 2> /dev/null; then
+		CONFIG[LZ4]="y"
+	elif [[ "${CONFIG[LZ4]}" == "y" ]]; then
+		echo "--with-lz4 requires liblz4."
+		exit 1
+	else
+		CONFIG[LZ4]="n"
+	fi
 fi
 
 if [[ "$wsl" != "y" ]]; then
