@@ -117,6 +117,8 @@ dte_set_env(bool set)
 		snprintf(env_value, sizeof(env_value), DOCA_TELEMETRY_ADDRESS_PREFIX "%s:%d", address, port);
 
 		setenv("PROMETHEUS_ENDPOINT", env_value, 1);
+		setenv("PROMETHEUS_USE_TYPENAME_AS_LABEL", "true", 1);
+		setenv("PROMETHEUS_USE_TAG_AS_LABEL", "true", 1);
 
 		/* Format: name1=value1,name2=value2,name3=value3... */
 		const_labels = spdk_sprintf_alloc("app=%s", spdk_app_get_name());
