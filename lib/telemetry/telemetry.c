@@ -632,6 +632,8 @@ register_failed:
 int
 spdk_telemetry_exporter_unregister(struct spdk_telemetry_exporter *telemetry_exporter)
 {
+	struct spdk_telemetry_type *type;
+
 	assert(telemetry_mgr_is_initialized());
 	assert(telemetry_exporter != NULL);
 	assert(spdk_thread_is_app_thread(NULL));
@@ -649,6 +651,22 @@ spdk_telemetry_exporter_unregister(struct spdk_telemetry_exporter *telemetry_exp
 	if (g_telemetry_mgr.poller != NULL) {
 		SPDK_ERRLOG("Telemetry is running, cannot unregister exporter\n");
 		return -EBUSY;
+	}
+
+	/* Unregister all types and sources with the exporter */
+	TAILQ_FOREACH(type, &g_telemetry_mgr.types, link) {
+		struct spdk_telemetry_source *src;
+
+		assert(type->handle != NULL); /* All types must still be registered with the exporter */
+
+		TAILQ_FOREACH(src, &type->sources, link) {
+			assert(src->handle != NULL); /* All sources must still be registered with the exporter */
+			g_telemetry_mgr.exporter->fn_table->unregister_source(g_telemetry_mgr.exporter->ctxt, src->handle);
+			src->handle = NULL;
+		}
+
+		g_telemetry_mgr.exporter->fn_table->unregister_type(g_telemetry_mgr.exporter->ctxt, type->handle);
+		type->handle = NULL;
 	}
 
 	g_telemetry_mgr.exporter = NULL;
