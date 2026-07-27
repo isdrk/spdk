@@ -648,7 +648,7 @@ spdk_telemetry_exporter_unregister(struct spdk_telemetry_exporter *telemetry_exp
 		return -EINVAL;
 	}
 
-	if (g_telemetry_mgr.poller != NULL) {
+	if (g_telemetry_mgr.poller != NULL || g_telemetry_mgr.stop_done_cb != NULL) {
 		SPDK_ERRLOG("Telemetry is running, cannot unregister exporter\n");
 		return -EBUSY;
 	}
