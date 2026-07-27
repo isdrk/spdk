@@ -205,7 +205,12 @@ dte_telemetry_unregister_type(struct dte_type *type)
 	assert(type != NULL);
 
 	if (type->doca_type != NULL) {
-		doca_telemetry_exporter_type_destroy(type->doca_type);
+		/* Unfortunately, DOCA Telemetry Exporter does not support unregistering types after the schema is started.
+		 * This can be revised in the future.
+		 */
+		if (!dte_is_started()) {
+			doca_telemetry_exporter_type_destroy(type->doca_type);
+		}
 		type->doca_type = NULL;
 	}
 }
