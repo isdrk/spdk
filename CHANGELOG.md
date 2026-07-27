@@ -2,6 +2,14 @@
 
 ## v25.09: (Upcoming Release)
 
+### build
+
+Added `--without-env` configure option, selecting the bundled null environment
+in `mk/env_null`. It builds the SPDK libraries without DPDK, for consumers that
+supply their own implementation of the `spdk_env_*` API and resolve those
+symbols at their own final link step. Apps, examples and tests are disabled
+when it is used, since they cannot be linked without an env implementation.
+
 ### bdev
 
 Added `dma_path_id` to `spdk_bdev_ext_io_opts`. It is propagated through

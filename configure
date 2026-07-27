@@ -13,6 +13,10 @@ trap 'echo -e "\n\nConfiguration failed\n\n" >&2' ERR
 rootdir=$(readlink -f $(dirname $0))
 source "$rootdir/scripts/common.sh"
 
+# Null environment layer selected by --without-env. Nothing that links a
+# complete binary can be built against it.
+env_null_dir=$rootdir/mk/env_null
+
 function usage() {
 	echo "'configure' configures SPDK to compile on supported platforms."
 	echo ""
@@ -61,6 +65,9 @@ function usage() {
 	echo "                           example: /usr/share/dpdk/x86_64-default-linuxapp-gcc"
 	echo " --with-env=DIR            Use an alternate environment implementation instead of DPDK."
 	echo "                           Implies --without-dpdk."
+	echo " --without-env             Use the bundled null environment in mk/env_null. Only the"
+	echo "                           libraries are built; apps, examples and tests are disabled"
+	echo "                           because they cannot be linked without an env implementation."
 	echo " --with-idxd               Build the IDXD library and accel framework plug-in module."
 	echo " --without-idxd            Disabled while experimental. Only built for x86 when enabled."
 	echo " --with-crypto             Build isa-l-crypto and vbdev crypto module. No path required."
@@ -472,6 +479,9 @@ for i in "$@"; do
 		--with-env=*)
 			CONFIG[ENV]="${i#*=}"
 			;;
+		--without-env)
+			CONFIG[ENV]=$env_null_dir
+			;;
 		--with-ublk)
 			CONFIG[UBLK]=y
 			;;
@@ -844,7 +854,11 @@ if [ -z "${CONFIG[ENV]}" ]; then
 	fi
 else
 	if [[ -n "${CONFIG[DPDK_DIR]}" || "${CONFIG[DPDK_PKG_CONFIG]}" == y ]]; then
-		echo "--with-env and --with-dpdk are mutually exclusive."
+		if [ "${CONFIG[ENV]}" = "$env_null_dir" ]; then
+			echo "--without-env and --with-dpdk are mutually exclusive."
+		else
+			echo "--with-env and --with-dpdk are mutually exclusive."
+		fi
 		exit 1
 	fi
 
@@ -858,6 +872,24 @@ else
 	fi
 	# Always disable virtio, but only print the error message if the user explicitly turned it on.
 	CONFIG[VIRTIO]="n"
+
+	if [ "${CONFIG[ENV]}" = "$env_null_dir" ]; then
+		# The null env implements no part of the spdk_env_* API, so anything
+		# that links a complete binary is unbuildable, so only build
+		# the libraries.
+		if [[ "${CONFIG[APPS]}" == "y" || "${CONFIG[EXAMPLES]}" == "y" ||
+			"${CONFIG[TESTS]}" == "y" || "${CONFIG[UNIT_TESTS]}" == "y" ]]; then
+			echo "Apps, examples and tests cannot be linked against the null environment. Disabling them."
+		fi
+		CONFIG[APPS]="n"
+		CONFIG[EXAMPLES]="n"
+		CONFIG[TESTS]="n"
+		CONFIG[UNIT_TESTS]="n"
+		if [ "${CONFIG[FIO_PLUGIN]}" = "y" ]; then
+			echo "fio_plugin cannot be linked against the null environment. Disabling it."
+		fi
+		CONFIG[FIO_PLUGIN]="n"
+	fi
 fi
 
 if [[ "${CONFIG[DPDK_PKG_CONFIG]}" == y ]]; then
