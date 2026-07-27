@@ -158,7 +158,7 @@ dte_create_telemetry_field(const struct spdk_telemetry_stat_info *stat_info)
 
 	ret = doca_telemetry_exporter_field_create(&field);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to create field %s: %s\n", stat_info->name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to create field %s: %s\n", stat_info->name, shim_doca_error_get_name(ret));
 		return NULL;
 	}
 
@@ -190,7 +190,7 @@ dte_type_add_stats(struct doca_telemetry_exporter_type *type,
 		ret = doca_telemetry_exporter_type_add_field(type, field);
 		if (ret != DOCA_SUCCESS) {
 			SPDK_ERRLOG("Failed to add field %s to type: %s\n", stat_info->name,
-				    doca_error_get_name(ret));
+				    shim_doca_error_get_name(ret));
 			doca_telemetry_exporter_field_destroy(field);
 			return ret;
 		}
@@ -224,14 +224,14 @@ dte_telemetry_register_type(struct dte_type *type)
 	/* Register type */
 	ret = doca_telemetry_exporter_type_create(&type->doca_type);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to create type %s: %s\n", type_info->name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to create type %s: %s\n", type_info->name, shim_doca_error_get_name(ret));
 		return ret;
 	}
 
 	/* Add stats to the type */
 	ret = dte_type_add_stats(type->doca_type, type->info);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to add stats to type %s: %s\n", type_info->name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to add stats to type %s: %s\n", type_info->name, shim_doca_error_get_name(ret));
 		goto type_error;
 	}
 
@@ -239,7 +239,8 @@ dte_telemetry_register_type(struct dte_type *type)
 	ret = doca_telemetry_exporter_schema_add_type(g_dte_mgr.schema, type->info->name, type->doca_type,
 			&type->type_index);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to add type %s to schema: %s\n", type_info->name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to add type %s to schema: %s\n", type_info->name,
+			    shim_doca_error_get_name(ret));
 		goto type_error;
 	}
 
@@ -282,7 +283,7 @@ dte_source_start(struct dte_source *source)
 	ret = doca_telemetry_exporter_source_create(g_dte_mgr.schema, &source->doca_source);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to create doca telemetry source for %s:%s: %s\n", type->info->name,
-			    source->name, doca_error_get_name(ret));
+			    source->name, shim_doca_error_get_name(ret));
 		goto source_create_error;
 	}
 
@@ -292,7 +293,7 @@ dte_source_start(struct dte_source *source)
 	ret = doca_telemetry_exporter_source_start(source->doca_source);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, source->name,
-			    doca_error_get_name(ret));
+			    shim_doca_error_get_name(ret));
 		goto source_start_error;
 	}
 
@@ -372,7 +373,7 @@ dte_schema_create(const char *name)
 	/* Init DOCA schema */
 	ret = doca_telemetry_exporter_schema_init(name, &schema);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to init DOCA schema for %s: %s\n", name, doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to init DOCA schema for %s: %s\n", name, shim_doca_error_get_name(ret));
 		return NULL;
 	}
 
@@ -454,7 +455,7 @@ dte_type_start(struct dte_type *type)
 		ret = dte_source_start(source);
 		if (ret != DOCA_SUCCESS) {
 			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, source->name,
-				    doca_error_get_name(ret));
+				    shim_doca_error_get_name(ret));
 			dte_type_stop(type);
 			return ret;
 		}
@@ -505,7 +506,7 @@ dte_schema_start(void)
 	/* Start the schema */
 	ret = doca_telemetry_exporter_schema_start(g_dte_mgr.schema);
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to start the doca telemetry schema: %s\n", doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to start the doca telemetry schema: %s\n", shim_doca_error_get_name(ret));
 		goto on_error;
 	}
 
@@ -586,7 +587,7 @@ dte_start(void *ctx)
 
 	ret = dte_schema_start();
 	if (ret != DOCA_SUCCESS) {
-		SPDK_ERRLOG("Failed to start schema: %s\n", doca_error_get_name(ret));
+		SPDK_ERRLOG("Failed to start schema: %s\n", shim_doca_error_get_name(ret));
 		return -EINVAL;
 	}
 
@@ -655,7 +656,7 @@ dte_register_source(void *ctx, struct spdk_telemetry_type_handle *type_handle, c
 		ret = dte_source_start(source);
 		if (ret != DOCA_SUCCESS) {
 			SPDK_ERRLOG("Failed to start doca telemetry source for %s:%s: %s\n", type->info->name, name,
-				    doca_error_get_name(ret));
+				    shim_doca_error_get_name(ret));
 			dte_source_destroy(source);
 			return NULL;
 		}
@@ -695,7 +696,7 @@ dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const 
 			(void *)stats_buffer, 1);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_NOTICELOG("Failed to report stats for %s:%s: %s\n",
-			       type->info->name, source->name, doca_error_get_name(ret));
+			       type->info->name, source->name, shim_doca_error_get_name(ret));
 		return true;
 	}
 
@@ -703,7 +704,7 @@ dte_report_stats(void *ctx, struct spdk_telemetry_source_handle *_source, const 
 	ret = doca_telemetry_exporter_source_flush(source->doca_source);
 	if (ret != DOCA_SUCCESS) {
 		SPDK_NOTICELOG("Failed to flush doca telemetry source for %s:%s: %s\n",
-			       type->info->name, source->name, doca_error_get_name(ret));
+			       type->info->name, source->name, shim_doca_error_get_name(ret));
 	}
 
 	SPDK_DEBUGLOG(telemetry_dte, "Reported stats for %s:%s\n", type->info->name, source->name);

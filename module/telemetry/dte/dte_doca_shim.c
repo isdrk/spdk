@@ -158,8 +158,12 @@ dte_doca_shim_fini(void)
 }
 
 const char *
-doca_error_get_name(doca_error_t error)
+shim_doca_error_get_name(doca_error_t error)
 {
+	if (g_shim.error_get_name == NULL) {
+		return "DOCA_ERROR_UNKNOWN";
+	}
+
 	return g_shim.error_get_name(error);
 }
 
