@@ -724,6 +724,59 @@ test_telemetry_poller_skips_disabled_type(void)
 	ut_telemetry_cleanup();
 }
 
+static void
+test_telemetry_exporter_unregister_reregister(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_UINT64("x", 1),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "exporter_unreg_type",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	static int pull_cb_arg;
+	struct spdk_telemetry_type *type = NULL;
+	struct spdk_telemetry_source *src = NULL;
+	int rc;
+
+	spdk_telemetry_init();
+	ut_reset_mock();
+
+	rc = spdk_telemetry_register_type(&type_info, &type);
+	CU_ASSERT_EQUAL(rc, 0);
+	rc = spdk_telemetry_register_source(type, "exporter_unreg_src", ut_pull_cb,
+					    &pull_cb_arg, &src);
+	CU_ASSERT_EQUAL(rc, 0);
+	rc = spdk_telemetry_exporter_register(&g_mock_exporter);
+	CU_ASSERT_EQUAL(rc, 0);
+	CU_ASSERT_PTR_NOT_NULL(type->handle);
+	CU_ASSERT_PTR_NOT_NULL(src->handle);
+
+	rc = spdk_telemetry_exporter_unregister(&g_mock_exporter);
+	CU_ASSERT_EQUAL(rc, 0);
+	CU_ASSERT_EQUAL(g_mock.unregister_source_count, 1);
+	CU_ASSERT_EQUAL(g_mock.unregister_type_count, 1);
+	CU_ASSERT_PTR_NULL(type->handle);
+	CU_ASSERT_PTR_NULL(src->handle);
+
+	rc = spdk_telemetry_exporter_register(&g_mock_exporter);
+	CU_ASSERT_EQUAL(rc, 0);
+	CU_ASSERT_EQUAL(g_mock.register_type_count, 2);
+	CU_ASSERT_EQUAL(g_mock.register_source_count, 2);
+	CU_ASSERT_PTR_NOT_NULL(type->handle);
+	CU_ASSERT_PTR_NOT_NULL(src->handle);
+
+	rc = spdk_telemetry_exporter_unregister(&g_mock_exporter);
+	CU_ASSERT_EQUAL(rc, 0);
+	CU_ASSERT_EQUAL(g_mock.unregister_source_count, 2);
+	CU_ASSERT_EQUAL(g_mock.unregister_type_count, 2);
+	CU_ASSERT_PTR_NULL(type->handle);
+	CU_ASSERT_PTR_NULL(src->handle);
+
+	ut_telemetry_cleanup();
+}
+
 /*
  * spdk_telemetry_unregister_type() marks the type and its sources for deletion.
  * The next telemetry_poll_type() invocation must delete them and invoke the
@@ -868,6 +921,7 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_telemetry_register_type_while_started);
 	CU_ADD_TEST(suite, test_telemetry_type_enable_disable);
 	CU_ADD_TEST(suite, test_telemetry_poller_skips_disabled_type);
+	CU_ADD_TEST(suite, test_telemetry_exporter_unregister_reregister);
 	CU_ADD_TEST(suite, test_telemetry_unregister_type_source);
 	CU_ADD_TEST(suite, test_telemetry_fini);
 
