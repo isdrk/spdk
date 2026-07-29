@@ -61,7 +61,8 @@ struct spdk_xlio_sock {
 	struct {
 		uint32_t		accept		: 1;
 		uint32_t		rx		: 1;
-		uint32_t		reserved	: 26;
+		uint32_t		destroying	: 1;
+		uint32_t		reserved	: 25;
 	} events;
 
 	STAILQ_ENTRY(spdk_xlio_sock)	link;
@@ -407,6 +408,19 @@ xlio_sock_is_destroyed(struct spdk_xlio_sock *sock)
 	return sock->xlio_sock == (xlio_socket_t)NULL;
 }
 
+static void
+xlio_sock_destroy(struct spdk_xlio_sock_group *group, struct spdk_xlio_sock *sock)
+{
+	int rc __attribute__((unused));
+
+	assert(!xlio_sock_is_destroyed(sock));
+	assert(!sock->events.destroying);
+
+	sock->events.destroying = true;
+	rc = xlio_socket_destroy(sock->xlio_sock);
+	assert(rc == 0);
+}
+
 static struct spdk_xlio_sock *
 alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 {
@@ -438,7 +452,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	rc = xlio_socket_setsockopt(sock->xlio_sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof val);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to set SO_REUSEADDR: %s\n", spdk_strerror(errno));
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -446,7 +460,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof val);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to set TCP_NODELAY: %s\n", spdk_strerror(errno));
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -454,7 +468,7 @@ alloc_xlio_sock(struct spdk_xlio_sock_group *group)
 	rc = xlio_socket_setsockopt(sock->xlio_sock, IPPROTO_TCP, TCP_QUICKACK, &val, sizeof val);
 	if (rc != 0) {
 		SPDK_ERRLOG("Failed to set TCP_QUICKACK: %s\n", spdk_strerror(errno));
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -509,7 +523,7 @@ xlio_sock_listen(const char *ip, int port, struct spdk_sock_group_impl *_group,
 	rc = getaddrinfo(ip, portnum, &hints, &res0);
 	if (rc != 0) {
 		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", gai_strerror(rc), rc);
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -545,7 +559,7 @@ retry:
 	freeaddrinfo(res0);
 
 	if (rc < 0) {
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -662,7 +676,7 @@ xlio_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *_group,
 		if (rc != 0 || src_ai == NULL) {
 			SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n",
 				    rc != 0 ? gai_strerror(rc) : "", rc);
-			xlio_socket_destroy(sock->xlio_sock);
+			xlio_sock_destroy(group, sock);
 			return NULL;
 		}
 
@@ -671,7 +685,7 @@ xlio_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *_group,
 			SPDK_ERRLOG("xlio_socket_bind() failed errno %d (%s:%s)\n", errno,
 				    src_addr ? src_addr : "", portnum);
 			freeaddrinfo(src_ai);
-			xlio_socket_destroy(sock->xlio_sock);
+			xlio_sock_destroy(group, sock);
 			return NULL;
 		}
 
@@ -698,7 +712,7 @@ xlio_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *_group,
 	rc = getaddrinfo(ip, portnum, &hints, &res0);
 	if (rc != 0) {
 		SPDK_ERRLOG("getaddrinfo() failed %s (%d)\n", gai_strerror(rc), rc);
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -723,7 +737,7 @@ xlio_sock_connect(const char *ip, int port, struct spdk_sock_group_impl *_group,
 	freeaddrinfo(res0);
 
 	if (rc < 0 || sock->rc != 0) {
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 		return NULL;
 	}
 
@@ -786,7 +800,6 @@ xlio_sock_close(struct spdk_sock_group_impl *_group, struct spdk_sock *_sock)
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 	struct spdk_xlio_sock_group *group = __xlio_group(_group);
 	struct spdk_xlio_stream_segment *segment, *tsegment;
-	int rc;
 
 	if (sock->rc == 0) {
 		xlio_socket_flush(sock->xlio_sock);
@@ -807,10 +820,7 @@ xlio_sock_close(struct spdk_sock_group_impl *_group, struct spdk_sock *_sock)
 
 	/* This is actually asynchronous. The remainder of the process will occur
 	 * in the event callback. */
-	rc = xlio_socket_destroy(sock->xlio_sock);
-	if (rc != 0) {
-		return rc;
-	}
+	xlio_sock_destroy(group, sock);
 
 	/* The spdk_sock_close() interface is synchronous, so wait until the socket gets fully
 	 * destroyed.  Otherwise, if we try to bind to the same address before receiving the
@@ -1197,6 +1207,7 @@ spdk_xlio_socket_event_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, int ev
 		break;
 	case XLIO_SOCKET_EVENT_TERMINATED:
 		SPDK_DEBUGLOG(sock_xlio, "%p: TERMINATED\n", sock);
+		assert(sock->events.destroying);
 		/* This is the last event we'll get. */
 		sock->xlio_sock = (xlio_socket_t)NULL;
 		xlio_sock_put(sock);
@@ -1212,12 +1223,12 @@ spdk_xlio_socket_event_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, int ev
 		 * will return it and the upper layer can detect the disconnect/error. */
 		sock->rc = value;
 		group = sock->group;
-		if (group != NULL && !sock->events.rx && !sock->events.accept) {
+		if (group != NULL &&
+		    !sock->events.rx && !sock->events.accept && !sock->events.destroying) {
 			sock->events.rx = true;
 			STAILQ_INSERT_TAIL(&group->pending_rx, sock, link);
 		}
 		break;
-
 	}
 }
 
@@ -1241,12 +1252,18 @@ spdk_xlio_socket_rx_cb(xlio_socket_t xlio_sock, uintptr_t userdata_sq, void *dat
 	group = sock->group;
 	assert(group != NULL);
 
+	if (spdk_unlikely(sock->events.destroying)) {
+		/* The socket is being destroyed, we don't care about new data */
+		xlio_poll_group_buf_free(group->xlio_group, buf);
+		return;
+	}
+
 	segment = STAILQ_FIRST(&group->segment_pool);
 	if (segment == NULL) {
 		/* TODO: I guess just allocate more. The only other option is to disconnect. */
 		segment = calloc(1, sizeof(*segment));
 		if (segment == NULL) {
-			xlio_socket_destroy(xlio_sock);
+			xlio_sock_destroy(group, sock);
 			return;
 		}
 	} else {
@@ -1482,7 +1499,7 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 
 	STAILQ_FOREACH_SAFE(sock, &group->pending_accept, link, tmp) {
 		STAILQ_REMOVE_HEAD(&group->pending_accept, link);
-		xlio_socket_destroy(sock->xlio_sock);
+		xlio_sock_destroy(group, sock);
 	}
 
 	while (!STAILQ_EMPTY(&group->segment_pool)) {
