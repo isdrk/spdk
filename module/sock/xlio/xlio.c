@@ -411,12 +411,32 @@ xlio_sock_is_destroyed(struct spdk_xlio_sock *sock)
 static void
 xlio_sock_destroy(struct spdk_xlio_sock_group *group, struct spdk_xlio_sock *sock)
 {
+	struct spdk_xlio_stream_segment *segment, *tsegment;
 	int rc __attribute__((unused));
 
 	assert(!xlio_sock_is_destroyed(sock));
 	assert(!sock->events.destroying);
 
 	sock->events.destroying = true;
+	if (group != NULL) {
+		/* Remove the socket from the pending lists */
+		if (sock->events.rx && !sock->events.accept) {
+			STAILQ_REMOVE(&group->pending_rx, sock, spdk_xlio_sock, link);
+		}
+		if (sock->events.accept) {
+			STAILQ_REMOVE(&group->pending_accept, sock, spdk_xlio_sock, link);
+		}
+		sock->events.accept = false;
+		sock->events.rx = false;
+
+		/* Dump all data that is waiting to be received. This is safe. */
+		STAILQ_FOREACH_SAFE(segment, &sock->pending_stream, link, tsegment) {
+			STAILQ_REMOVE_HEAD(&sock->pending_stream, link);
+			xlio_poll_group_buf_free(group->xlio_group, segment->xlio_buf);
+			STAILQ_INSERT_HEAD(&group->segment_pool, segment, link);
+		}
+	}
+
 	rc = xlio_socket_destroy(sock->xlio_sock);
 	assert(rc == 0);
 }
@@ -799,24 +819,13 @@ xlio_sock_close(struct spdk_sock_group_impl *_group, struct spdk_sock *_sock)
 {
 	struct spdk_xlio_sock *sock = __xlio_sock(_sock);
 	struct spdk_xlio_sock_group *group = __xlio_group(_group);
-	struct spdk_xlio_stream_segment *segment, *tsegment;
 
 	if (sock->rc == 0) {
 		xlio_socket_flush(sock->xlio_sock);
 	}
 
+	/* Users cannot close a socket that hasn't been accepted */
 	assert(!sock->events.accept);
-	if (sock->events.rx && _group != NULL) {
-		STAILQ_REMOVE(&group->pending_rx, sock, spdk_xlio_sock, link);
-		sock->events.rx = false;
-	}
-
-	/* Dump all data that is waiting to be received. This is safe. */
-	STAILQ_FOREACH_SAFE(segment, &sock->pending_stream, link, tsegment) {
-		STAILQ_REMOVE_HEAD(&sock->pending_stream, link);
-		xlio_poll_group_buf_free(group->xlio_group, segment->xlio_buf);
-		STAILQ_INSERT_HEAD(&group->segment_pool, segment, link);
-	}
 
 	/* This is actually asynchronous. The remainder of the process will occur
 	 * in the event callback. */
@@ -1498,7 +1507,7 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 	}
 
 	STAILQ_FOREACH_SAFE(sock, &group->pending_accept, link, tmp) {
-		STAILQ_REMOVE_HEAD(&group->pending_accept, link);
+		/* xlio_sock_destroy() removes socket from the pending_accept list */
 		xlio_sock_destroy(group, sock);
 	}
 
