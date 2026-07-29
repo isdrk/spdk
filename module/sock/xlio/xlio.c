@@ -1483,7 +1483,6 @@ xlio_sock_group_close(struct spdk_sock_group_impl *_group)
 	STAILQ_FOREACH_SAFE(sock, &group->pending_accept, link, tmp) {
 		STAILQ_REMOVE_HEAD(&group->pending_accept, link);
 		xlio_socket_destroy(sock->xlio_sock);
-		free(sock);
 	}
 
 	while (!STAILQ_EMPTY(&group->segment_pool)) {
