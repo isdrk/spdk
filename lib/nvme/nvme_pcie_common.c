@@ -136,6 +136,7 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 	int32_t			numa_id;
 	uint64_t		sq_paddr = 0;
 	uint64_t		cq_paddr = 0;
+	char			tracebuf[1024];
 
 	if (opts) {
 		pqpair->sq_vaddr = opts->sq.vaddr;
@@ -252,6 +253,10 @@ nvme_pcie_qpair_construct(struct spdk_nvme_qpair *qpair,
 		nvme_qpair_construct_tracker(tr, i, nvme_pcie_vtophys(qpair, tr, NULL));
 		TAILQ_INSERT_HEAD(&pqpair->free_tr, tr, tq_list);
 	}
+
+	snprintf(tracebuf, sizeof(tracebuf), NVME_CTRLR_LOG_FMT ",id:%u",
+		 NVME_CTRLR_LOG_ARGS(&pctrlr->ctrlr), qpair->id);
+	pqpair->trace_id = spdk_trace_register_owner(OWNER_TYPE_NVME_PCIE_QP, tracebuf);
 
 	nvme_pcie_qpair_reset(qpair);
 
@@ -673,7 +678,7 @@ nvme_pcie_qpair_submit_tracker(struct spdk_nvme_qpair *qpair, struct nvme_tracke
 	req = tr->req;
 	assert(req != NULL);
 
-	spdk_trace_record(TRACE_NVME_PCIE_SUBMIT, qpair->id, 0, (uintptr_t)req, req->cb_arg,
+	spdk_trace_record(TRACE_NVME_PCIE_SUBMIT, pqpair->trace_id, 0, (uintptr_t)req, req->cb_arg,
 			  (uint32_t)req->cmd.cid, (uint32_t)req->cmd.opc,
 			  req->cmd.cdw10, req->cmd.cdw11, req->cmd.cdw12,
 			  pqpair->qpair.queue_depth);
@@ -720,7 +725,7 @@ nvme_pcie_qpair_complete_tracker(struct spdk_nvme_qpair *qpair, struct nvme_trac
 
 	req = tr->req;
 
-	spdk_trace_record(TRACE_NVME_PCIE_COMPLETE, qpair->id, 0, (uintptr_t)req, req->cb_arg,
+	spdk_trace_record(TRACE_NVME_PCIE_COMPLETE, pqpair->trace_id, 0, (uintptr_t)req, req->cb_arg,
 			  (uint32_t)req->cmd.cid, (uint32_t)cpl->status_raw, pqpair->qpair.queue_depth);
 
 	assert(req != NULL);
@@ -1072,6 +1077,7 @@ nvme_pcie_qpair_destroy(struct spdk_nvme_qpair *qpair)
 
 	}
 
+	spdk_trace_unregister_owner(pqpair->trace_id);
 	spdk_free(pqpair);
 
 	return 0;

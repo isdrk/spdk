@@ -200,6 +200,8 @@ struct nvme_pcie_qpair {
 
 	struct spdk_nvme_cmd *sq_vaddr;
 	struct spdk_nvme_cpl *cq_vaddr;
+
+	uint16_t trace_id;
 };
 
 static inline struct nvme_pcie_qpair *
