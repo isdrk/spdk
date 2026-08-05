@@ -161,6 +161,58 @@ ut_telemetry_cleanup(void)
 	g_telemetry_mgr.initialized      = false;
 }
 
+static void
+test_telemetry_buffer_size_int64(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_INT64("signed_counter", 1),
+		SPDK_TELEMETRY_STAT_INFO_INT64("offset",         4),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "buf_size_int64",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	struct spdk_telemetry_type *type = NULL;
+	int rc;
+
+	spdk_telemetry_init();
+
+	rc = spdk_telemetry_register_type(&type_info, &type);
+	CU_ASSERT_EQUAL(rc, 0);
+	SPDK_CU_ASSERT_FATAL(type != NULL);
+	/* 1 + 4 fields × 8 bytes — same footprint as UINT64 */
+	CU_ASSERT_EQUAL(type->stats_buffer_size, 5 * sizeof(uint64_t));
+
+	ut_telemetry_cleanup();
+}
+
+static void
+test_telemetry_buffer_size_double(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_DOUBLE64("utilization", 1),
+		SPDK_TELEMETRY_STAT_INFO_DOUBLE64("latency_us",  3),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "buf_size_double",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	struct spdk_telemetry_type *type = NULL;
+	int rc;
+
+	spdk_telemetry_init();
+
+	rc = spdk_telemetry_register_type(&type_info, &type);
+	CU_ASSERT_EQUAL(rc, 0);
+	SPDK_CU_ASSERT_FATAL(type != NULL);
+	/* 1 + 3 fields × 8 bytes */
+	CU_ASSERT_EQUAL(type->stats_buffer_size, 4 * sizeof(uint64_t));
+
+	ut_telemetry_cleanup();
+}
+
 /* ── Tests ──────────────────────────────────────────────────────────────── */
 
 static void
@@ -168,6 +220,10 @@ test_telemetry_stat_type_name(void)
 {
 	CU_ASSERT_STRING_EQUAL(spdk_telemetry_stat_type_name(SPDK_TELEMETRY_STAT_TYPE_UINT64),
 			       "uint64_t");
+	CU_ASSERT_STRING_EQUAL(spdk_telemetry_stat_type_name(SPDK_TELEMETRY_STAT_TYPE_INT64),
+			       "int64_t");
+	CU_ASSERT_STRING_EQUAL(spdk_telemetry_stat_type_name(SPDK_TELEMETRY_STAT_TYPE_DOUBLE64),
+			       "double");
 	CU_ASSERT_STRING_EQUAL(spdk_telemetry_stat_type_name(SPDK_TELEMETRY_STAT_TYPE_SUBTYPE),
 			       "subtype");
 	CU_ASSERT_STRING_EQUAL(spdk_telemetry_stat_type_name(__SPDK_TELEMETRY_STAT_TYPE_LAST),
@@ -904,6 +960,8 @@ main(int argc, char **argv)
 
 	CU_ADD_TEST(suite, test_telemetry_stat_type_name);
 	CU_ADD_TEST(suite, test_telemetry_buffer_size_simple_uint64);
+	CU_ADD_TEST(suite, test_telemetry_buffer_size_int64);
+	CU_ADD_TEST(suite, test_telemetry_buffer_size_double);
 	CU_ADD_TEST(suite, test_telemetry_buffer_size_array);
 	CU_ADD_TEST(suite, test_telemetry_buffer_size_nested);
 	CU_ADD_TEST(suite, test_telemetry_buffer_size_nested_array);

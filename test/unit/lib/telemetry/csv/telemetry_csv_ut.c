@@ -572,6 +572,202 @@ test_csv_register_source_file_failure(void)
 	telemetry_csv_delete();
 }
 
+/* INT64 values, including negative, are formatted as signed integers */
+static void
+test_csv_int64_report_stats(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_INT64("temperature_c", 1),
+		SPDK_TELEMETRY_STAT_INFO_INT64("offset_ns",     1),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "csv_int64_report",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	const struct spdk_telemetry_exporter_fn_table *fn;
+	void *ctx;
+	struct spdk_telemetry_type_handle   *type_h;
+	struct spdk_telemetry_source_handle *src_h;
+	uint64_t stat_buf[2];
+	int64_t  temp = -42, offset = 1000000;
+	char     file_path[512], content[2048];
+	int      rc;
+
+	memcpy(&stat_buf[0], &temp,   sizeof(temp));
+	memcpy(&stat_buf[1], &offset, sizeof(offset));
+
+	ut_reset_csv();
+	telemetry_csv_create(g_tmpdir);
+
+	fn  = g_telemetry_csv.exporter.exporter.fn_table;
+	ctx = g_telemetry_csv.exporter.exporter.ctxt;
+
+	type_h = fn->register_type(ctx, &type_info);
+	src_h  = fn->register_source(ctx, type_h, "sensor0");
+	SPDK_CU_ASSERT_FATAL(src_h != NULL);
+
+	CU_ASSERT_EQUAL(fn->report_stats(ctx, src_h, stat_buf, sizeof(stat_buf)), true);
+
+	snprintf(file_path, sizeof(file_path), "%s/csv_int64_report.csv", g_tmpdir);
+	rc = ut_read_file(file_path, content, sizeof(content));
+	CU_ASSERT(rc > 0);
+	CU_ASSERT(strstr(content, "source,temperature_c,offset_ns\n") != NULL);
+	CU_ASSERT(strstr(content, "sensor0,-42,1000000\n")            != NULL);
+
+	fn->unregister_source(ctx, src_h);
+	fn->unregister_type(ctx, type_h);
+	telemetry_csv_delete();
+}
+
+/* DOUBLE64 values are formatted with %g (no trailing zeros) */
+static void
+test_csv_double_report_stats(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_DOUBLE64("utilization", 1),
+		SPDK_TELEMETRY_STAT_INFO_DOUBLE64("latency_us",  1),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "csv_double_report",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	const struct spdk_telemetry_exporter_fn_table *fn;
+	void *ctx;
+	struct spdk_telemetry_type_handle   *type_h;
+	struct spdk_telemetry_source_handle *src_h;
+	uint64_t stat_buf[2];
+	double   util = 0.75, lat = 123.5;
+	char     file_path[512], content[2048];
+	int      rc;
+
+	memcpy(&stat_buf[0], &util, sizeof(util));
+	memcpy(&stat_buf[1], &lat,  sizeof(lat));
+
+	ut_reset_csv();
+	telemetry_csv_create(g_tmpdir);
+
+	fn  = g_telemetry_csv.exporter.exporter.fn_table;
+	ctx = g_telemetry_csv.exporter.exporter.ctxt;
+
+	type_h = fn->register_type(ctx, &type_info);
+	src_h  = fn->register_source(ctx, type_h, "dev0");
+	SPDK_CU_ASSERT_FATAL(src_h != NULL);
+
+	CU_ASSERT_EQUAL(fn->report_stats(ctx, src_h, stat_buf, sizeof(stat_buf)), true);
+
+	snprintf(file_path, sizeof(file_path), "%s/csv_double_report.csv", g_tmpdir);
+	rc = ut_read_file(file_path, content, sizeof(content));
+	CU_ASSERT(rc > 0);
+	CU_ASSERT(strstr(content, "source,utilization,latency_us\n") != NULL);
+	CU_ASSERT(strstr(content, "dev0,0.75,123.5\n")               != NULL);
+
+	fn->unregister_source(ctx, src_h);
+	fn->unregister_type(ctx, type_h);
+	telemetry_csv_delete();
+}
+
+/* Array of INT64: exercises the per-element count loop with new types */
+static void
+test_csv_int64_array_report_stats(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_INT64("delta_ns", 3),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "csv_int64_arr_report",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	const struct spdk_telemetry_exporter_fn_table *fn;
+	void *ctx;
+	struct spdk_telemetry_type_handle   *type_h;
+	struct spdk_telemetry_source_handle *src_h;
+	uint64_t stat_buf[3];
+	int64_t  v0 = -10, v1 = 20, v2 = -30;
+	char     file_path[512], content[2048];
+	int      rc;
+
+	memcpy(&stat_buf[0], &v0, sizeof(v0));
+	memcpy(&stat_buf[1], &v1, sizeof(v1));
+	memcpy(&stat_buf[2], &v2, sizeof(v2));
+
+	ut_reset_csv();
+	telemetry_csv_create(g_tmpdir);
+
+	fn  = g_telemetry_csv.exporter.exporter.fn_table;
+	ctx = g_telemetry_csv.exporter.exporter.ctxt;
+
+	type_h = fn->register_type(ctx, &type_info);
+	src_h  = fn->register_source(ctx, type_h, "ch0");
+	SPDK_CU_ASSERT_FATAL(src_h != NULL);
+
+	CU_ASSERT_EQUAL(fn->report_stats(ctx, src_h, stat_buf, sizeof(stat_buf)), true);
+
+	snprintf(file_path, sizeof(file_path), "%s/csv_int64_arr_report.csv", g_tmpdir);
+	rc = ut_read_file(file_path, content, sizeof(content));
+	CU_ASSERT(rc > 0);
+	CU_ASSERT(strstr(content, "source,delta_ns[0],delta_ns[1],delta_ns[2]\n") != NULL);
+	CU_ASSERT(strstr(content, "ch0,-10,20,-30\n")                             != NULL);
+
+	fn->unregister_source(ctx, src_h);
+	fn->unregister_type(ctx, type_h);
+	telemetry_csv_delete();
+}
+
+/* Mixed scalar types in one row: UINT64, INT64, DOUBLE64 all formatted correctly */
+static void
+test_csv_mixed_scalar_types(void)
+{
+	static const struct spdk_telemetry_stat_info stats[] = {
+		SPDK_TELEMETRY_STAT_INFO_UINT64("io_count",    1),
+		SPDK_TELEMETRY_STAT_INFO_INT64("queue_depth",  1),
+		SPDK_TELEMETRY_STAT_INFO_DOUBLE64("bandwidth",  1),
+	};
+	static const struct spdk_telemetry_type_info type_info = {
+		.name      = "csv_mixed_scalars",
+		.num_stats = SPDK_COUNTOF(stats),
+		.stats     = stats,
+	};
+	const struct spdk_telemetry_exporter_fn_table *fn;
+	void *ctx;
+	struct spdk_telemetry_type_handle   *type_h;
+	struct spdk_telemetry_source_handle *src_h;
+	uint64_t stat_buf[3];
+	uint64_t io_count    = 500;
+	int64_t  queue_depth = -3;
+	double   bandwidth   = 1.5;
+	char     file_path[512], content[2048];
+	int      rc;
+
+	memcpy(&stat_buf[0], &io_count,    sizeof(io_count));
+	memcpy(&stat_buf[1], &queue_depth, sizeof(queue_depth));
+	memcpy(&stat_buf[2], &bandwidth,   sizeof(bandwidth));
+
+	ut_reset_csv();
+	telemetry_csv_create(g_tmpdir);
+
+	fn  = g_telemetry_csv.exporter.exporter.fn_table;
+	ctx = g_telemetry_csv.exporter.exporter.ctxt;
+
+	type_h = fn->register_type(ctx, &type_info);
+	src_h  = fn->register_source(ctx, type_h, "dev0");
+	SPDK_CU_ASSERT_FATAL(src_h != NULL);
+
+	CU_ASSERT_EQUAL(fn->report_stats(ctx, src_h, stat_buf, sizeof(stat_buf)), true);
+
+	snprintf(file_path, sizeof(file_path), "%s/csv_mixed_scalars.csv", g_tmpdir);
+	rc = ut_read_file(file_path, content, sizeof(content));
+	CU_ASSERT(rc > 0);
+	CU_ASSERT(strstr(content, "source,io_count,queue_depth,bandwidth\n") != NULL);
+	CU_ASSERT(strstr(content, "dev0,500,-3,1.5\n")                       != NULL);
+
+	fn->unregister_source(ctx, src_h);
+	fn->unregister_type(ctx, type_h);
+	telemetry_csv_delete();
+}
+
 /* ── main ───────────────────────────────────────────────────────────────── */
 
 int
@@ -603,6 +799,10 @@ main(int argc, char **argv)
 	CU_ADD_TEST(suite, test_csv_multiple_types);
 	CU_ADD_TEST(suite, test_csv_create_register_failure);
 	CU_ADD_TEST(suite, test_csv_register_source_file_failure);
+	CU_ADD_TEST(suite, test_csv_int64_report_stats);
+	CU_ADD_TEST(suite, test_csv_double_report_stats);
+	CU_ADD_TEST(suite, test_csv_int64_array_report_stats);
+	CU_ADD_TEST(suite, test_csv_mixed_scalar_types);
 
 	num_failures = spdk_ut_run_tests(argc, argv, NULL);
 
