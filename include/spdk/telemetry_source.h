@@ -42,6 +42,14 @@ enum spdk_telemetry_stat_type {
 	 */
 	SPDK_TELEMETRY_STAT_TYPE_UINT64,
 	/**
+	 * 64-bit signed integer.
+	 */
+	SPDK_TELEMETRY_STAT_TYPE_INT64,
+	/**
+	 * 64-bit double precision floating point number.
+	 */
+	SPDK_TELEMETRY_STAT_TYPE_DOUBLE64,
+	/**
 	 * Nested telemetry type.
 	 */
 	SPDK_TELEMETRY_STAT_TYPE_SUBTYPE,
@@ -85,6 +93,12 @@ struct spdk_telemetry_stat_info {
 
 #define SPDK_TELEMETRY_STAT_INFO_UINT64(stat_name, stat_count) \
 	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_UINT64, .count = stat_count, .extra.unused = 0 }
+
+#define SPDK_TELEMETRY_STAT_INFO_INT64(stat_name, stat_count) \
+	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_INT64, .count = stat_count, .extra.unused = 0 }
+
+#define SPDK_TELEMETRY_STAT_INFO_DOUBLE64(stat_name, stat_count) \
+	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_DOUBLE64, .count = stat_count, .extra.unused = 0 }
 
 #define SPDK_TELEMETRY_STAT_INFO_SUBTYPE(stat_name, stat_count, subtype_name) \
 	{ .name = stat_name, .type = (uint8_t)SPDK_TELEMETRY_STAT_TYPE_SUBTYPE, .count = stat_count, .extra.type_name = subtype_name }

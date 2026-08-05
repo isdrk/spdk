@@ -141,6 +141,8 @@ telemetry_csv_write_type_header(FILE *file, struct spdk_telemetry_type_handle *t
 
 		switch (stat_info->type) {
 		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+		case SPDK_TELEMETRY_STAT_TYPE_INT64:
+		case SPDK_TELEMETRY_STAT_TYPE_DOUBLE64:
 			if (stat_info->count == 1) {
 				fprintf(file, ",%.*s%s", (int)offset, prefix_buf, stat_info->name);
 			} else {
@@ -279,19 +281,27 @@ telemetry_csv_report_type_stats(struct spdk_telemetry_type_handle *type, const c
 		struct spdk_telemetry_type_handle *nested_type;
 		uint64_t j;
 
+#define REPORT_SINGLE_TYPE(t, fmt) \
+	if (*offset + sizeof(t) * stat_info->count > stats_buffer_size) { \
+		SPDK_ERRLOG("Stats buffer too small for type %s\n", type->info->name); \
+		assert(false); \
+		return -EINVAL; \
+	} \
+	for (j = 0; j < stat_info->count; j++) { \
+		t value = *(const t *)(stats + (*offset)); \
+		fprintf(type->file, "," fmt, value); \
+		*offset += sizeof(t); \
+	}
+
 		switch (stat_info->type) {
 		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
-			if (*offset + sizeof(uint64_t) * stat_info->count > stats_buffer_size) {
-				SPDK_ERRLOG("Stats buffer too small for type %s\n", type->info->name);
-				assert(false);
-				return -EINVAL;
-			}
+			REPORT_SINGLE_TYPE(uint64_t, "%" PRIu64);
 			break;
-			for (j = 0; j < stat_info->count; j++) {
-				uint64_t value = *(const uint64_t *)(stats + (*offset));
-				fprintf(type->file, ",%" PRIu64, value);
-				*offset += sizeof(uint64_t);
-			}
+		case SPDK_TELEMETRY_STAT_TYPE_INT64:
+			REPORT_SINGLE_TYPE(int64_t, "%" PRId64);
+			break;
+		case SPDK_TELEMETRY_STAT_TYPE_DOUBLE64:
+			REPORT_SINGLE_TYPE(double, "%g");
 			break;
 		case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
 			assert(stat_info->extra.type_name != NULL);
@@ -316,6 +326,7 @@ telemetry_csv_report_type_stats(struct spdk_telemetry_type_handle *type, const c
 			return -EINVAL;
 		}
 	}
+#undef REPORT_SINGLE_TYPE
 
 	return 0;
 }

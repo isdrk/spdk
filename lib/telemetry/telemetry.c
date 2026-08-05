@@ -24,6 +24,7 @@ enum telemetry_source_state {
 };
 
 SPDK_STATIC_ASSERT(__TELEMETRY_SOURCE_LAST <= 8, "telemetry_source_state is too large");
+SPDK_STATIC_ASSERT(sizeof(double) == 8, "double is not 8 bytes");
 
 struct spdk_telemetry_source {
 	uint64_t state : 3; /* must be big enough to hold __TELEMETRY_SOURCE_LAST - 1 */
@@ -726,6 +727,8 @@ telemetry_type_set_stats_buffer_size(struct spdk_telemetry_type *type)
 
 		switch (stat_info->type) {
 		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+		case SPDK_TELEMETRY_STAT_TYPE_INT64:
+		case SPDK_TELEMETRY_STAT_TYPE_DOUBLE64:
 			size += sizeof(uint64_t) * stat_info->count;
 			break;
 		case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
@@ -920,6 +923,10 @@ spdk_telemetry_stat_type_name(enum spdk_telemetry_stat_type type)
 	switch (type) {
 	case SPDK_TELEMETRY_STAT_TYPE_UINT64:
 		return "uint64_t";
+	case SPDK_TELEMETRY_STAT_TYPE_INT64:
+		return "int64_t";
+	case SPDK_TELEMETRY_STAT_TYPE_DOUBLE64:
+		return "double";
 	case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
 		return "subtype";
 	default:
