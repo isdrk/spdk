@@ -268,27 +268,80 @@ telemetry_csv_register_type(void *ctx, const struct spdk_telemetry_type_info *ty
 	return type;
 }
 
+static int
+telemetry_csv_report_type_stats(struct spdk_telemetry_type_handle *type, const char *stats,
+				uint64_t *offset, uint64_t stats_buffer_size)
+{
+	uint64_t i;
+
+	for (i = 0; i < type->info->num_stats; i++) {
+		const struct spdk_telemetry_stat_info *stat_info = &type->info->stats[i];
+		struct spdk_telemetry_type_handle *nested_type;
+		uint64_t j;
+
+		switch (stat_info->type) {
+		case SPDK_TELEMETRY_STAT_TYPE_UINT64:
+			if (*offset + sizeof(uint64_t) * stat_info->count > stats_buffer_size) {
+				SPDK_ERRLOG("Stats buffer too small for type %s\n", type->info->name);
+				assert(false);
+				return -EINVAL;
+			}
+			break;
+			for (j = 0; j < stat_info->count; j++) {
+				uint64_t value = *(const uint64_t *)(stats + (*offset));
+				fprintf(type->file, ",%" PRIu64, value);
+				*offset += sizeof(uint64_t);
+			}
+			break;
+		case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
+			assert(stat_info->extra.type_name != NULL);
+			nested_type = telemetry_csv_find_type(stat_info->extra.type_name);
+			if (nested_type == NULL) {
+				SPDK_WARNLOG("Nested telemetry type %s not found\n", stat_info->extra.type_name);
+				assert(false);
+				return -ENOENT;
+			}
+			for (j = 0; j < stat_info->count; j++) {
+				int res = telemetry_csv_report_type_stats(nested_type, stats, offset, stats_buffer_size);
+				if (res != 0) {
+					SPDK_ERRLOG("Failed to report stats for type %s: %s\n", nested_type->info->name,
+						    spdk_strerror(-res));
+					return res;
+				}
+			}
+			break;
+		default:
+			SPDK_WARNLOG("Unknown stat type: %d\n", stat_info->type);
+			assert(false);
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static bool
 telemetry_csv_report_stats(void *ctx, struct spdk_telemetry_source_handle *source,
 			   const void *stats_buffer, uint64_t stats_buffer_size)
 {
-	uint64_t i;
 	struct spdk_telemetry_type_handle *type;
-	const uint64_t *stats = stats_buffer;
-	uint64_t num_stats = stats_buffer_size / sizeof(uint64_t);
+	int res;
+	uint64_t offset = 0;
 
 	assert(source != NULL);
-	assert(stats != NULL);
-	assert(num_stats > 0);
+	assert(stats_buffer != NULL);
+	assert(stats_buffer_size > 0);
 
 	type = source->type;
 	fprintf(type->file, "%s", source->name);
-	for (i = 0; i < num_stats; i++) {
-		fprintf(type->file, ",%" PRIu64, stats[i]);
+	res = telemetry_csv_report_type_stats(type, stats_buffer, &offset, stats_buffer_size);
+	if (res != 0) {
+		SPDK_ERRLOG("Failed to report stats for type %s: %s\n", type->info->name, spdk_strerror(-res));
+		return false;
 	}
+
 	fprintf(type->file, "\n");
 	fflush(type->file);
-
 	return true;
 }
 
