@@ -145,7 +145,7 @@ dte_create_telemetry_field(const struct spdk_telemetry_stat_info *stat_info)
 
 	switch (stat_info->type) {
 	case SPDK_TELEMETRY_STAT_TYPE_UINT64:
-		type_name = "uint64_t";
+		type_name = DOCA_TELEMETRY_EXPORTER_FIELD_TYPE_UINT64;
 		break;
 	case SPDK_TELEMETRY_STAT_TYPE_SUBTYPE:
 		assert(stat_info->extra.type_name != NULL);
