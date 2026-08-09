@@ -12,11 +12,18 @@
 
 #include "spdk/stdinc.h"
 #include "spdk/log.h"
+#include "spdk/config.h"
 #include "dte_doca_shim.h"
 
 #include <doca_error.h>
 #include <doca_version.h>
 #include <doca_telemetry_exporter.h>
+
+#define STR_HELPER(x) #x
+#define STR(x) STR_HELPER(x)
+
+#define DOCA_COMMON_LIB STR(SPDK_CONFIG_DOCA_COMMON_LIB)
+#define DOCA_TELEMETRY_EXPORTER_LIB STR(SPDK_CONFIG_DOCA_TELEMETRY_EXPORTER_LIB)
 
 /* We define our macro as DOCA_VERSION_LTE_CURRENT() uses casting to size_t, which is not supported by the preprocessor. */
 #define DOCA_VERSION_AT_LEAST(maj, min, pat) \
@@ -106,16 +113,16 @@ static struct {
 int
 dte_doca_shim_init(void)
 {
-	g_shim.hdl_common = dlopen("libdoca_common.so", RTLD_NOW | RTLD_GLOBAL);
+	g_shim.hdl_common = dlopen(DOCA_COMMON_LIB, RTLD_NOW | RTLD_GLOBAL);
 	if (g_shim.hdl_common == NULL) {
-		SPDK_ERRLOG("doca shim: dlopen(libdoca_common.so) failed: %s\n", dlerror());
+		SPDK_ERRLOG("doca shim: dlopen(" DOCA_COMMON_LIB ") failed: %s\n", dlerror());
 		return -ENOTSUP;
 	}
 
-	g_shim.hdl_telemetry_exporter = dlopen("libdoca_telemetry_exporter.so",
+	g_shim.hdl_telemetry_exporter = dlopen(DOCA_TELEMETRY_EXPORTER_LIB,
 					       RTLD_NOW | RTLD_GLOBAL);
 	if (g_shim.hdl_telemetry_exporter == NULL) {
-		SPDK_ERRLOG("doca shim: dlopen(libdoca_telemetry_exporter.so) failed: %s\n",
+		SPDK_ERRLOG("doca shim: dlopen(" DOCA_TELEMETRY_EXPORTER_LIB ") failed: %s\n",
 			    dlerror());
 		dlclose(g_shim.hdl_common);
 		g_shim.hdl_common = NULL;
