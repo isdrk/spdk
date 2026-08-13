@@ -115,7 +115,17 @@ user=${USER:-root}
 branch=$(git name-rev --name-only --refs *nvda* HEAD | awk -F/ '{print $NF}')
 
 if [ -z "$VER" ]; then
-    export VER=$(echo $branch | grep -o '[0-9]\+\(\.[0-9]\+\)*')
+    # Prefer version from the branch name. When HEAD is detached (e.g. MR
+    # checkout) the ref carries no version, so use the spec instead.
+    if [[ "$branch" =~ [0-9]+(\.[0-9]+)* ]]; then
+        VER=$BASH_REMATCH
+    else
+        # build_rpm.sh moves the spec to the tree root
+        spec=scripts/spdk.spec
+        [ -e "$spec" ] || spec=spdk.spec
+        VER=$(awk '/^%define scm_version/ {print $3}' "$spec")
+    fi
+    export VER
 fi
 
 name="spdk"
@@ -130,6 +140,10 @@ fi
 if test -n "$ghprbPullId"; then
     REV="pr${ghprbPullId}"
     repo_name="${repo_name}-pr"
+    STAGE="pr"
+elif [[ "${REFSPEC:-}" =~ refs/merge-requests/([0-9]+) ]]; then
+    REV="mr${BASH_REMATCH[1]}"
+    repo_name="${repo_name}-mr"
     STAGE="pr"
 else
     REV=${BUILD_NUMBER:-1}

@@ -7,7 +7,17 @@
 branch=$(git name-rev --name-only HEAD | awk -F/ '{print $NF}')
 
 if [ -z "$VER" ]; then
-	export VER=$(echo $branch | grep -o '[0-9]\+\(\.[0-9]\+\)*')
+	# Prefer version from the branch name. When HEAD is detached the ref
+	# carries no version, so use the spec instead.
+	if [[ "$branch" =~ [0-9]+(\.[0-9]+)* ]]; then
+		VER=$BASH_REMATCH
+	else
+		# build_rpm.sh moves the spec to the tree root
+		spec=scripts/spdk.spec
+		[ -e "$spec" ] || spec=spdk.spec
+		VER=$(awk '/^%define scm_version/ {print $3}' "$spec")
+	fi
+	export VER
 fi
 
 REV=${BUILD_NUMBER:-1}

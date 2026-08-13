@@ -114,6 +114,7 @@ pipeline_stop:
   containerSelector:
       - "{name: 'ubuntu22_04'}"
   run: |
-    if [[ ! -n "$ghprbPullId" && "$pipeline_status" == "SUCCESS" ]]; then
+    # Skip tagging for GitHub PRs and GitLab MRs (REFSPEC=refs/merge-requests/<id>/...)
+    if [[ -z "$ghprbPullId" && ! "${REFSPEC:-}" =~ refs/merge-requests/ && "$pipeline_status" == "SUCCESS" ]]; then
       .ci/git_tag.sh
     fi

@@ -13,11 +13,20 @@ BASEDIR=$(dirname "$0")
 ODIR=$(readlink -f $BASEDIR/../)
 
 if [ -z "$VER" ]; then
-	export VER=$(echo $branch | grep -o '[0-9]\+\(\.[0-9]\+\)*')
+	# Prefer version from the branch name. When HEAD is detached (e.g. MR
+	# checkout) the ref carries no version, so use the spec instead.
+	if [[ "$branch" =~ [0-9]+(\.[0-9]+)* ]]; then
+		VER=$BASH_REMATCH
+	else
+		VER=$(awk '/^%define scm_version/ {print $3}' scripts/spdk.spec)
+	fi
+	export VER
 fi
 
 if test -n "$ghprbPullId" ; then
     REV="pr${ghprbPullId}"
+elif [[ "${REFSPEC:-}" =~ refs/merge-requests/([0-9]+) ]]; then
+    REV="mr${BASH_REMATCH[1]}"
 else
     REV="${BUILD_NUMBER:-1}"
 fi
