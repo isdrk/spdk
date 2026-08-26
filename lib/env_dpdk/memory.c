@@ -830,6 +830,26 @@ _vfio_iommu_map_dma(uint64_t vaddr, uint64_t iova, uint64_t size)
 {
 	struct spdk_vfio_dma_map *dma_map;
 	int ret;
+	long page_size;
+
+	page_size = sysconf(_SC_PAGESIZE);
+	if (page_size <= 0) {
+		DEBUG_PRINT("Failed to get system page size\n");
+		return -EINVAL;
+	}
+
+	/* VFIO_IOMMU_MAP_DMA rejects any vaddr/iova/size not aligned to the
+	 * container's minimum IOMMU page size, which the kernel floors to
+	 * the runtime page size. A region smaller than one page (e.g. a
+	 * small PCI BAR registered through vtophys_iommu_map_dma_bar())
+	 * can never satisfy that, so don't bother creating a dma_map for it.
+	 */
+	if (size < (uint64_t)page_size) {
+		DEBUG_PRINT("Skipping DMA mapping smaller than page size (vaddr=0x%" PRIx64
+			    " iova=0x%" PRIx64 " size=0x%" PRIx64 " page_size=0x%lx)\n",
+			    vaddr, iova, size, page_size);
+		return -EINVAL;
+	}
 
 	dma_map = calloc(1, sizeof(*dma_map));
 	if (dma_map == NULL) {
@@ -904,6 +924,15 @@ vtophys_iommu_map_dma_bar(uint64_t vaddr, uint64_t iova, uint64_t size)
 	pthread_mutex_lock(&g_vfio.mutex);
 	ret = _vfio_iommu_map_dma(vaddr, iova, size);
 	pthread_mutex_unlock(&g_vfio.mutex);
+
+	if (ret != 0) {
+		/* Peer-to-peer DMA into this BAR is best-effort. The BAR's
+		 * CPU-accessible mapping is already established independently of
+		 * this call, so don't fail it over a DMA registration failure -
+		 * the caller would unmap the whole BAR otherwise.
+		 */
+		return 0;
+	}
 
 	return ret;
 }
