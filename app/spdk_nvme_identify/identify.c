@@ -1517,10 +1517,6 @@ print_namespace(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 			printf("  Atomic Write Unit (PFail):           %d\n", nsdata->nawupf + 1);
 		}
 
-		if (nsdata->npwg) {
-			printf("  Preferred Write Granularity:         %d\n", nsdata->npwg + 1);
-		}
-
 		if (nsdata->nacwu) {
 			printf("  Atomic Compare & Write Unit:         %d\n", nsdata->nacwu + 1);
 		}
@@ -1528,6 +1524,15 @@ print_namespace(struct spdk_nvme_ctrlr *ctrlr, struct spdk_nvme_ns *ns)
 		printf("  Atomic Boundary Size (Normal):       %d\n", nsdata->nabsn);
 		printf("  Atomic Boundary Size (PFail):        %d\n", nsdata->nabspf);
 		printf("  Atomic Boundary Offset:              %d\n", nsdata->nabo);
+	}
+	printf("Optimal Performance:                   %s\n",
+	       nsdata->nsfeat.optperf ? "Supported" : "Not Supported");
+	if (nsdata->nsfeat.optperf) {
+		printf("  Preferred Write Granularity:         %d\n", nsdata->npwg);
+		printf("  Preferred Write Alignment:           %d\n", nsdata->npwa);
+		printf("  Preferred Deallocate Granularity:    %d\n", nsdata->npdg);
+		printf("  Preferred Deallocate Alignment:      %d\n", nsdata->npda);
+		printf("  Optimal Write Size:                  %d\n", nsdata->nows);
 	}
 
 	if (cdata->oncs.nvmcpys) {
