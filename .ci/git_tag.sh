@@ -4,7 +4,7 @@
 #  All rights reserved.
 #
 
-branch=$(git name-rev --name-only HEAD | awk -F/ '{print $NF}')
+branch=$(git name-rev --name-only --refs '*nvda*' HEAD | awk -F/ '{print $NF}')
 
 if [ -z "$VER" ]; then
 	# Prefer version from the branch name. When HEAD is detached the ref
